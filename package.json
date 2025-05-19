@@ -1,0 +1,34 @@
+{
+  "name": "schoolmule-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/husaab/schoolmule-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/husaab/schoolmule-backend/issues"
+  },
+  "homepage": "https://github.com/husaab/schoolmule-backend#readme",
+  "description": "",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "express-validator": "^7.2.1",
+    "nodemon": "^3.1.10",
+    "pg": "^8.16.0",
+    "pino": "^9.7.0",
+    "uuid": "^11.1.0"
+  }
+}
