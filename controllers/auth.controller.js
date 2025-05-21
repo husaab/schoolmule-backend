@@ -5,59 +5,74 @@ const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
 const { getVerificationEmailHTML } = require('../utils/emailTemplate');
 
-const registerUser = async (req, res) => {
+  const registerUser = async (req, res) => {
     const saltRounds = 10;
-  
     const client = await db.connect();
-  
+
     try {
       await client.query('BEGIN');
-  
-      const { username, email, password } = req.body;
-  
-      if (!username || !email || !password) {
+
+      const { username, email, password, school, role } = req.body;
+
+      if (!username || !email || !password || !school || !role) {
         throw { status: 400, message: "Missing required fields" };
       }
-  
+
       const hashedPassword = await bcrypt.hash(password, saltRounds);
       const [firstName = '', lastName = ''] = username.split(" ");
 
+      const userId = uuidv4();
       const emailToken = uuidv4();
       const isVerified = false;
-  
-      const sql = userQueries.createUser;
-      const values = [email, username, hashedPassword, firstName, lastName, emailToken, isVerified];
-  
-      const result = await client.query(sql, values);
+
+      const values = [
+        userId,
+        email,
+        username,
+        hashedPassword,
+        firstName,
+        lastName,
+        school,
+        role,
+        emailToken,
+        isVerified
+      ];
+
+      const result = await client.query(userQueries.createUser, values);
       const user = result.rows[0];
-  
+
       await client.query('COMMIT');
-  
-      const response = {
-        status: 200,
-        message: "User Registered Successfully, a verification email has been sent.",
-        data: {
-          id: user.id,
-          email: user.email,
-          username: user.username,
-          isVerified: user.is_verified,
-          emailToken: user.email_token
-        }
-      };
 
       const verificationUrl = `${process.env.FRONTEND_URL}/verifyemailtoken?token=${user.email_token}`;
-
       const html = getVerificationEmailHTML({
         name: user.first_name,
         url: verificationUrl
       });
+
       await resend.emails.send({
-        from: 'verify@theatlantisai.com',
+        from: 'verify@schoolmule.ca',
         to: user.email,
-        subject: 'Verify your email at Atlantis AI',
+        subject: 'Verify your email at School Mule',
         html
       });
-  
+
+      const response = {
+        status: 200,
+        message: "User registered successfully. A verification email has been sent.",
+        data: {
+          userId: user.user_id,
+          username: user.username,
+          fullName: `${user.first_name} ${user.last_name}`,
+          email: user.email,
+          school: user.school,
+          role: user.role,
+          isVerified: user.is_verified,
+          emailToken: user.email_token,
+          createdAt: user.created_at,
+          lastModifiedAt: user.last_modified_at
+        }
+      };
+
       logger.info(response);
       return res.status(200).json(response);
     } catch (error) {
@@ -75,33 +90,38 @@ const registerUser = async (req, res) => {
 
   const login = async (req, res) => {
     const { email, password } = req.body;
-  
+
     try {
       const sql = userQueries.loginUser;
       const result = await db.query(sql, [email]);
-  
+
       if (result.rows.length === 0) {
         throw { status: 404, message: "User not found" };
       }
-  
+
       const user = result.rows[0];
       const isPasswordValid = await bcrypt.compare(password, user.password);
-  
+
       if (!isPasswordValid) {
         throw { status: 401, message: "Invalid credentials" };
       }
-  
+
       const response = {
         status: 200,
-        message: "User Login Successful",
+        message: "User login successful",
         data: {
-          id: user.id,
-          email: user.email,
+          userId: user.user_id,
           username: user.username,
-          isVerified: user.is_verified
+          fullName: `${user.first_name} ${user.last_name}`,
+          email: user.email,
+          school: user.school,
+          role: user.role,
+          isVerified: user.is_verified,
+          createdAt: user.created_at,
+          lastModifiedAt: user.last_modified_at
         }
       };
-  
+
       logger.info(response);
       return res.status(200).json(response);
     } catch (error) {

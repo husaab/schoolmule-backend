@@ -12,10 +12,14 @@ const getAllUser = async (req, res) => {
     return res.status(200).json({
       status: "success",
       users: result.rows.map(user => ({
-        id: user.id,
+        userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,
+        firstName: user.first_name,
+        lastName: user.last_name,
         email: user.email,
+        school: user.school,
+        role: user.role,
         createdAt: user.created_at,
         lastModifiedAt: user.last_modified_at,
         isVerified: user.is_verified,
@@ -46,10 +50,14 @@ const getUserByEmail = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: {
-        id: user.id,
+        userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,
+        firstName: user.first_name,
+        lastName: user.last_name,
         email: user.email,
+        school: user.school,
+        role: user.role,
         createdAt: user.created_at,
         lastModifiedAt: user.last_modified_at,
         isVerified: user.is_verified,
@@ -76,10 +84,14 @@ const getUser = async (req, res) => {
     return res.status(200).json({
       status: "success",
       user: {
-        id: user.id,
+        userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,
+        firstName: user.first_name,
+        lastName: user.last_name,
         email: user.email,
+        school: user.school,
+        role: user.role,
         createdAt: user.created_at,
         lastModifiedAt: user.last_modified_at,
         isVerified: user.is_verified,
@@ -112,13 +124,17 @@ const deleteUser = async (req, res) => {
 
 const updateUser = async (req, res) => {
   const { id } = req.params;
-  const { email, username } = req.body;
+  const { email, username, school, role } = req.body;
+
+  if (!email || !username || !school || !role) {
+    return res.status(400).json({ status: "failed", message: "Missing required fields" });
+  }
 
   const [firstName = "", lastName = ""] = username.split(" ");
 
   try {
     const sql = userQueries.updateUserById;
-    const result = await db.query(sql, [email, username, firstName, lastName, id]);
+    const result = await db.query(sql, [email, username, firstName, lastName, school, role, id]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({ status: "failed", message: "User not found or not updated" });
