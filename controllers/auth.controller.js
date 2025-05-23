@@ -4,6 +4,8 @@ const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
 const { getVerificationEmailHTML } = require('../utils/emailTemplate');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -56,7 +58,7 @@ const { getVerificationEmailHTML } = require('../utils/emailTemplate');
         html
       });
 
-      const response = {
+      return {
         status: 200,
         message: "User registered successfully. A verification email has been sent.",
         data: {
@@ -73,15 +75,13 @@ const { getVerificationEmailHTML } = require('../utils/emailTemplate');
         }
       };
 
-      logger.info(response);
-      return res.status(200).json(response);
     } catch (error) {
       await client.query('ROLLBACK');
       logger.error(error);
-      return res.status(error.status || 500).json({
-        status: "failed",
+      return {
+        status: 500,
         message: error.message || "Internal Server Error"
-      });
+      };
     } finally {
       client.release();
     }
@@ -106,7 +106,7 @@ const { getVerificationEmailHTML } = require('../utils/emailTemplate');
         throw { status: 401, message: "Invalid credentials" };
       }
 
-      const response = {
+      return {
         status: 200,
         message: "User login successful",
         data: {
@@ -122,14 +122,12 @@ const { getVerificationEmailHTML } = require('../utils/emailTemplate');
         }
       };
 
-      logger.info(response);
-      return res.status(200).json(response);
     } catch (error) {
       logger.error(error);
-      return res.status(error.status || 500).json({
-        status: "failed",
+      return {
+        status: 500,
         message: error.message || "Internal Server Error"
-      });
+      };
     }
   };
 
