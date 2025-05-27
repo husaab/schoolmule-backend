@@ -11,7 +11,7 @@ const getAllUser = async (req, res) => {
     logger.info("All users fetched successfully");
     return res.status(200).json({
       status: "success",
-      users: result.rows.map(user => ({
+      data: result.rows.map(user => ({
         userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,
@@ -83,7 +83,7 @@ const getUser = async (req, res) => {
     const user = result.rows[0];
     return res.status(200).json({
       status: "success",
-      user: {
+      data: {
         userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,
@@ -158,7 +158,7 @@ const updatePassword = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const result = await client.query("SELECT password FROM users WHERE id = $1", [id]);
+    const result = await client.query("SELECT password FROM users WHERE user_id = $1", [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ status: "failed", message: "User not found" });
