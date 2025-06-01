@@ -4,7 +4,14 @@ const logger = require("../logger");
 
 const getAllStudents = async (req, res) => {
   try {
-    const { rows } = await db.query(studentQueries.selectAllStudents);
+    const requestedSchool = req.query.school;
+    if (!requestedSchool) {
+      return res.status(400).json({
+        status: "failed",
+        message: "Missing required query parameter: school",
+      });
+    }
+    const { rows } = await db.query(studentQueries.selectStudentsBySchool, [requestedSchool]);
 
     logger.info("All students fetched successfully");
     return res.status(200).json({

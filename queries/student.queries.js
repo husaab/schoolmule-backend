@@ -20,6 +20,27 @@ const studentQueries = {
     FROM students
   `,
 
+  selectStudentsBySchool: `
+    SELECT
+      student_id,
+      name,
+      school,
+      homeroom_teacher_id,
+      grade,
+      oen,
+      mother_name,
+      mother_email,
+      mother_number,
+      father_name,
+      father_email,
+      father_number,
+      emergency_contact,
+      created_at,
+      last_modified_at
+    FROM students
+    WHERE school = $1
+  `,
+
   // GET    /students/:id
   selectStudentById: `
     SELECT

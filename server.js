@@ -6,6 +6,8 @@ const rateLimit = require('express-rate-limit');
 const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
 const studentRoutes = require("./routes/student.routes")
+const classRoutes = require("./routes/class.routes")
+const assessmentRoutes = require("./routes/assessment.routes")
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -36,6 +38,8 @@ app.use(RequestLogger);
 app.use("/api/auth", authRoutes); 
 app.use("/api/users", userRoutes);
 app.use("/api/students", studentRoutes);
+app.use("/api/classes", classRoutes);
+app.use("/api/assessments", assessmentRoutes);
 
 // Export app for testing
 module.exports = app;
