@@ -2,6 +2,8 @@
 
 const db = require("../config/database");
 const classQueries = require("../queries/class.queries");
+const bulkQueries = require("../queries/bulk.queries");
+const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 
 //
@@ -341,6 +343,206 @@ const getAssessmentsByClass = async (req, res) => {
   }
 };
 
+const addStudentToClass = async (req, res) => {
+  const { classId } = req.params;
+  const { studentId } = req.body;
+
+  // Validate both IDs are provided
+  if (!classId || !studentId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required fields: classId and studentId",
+    });
+  }
+
+  try {
+    // (Optional) You may want to verify that classId and studentId both exist in their tables before inserting.
+    const { rows } = await db.query(
+      classQueries.createClassStudentRelation,
+      [classId, studentId]
+    );
+
+    logger.info(`Student ${studentId} enrolled in class ${classId}`);
+    return res.status(201).json({
+      status: "success",
+      data: {
+        classId:   rows[0].class_id,
+        studentId: rows[0].student_id,
+      },
+    });
+  } catch (error) {
+    logger.error(error);
+    // Unique‐constraint violation (e.g., already enrolled) will come here with code “23505”
+    if (error.code === "23505") {
+      return res.status(409).json({
+        status: "failed",
+        message: `Student ${studentId} is already enrolled in class ${classId}`,
+      });
+    }
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error enrolling student in class" });
+  }
+};
+
+const removeStudentFromClass = async (req, res) => {
+  const { classId, studentId } = req.params;
+
+  if (!classId || !studentId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required path parameters: classId and studentId",
+    });
+  }
+
+  try {
+    const result = await db.query(
+      classQueries.deleteClassStudentRelation,
+      [classId, studentId]
+    );
+
+    if (result.rowCount === 0) {
+      // Nothing was deleted → relationship didn’t exist
+      return res.status(404).json({
+        status: "failed",
+        message: `No enrollment found for student ${studentId} in class ${classId}`,
+      });
+    }
+
+    logger.info(`Student ${studentId} removed from class ${classId}`);
+    return res.status(200).json({
+      status: "success",
+      message: `Student ${studentId} unenrolled from class ${classId}`,
+    });
+  } catch (error) {
+    logger.error(error);
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error removing student from class" });
+  }
+};
+
+//
+// 12) POST /classes/:classId/students/bulk
+//     → Bulk‐enroll students, either “all in grade” or a given list
+//
+// controllers/class.controller.js
+
+const bulkEnrollStudentsToClass = async (req, res) => {
+  const { classId } = req.params;
+  const { enrollAllInGrade, studentIds } = req.body;
+
+  if (!classId) {
+    return res
+      .status(400)
+      .json({ status: "failed", message: "Missing classId" });
+  }
+
+  try {
+    // If enrollAllInGrade = true, insert every student in that class’s grade
+    if (enrollAllInGrade) {
+      // 1) Fetch this class’s grade
+      const { rows: classRows } = await db.query(
+        classQueries.selectClassById,
+        [classId]
+      );
+      if (classRows.length === 0) {
+        return res.status(404).json({
+          status: "failed",
+          message: `Class ${classId} not found`,
+        });
+      }
+      const classGrade = classRows[0].grade;
+      const classSchool = classRows[0].school;
+
+      // 2) Insert all students in that grade
+      await db.query(bulkQueries.enrollAllInGrade, [classId, classGrade, classSchool]);
+
+      // 3) To figure out exactly which IDs were inserted, fetch all student_ids in that grade
+      const { rows: studentRows } = await db.query(
+        studentQueries.selectStudentsByGrade,
+        [classGrade]
+      );
+      const gradeStudentIds = studentRows.map((r) => r.student_id);
+
+      // 4) Now run “selectEnrolledSpecificStudents” to return every student_id among those
+      const { rows: insertedRows } = await db.query(
+        bulkQueries.selectEnrolledSpecificStudents,
+        [classId, gradeStudentIds]
+      );
+      const newlyInsertedIds = insertedRows.map((r) => r.student_id);
+
+      return res.status(201).json({
+        status: "success",
+        data: newlyInsertedIds.map((sid) => ({ classId, studentId: sid })),
+      });
+    }
+
+    // Otherwise, we expect a (non­empty) array of studentIds
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({
+        status: "failed",
+        message:
+          "Must supply non­empty studentIds array when enrollAllInGrade=false",
+      });
+    }
+
+    // 5) Insert only the provided list
+    // Here we pass a real `uuid[]` for $2; pg will automatically cast the JS array → uuid[].
+    await db.query(bulkQueries.enrollSpecificStudents, [classId, studentIds]);
+
+    // 6) Return exactly which studentIds were newly added
+    const { rows: insertedRows2 } = await db.query(
+      bulkQueries.selectEnrolledSpecificStudents,
+      [classId, studentIds]
+    );
+    const newlyInsertedIds2 = insertedRows2.map((r) => r.student_id);
+
+    return res.status(201).json({
+      status: "success",
+      data: newlyInsertedIds2.map((sid) => ({ classId, studentId: sid })),
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({
+      status: "failed",
+      message: "Error during bulk enrollment",
+    });
+  }
+};
+
+const bulkUnenrollStudentsFromClass = async (req, res) => {
+  const { classId } = req.params;
+  if (!classId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing classId",
+    });
+  }
+
+  try {
+    // Delete every row in `class_students` where class_id = $1
+    const result = await db.query(
+      bulkQueries.unenrollAllFromClass,
+      [classId]
+    );
+
+    logger.info(
+      `Unenrolled all students from class ${classId} (deleted ${result.rowCount} rows)`
+    );
+    return res.status(200).json({
+      status: "success",
+      message: "All students unenrolled from class",
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({
+      status: "failed",
+      message: "Error unenrolling all students",
+    });
+  }
+};
+
 module.exports = {
   getAllClasses,
   getClassById,
@@ -351,4 +553,8 @@ module.exports = {
   deleteClass,
   getStudentsInClass,
   getAssessmentsByClass,
+  addStudentToClass,
+  removeStudentFromClass,
+  bulkEnrollStudentsToClass,
+  bulkUnenrollStudentsFromClass
 };

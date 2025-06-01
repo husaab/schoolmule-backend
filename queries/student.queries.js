@@ -109,6 +109,12 @@ const studentQueries = {
   deleteStudentById: `
     DELETE FROM students
     WHERE student_id = $1
+  `,
+
+  selectStudentsByGrade: `
+    SELECT student_id
+    FROM students
+    WHERE grade = $1
   `
 };
 

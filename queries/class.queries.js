@@ -155,6 +155,18 @@ const classQueries = {
     WHERE class_id = $1
     ORDER BY weight_percent
   `,
+
+    createClassStudentRelation: `
+      INSERT INTO class_students (class_id, student_id)
+      VALUES ($1, $2)
+      RETURNING *
+    `,
+
+    deleteClassStudentRelation: `
+      DELETE FROM class_students
+      WHERE class_id = $1
+        AND student_id = $2
+    `,
 };
 
 module.exports = classQueries;
