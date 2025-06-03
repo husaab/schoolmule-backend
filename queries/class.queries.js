@@ -5,16 +5,17 @@ const classQueries = {
   // 1) GET /classes?school={school}
   //    → List all classes for a given school
   //
-  selectClassesBySchool: `
+   selectClassesBySchool: `
     SELECT
       class_id,
       school,
       grade,
       subject,
-      homeroom_teacher_name,
+      teacher_name,
+      teacher_id,
       created_at,
       last_modified_at
-    FROM classes
+    FROM public.classes
     WHERE school = $1
     ORDER BY grade, subject
   `,
@@ -29,10 +30,11 @@ const classQueries = {
       school,
       grade,
       subject,
-      homeroom_teacher_name,
+      teacher_name,
+      teacher_id,
       created_at,
       last_modified_at
-    FROM classes
+    FROM public.classes
     WHERE class_id = $1
   `,
 
@@ -46,12 +48,13 @@ const classQueries = {
       school,
       grade,
       subject,
-      homeroom_teacher_name,
+      teacher_name,
+      teacher_id,
       created_at,
       last_modified_at
-    FROM classes
+    FROM public.classes
     WHERE school = $1
-      AND grade = $2
+      AND grade  = $2
     ORDER BY subject
   `,
 
@@ -65,12 +68,13 @@ const classQueries = {
       school,
       grade,
       subject,
-      homeroom_teacher_name,
+      teacher_name,
+      teacher_id,
       created_at,
       last_modified_at
-    FROM classes
-    WHERE homeroom_teacher_name = $1
-    ORDER BY school, grade, subject
+    FROM public.classes
+    WHERE teacher_name = $1
+    ORDER BY grade, subject
   `,
 
   //
@@ -78,13 +82,18 @@ const classQueries = {
   //    → Create a new class
   //
   createClass: `
-    INSERT INTO classes (
+    INSERT INTO public.classes
+      (school, grade, subject, teacher_name, teacher_id)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING
+      class_id,
       school,
       grade,
       subject,
-      homeroom_teacher_name
-    ) VALUES ($1, $2, $3, $4)
-    RETURNING *
+      teacher_name,
+      teacher_id,
+      created_at,
+      last_modified_at
   `,
 
   //
@@ -92,15 +101,24 @@ const classQueries = {
   //    → Update any field of an existing class
   //
   updateClassById: `
-    UPDATE classes
+    UPDATE public.classes
     SET
-      school                 = COALESCE($1, school),
-      grade                  = COALESCE($2, grade),
-      subject                = COALESCE($3, subject),
-      homeroom_teacher_name  = COALESCE($4, homeroom_teacher_name),
-      last_modified_at       = NOW()
-    WHERE class_id = $5
-    RETURNING *
+      school            = COALESCE($1, school),
+      grade             = COALESCE($2, grade),
+      subject           = COALESCE($3, subject),
+      teacher_name      = COALESCE($4, teacher_name),
+      teacher_id        = COALESCE($5, teacher_id),
+      last_modified_at  = NOW()
+    WHERE class_id = $6
+    RETURNING
+      class_id,
+      school,
+      grade,
+      subject,
+      teacher_name,
+      teacher_id,
+      created_at,
+      last_modified_at
   `,
 
   //

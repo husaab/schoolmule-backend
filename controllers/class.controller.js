@@ -29,13 +29,14 @@ const getAllClasses = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: rows.map((c) => ({
-        classId:             c.class_id,
-        school:              c.school,
-        grade:               c.grade,
-        subject:             c.subject,
-        homeroomTeacherName: c.homeroom_teacher_name,  // <— changed
-        createdAt:           c.created_at,
-        lastModifiedAt:      c.last_modified_at,
+        classId:      c.class_id,
+        school:       c.school,
+        grade:        c.grade,
+        subject:      c.subject,
+        teacherName:  c.teacher_name,  // <-- now from classes.teacher_name
+        teacherId:    c.teacher_id,    // <-- new
+        createdAt:    c.created_at,
+        lastModifiedAt: c.last_modified_at
       })),
     });
   } catch (error) {
@@ -65,13 +66,14 @@ const getClassById = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: {
-        classId:             c.class_id,
-        school:              c.school,
-        grade:               c.grade,
-        subject:             c.subject,
-        homeroomTeacherName: c.homeroom_teacher_name,  // <— changed
-        createdAt:           c.created_at,
-        lastModifiedAt:      c.last_modified_at,
+        classId:        c.class_id,
+        school:         c.school,
+        grade:          c.grade,
+        subject:        c.subject,
+        teacherName:    c.teacher_name,  // <-- new
+        teacherId:      c.teacher_id,    // <-- new
+        createdAt:      c.created_at,
+        lastModifiedAt: c.last_modified_at
       },
     });
   } catch (error) {
@@ -114,13 +116,14 @@ const getClassesByGrade = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: rows.map((c) => ({
-        classId:             c.class_id,
-        school:              c.school,
-        grade:               c.grade,
-        subject:             c.subject,
-        homeroomTeacherName: c.homeroom_teacher_name,  // <— changed
-        createdAt:           c.created_at,
-        lastModifiedAt:      c.last_modified_at,
+        classId:        c.class_id,
+        school:         c.school,
+        grade:          c.grade,
+        subject:        c.subject,
+        teacherName:    c.teacher_name,  // <-- new
+        teacherId:      c.teacher_id,    // <-- new
+        createdAt:      c.created_at,
+        lastModifiedAt: c.last_modified_at
       })),
     });
   } catch (error) {
@@ -154,13 +157,14 @@ const getClassesByTeacher = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: rows.map((c) => ({
-        classId:             c.class_id,
-        school:              c.school,
-        grade:               c.grade,
-        subject:             c.subject,
-        homeroomTeacherName: c.homeroom_teacher_name,  // <— changed
-        createdAt:           c.created_at,
-        lastModifiedAt:      c.last_modified_at,
+        classId:        c.class_id,
+        school:         c.school,
+        grade:          c.grade,
+        subject:        c.subject,
+        teacherName:    c.teacher_name,  // <-- new
+        teacherId:      c.teacher_id,    // <-- new
+        createdAt:      c.created_at,
+        lastModifiedAt: c.last_modified_at
       })),
     });
   } catch (error) {
@@ -176,39 +180,43 @@ const getClassesByTeacher = async (req, res) => {
 //    → Create a new class
 //
 const createClass = async (req, res) => {
-  // Now expect homeroom_teacher_name instead of ID
-  const { school, grade, subject, homeroom_teacher_name } = req.body;
+  const { school, grade, subject, teacherName, teacherId } = req.body;
 
-  // Basic required‐field check
-  if (!school || grade == null || !subject || !homeroom_teacher_name) {
+  // Validate required fields
+  if (!school || grade == null || !subject || !teacherName || !teacherId) {
     return res.status(400).json({
       status: "failed",
       message:
-        "Missing required fields: school, grade, subject, homeroom_teacher_name",
+        "Missing required fields: school, grade, subject, teacherName, teacherId"
     });
   }
 
   try {
-    const vals = [school, grade, subject, homeroom_teacher_name];
+    // Optionally: you can verify that `teacherId` actually exists in users with role='teacher'
+    // e.g. await db.query("SELECT 1 FROM users WHERE user_id = $1 AND role='teacher'", [teacherId]);
+
+    const vals = [school, grade, subject, teacherName, teacherId];
     const { rows } = await db.query(classQueries.createClass, vals);
 
     logger.info(`Class created with id ${rows[0].class_id}`);
     return res.status(201).json({
       status: "success",
       data: {
-        classId:             rows[0].class_id,
-        school:              rows[0].school,
-        grade:               rows[0].grade,
-        subject:             rows[0].subject,
-        homeroomTeacherName: rows[0].homeroom_teacher_name,  // <— changed
-        createdAt:           rows[0].created_at,
-        lastModifiedAt:      rows[0].last_modified_at,
-      },
+        classId:      rows[0].class_id,
+        school:       rows[0].school,
+        grade:        rows[0].grade,
+        subject:      rows[0].subject,
+        teacherName:  rows[0].teacher_name,
+        teacherId:    rows[0].teacher_id,
+        createdAt:    rows[0].created_at,
+        lastModifiedAt: rows[0].last_modified_at
+      }
     });
   } catch (error) {
-    // If you add a UNIQUE(school, grade, subject) constraint, catch code “23505” here
     logger.error(error);
-    return res.status(500).json({ status: "failed", message: "Error creating class" });
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error creating class" });
   }
 };
 
@@ -218,16 +226,30 @@ const createClass = async (req, res) => {
 //
 const updateClass = async (req, res) => {
   const { id } = req.params;
+  const {
+    school          = null,
+    grade           = null,
+    subject         = null,
+    teacherName     = null,
+    teacherId       = null
+  } = req.body;
+
+  // Build the parameter array in the same order as `updateClassById`
+  // (i.e. $1=school, $2=grade, $3=subject, $4=teacher_name, $5=teacher_id, $6=class_id)
   const vals = [
-    req.body.school ?? null,
-    req.body.grade ?? null,
-    req.body.subject ?? null,
-    req.body.homeroom_teacher_name ?? null,  // <— changed param
-    id,
+    school,
+    grade,
+    subject,
+    teacherName,
+    teacherId,
+    id
   ];
 
   try {
-    const { rows, rowCount } = await db.query(classQueries.updateClassById, vals);
+    const { rows, rowCount } = await db.query(
+      classQueries.updateClassById,
+      vals
+    );
     if (rowCount === 0) {
       return res
         .status(404)
@@ -235,23 +257,28 @@ const updateClass = async (req, res) => {
     }
 
     logger.info(`Class ${id} updated`);
+    const c = rows[0];
     return res.status(200).json({
       status: "success",
       data: {
-        classId:             rows[0].class_id,
-        school:              rows[0].school,
-        grade:               rows[0].grade,
-        subject:             rows[0].subject,
-        homeroomTeacherName: rows[0].homeroom_teacher_name,  // <— changed
-        createdAt:           rows[0].created_at,
-        lastModifiedAt:      rows[0].last_modified_at,
-      },
+        classId:      c.class_id,
+        school:       c.school,
+        grade:        c.grade,
+        subject:      c.subject,
+        teacherName:  c.teacher_name,  // <-- updated
+        teacherId:    c.teacher_id,    // <-- updated
+        createdAt:    c.created_at,
+        lastModifiedAt: c.last_modified_at
+      }
     });
   } catch (error) {
     logger.error(error);
-    return res.status(500).json({ status: "failed", message: "Error updating class" });
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error updating class" });
   }
 };
+
 
 //
 // 7) DELETE /classes/:id
