@@ -570,6 +570,44 @@ const bulkUnenrollStudentsFromClass = async (req, res) => {
   }
 };
 
+const getClassesByTeacherId = async (req, res) => {
+  const { teacherId } = req.params
+  if (!teacherId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required path parameter: teacherId"
+    })
+  }
+
+  try {
+    // Run the new query
+    const { rows } = await db.query(
+      classQueries.selectClassesByTeacherId,
+      [teacherId]
+    )
+
+    logger.info(`Classes fetched successfully for teacher_id="${teacherId}"`)
+    return res.status(200).json({
+      status: "success",
+      data: rows.map((c) => ({
+        classId:        c.class_id,
+        school:         c.school,
+        grade:          c.grade,
+        subject:        c.subject,
+        teacherName:    c.teacher_name,
+        teacherId:      c.teacher_id,
+        createdAt:      c.created_at,
+        lastModifiedAt: c.last_modified_at
+      }))
+    })
+  } catch (error) {
+    logger.error(error)
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error fetching classes by teacherId" })
+  }
+}
+
 module.exports = {
   getAllClasses,
   getClassById,
@@ -583,5 +621,6 @@ module.exports = {
   addStudentToClass,
   removeStudentFromClass,
   bulkEnrollStudentsToClass,
-  bulkUnenrollStudentsFromClass
+  bulkUnenrollStudentsFromClass,
+  getClassesByTeacherId
 };

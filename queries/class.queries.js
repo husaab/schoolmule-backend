@@ -185,6 +185,21 @@ const classQueries = {
       WHERE class_id = $1
         AND student_id = $2
     `,
+
+    selectClassesByTeacherId: `
+      SELECT
+        class_id,
+        school,
+        grade,
+        subject,
+        teacher_name,
+        teacher_id,
+        created_at,
+        last_modified_at
+      FROM classes
+      WHERE teacher_id = $1
+      ORDER BY grade, subject
+    `,
 };
 
 module.exports = classQueries;

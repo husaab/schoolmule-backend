@@ -3,7 +3,7 @@
 const express = require("express");
 const { getAllClasses, getClassById, getClassesByGrade, getClassesByTeacher, createClass,
   updateClass, deleteClass, getStudentsInClass, getAssessmentsByClass,  addStudentToClass, bulkEnrollStudentsToClass,
-  removeStudentFromClass, bulkUnenrollStudentsFromClass } = require("../controllers/class.controller");
+  removeStudentFromClass, bulkUnenrollStudentsFromClass, getClassesByTeacherId } = require("../controllers/class.controller");
 
 const router = express.Router();
 
@@ -12,6 +12,7 @@ router.get("/", getAllClasses);
 router.get("/:id", getClassById);
 router.get("/grade/:grade", getClassesByGrade);
 router.get("/teacher/:teacherName", getClassesByTeacher);
+router.get("/teacher/id/:teacherId", getClassesByTeacherId);
 
 router.post("/", createClass);
 router.patch("/:id", updateClass);
