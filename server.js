@@ -10,6 +10,7 @@ const classRoutes = require("./routes/class.routes")
 const assessmentRoutes = require("./routes/assessment.routes")
 const teacherRoutes = require("./routes/teacher.routes")
 const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
+const attendanceRoutes = require("./routes/attendance.routes")
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -44,6 +45,7 @@ app.use("/api/classes", classRoutes);
 app.use("/api/assessments", assessmentRoutes);
 app.use("/api/teachers", teacherRoutes);
 app.use('/api/studentAssessments', studentAssessmentRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 // Export app for testing
 module.exports = app;
