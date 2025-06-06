@@ -70,6 +70,21 @@ const assessmentQueries = {
     DELETE FROM assessments
     WHERE assessment_id = $1
   `,
+
+  selectFinalGradesByStudent: `
+    SELECT 
+      c.subject AS subject_name,
+      ROUND(SUM(COALESCE(sa.score, 0) * (a.weight_percent / 100.0))) AS final_grade
+    FROM students s
+    JOIN class_students cs ON cs.student_id = s.student_id
+    JOIN classes c ON c.class_id = cs.class_id
+    JOIN assessments a ON a.class_id = c.class_id
+    LEFT JOIN student_assessments sa 
+      ON sa.assessment_id = a.assessment_id AND sa.student_id = s.student_id
+    WHERE s.student_id = $1
+    GROUP BY c.subject
+    ORDER BY c.subject
+  `
 }
 
 module.exports = assessmentQueries

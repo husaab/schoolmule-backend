@@ -15,6 +15,17 @@ const teacherQueries = {
     WHERE role = 'TEACHER'
       AND school = $1
     ORDER BY last_name, first_name
+  `,
+
+  selectTeacherById: `
+    SELECT
+      user_id,
+      first_name,
+      last_name,
+      email
+    FROM users
+    WHERE user_id = $1
+      AND role = 'TEACHER'
   `
 };
 

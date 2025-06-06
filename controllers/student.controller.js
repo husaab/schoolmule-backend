@@ -87,17 +87,13 @@ const getStudentById = async (req, res) => {
 const createStudent = async (req, res) => {
   const {
     name,
-    homeroom_teacher_id,
+    homeroomTeacherId,
     grade,
     oen,
     school,                // ← new
-    mother_name,
-    mother_email,
-    mother_number,
-    father_name,
-    father_email,
-    father_number,
-    emergency_contact
+    mother,
+    father,
+    emergencyContact
     } = req.body;
 
   // Basic required-field check
@@ -111,17 +107,17 @@ const createStudent = async (req, res) => {
   try {
     const vals = [
       name,
-      homeroom_teacher_id || null,
+      homeroomTeacherId || null,
       grade,
       oen,
       school,
-      mother_name || null,
-      mother_email || null,
-      mother_number || null,
-      father_name || null,
-      father_email || null,
-      father_number || null,
-      emergency_contact
+      mother.name || null,
+      mother.email || null,
+      mother.number || null,
+      father.name || null,
+      father.email || null,
+      father.number || null,
+      emergencycontact
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
@@ -139,20 +135,31 @@ const createStudent = async (req, res) => {
 const updateStudent = async (req, res) => {
   const { id } = req.params;
   // pull in everything; missing → null for COALESCE in your SQL
+  const {
+    name,
+    grade,
+    oen,
+    school,
+    homeroomTeacherId,
+    mother = {},
+    father = {},
+    emergencyContact,
+  } = req.body;
+
   const vals = [
-    req.body.name ?? null,
-    req.body.homeroom_teacher_id ?? null,
-    req.body.grade ?? null,
-    req.body.oen ?? null,
-    req.body.school ?? null,
-    req.body.mother_name ?? null,
-    req.body.mother_email ?? null,
-    req.body.mother_number ?? null,
-    req.body.father_name ?? null,
-    req.body.father_email ?? null,
-    req.body.father_number ?? null,
-    req.body.emergency_contact ?? null,
-    id
+    name ?? null,
+    homeroomTeacherId ?? null,
+    grade ?? null,
+    oen ?? null,
+    school ?? null,
+    mother.name ?? null,
+    mother.email ?? null,
+    mother.phone ?? null,
+    father.name ?? null,
+    father.email ?? null,
+    father.phone ?? null,
+    emergencyContact ?? null,
+    id,
   ];
 
   try {

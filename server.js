@@ -11,6 +11,7 @@ const assessmentRoutes = require("./routes/assessment.routes")
 const teacherRoutes = require("./routes/teacher.routes")
 const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
 const attendanceRoutes = require("./routes/attendance.routes")
+const reportCardRoutes = require('./routes/reportCard.routes');
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -31,7 +32,7 @@ app.use(express.json());
 
 const limiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
-    max: 30,
+    max: 1000,
 });
 
 // Apply the limiter to all requests
@@ -46,6 +47,7 @@ app.use("/api/assessments", assessmentRoutes);
 app.use("/api/teachers", teacherRoutes);
 app.use('/api/studentAssessments', studentAssessmentRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/report-cards", reportCardRoutes);
 
 // Export app for testing
 module.exports = app;
