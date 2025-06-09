@@ -15,6 +15,21 @@ const reportCardQueries = {
     SELECT student_id, class_id, term, work_habits, behavior, comment
     FROM report_card_feedback
     WHERE student_id = $1 AND class_id = $2 AND term = $3
+  `,
+
+  upsertGeneratedReportCard: `
+    INSERT INTO report_cards (student_id, term, student_name, file_path, grade)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (student_id, term) DO UPDATE
+    SET file_path = EXCLUDED.file_path,
+        grade = EXCLUDED.grade,
+        generated_at = now()
+  `,
+
+  selectGeneratedReportCards: `
+    SELECT student_id, term, student_name, file_path, generated_at, grade
+    FROM report_cards
+    WHERE term = $1
   `
 };
 

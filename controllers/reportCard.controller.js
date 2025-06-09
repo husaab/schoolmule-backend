@@ -90,7 +90,36 @@ const getFeedback = async (req, res) => {
   }
 };
 
+const generateReportCardsBulk = async (req, res) => {
+  const { studentIds, term } = req.body;
 
+  if (!Array.isArray(studentIds) || !term) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing or invalid studentIds or term'
+    });
+  }
+
+  const successes = [];
+  const failures = [];
+
+  for (const studentId of studentIds) {
+    try {
+      const result = await generateSingleReportCard(studentId, term);
+      successes.push({ studentId, message: result });
+    } catch (err) {
+      logger.error(`Failed to generate report card for ${studentId}`, err);
+      failures.push({ studentId, error: err.message || 'Unknown error' });
+    }
+  }
+
+  return res.status(200).json({
+    status: 'completed',
+    term,
+    generated: successes,
+    failed: failures
+  });
+};
 
 
 /**
@@ -139,17 +168,17 @@ const generateReportCard = async (req, res) => {
     // Fetch all feedbacks for these classes for the given term
     const feedbackRows = [];
     for (const cls of classRows) {
-    const { rows: fbRows } = await db.query(reportCardQueries.selectFeedback, [
-        studentId,
-        cls.class_id,
-        term
-    ]);
-    if (fbRows.length > 0) {
-        feedbackRows.push({
-        subject: cls.subject,
-        ...fbRows[0]
-        });
-    }
+      const { rows: fbRows } = await db.query(reportCardQueries.selectFeedback, [
+          studentId,
+          cls.class_id,
+          term
+      ]);
+      if (fbRows.length > 0) {
+          feedbackRows.push({
+          subject: cls.subject,
+          ...fbRows[0]
+          });
+      }
     }
 
     // Render HTML → PDF
@@ -170,7 +199,7 @@ const generateReportCard = async (req, res) => {
 
     // Upload to Supabase bucket
     const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase(); // e.g., "Al Haadi Academy" → "ALHAADIACADEMY"
-    const fileName = `${schoolFolder}/${studentId}_report_card.pdf`;
+    const fileName = `${schoolFolder}/${student.name}_${term}_report_card.pdf`;
 
     const { error } = await supabase
       .storage
@@ -179,6 +208,14 @@ const generateReportCard = async (req, res) => {
         contentType: 'application/pdf',
         upsert: true
       });
+
+      await db.query(reportCardQueries.upsertGeneratedReportCard, [
+        studentId,
+        term,
+        student.name,
+        fileName,
+        student.grade
+      ]);
 
     if (error) {
       logger.error(error);
@@ -192,8 +229,145 @@ const generateReportCard = async (req, res) => {
   }
 };
 
+const generateSingleReportCard = async (studentId, term) => {
+  const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
+  if (studentRows.length === 0) throw new Error('Student not found');
+  const student = studentRows[0];
+
+  const { rows: teacherRows } = await db.query(`
+    SELECT username FROM users WHERE user_id = $1
+  `, [student.homeroom_teacher_id]);
+  const teacherName = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
+
+  const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
+  const subjects = assessments.map(a => ({
+    subject: a.subject_name,
+    grade: Math.round(a.final_grade)
+  }));
+
+  const { rows: classRows } = await db.query(`
+    SELECT c.class_id, c.subject
+    FROM class_students cs
+    JOIN classes c ON cs.class_id = c.class_id
+    WHERE cs.student_id = $1
+  `, [studentId]);
+
+  const feedbackRows = [];
+  for (const cls of classRows) {
+    const { rows: fbRows } = await db.query(reportCardQueries.selectFeedback, [
+      studentId,
+      cls.class_id,
+      term
+    ]);
+    if (fbRows.length > 0) {
+      feedbackRows.push({
+        subject: cls.subject,
+        ...fbRows[0]
+      });
+    }
+  }
+
+  const html = getReportCardHTML({
+    schoolName: student.school,
+    term,
+    student: {
+      name: student.name,
+      grade: student.grade,
+      oen: student.oen,
+      homeroomTeacher: teacherName
+    },
+    subjects,
+    feedbacks: feedbackRows
+  });
+
+  const pdfBuffer = await createPDFBuffer(html);
+  const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
+  const fileName = `${schoolFolder}/${student.name}_${term}_report_card.pdf`;
+
+  const { error } = await supabase
+    .storage
+    .from('report-cards')
+    .upload(fileName, pdfBuffer, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+    await db.query(reportCardQueries.upsertGeneratedReportCard, [
+      studentId,
+      term,
+      student.name,
+      fileName,
+      student.grade
+    ]);
+
+  if (error) throw new Error('Upload to storage failed');
+
+  return 'Report card generated and uploaded';
+};
+
+/**
+ * GET /report-cards/status?term=Term 1
+ */
+const getGeneratedReportCards = async (req, res) => {
+  const { term } = req.query;
+
+  if (!term) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing query parameter: term'
+    });
+  }
+
+  try {
+    const { rows } = await db.query(
+      reportCardQueries.selectGeneratedReportCards,
+      [term]
+    );
+
+    return res.status(200).json({
+      status: 'success',
+      data: rows
+    });
+  } catch (err) {
+    logger.error(err);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching report card status' });
+  }
+};
+
+const deleteReportCard = async (req, res) => {
+  const filePath = req.query.filePath;
+
+  if (!filePath) {
+    return res.status(400).json({ status: 'failed', message: 'filePath is required' });
+  }
+
+  try {
+    // Delete from Supabase Storage
+    const { error } = await supabase.storage
+      .from('report-cards')
+      .remove([filePath]);
+
+    if (error) {
+      console.error('Supabase delete error:', error);
+      return res.status(500).json({ status: 'failed', message: 'Failed to delete file from storage' });
+    }
+
+    // Optional: Remove from database table
+    await db.query('DELETE FROM report_cards WHERE file_path = $1', [filePath]);
+
+    return res.status(200).json({ status: 'success', message: 'Report card deleted' });
+  } catch (err) {
+    console.error('Delete report card error:', err);
+    return res.status(500).json({ status: 'failed', message: 'Server error' });
+  }
+};
+
+
 module.exports = {
   generateReportCard,
   upsertFeedback,
-  getFeedback
+  getFeedback,
+  generateReportCardsBulk,
+  getGeneratedReportCards,
+  deleteReportCard
 };

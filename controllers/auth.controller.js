@@ -78,6 +78,13 @@ const resend = new Resend(process.env.RESEND_API_KEY);
     } catch (error) {
       await client.query('ROLLBACK');
       logger.error(error);
+      if (error.code === '23505' && error.constraint === 'users_duplicate_email_key') {
+        return {
+          status: 400,
+          message: "An account with this email already exists.",
+        };
+      }
+
       return {
         status: 500,
         message: error.message || "Internal Server Error"
