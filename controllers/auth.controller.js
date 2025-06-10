@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
-const { getVerificationEmailHTML } = require('../utils/emailTemplate');
+const { getVerificationEmailHTML, getConfirmedEmailHTML  } = require('../utils/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -26,6 +26,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
       const userId = uuidv4();
       const emailToken = uuidv4();
       const isVerified = false;
+      const isVerifiedSchool = false;
 
       const values = [
         userId,
@@ -37,7 +38,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         school,
         role,
         emailToken,
-        isVerified
+        isVerified,
+        isVerifiedSchool
       ];
 
       const result = await client.query(userQueries.createUser, values);
@@ -45,7 +47,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
       await client.query('COMMIT');
 
-      const verificationUrl = `${process.env.FRONTEND_URL}/verifyemailtoken?token=${user.email_token}`;
+      const verificationUrl = `${process.env.FRONTEND_URL}/verify-email-token?token=${user.email_token}`;
       const html = getVerificationEmailHTML({
         name: user.first_name,
         url: verificationUrl
@@ -69,6 +71,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
           school: user.school,
           role: user.role,
           isVerified: user.is_verified,
+          isVerifiedSchool: user.is_verified_school,
           emailToken: user.email_token,
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at
@@ -124,6 +127,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
           school: user.school,
           role: user.role,
           isVerified: user.is_verified,
+          isVerifiedSchool: user.is_verified_school,
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at
         }
@@ -157,7 +161,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         };
       }
   
-      const verificationUrl = `${process.env.FRONTEND_URL}/verifyemailtoken?token=${user.email_token}`;
+      const verificationUrl = `${process.env.FRONTEND_URL}/verify-email-token?token=${user.email_token}`;
       const html = getVerificationEmailHTML({
         name: user.first_name,
         url: verificationUrl
@@ -170,10 +174,10 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         html
       });
   
-      return {
-        status: 200,
+      return res.status(200).json({
+        success: true,
         message: "Verification email sent successfully"
-      };
+      });
     } catch (error) {
       logger.error("Verification email error:", error);
       throw { status: error.status || 500, message: error.message || "Failed to send verification email" };
@@ -195,16 +199,26 @@ const resend = new Resend(process.env.RESEND_API_KEY);
       }
   
       const user = result.rows[0];
-      return {
-        status: 200,
+
+      const html = getConfirmedEmailHTML({ name: user.username });
+
+      await resend.emails.send({
+        from: 'verify@schoolmule.ca',
+        to: user.email,
+        subject: 'Your Email Has Been Verified at School Mule',
+        html,
+      });
+
+      return res.status(200).json({
+        success: true,
         message: "Email verified successfully",
         data: {
-          id: user.id,
+          id: user.user_id,
           email: user.email,
           username: user.username,
           isVerified: user.is_verified
         }
-      };
+      });
     } catch (error) {
       logger.error(error);
       throw { status: error.status || 500, message: error.message || "Failed to verify email" };

@@ -1,14 +1,16 @@
 const userQueries = {
     createUser: `
-      INSERT INTO users 
-        (user_id, email, username, password, first_name, last_name, school, role, created_at, last_modified_at, email_token, is_verified)
-      VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), $9, $10)
+     INSERT INTO users 
+    (user_id, email, username, password, first_name, last_name, school, role, created_at, last_modified_at, email_token, is_verified, is_verified_school)
+    VALUES 
+      ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), $9, $10, $11)
       RETURNING *
     `,
   
     loginUser: `
-      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at
+      SELECT user_id, email, username, password, first_name, last_name,
+            school, role, email_token, is_verified, is_verified_school, 
+            created_at, last_modified_at
       FROM users 
       WHERE email = $1
     `,
