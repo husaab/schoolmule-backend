@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
-const { getVerificationEmailHTML, getConfirmedEmailHTML  } = require('../utils/emailTemplate');
+const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML } = require('../utils/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -209,6 +209,24 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         html,
       });
 
+      const admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
+
+      console.log("Admins found for school:", user.school, admins.rows);
+
+      for (const admin of admins.rows) {
+        const adminHtml = getAdminNotifyEmailHTML({
+          name: admin.first_name,
+          school: user.school,
+        });
+        console.log("Notifying admin:", admin.email);
+        await resend.emails.send({
+          from: 'notification@schoolmule.ca',
+          to: admin.email,
+          subject: 'New User Awaiting School Approval',
+          html: adminHtml,
+        });
+      }
+
       return res.status(200).json({
         success: true,
         message: "Email verified successfully",
@@ -225,10 +243,158 @@ const resend = new Resend(process.env.RESEND_API_KEY);
     }
   };
 
+const approveUserForSchool = async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const result = await db.query(userQueries.approveUserSchool, [userId]);
+
+    if (result.rows.length === 0) {
+      throw { status: 404, message: "User not found or already approved" };
+    }
+
+    const user = result.rows[0];
+    const html = getApprovalEmailHTML({ name: user.username });
+
+    await resend.emails.send({
+      from: 'verify@schoolmule.ca',
+      to: user.email,
+      subject: 'Your School Mule Account Has Been Approved',
+      html,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "User approved and email sent",
+    });
+
+  } catch (error) {
+    logger.error(error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to approve user",
+    });
+  }
+};
+
+const getPendingApprovals = async (req, res) => {
+  const { school } = req.query;
+
+  if (!school) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing school identifier',
+    });
+  }
+
+  try {
+    const result = await db.query(userQueries.getPendingSchoolApprovals, [school]);
+
+    return res.status(200).json({
+      success: true,
+      users: result.rows,
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pending approvals',
+    });
+  }
+};
+
+const resendSchoolApprovalEmail = async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const result = await db.query(userQueries.resendSchoolApprovalEmail, [userId]);
+
+    if (result.rows.length === 0) {
+      throw { status: 404, message: "User not found or already approved" };
+    }
+
+    const user = result.rows[0];
+    const html = getApprovalEmailHTML({ name: user.username });
+
+    await resend.emails.send({
+      from: 'verify@schoolmule.ca',
+      to: user.email,
+      subject: 'Reminder: Your School Mule Account Was Approved',
+      html,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Approval email resent successfully",
+    });
+
+  } catch (error) {
+    logger.error(error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to resend approval email",
+    });
+  }
+};
+
+const deleteUserAccount = async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const result = await db.query(userQueries.deleteUser, [userId]);
+
+    if (result.rowCount === 0) {
+      throw { status: 404, message: "User not found" };
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User account deleted",
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to delete user",
+    });
+  }
+};
+
+const declineUserForSchool = async (req, res) => {
+  const { userId } = req.body;
+
+  try {
+    const result = await db.query(userQueries.selectById, [userId]);
+    if (result.rows.length === 0) {
+      throw { status: 404, message: "User not found" };
+    }
+
+    const user = result.rows[0];
+    const html = getDeclineEmailHTML({ name: user.first_name, school: user.school });
+
+    await resend.emails.send({
+      from: 'verify@schoolmule.ca',
+      to: user.email,
+      subject: 'Your School Mule Account Was Declined',
+      html,
+    });
+
+    return res.status(200).json({ success: true, message: 'User declined and email sent.' });
+  } catch (error) {
+    logger.error(error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to decline user",
+    });
+  }
+};
 
 module.exports = {
     registerUser,
     login,
     sendVerificationEmail,
-    verifyEmail
+    verifyEmail,
+    approveUserForSchool,
+    getPendingApprovals,
+    resendSchoolApprovalEmail,
+    deleteUserAccount,
+    declineUserForSchool
 }

@@ -62,8 +62,40 @@ const userQueries = {
       UPDATE users 
       SET is_verified = true , email_token = null
       WHERE email_token = $1
-      RETURNING user_id, email, username, is_verified
+      RETURNING user_id, email, username, is_verified, school
     `,
+
+    approveUserSchool: `
+      UPDATE users 
+      SET is_verified_school = true,
+          last_modified_at = NOW()
+      WHERE user_id = $1
+      RETURNING user_id, email, username, is_verified_school
+    `,
+
+    getPendingSchoolApprovals: `
+      SELECT user_id, email, username, first_name, last_name, role, school, created_at
+      FROM users
+      WHERE is_verified = true AND is_verified_school = false AND school = $1
+    `,
+
+    resendSchoolApprovalEmail: `
+      SELECT user_id, email, username, first_name
+      FROM users
+      WHERE user_id = $1 AND is_verified = true AND is_verified_school = false
+    `,
+
+    getAdminsBySchool: `
+      SELECT email, first_name
+      FROM users
+      WHERE school = $1 AND role = 'ADMIN'
+    `,
+
+    declineUserFromSchool: `
+      UPDATE users
+      SET is_verified_school = false, last_modified_at = NOW()
+      WHERE user_id = $1
+    `
   };
   
 module.exports = userQueries;

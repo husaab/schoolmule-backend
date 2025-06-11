@@ -22,13 +22,42 @@ function getVerificationEmailHTML({ name, url }) {
         <h2 style="color: #00ACC1;">Email Verified ✅</h2>
         <p>Hello <strong>${name}</strong>,</p>
         <p>We're excited to let you know that your email has been successfully verified at <strong>School Mule</strong>!</p>
-        <p>You can now log in and enjoy full access to your dashboard.</p>
+        <p>You are now awaiting approval from a school admin.</p>
         <p style="color: #888; font-size: 12px;">— School Mule Team</p>
       </div>
     `;
 }
-  
+
+const getApprovalEmailHTML = ({ name }) => `
+  <div>
+    <p>Hi ${name},</p>
+    <p>Your account has been approved by the school administrator! You can now access School Mule.</p>
+    <p><a href="${process.env.FRONTEND_URL}/login">Login here</a></p>
+  </div>
+`;
+
+const getAdminNotifyEmailHTML = ({ name, school }) => `
+  <div>
+    <p>Hello ${name},</p>
+    <p>A new user has verified their email and is requesting access to School Mule for <strong>${school}</strong>.</p>
+    <p>Please log in and approve their account if appropriate.</p>
+    <p><a href="${process.env.FRONTEND_URL}/admin-panel/approvals">Review pending approvals</a></p>
+  </div>
+`;
+
+const getDeclineEmailHTML = ({ name, school }) => `
+  <div>
+    <p>Hi ${name},</p>
+    <p>Your registration with <strong>${school}</strong> on School Mule was reviewed and unfortunately declined.</p>
+    <p>If you believe this was in error, please contact your school administrator directly.</p>
+    <p>— School Mule Team</p>
+  </div>
+`;
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
+  getApprovalEmailHTML,
+  getAdminNotifyEmailHTML,
+  getDeclineEmailHTML
 };
