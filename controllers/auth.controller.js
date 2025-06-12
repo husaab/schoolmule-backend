@@ -2,8 +2,11 @@ const db = require("../config/database");
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
+const passwordQueries = require('../queries/password.queries');
 const logger = require("../logger");
-const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML } = require('../utils/emailTemplate');
+const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML
+  , getResetEmailHTML
+ } = require('../utils/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -115,6 +118,29 @@ const resend = new Resend(process.env.RESEND_API_KEY);
       if (!isPasswordValid) {
         throw { status: 401, message: "Invalid credentials" };
       }
+
+      if (user.role === 'ADMIN') {
+        user.is_verified = true;
+        user.is_verified_school = true;
+      }
+
+      res.cookie('user_id', user.user_id, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+      });
+
+      res.cookie('is_verified_email', user.is_verified, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+      });
+
+      res.cookie('is_verified_school', user.is_verified_school, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+      });
 
       return {
         status: 200,
@@ -387,6 +413,92 @@ const declineUserForSchool = async (req, res) => {
   }
 };
 
+const logout = async (req, res) => {
+  res.clearCookie('user_id');
+  res.clearCookie('is_verified_email');
+  res.clearCookie('is_verified_school');
+
+  return res.status(200).json({
+    success: true,
+    message: 'Logged out successfully',
+  });
+};
+
+const requestPasswordReset = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const userResult = await db.query(userQueries.selectByEmail, [email]);
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'No user found with this email.' });
+    }
+
+    const user = userResult.rows[0];
+
+    const tokenResult = await db.query(passwordQueries.createPasswordResetToken, [user.user_id]);
+    const token = tokenResult.rows[0].token;
+
+    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+
+    await sendResetEmail(user.email, resetLink);
+
+    res.json({ success: true, message: 'Password reset email sent.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+const sendResetEmail = async (to, url) => {
+  const html = getResetEmailHTML({ name: 'there', url }); // you can customize name later
+  await resend.emails.send({
+    from: 'reset@schoolmule.ca',
+    to,
+    subject: 'Reset your password',
+    html
+  });
+};
+
+const validateResetToken = async (req, res) => {
+  const { token } = req.query;
+
+  try {
+    const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
+
+    if (tokenResult.rowCount === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token.' });
+    }
+
+    res.json({ success: true, message: 'Token is valid.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
+    if (tokenResult.rowCount === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token.' });
+    }
+
+    const { user_id } = tokenResult.rows[0];
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await db.query(userQueries.updatePassword, [hashedPassword, user_id]);
+    await db.query(passwordQueries.deletePasswordResetToken, [token]);
+
+    res.json({ success: true, message: 'Password updated successfully.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 module.exports = {
     registerUser,
     login,
@@ -396,5 +508,9 @@ module.exports = {
     getPendingApprovals,
     resendSchoolApprovalEmail,
     deleteUserAccount,
-    declineUserForSchool
+    declineUserForSchool,
+    logout,
+    requestPasswordReset,
+    validateResetToken,
+    resetPassword
 }

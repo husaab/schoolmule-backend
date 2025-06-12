@@ -2,7 +2,7 @@ const express = require("express")
 require("dotenv").config();
 const cors = require("cors");
 const rateLimit = require('express-rate-limit');
-
+const verifyUser = require('./middleware/verifyUserMiddleware');
 const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
 const studentRoutes = require("./routes/student.routes")
@@ -12,6 +12,8 @@ const teacherRoutes = require("./routes/teacher.routes")
 const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
 const attendanceRoutes = require("./routes/attendance.routes")
 const reportCardRoutes = require('./routes/reportCard.routes');
+
+const cookieParser = require("cookie-parser");
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -37,9 +39,13 @@ const limiter = rateLimit({
 
 // Apply the limiter to all requests
 app.use(limiter);
+app.use(cookieParser());
 app.use(RequestLogger);
 
 app.use("/api/auth", authRoutes); 
+
+app.use(verifyUser);
+
 app.use("/api/users", userRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/classes", classRoutes);
