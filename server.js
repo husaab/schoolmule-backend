@@ -13,6 +13,7 @@ const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
 const attendanceRoutes = require("./routes/attendance.routes")
 const reportCardRoutes = require('./routes/reportCard.routes');
 const scheduleRoutes = require("./routes/schedule.routes");
+const dashboardRoutes = require("./routes/dashboard.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -56,6 +57,7 @@ app.use('/api/studentAssessments', studentAssessmentRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/report-cards", reportCardRoutes);
 app.use("/api/schedules", scheduleRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 
 // Export app for testing
 module.exports = app;

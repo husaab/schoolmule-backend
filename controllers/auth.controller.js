@@ -128,18 +128,21 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
       res.cookie('is_verified_email', user.is_verified, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
       res.cookie('is_verified_school', user.is_verified_school, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
       return {

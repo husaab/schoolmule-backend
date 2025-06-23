@@ -1,13 +1,19 @@
 const attendanceQueries = {
   // Bulk insert general attendance
   insertGeneralAttendance: `
-    INSERT INTO general_attendance (student_id, attendance_date, status)
+    INSERT INTO general_attendance (
+      student_id,
+      attendance_date,
+      status,
+      school
+    )
     SELECT
       unnest($1::uuid[]),
       $2::date,
-      unnest($3::attendance_status[])
+      unnest($3::attendance_status[]),
+      $4::school
     ON CONFLICT (student_id, attendance_date) DO UPDATE
-    SET status = EXCLUDED.status
+      SET status = EXCLUDED.status
   `,
 
   // Bulk insert class attendance
@@ -29,10 +35,11 @@ const attendanceQueries = {
   `,
 
   // Get class attendance for a given class and date
-  selectClassAttendanceByDate: `
+  selectGeneralAttendanceByDate: `
     SELECT student_id, status
-    FROM class_attendance
-    WHERE class_id = $1 AND attendance_date = $2
+    FROM general_attendance
+    WHERE attendance_date = $1
+      AND school = $2
   `,
 };
 
