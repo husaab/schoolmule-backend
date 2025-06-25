@@ -12,4 +12,6 @@ router.get('/attendance/weekly', dashboardController.getWeeklyAttendanceRate)
 
 router.get('/attendance/monthly', dashboardController.getMonthlyAttendanceRate)
 
+router.get('/attendance/trend', dashboardController.getAttendanceTrend);
+
 module.exports = router

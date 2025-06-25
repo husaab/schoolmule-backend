@@ -28,10 +28,11 @@ const attendanceQueries = {
     SET status = EXCLUDED.status
   `,
 
-  selectGeneralAttendanceByDate: `
+  selectClassAttendanceByDate: `
     SELECT student_id, status
-    FROM general_attendance
-    WHERE attendance_date = $1
+    FROM class_attendance
+    WHERE class_id = $1
+      AND attendance_date = $2::date
   `,
 
   // Get class attendance for a given class and date
