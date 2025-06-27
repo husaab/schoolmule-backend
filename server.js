@@ -14,6 +14,7 @@ const attendanceRoutes = require("./routes/attendance.routes")
 const reportCardRoutes = require('./routes/reportCard.routes');
 const scheduleRoutes = require("./routes/schedule.routes");
 const dashboardRoutes = require("./routes/dashboard.routes")
+const emailRoutes = require("./routes/email.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -45,6 +46,7 @@ app.use(cookieParser());
 app.use(RequestLogger);
 
 app.use("/api/auth", authRoutes); 
+app.use("/api/email", emailRoutes);
 
 app.use(verifyUser);
 
