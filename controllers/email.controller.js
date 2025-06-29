@@ -1,6 +1,7 @@
 // src/controllers/email.controller.js
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
+const { getContactEmailHTML, getTicketEmailHTML } = require('../utils/emailTemplate');
 
 async function sendContactEmail(req, res) {
   const { name, email, message } = req.body;
@@ -8,13 +9,7 @@ async function sendContactEmail(req, res) {
     return res.status(400).json({ success:false, message:'Missing name, email or message' });
   }
 
-  const html = `
-    <h2>School Mule Contact Form Submission</h2>
-    <p><strong>Name:</strong> ${name}</p>
-    <p><strong>Email:</strong> ${email}</p>
-    <p><strong>Message:</strong></p>
-    <p>${message.replace(/\n/g,'<br>')}</p>
-  `;
+  const html = getContactEmailHTML({ name, email, message });
 
   await resend.emails.send({
     from: 'contact@schoolmule.ca',
@@ -37,15 +32,13 @@ async function sendTicketEmail(req, res) {
     return res.status(400).json({ success: false, message: 'Missing fields' });
   }
 
-  const html = `
-    <h2>New Support Ticket</h2>
-    <p><strong>Username:</strong> ${username}</p>
-    <p><strong>School:</strong> ${school}</p>
-    <p><strong>Contact Email:</strong> ${contactEmail}</p>
-    <p><strong>Issue Type:</strong> ${issueType}</p>
-    <p><strong>Description:</strong></p>
-    <p>${description.replace(/\n/g, '<br>')}</p>
-  `;
+  const html = getTicketEmailHTML({
+    username,
+    school,
+    issueType,
+    description,
+    contactEmail
+  });
 
   await resend.emails.send({
     from: `support@${process.env.MAIL_DOMAIN}`,

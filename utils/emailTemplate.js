@@ -70,11 +70,44 @@ const getResetEmailHTML = ({ name, url }) => `
   </div>
 `;
 
+// src/controllers/emailTemplates.js
+function getContactEmailHTML({ name, email, message }) {
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">New Contact Form Submission</h2>
+      <p><strong>Name:</strong> ${name}</p>
+      <p><strong>Email:</strong> ${email}</p>
+      <p><strong>Message:</strong></p>
+      <p>${message.replace(/\n/g, '<br>')}</p>
+      <p style="color: #888; font-size: 12px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
+function getTicketEmailHTML({ username, school, issueType, description, contactEmail }) {
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">New Support Ticket</h2>
+      <p><strong>Username:</strong> ${username}</p>
+      <p><strong>School:</strong> ${school}</p>
+      <p><strong>Contact Email:</strong> ${contactEmail}</p>
+      <p><strong>Issue Type:</strong> ${issueType}</p>
+      <p><strong>Description:</strong></p>
+      <p>${description.replace(/\n/g, '<br>')}</p>
+      <p style="color: #888; font-size: 12px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
   getApprovalEmailHTML,
   getAdminNotifyEmailHTML,
   getDeclineEmailHTML,
-  getResetEmailHTML
+  getResetEmailHTML,
+  getContactEmailHTML,
+  getTicketEmailHTML
 };
