@@ -95,7 +95,23 @@ const userQueries = {
       UPDATE users
       SET is_verified_school = false, last_modified_at = NOW()
       WHERE user_id = $1
-    `
+    `,
+
+      selectUsersBySchool: `
+        SELECT
+          user_id, email, username, first_name, last_name,
+          school, role, email_token, is_verified, created_at, last_modified_at
+        FROM users
+        WHERE school = $1
+        ORDER BY last_name, first_name
+      `,
+
+      selectParentsBySchool: `
+        SELECT user_id, first_name, last_name, email
+          FROM users
+        WHERE school = $1
+          AND role   = 'PARENT'
+      `
   };
   
 module.exports = userQueries;

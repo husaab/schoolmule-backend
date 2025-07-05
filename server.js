@@ -17,6 +17,7 @@ const dashboardRoutes = require("./routes/dashboard.routes")
 const emailRoutes = require("./routes/email.routes")
 const parentStudentRoutes = require("./routes/parentStudent.routes")
 const parentRoutes = require("./routes/parent.routes")
+const messageRoutes = require("./routes/message.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -64,6 +65,7 @@ app.use("/api/schedules", scheduleRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/parent-students", parentStudentRoutes);
 app.use("/api/parents", parentRoutes);
+app.use("/api/messages", messageRoutes);
 
 // Export app for testing
 module.exports = app;

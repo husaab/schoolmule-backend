@@ -101,6 +101,31 @@ function getTicketEmailHTML({ username, school, issueType, description, contactE
   `;
 }
 
+/**
+ * New message notification template
+ * @param {string} fromName – sender’s name
+ * @param {string} subject – message subject
+ * @param {string} link – URL users click to read the full message
+ */
+function getNewMessageEmailHTML({ fromName, subject, link }) {
+  return `
+    <div style="font-family:Arial,sans-serif;padding:20px;max-width:600px;margin:auto;
+                background:#f9f9f9;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+      <h2 style="color:#00ACC1;">You’ve Got a New Message 📬</h2>
+      <p><strong>From:</strong> ${fromName}</p>
+      <p><strong>Subject:</strong> ${subject || '<em>(No subject)</em>'}</p>
+      <div style="text-align:center;margin:30px 0;">
+        <a href="${link}"
+           style="background-color:#00ACC1;color:white;padding:12px 24px;
+                  text-decoration:none;border-radius:5px;font-weight:bold;display:inline-block;">
+          Read Message in Communication Inbox
+        </a>
+      </div>
+      <p style="color:#888;font-size:12px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
@@ -109,5 +134,6 @@ module.exports = {
   getDeclineEmailHTML,
   getResetEmailHTML,
   getContactEmailHTML,
-  getTicketEmailHTML
+  getTicketEmailHTML,
+  getNewMessageEmailHTML
 };

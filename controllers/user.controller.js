@@ -32,6 +32,31 @@ const getAllUser = async (req, res) => {
   }
 };
 
+const getUsersBySchool = async (req, res) => {
+  const { school } = req.params;
+  try {
+    const { rows } = await db.query(userQueries.selectUsersBySchool, [school]);
+    const data = rows.map(u => ({
+      userId: u.user_id,
+      username: u.username,
+      fullName: `${u.first_name} ${u.last_name}`,
+      firstName: u.first_name,
+      lastName: u.last_name,
+      email: u.email,
+      school: u.school,
+      role: u.role,
+      createdAt: u.created_at,
+      lastModifiedAt: u.last_modified_at,
+      isVerified: u.is_verified,
+      emailToken: u.email_token
+    }));
+    return res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error fetching users by school" });
+  }
+};
+
 const getUserByEmail = async (req, res) => {
   const { email } = req.params;
   if (!email) {
@@ -190,5 +215,6 @@ module.exports = {
   deleteUser,
   updateUser,
   getUserByEmail,
-  updatePassword
+  updatePassword,
+  getUsersBySchool
 };
