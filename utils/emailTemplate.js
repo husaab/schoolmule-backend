@@ -126,6 +126,26 @@ function getNewMessageEmailHTML({ fromName, subject, link }) {
   `;
 }
 
+// at the bottom of src/utils/emailTemplate.js
+function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
+  return `
+    <div style="font-family: Arial, sans-serif; padding:20px; max-width:600px; margin:auto;
+                background-color:#f9f9f9; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+      <h2 style="color:#00ACC1;">New Feedback for ${childName} 📝</h2>
+      <p>Your child, <strong>${childName}</strong>, has received feedback for <strong>${assessmentName}</strong> in ${courseName}.</p>
+      <p>Log in to view the full comments and details:</p>
+      <div style="text-align:center; margin: 30px 0;">
+        <a href="${link}"
+           style="background-color:#00ACC1; color:white; padding:12px 24px; text-decoration:none;
+                  border-radius:5px; font-weight:bold; display:inline-block;">
+          View Feedback
+        </a>
+      </div>
+      <p style="color:#888; font-size:12px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
@@ -135,5 +155,6 @@ module.exports = {
   getResetEmailHTML,
   getContactEmailHTML,
   getTicketEmailHTML,
-  getNewMessageEmailHTML
+  getNewMessageEmailHTML,
+  getFeedbackEmailHTML
 };

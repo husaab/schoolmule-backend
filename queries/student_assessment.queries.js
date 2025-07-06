@@ -37,7 +37,15 @@ DO UPDATE SET score = EXCLUDED.score
 RETURNING student_id, assessment_id, score;
 `;
 
+const selectStudentAssessment = `
+SELECT student_id, assessment_id, score
+FROM student_assessments
+WHERE student_id = $1
+  AND assessment_id = $2;
+`;
+
 module.exports = {
   selectScoresByClass,
   upsertStudentAssessments,
+  selectStudentAssessment
 };

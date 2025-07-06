@@ -502,6 +502,55 @@ const resetPassword = async (req, res) => {
   }
 };
 
+const validateSession = async (req, res) => {
+  const userId = req.cookies['user_id'];
+  const isEmailVerified = req.cookies['is_verified_email'] === 'true';
+  const isSchoolVerified = req.cookies['is_verified_school'] === 'true';
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'No session found'
+    });
+  }
+
+  try {
+    const result = await db.query(userQueries.selectById, [userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid session'
+      });
+    }
+
+    const user = result.rows[0];
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Session valid',
+      data: {
+        userId: user.user_id,
+        username: user.username,
+        fullName: `${user.first_name} ${user.last_name}`,
+        email: user.email,
+        school: user.school,
+        role: user.role,
+        isVerified: user.is_verified,
+        isVerifiedSchool: user.is_verified_school,
+        createdAt: user.created_at,
+        lastModifiedAt: user.last_modified_at
+      }
+    });
+  } catch (error) {
+    logger.error('Session validation error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Session validation failed'
+    });
+  }
+};
+
 module.exports = {
     registerUser,
     login,
@@ -515,5 +564,6 @@ module.exports = {
     logout,
     requestPasswordReset,
     validateResetToken,
-    resetPassword
+    resetPassword,
+    validateSession
 }

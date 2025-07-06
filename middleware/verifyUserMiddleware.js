@@ -1,4 +1,7 @@
 const verifyUser = (req, res, next) => {
+  if(req.cookies['user_id'] == null){
+    
+  }
   const isEmailVerified = req.cookies['is_verified_email'] === 'true';
   const isSchoolVerified = req.cookies['is_verified_school'] === 'true';
 

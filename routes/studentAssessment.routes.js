@@ -1,7 +1,7 @@
 // src/routes/studentAssessment.router.js
 
 const express = require('express');
-const { getScoresByClass, upsertScoresByClass, exportScoresExcel } = require('../controllers/studentAssessment.controller');
+const { getScoresByClass, upsertScoresByClass, exportScoresExcel, getStudentAssessment } = require('../controllers/studentAssessment.controller');
 
 const router = express.Router();
 
@@ -10,6 +10,7 @@ const router = express.Router();
 
 router.get('/classes/:classId/scores', getScoresByClass);
 router.post('/classes/:classId/scores', upsertScoresByClass);
-router.get('/classes/:classId/scores/csv', exportScoresExcel)
+router.get('/classes/:classId/scores/csv', exportScoresExcel);
+router.get('/:studentId/:assessmentId', getStudentAssessment);
 
 module.exports = router;

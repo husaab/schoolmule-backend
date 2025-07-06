@@ -1,7 +1,7 @@
 const express = require("express");
 const { registerUser, login, sendVerificationEmail, verifyEmail, approveUserForSchool,
 getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserForSchool, logout, requestPasswordReset, 
-validateResetToken, resetPassword} = require("../controllers/auth.controller");
+validateResetToken, resetPassword, validateSession} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 
@@ -23,5 +23,8 @@ router.post('/logout', logout);
 router.post("/request-password-reset", requestPasswordReset);
 router.get("/validate-reset-token", validateResetToken);
 router.post("/reset-password", resetPassword);
+
+// Session validation
+router.get("/me", validateSession);
 
 module.exports = router;

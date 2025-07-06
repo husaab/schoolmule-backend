@@ -1,7 +1,7 @@
 // src/controllers/studentAssessment.controller.js
 
 const db = require('../config/database');
-const { selectScoresByClass, upsertStudentAssessments } = require('../queries/student_assessment.queries');
+const { selectScoresByClass, upsertStudentAssessments, selectStudentAssessment } = require('../queries/student_assessment.queries');
 const logger = require('../logger');
 const ExcelJS = require('exceljs');
 
@@ -235,10 +235,27 @@ const exportScoresExcel = async (req, res) => {
   }
 };
 
-
+/**
+ * GET /studentAssessments/:studentId/:assessmentId
+ * → Return a single student assessment record
+ */
+async function getStudentAssessment(req, res) {
+  const { studentId, assessmentId } = req.params;
+  try {
+    const { rows } = await db.query(selectStudentAssessment, [studentId, assessmentId]);
+    if (rows.length === 0) {
+      return res.status(200).json({ status: 'success', data: null });
+    }
+    return res.status(200).json({ status: 'success', data: rows[0] });
+  } catch (err) {
+    logger.error(err);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching student assessment' });
+  }
+}
 
 module.exports = {
   getScoresByClass,
   upsertScoresByClass,
-  exportScoresExcel
+  exportScoresExcel,
+  getStudentAssessment
 };
