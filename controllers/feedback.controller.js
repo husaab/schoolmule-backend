@@ -13,6 +13,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const toCamel = row => ({
   feedbackId:           row.feedback_id,
   studentId:            row.student_id,
+  studentName:          row.student_name,
   senderId:             row.sender_id,
   senderName:           row.sender_name,
   recipientId:          row.recipient_id,
@@ -82,7 +83,7 @@ const sendFeedback = async (req, res) => {
     senderId, senderName,
     recipientId, recipientName,
     school, subject, body,
-    assessmentName, score, weightPercentage, childName, courseName, studentId
+    assessmentName, score, weightPercentage, childName, courseName, studentId, studentName
   } = req.body;
 
   if (!senderId || !recipientId || !body || !school || !assessmentName || score == null || weightPercentage == null) {
@@ -94,7 +95,7 @@ const sendFeedback = async (req, res) => {
       feedbackQueries.insertFeedback,
       [senderId, senderName, recipientId, recipientName,
        school, subject || null, body,
-       assessmentName, score, weightPercentage, courseName, studentId]
+       assessmentName, score, weightPercentage, courseName, studentId, studentName || null]
     );
 
     const userRes = await db.query(

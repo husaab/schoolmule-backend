@@ -69,6 +69,7 @@ const sendMessage = async (req, res) => {
     const html = getNewMessageEmailHTML({
       fromName: senderName,
       subject: subject || "",
+      body,
       link
     });
 
@@ -171,6 +172,7 @@ const sendToAllParents = async (req, res) => {
         from: "notifications@schoolmule.ca",
         to: p.email,
         subject: `New message from ${senderName}`,
+        body,
         html,
       });
     }

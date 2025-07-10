@@ -7,9 +7,9 @@ INSERT INTO feedback(
   sender_id, sender_name,
   recipient_id, recipient_name,
   school, subject, body,
-  assessment_name, score, weight_percentage, course_name, student_id
+  assessment_name, score, weight_percentage, course_name, student_id, student_name
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 `;
 

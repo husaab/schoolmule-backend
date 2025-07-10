@@ -19,6 +19,7 @@ const parentStudentRoutes = require("./routes/parentStudent.routes")
 const parentRoutes = require("./routes/parent.routes")
 const messageRoutes = require("./routes/message.routes")
 const feedbackRoutes = require("./routes/feedback.routes")
+const staffRoutes = require("./routes/staff.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -67,7 +68,8 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/parent-students", parentStudentRoutes);
 app.use("/api/parents", parentRoutes);
 app.use("/api/messages", messageRoutes);
-app.use("/api/feedback", feedbackRoutes)
+app.use("/api/feedback", feedbackRoutes);
+app.use("/api/staff", staffRoutes);
 
 // Export app for testing
 module.exports = app;

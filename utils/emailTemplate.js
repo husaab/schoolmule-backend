@@ -107,13 +107,23 @@ function getTicketEmailHTML({ username, school, issueType, description, contactE
  * @param {string} subject – message subject
  * @param {string} link – URL users click to read the full message
  */
-function getNewMessageEmailHTML({ fromName, subject, link }) {
+function getNewMessageEmailHTML({ fromName, subject, body, link }) {
+  // preserve line breaks by converting \n to <br>
+  const formattedBody = body
+    .split('\n')
+    .map(line => `<p style="margin:0 0 8px;">${line}</p>`)
+    .join('');
+
   return `
     <div style="font-family:Arial,sans-serif;padding:20px;max-width:600px;margin:auto;
                 background:#f9f9f9;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-      <h2 style="color:#00ACC1;">You’ve Got a New Message 📬</h2>
-      <p><strong>From:</strong> ${fromName}</p>
-      <p><strong>Subject:</strong> ${subject || '<em>(No subject)</em>'}</p>
+      <h2 style="color:#00ACC1;margin-bottom:16px;">You’ve Got a New Message 📬</h2>
+      <p style="margin-bottom:8px;"><strong>From:</strong> ${fromName}</p>
+      <p style="margin-bottom:8px;"><strong>Subject:</strong> ${subject || '<em>(No subject)</em>'}</p>
+      <div style="margin:16px 0;padding:12px;background:#fff;border-radius:4px;border:1px solid #e0e0e0;">
+        <h3 style="margin-top:0;margin-bottom:8px;font-weight:600;">Message:</h3>
+        ${formattedBody}
+      </div>
       <div style="text-align:center;margin:30px 0;">
         <a href="${link}"
            style="background-color:#00ACC1;color:white;padding:12px 24px;
@@ -121,7 +131,7 @@ function getNewMessageEmailHTML({ fromName, subject, link }) {
           Read Message in Communication Inbox
         </a>
       </div>
-      <p style="color:#888;font-size:12px;">— School Mule Team</p>
+      <p style="color:#888;font-size:12px;margin-top:16px;">— School Mule Team</p>
     </div>
   `;
 }
