@@ -20,6 +20,9 @@ const parentRoutes = require("./routes/parent.routes")
 const messageRoutes = require("./routes/message.routes")
 const feedbackRoutes = require("./routes/feedback.routes")
 const staffRoutes = require("./routes/staff.routes")
+const tuitionPlanRoutes = require("./routes/tuitionPlan.routes")
+const tuitionInvoiceRoutes = require("./routes/tuitionInvoice.routes")
+const tuitionInvoiceCommentRoutes = require("./routes/tuitionInvoiceComment.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -70,6 +73,9 @@ app.use("/api/parents", parentRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/feedback", feedbackRoutes);
 app.use("/api/staff", staffRoutes);
+app.use("/api/tuition-plans", tuitionPlanRoutes);
+app.use("/api/tuition-invoices", tuitionInvoiceRoutes);
+app.use("/api/tuition-invoice-comments", tuitionInvoiceCommentRoutes);
 
 // Export app for testing
 module.exports = app;

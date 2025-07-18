@@ -117,7 +117,7 @@ const createStudent = async (req, res) => {
       father.name || null,
       father.email || null,
       father.number || null,
-      emergencycontact
+      emergencyContact
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
