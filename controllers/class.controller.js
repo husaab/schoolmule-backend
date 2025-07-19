@@ -33,8 +33,10 @@ const getAllClasses = async (req, res) => {
         school:       c.school,
         grade:        c.grade,
         subject:      c.subject,
-        teacherName:  c.teacher_name,  // <-- now from classes.teacher_name
-        teacherId:    c.teacher_id,    // <-- new
+        teacherName:  c.teacher_name,
+        teacherId:    c.teacher_id,
+        termId:       c.term_id,
+        termName:     c.term_name,
         createdAt:    c.created_at,
         lastModifiedAt: c.last_modified_at
       })),
@@ -70,8 +72,10 @@ const getClassById = async (req, res) => {
         school:         c.school,
         grade:          c.grade,
         subject:        c.subject,
-        teacherName:    c.teacher_name,  // <-- new
-        teacherId:      c.teacher_id,    // <-- new
+        teacherName:    c.teacher_name,
+        teacherId:      c.teacher_id,
+        termId:         c.term_id,
+        termName:       c.term_name,
         createdAt:      c.created_at,
         lastModifiedAt: c.last_modified_at
       },
@@ -120,8 +124,10 @@ const getClassesByGrade = async (req, res) => {
         school:         c.school,
         grade:          c.grade,
         subject:        c.subject,
-        teacherName:    c.teacher_name,  // <-- new
-        teacherId:      c.teacher_id,    // <-- new
+        teacherName:    c.teacher_name, 
+        teacherId:      c.teacher_id, 
+        termId:         c.term_id,
+        termName:       c.term_name,
         createdAt:      c.created_at,
         lastModifiedAt: c.last_modified_at
       })),
@@ -161,8 +167,10 @@ const getClassesByTeacher = async (req, res) => {
         school:         c.school,
         grade:          c.grade,
         subject:        c.subject,
-        teacherName:    c.teacher_name,  // <-- new
-        teacherId:      c.teacher_id,    // <-- new
+        teacherName:    c.teacher_name, 
+        teacherId:      c.teacher_id,
+        termId:         c.term_id,
+        termName:       c.term_name,
         createdAt:      c.created_at,
         lastModifiedAt: c.last_modified_at
       })),
@@ -180,14 +188,14 @@ const getClassesByTeacher = async (req, res) => {
 //    → Create a new class
 //
 const createClass = async (req, res) => {
-  const { school, grade, subject, teacherName, teacherId } = req.body;
+  const { school, grade, subject, teacherName, teacherId, termId, termName } = req.body;
 
   // Validate required fields
-  if (!school || grade == null || !subject || !teacherName || !teacherId) {
+  if (!school || grade == null || !subject || !teacherName || !teacherId || !termId || !termName) {
     return res.status(400).json({
       status: "failed",
       message:
-        "Missing required fields: school, grade, subject, teacherName, teacherId"
+        "Missing required fields: school, grade, subject, teacherName, teacherId, termId, termName"
     });
   }
 
@@ -195,9 +203,9 @@ const createClass = async (req, res) => {
     // Optionally: you can verify that `teacherId` actually exists in users with role='teacher'
     // e.g. await db.query("SELECT 1 FROM users WHERE user_id = $1 AND role='teacher'", [teacherId]);
 
-    const vals = [school, grade, subject, teacherName, teacherId];
+    const vals = [school, grade, subject, teacherName, teacherId, termId, termName];
     const { rows } = await db.query(classQueries.createClass, vals);
-
+    
     logger.info(`Class created with id ${rows[0].class_id}`);
     return res.status(201).json({
       status: "success",
@@ -208,6 +216,8 @@ const createClass = async (req, res) => {
         subject:      rows[0].subject,
         teacherName:  rows[0].teacher_name,
         teacherId:    rows[0].teacher_id,
+        termId:       rows[0].term_id,
+        termName:     rows[0].term_name,
         createdAt:    rows[0].created_at,
         lastModifiedAt: rows[0].last_modified_at
       }
@@ -231,17 +241,21 @@ const updateClass = async (req, res) => {
     grade           = null,
     subject         = null,
     teacherName     = null,
-    teacherId       = null
+    teacherId       = null,
+    termId          = null,
+    termName        = null
   } = req.body;
 
   // Build the parameter array in the same order as `updateClassById`
-  // (i.e. $1=school, $2=grade, $3=subject, $4=teacher_name, $5=teacher_id, $6=class_id)
+  // (i.e. $1=school, $2=grade, $3=subject, $4=teacher_name, $5=teacher_id, $6=term_id, $7=term_name, $8=class_id)
   const vals = [
     school,
     grade,
     subject,
     teacherName,
     teacherId,
+    termId,
+    termName,
     id
   ];
 
@@ -265,8 +279,10 @@ const updateClass = async (req, res) => {
         school:       c.school,
         grade:        c.grade,
         subject:      c.subject,
-        teacherName:  c.teacher_name,  // <-- updated
-        teacherId:    c.teacher_id,    // <-- updated
+        teacherName:  c.teacher_name, 
+        teacherId:    c.teacher_id,
+        termId:       c.term_id,
+        termName:     c.term_name,
         createdAt:    c.created_at,
         lastModifiedAt: c.last_modified_at
       }
@@ -596,6 +612,8 @@ const getClassesByTeacherId = async (req, res) => {
         subject:        c.subject,
         teacherName:    c.teacher_name,
         teacherId:      c.teacher_id,
+        termId:         c.term_id,
+        termName:       c.term_name,
         createdAt:      c.created_at,
         lastModifiedAt: c.last_modified_at
       }))

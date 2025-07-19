@@ -23,6 +23,8 @@ const staffRoutes = require("./routes/staff.routes")
 const tuitionPlanRoutes = require("./routes/tuitionPlan.routes")
 const tuitionInvoiceRoutes = require("./routes/tuitionInvoice.routes")
 const tuitionInvoiceCommentRoutes = require("./routes/tuitionInvoiceComment.routes")
+const schoolRoutes = require("./routes/school.routes")
+const termRoutes = require("./routes/term.routes")
 
 const cookieParser = require("cookie-parser");
 
@@ -76,6 +78,8 @@ app.use("/api/staff", staffRoutes);
 app.use("/api/tuition-plans", tuitionPlanRoutes);
 app.use("/api/tuition-invoices", tuitionInvoiceRoutes);
 app.use("/api/tuition-invoice-comments", tuitionInvoiceCommentRoutes);
+app.use("/api/schools", schoolRoutes);
+app.use("/api/terms", termRoutes);
 
 // Export app for testing
 module.exports = app;

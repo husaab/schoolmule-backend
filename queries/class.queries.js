@@ -13,6 +13,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
     FROM public.classes
@@ -32,6 +34,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
     FROM public.classes
@@ -50,6 +54,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
     FROM public.classes
@@ -70,6 +76,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
     FROM public.classes
@@ -83,8 +91,8 @@ const classQueries = {
   //
   createClass: `
     INSERT INTO public.classes
-      (school, grade, subject, teacher_name, teacher_id)
-    VALUES ($1, $2, $3, $4, $5)
+      (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING
       class_id,
       school,
@@ -92,6 +100,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
   `,
@@ -108,8 +118,10 @@ const classQueries = {
       subject           = COALESCE($3, subject),
       teacher_name      = COALESCE($4, teacher_name),
       teacher_id        = COALESCE($5, teacher_id),
+      term_id           = COALESCE($6, term_id),
+      term_name         = COALESCE($7, term_name),
       last_modified_at  = NOW()
-    WHERE class_id = $6
+    WHERE class_id = $8
     RETURNING
       class_id,
       school,
@@ -117,6 +129,8 @@ const classQueries = {
       subject,
       teacher_name,
       teacher_id,
+      term_id,
+      term_name,
       created_at,
       last_modified_at
   `,
@@ -194,6 +208,8 @@ const classQueries = {
         subject,
         teacher_name,
         teacher_id,
+        term_id,
+        term_name,
         created_at,
         last_modified_at
       FROM classes
