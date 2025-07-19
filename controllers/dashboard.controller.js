@@ -207,10 +207,82 @@ const getAttendanceTrend = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/dashboard/financial
+ * Query params: school
+ */
+const getFinancialOverview = async (req, res) => {
+  const { school } = req.query;
+  if (!school) {
+    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
+  }
+
+  try {
+    // Parallel queries for performance
+    const [
+      totalRevenueRes,
+      totalOutstandingRes,
+      statusCountsRes,
+      studentsWithInvoicesRes,
+      monthlyTrendsRes,
+      averagePaymentRes
+    ] = await Promise.all([
+      db.query(dashboardQueries.selectTotalRevenue, [school]),
+      db.query(dashboardQueries.selectTotalOutstanding, [school]),
+      db.query(dashboardQueries.selectInvoiceStatusCounts, [school]),
+      db.query(dashboardQueries.selectStudentsWithInvoices, [school]),
+      db.query(dashboardQueries.selectMonthlyRevenueTrends, [school]),
+      db.query(dashboardQueries.selectAveragePayment, [school])
+    ]);
+
+    // Process status counts into an object
+    const statusCounts = {};
+    statusCountsRes.rows.forEach(row => {
+      statusCounts[row.status] = row.count;
+    });
+
+    // Ensure all status types are present with 0 if not found
+    const allStatuses = ['pending', 'paid', 'overdue', 'cancelled'];
+    allStatuses.forEach(status => {
+      if (!statusCounts[status]) {
+        statusCounts[status] = 0;
+      }
+    });
+
+    // Process monthly trends
+    const monthlyTrends = monthlyTrendsRes.rows.map(row => ({
+      month: row.month,
+      revenue: parseFloat(row.revenue),
+      invoiceCount: row.invoice_count
+    }));
+
+    const totalRevenue = parseFloat(totalRevenueRes.rows[0].total_revenue);
+    const totalOutstanding = parseFloat(totalOutstandingRes.rows[0].total_outstanding);
+    const studentsWithInvoices = studentsWithInvoicesRes.rows[0].count;
+    const averagePayment = parseFloat(averagePaymentRes.rows[0]?.average_payment || 0);
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        totalRevenue,
+        totalOutstanding,
+        statusCounts,
+        studentsWithInvoices,
+        monthlyTrends,
+        averagePayment
+      },
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching financial overview' });
+  }
+};
+
 module.exports = {
   getSummary,
   getTodaysAttendanceRate,
   getWeeklyAttendanceRate,
   getMonthlyAttendanceRate,
-  getAttendanceTrend
+  getAttendanceTrend,
+  getFinancialOverview
 };

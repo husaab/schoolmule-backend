@@ -14,4 +14,6 @@ router.get('/attendance/monthly', dashboardController.getMonthlyAttendanceRate)
 
 router.get('/attendance/trend', dashboardController.getAttendanceTrend);
 
+router.get('/financial', dashboardController.getFinancialOverview);
+
 module.exports = router

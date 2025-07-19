@@ -148,6 +148,77 @@ const dashboardQueries = {
       WHERE s.school = $1
       GROUP BY sa.student_id, c.class_id
     ) AS sub
+  `,
+
+  /**
+   * Financial Overview: Total revenue collected from paid invoices
+   * Params: school (public.school enum)
+   */
+  selectTotalRevenue: `
+    SELECT COALESCE(SUM(amount_paid), 0)::numeric AS total_revenue
+    FROM tuition_invoices
+    WHERE school = $1
+  `,
+
+  /**
+   * Financial Overview: Total outstanding amount (amount due - amount paid for unpaid invoices)
+   * Params: school (public.school enum)
+   */
+  selectTotalOutstanding: `
+    SELECT COALESCE(SUM(amount_due - amount_paid), 0)::numeric AS total_outstanding
+    FROM tuition_invoices
+    WHERE school = $1
+      AND status != 'paid'
+  `,
+
+  /**
+   * Financial Overview: Invoice status breakdown counts
+   * Params: school (public.school enum)
+   */
+  selectInvoiceStatusCounts: `
+    SELECT 
+      status,
+      COUNT(*)::int AS count
+    FROM tuition_invoices
+    WHERE school = $1
+    GROUP BY status
+  `,
+
+  /**
+   * Financial Overview: Count of students with active invoices
+   * Params: school (public.school enum)
+   */
+  selectStudentsWithInvoices: `
+    SELECT COUNT(DISTINCT student_id)::int AS count
+    FROM tuition_invoices
+    WHERE school = $1
+  `,
+
+  /**
+   * Financial Overview: Monthly revenue trends for the last 12 months
+   * Params: school (public.school enum)
+   */
+  selectMonthlyRevenueTrends: `
+    SELECT 
+      DATE_TRUNC('month', period_start) AS month,
+      COALESCE(SUM(amount_paid), 0)::numeric AS revenue,
+      COUNT(*)::int AS invoice_count
+    FROM tuition_invoices
+    WHERE school = $1
+      AND period_start >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '11 months'
+    GROUP BY DATE_TRUNC('month', period_start)
+    ORDER BY month ASC
+  `,
+
+  /**
+   * Financial Overview: Average payment amount
+   * Params: school (public.school enum)
+   */
+  selectAveragePayment: `
+    SELECT ROUND(AVG(amount_paid)::numeric, 2) AS average_payment
+    FROM tuition_invoices
+    WHERE school = $1
+      AND amount_paid > 0
   `
 };
 
