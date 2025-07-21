@@ -25,6 +25,29 @@ const termQueries = {
   `,
 
   /**
+   * Get a single term by name and school
+   * Params: termName, school
+   */
+  selectTermByNameAndSchool: `
+    SELECT 
+      t.term_id,
+      t.school,
+      t.school_id,
+      t.name,
+      t.start_date,
+      t.end_date,
+      t.academic_year,
+      t.is_active,
+      t.created_at,
+      t.updated_at,
+      s.name as school_name
+    FROM terms t
+    LEFT JOIN schools s ON t.school_id = s.school_id
+    WHERE t.name = $1 AND t.school = $2
+    LIMIT 1
+  `,
+
+  /**
    * Get all terms for a school (by school_id)
    * Params: school_id (UUID)
    */

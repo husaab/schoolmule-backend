@@ -1,6 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabaseClient');
-const { generateReportCard, upsertFeedback, getFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard } = require('../controllers/reportCard.controller');
+const { generateReportCard, upsertFeedback, getFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, getGeneratedReportCardsByStudentId} = require('../controllers/reportCard.controller');
 
 const router = express.Router();
 
@@ -9,6 +9,7 @@ router.post('/feedback', upsertFeedback);
 router.get('/feedback', getFeedback);
 router.post('/generate/bulk', generateReportCardsBulk);
 router.get('/view', getGeneratedReportCards);
+router.get("/view/student", getGeneratedReportCardsByStudentId);
 router.delete('/delete', deleteReportCard);
 
 router.get('/signed-url', async (req, res) => {

@@ -10,6 +10,9 @@ router.get('/', termController.getTermsBySchool);
 // GET /api/terms/school-id/:schoolId - Get all terms for a school by school_id
 router.get('/school-id/:schoolId', termController.getTermsBySchoolId);
 
+// GET /api/terms/by-name?termName=TERM_NAME&school=SCHOOL_ENUM - Get term by name and school
+router.get('/by-name', termController.getTermByNameAndSchool);
+
 // GET /api/terms/active?school=SCHOOL_ENUM - Get active term for a school
 router.get('/active', termController.getActiveTermBySchool);
 

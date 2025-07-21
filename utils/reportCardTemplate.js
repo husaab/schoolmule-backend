@@ -61,7 +61,7 @@ function getReportCardHTML({ schoolName, student, subjects, term, feedbacks }) {
     <body>
       <div class="container">
         <h1>${schoolName}</h1>
-        <h2>${term.toUpperCase()} REPORT CARD 2024–2025</h2>
+        <h2>${term.toUpperCase()} REPORT CARD 2025–2026</h2>
 
         <p><strong>Name:</strong> ${name}</p>
         <p><strong>Grade:</strong> ${grade}</p>

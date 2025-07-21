@@ -30,6 +30,12 @@ const reportCardQueries = {
     SELECT student_id, term, student_name, file_path, generated_at, grade
     FROM report_cards
     WHERE term = $1
+  `,
+
+  selectGeneratedReportCardsByStudentId: `
+    SELECT student_id, term, student_name, file_path, generated_at, grade
+    FROM report_cards
+    WHERE student_id = $1 AND term = $2
   `
 };
 

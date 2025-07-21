@@ -3,12 +3,24 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
+const termQueries = require('../queries/term.queries');
 const logger = require("../logger");
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML
   , getResetEmailHTML
  } = require('../utils/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Helper function to get active term for a school
+const getActiveTermForSchool = async (school) => {
+  try {
+    const result = await db.query(termQueries.selectActiveTermBySchool, [school]);
+    return result.rows.length > 0 ? result.rows[0] : null;
+  } catch (error) {
+    logger.error('Error fetching active term:', error);
+    return null;
+  }
+};
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -63,6 +75,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         html
       });
 
+      // Get active term for the user's school
+      const activeTerm = await getActiveTermForSchool(user.school);
+
       return {
         status: 200,
         message: "User registered successfully. A verification email has been sent.",
@@ -77,7 +92,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
           isVerifiedSchool: user.is_verified_school,
           emailToken: user.email_token,
           createdAt: user.created_at,
-          lastModifiedAt: user.last_modified_at
+          lastModifiedAt: user.last_modified_at,
+          activeTerm: activeTerm ? activeTerm.name : null
         }
       };
 
@@ -145,6 +161,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
         maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
+      // Get active term for the user's school
+      const activeTerm = await getActiveTermForSchool(user.school);
+
       return {
         status: 200,
         message: "User login successful",
@@ -158,7 +177,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
           isVerified: user.is_verified,
           isVerifiedSchool: user.is_verified_school,
           createdAt: user.created_at,
-          lastModifiedAt: user.last_modified_at
+          lastModifiedAt: user.last_modified_at,
+          activeTerm: activeTerm ? activeTerm.name : false
         }
       };
 
@@ -526,6 +546,9 @@ const validateSession = async (req, res) => {
 
     const user = result.rows[0];
     
+    // Get active term for the user's school
+    const activeTerm = await getActiveTermForSchool(user.school);
+    
     return res.status(200).json({
       success: true,
       message: 'Session valid',
@@ -539,7 +562,8 @@ const validateSession = async (req, res) => {
         isVerified: user.is_verified,
         isVerifiedSchool: user.is_verified_school,
         createdAt: user.created_at,
-        lastModifiedAt: user.last_modified_at
+        lastModifiedAt: user.last_modified_at,
+        activeTerm: activeTerm ? activeTerm.name : false
       }
     });
   } catch (error) {

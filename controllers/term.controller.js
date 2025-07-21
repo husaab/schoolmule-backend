@@ -80,6 +80,43 @@ const getTermsBySchoolId = async (req, res) => {
 };
 
 /**
+ * GET /api/terms/by-name?termName=TERM_NAME&school=SCHOOL_ENUM
+ * Get a single term by name and school
+ */
+const getTermByNameAndSchool = async (req, res) => {
+  const { termName, school } = req.query;
+  
+  if (!termName || !school) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Term name and school are required'
+    });
+  }
+
+  try {
+    const { rows } = await db.query(termQueries.selectTermByNameAndSchool, [termName, school]);
+    
+    if (rows.length === 0) {
+      return res.status(404).json({
+        status: 'failed',
+        message: 'Term not found'
+      });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      data: mapTermToResponse(rows[0])
+    });
+  } catch (error) {
+    logger.error('Error fetching term by name and school:', error);
+    return res.status(500).json({
+      status: 'failed',
+      message: 'Error fetching term'
+    });
+  }
+};
+
+/**
  * GET /api/terms/active?school=SCHOOL_ENUM
  * Get active term for a school
  */
@@ -529,6 +566,7 @@ const getTermsByAcademicYear = async (req, res) => {
 module.exports = {
   getTermsBySchool,
   getTermsBySchoolId,
+  getTermByNameAndSchool,
   getActiveTermBySchool,
   getCurrentTermBySchool,
   getTermById,

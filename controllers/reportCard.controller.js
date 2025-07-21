@@ -334,6 +334,32 @@ const getGeneratedReportCards = async (req, res) => {
   }
 };
 
+const getGeneratedReportCardsByStudentId = async (req, res) => {
+  const { studentId, term } = req.query;
+
+  if (!studentId || !term) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing query parameter: studentId or term'
+    });
+  }
+
+  try {
+    const { rows } = await db.query(
+      reportCardQueries.selectGeneratedReportCardsByStudentId,
+      [studentId, term]
+    );
+
+    return res.status(200).json({
+      status: 'success',
+      data: rows
+    });
+  } catch (err) {
+    logger.error(err);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching report card status' });
+  }
+};
+
 const deleteReportCard = async (req, res) => {
   const filePath = req.query.filePath;
 
@@ -369,5 +395,6 @@ module.exports = {
   getFeedback,
   generateReportCardsBulk,
   getGeneratedReportCards,
-  deleteReportCard
+  deleteReportCard,
+  getGeneratedReportCardsByStudentId
 };
