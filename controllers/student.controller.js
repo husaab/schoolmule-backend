@@ -2,6 +2,29 @@ const db = require("../config/database");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 
+// Convert database row to camelCase
+const toCamel = (s) => ({
+  studentId: s.student_id,
+  name: s.name,
+  homeroomTeacherId: s.homeroom_teacher_id,
+  school: s.school,
+  grade: s.grade,
+  oen: s.oen,
+  mother: {
+    name: s.mother_name,
+    email: s.mother_email,
+    phone: s.mother_number,
+  },
+  father: {
+    name: s.father_name,
+    email: s.father_email,
+    phone: s.father_number,
+  },
+  emergencyContact: s.emergency_contact,
+  createdAt: s.created_at,
+  lastModifiedAt: s.last_modified_at,
+});
+
 const getAllStudents = async (req, res) => {
   try {
     const requestedSchool = req.query.school;
@@ -16,27 +39,7 @@ const getAllStudents = async (req, res) => {
     logger.info("All students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(s => ({
-        studentId:         s.student_id,
-        name:              s.name,
-        homeroomTeacherId: s.homeroom_teacher_id,
-        school: s.school,
-        grade:             s.grade,
-        oen:               s.oen,
-        mother: {
-          name:  s.mother_name,
-          email: s.mother_email,
-          phone: s.mother_number,
-        },
-        father: {
-          name:  s.father_name,
-          email: s.father_email,
-          phone: s.father_number,
-        },
-        emergencyContact:  s.emergency_contact,
-        createdAt:         s.created_at,
-        lastModifiedAt:    s.last_modified_at,
-      }))
+      data: rows.map(toCamel)
     });
   } catch (error) {
     logger.error(error);
@@ -53,30 +56,9 @@ const getStudentById = async (req, res) => {
       return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
     }
 
-    const s = rows[0];
     return res.status(200).json({
       status: "success",
-      data: {
-        studentId:         s.student_id,
-        name:              s.name,
-        school: s.school,
-        homeroomTeacherId: s.homeroom_teacher_id,
-        grade:             s.grade,
-        oen:               s.oen,
-        mother: {
-          name:  s.mother_name,
-          email: s.mother_email,
-          phone: s.mother_number,
-        },
-        father: {
-          name:  s.father_name,
-          email: s.father_email,
-          phone: s.father_number,
-        },
-        emergencyContact:  s.emergency_contact,
-        createdAt:         s.created_at,
-        lastModifiedAt:    s.last_modified_at,
-      }
+      data: toCamel(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -124,7 +106,7 @@ const createStudent = async (req, res) => {
     logger.info(`Student created with id ${rows[0].student_id}`);
     return res.status(201).json({
       status: "success",
-      data: rows[0]   // raw DB row; you can map it like above if you want
+      data: toCamel(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -172,7 +154,7 @@ const updateStudent = async (req, res) => {
     logger.info(`Student ${id} updated`);
     return res.status(200).json({
       status: "success",
-      data: rows[0]
+      data: toCamel(rows[0])
     });
   } catch (error) {
     logger.error(error);
