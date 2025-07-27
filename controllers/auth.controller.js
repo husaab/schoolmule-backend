@@ -140,26 +140,16 @@ const getActiveTermForSchool = async (school) => {
         user.is_verified_school = true;
       }
 
-      res.cookie('user_id', user.user_id, {
+      const cookieOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true, // Always true for cross-origin
+        sameSite: 'none', // Required for cross-origin cookies
         maxAge: 7 * 24 * 60 * 60 * 1000
-      });
+      };
 
-      res.cookie('is_verified_email', user.is_verified, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
-
-      res.cookie('is_verified_school', user.is_verified_school, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
+      res.cookie('user_id', user.user_id, cookieOptions);
+      res.cookie('is_verified_email', user.is_verified, cookieOptions);
+      res.cookie('is_verified_school', user.is_verified_school, cookieOptions);
 
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
