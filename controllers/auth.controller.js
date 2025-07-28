@@ -1,6 +1,7 @@
 const db = require("../config/database");
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
 const termQueries = require('../queries/term.queries');
@@ -78,6 +79,22 @@ const getActiveTermForSchool = async (school) => {
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
 
+      // Create JWT token with user data
+      const tokenPayload = {
+        userId: user.user_id,
+        username: user.username,
+        email: user.email,
+        school: user.school,
+        role: user.role,
+        isVerified: user.is_verified,
+        isVerifiedSchool: user.is_verified_school,
+        activeTerm: activeTerm ? activeTerm.name : null
+      };
+
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+        expiresIn: '7d'
+      });
+
       return {
         status: 200,
         message: "User registered successfully. A verification email has been sent.",
@@ -93,7 +110,8 @@ const getActiveTermForSchool = async (school) => {
           emailToken: user.email_token,
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
-          activeTerm: activeTerm ? activeTerm.name : null
+          activeTerm: activeTerm ? activeTerm.name : null,
+          token: token
         }
       };
 
@@ -140,19 +158,24 @@ const getActiveTermForSchool = async (school) => {
         user.is_verified_school = true;
       }
 
-      const cookieOptions = {
-        httpOnly: true,
-        secure: true, // Always true for cross-origin
-        sameSite: 'none', // Required for cross-origin cookies
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      };
-
-      res.cookie('user_id', user.user_id, cookieOptions);
-      res.cookie('is_verified_email', user.is_verified, cookieOptions);
-      res.cookie('is_verified_school', user.is_verified_school, cookieOptions);
-
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
+
+      // Create JWT token with user data
+      const tokenPayload = {
+        userId: user.user_id,
+        username: user.username,
+        email: user.email,
+        school: user.school,
+        role: user.role,
+        isVerified: user.is_verified,
+        isVerifiedSchool: user.is_verified_school,
+        activeTerm: activeTerm ? activeTerm.name : false
+      };
+
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+        expiresIn: '7d'
+      });
 
       return {
         status: 200,
@@ -168,7 +191,8 @@ const getActiveTermForSchool = async (school) => {
           isVerifiedSchool: user.is_verified_school,
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
-          activeTerm: activeTerm ? activeTerm.name : false
+          activeTerm: activeTerm ? activeTerm.name : false,
+          token: token
         }
       };
 
@@ -513,24 +537,28 @@ const resetPassword = async (req, res) => {
 };
 
 const validateSession = async (req, res) => {
-  const userId = req.cookies['user_id'];
-  const isEmailVerified = req.cookies['is_verified_email'] === 'true';
-  const isSchoolVerified = req.cookies['is_verified_school'] === 'true';
-
-  if (!userId) {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({
       success: false,
-      message: 'No session found'
+      message: 'No token provided'
     });
   }
 
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+
   try {
-    const result = await db.query(userQueries.selectById, [userId]);
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Optional: Verify user still exists in database (recommended for security)
+    const result = await db.query(userQueries.selectById, [decoded.userId]);
     
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid session'
+        message: 'Invalid token - user not found'
       });
     }
 
@@ -557,11 +585,23 @@ const validateSession = async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Session validation error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Session validation failed'
-    });
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
+    } else if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired'
+      });
+    } else {
+      logger.error('Session validation error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Session validation failed'
+      });
+    }
   }
 };
 

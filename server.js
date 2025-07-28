@@ -26,7 +26,6 @@ const tuitionInvoiceCommentRoutes = require("./routes/tuitionInvoiceComment.rout
 const schoolRoutes = require("./routes/school.routes")
 const termRoutes = require("./routes/term.routes")
 
-const cookieParser = require("cookie-parser");
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -37,8 +36,7 @@ const app = express();
 const corsOptions = {
   origin: process.env.CROSS_ORIGIN_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 };
 
 // core modules
@@ -52,7 +50,6 @@ const limiter = rateLimit({
 
 // Apply the limiter to all requests
 app.use(limiter);
-app.use(cookieParser());
 app.use(RequestLogger);
 
 app.use("/api/auth", authRoutes); 
