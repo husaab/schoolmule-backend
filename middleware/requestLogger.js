@@ -31,17 +31,19 @@ function maskCookies(cookies) {
 
 const RequestLogger = (req, res, next) => {
     const sanitizedBody = req.body ? maskSensitiveData(req.body) : null;
+    
+    // Extract auth info from JWT token if present
+    const authHeader = req.headers.authorization;
+    const hasToken = authHeader && authHeader.startsWith('Bearer ');
+    
     logger.info({
         method: req.method,
         url: req.url,
         body: sanitizedBody,
         params: req.params ? JSON.stringify(req.params) : null,
         query: req.query ? JSON.stringify(req.query) : null,
-        cookies: {
-            user_id: req.cookies?.['user_id'],
-            is_verified_email: req.cookies?.['is_verified_email'],
-            is_verified_school: req.cookies?.['is_verified_school'],
-        }
+        auth: hasToken ? req.headers.authorization : null,
+        hostname: req.hostname
     }, 'Request received');
     next();
 }
