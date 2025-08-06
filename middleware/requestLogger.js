@@ -43,7 +43,6 @@ const RequestLogger = (req, res, next) => {
         params: req.params ? JSON.stringify(req.params) : null,
         query: req.query ? JSON.stringify(req.query) : null,
         auth: hasToken ? req.headers.authorization : null,
-        hostname: req.hostname
     }, 'Request received');
     next();
 }
