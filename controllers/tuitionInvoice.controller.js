@@ -456,7 +456,13 @@ const generateInvoices = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error(error);
+    logger.error({
+      error: error,
+      message: error.message,
+      stack: error.stack,
+      body: req.body,
+      function: 'generateInvoices'
+    }, 'Error generating invoices');
     return res.status(500).json({ 
       status: "failed", 
       message: "Error generating invoices" 

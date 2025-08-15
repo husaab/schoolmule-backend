@@ -1,15 +1,17 @@
 // logging.js
 const pino = require("pino")
 
-// const logger = pino({
-//     level: 'info',
-//     transport: {
-//       target: 'pino-pretty',
-//       options: {
-//         colorize: true // for better readability in the console
-//       }
-//     }
-//   });
-const logger = pino();
+const logger = pino({
+    level: 'info',
+    serializers: {
+      err: pino.stdSerializers.err,
+      error: pino.stdSerializers.err
+    },
+    formatters: {
+      level(label) {
+        return { level: label };
+      }
+    }
+});
 
 module.exports = logger;
