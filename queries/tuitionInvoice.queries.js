@@ -161,8 +161,6 @@ const selectActiveTuitionPlansBySchoolAndGrade = `
   FROM tuition_plans 
   WHERE school = $1 
     AND ($2::text IS NULL OR grade::text = $2)
-    AND effective_from <= CURRENT_DATE 
-    AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
   ORDER BY grade ASC;
 `;
 
