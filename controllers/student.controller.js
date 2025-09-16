@@ -95,10 +95,10 @@ const createStudent = async (req, res) => {
       school,
       mother.name || null,
       mother.email || null,
-      mother.number || null,
+      mother.phone || null,
       father.name || null,
       father.email || null,
-      father.number || null,
+      father.phone || null,
       emergencyContact
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
