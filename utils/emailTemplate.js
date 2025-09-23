@@ -36,10 +36,10 @@ const getApprovalEmailHTML = ({ name }) => `
   </div>
 `;
 
-const getAdminNotifyEmailHTML = ({ name, school }) => `
+const getAdminNotifyEmailHTML = ({ new_user, school }) => `
   <div>
-    <p>Hello ${name},</p>
-    <p>A new user has verified their email and is requesting access to School Mule for <strong>${school}</strong>.</p>
+    <p>Hello ${school} Admins,</p>
+    <p>A new user by the name of ${new_user} has verified their email and is requesting access to School Mule for <strong>${school}</strong>.</p>
     <p>Please log in and approve their account if appropriate.</p>
     <p><a href="${process.env.FRONTEND_URL}/admin-panel/approvals">Review pending approvals</a></p>
   </div>

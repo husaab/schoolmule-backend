@@ -275,20 +275,20 @@ const getActiveTermForSchool = async (school) => {
       const admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
 
       console.log("Admins found for school:", user.school, admins.rows);
+      const recipients = [...new Set(admins.rows.map(a => a.email).filter(Boolean))];
 
-      for (const admin of admins.rows) {
-        const adminHtml = getAdminNotifyEmailHTML({
-          name: admin.first_name,
-          school: user.school,
-        });
-        console.log("Notifying admin:", admin.email);
-        await resend.emails.send({
-          from: 'notification@schoolmule.ca',
-          to: admin.email,
-          subject: 'New User Awaiting School Approval',
-          html: adminHtml,
-        });
-      }
+      const adminHtml = getAdminNotifyEmailHTML({
+        new_user: user.username,
+        school: user.school,
+      });
+
+      console.log("Notifying admins:", recipients);
+      await resend.emails.send({
+        from: 'notification@schoolmule.ca',
+        to: recipients,
+        subject: 'New User Awaiting School Approval',
+        html: adminHtml,
+      });
 
       return res.status(200).json({
         success: true,
