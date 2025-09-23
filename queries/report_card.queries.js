@@ -18,24 +18,25 @@ const reportCardQueries = {
   `,
 
   upsertGeneratedReportCard: `
-    INSERT INTO report_cards (student_id, term, student_name, file_path, grade)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO report_cards (student_id, term, student_name, file_path, grade, school)
+    VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (student_id, term) DO UPDATE
     SET file_path = EXCLUDED.file_path,
         grade = EXCLUDED.grade,
+        school = EXCLUDED.school,
         generated_at = now()
   `,
 
   selectGeneratedReportCards: `
     SELECT student_id, term, student_name, file_path, generated_at, grade
     FROM report_cards
-    WHERE term = $1
+    WHERE term = $1 AND school = $2
   `,
 
   selectGeneratedReportCardsByStudentId: `
     SELECT student_id, term, student_name, file_path, generated_at, grade
     FROM report_cards
-    WHERE student_id = $1 AND term = $2
+    WHERE student_id = $1 AND term = $2 AND school = $3
   `
 };
 

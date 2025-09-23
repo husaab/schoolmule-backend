@@ -182,10 +182,17 @@ const classQueries = {
       name,
       weight_percent,
       created_at,
-      last_modified_at
+      last_modified_at,
+      parent_assessment_id,
+      is_parent,
+      sort_order
     FROM assessments
     WHERE class_id = $1
-    ORDER BY weight_percent
+    ORDER BY 
+      CASE WHEN parent_assessment_id IS NULL THEN assessment_id ELSE parent_assessment_id END,
+      is_parent DESC,
+      sort_order ASC,
+      created_at ASC
   `,
 
     createClassStudentRelation: `

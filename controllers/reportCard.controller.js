@@ -214,7 +214,8 @@ const generateReportCard = async (req, res) => {
         term,
         student.name,
         fileName,
-        student.grade
+        student.grade,
+        student.school
       ]);
 
     if (error) {
@@ -297,7 +298,8 @@ const generateSingleReportCard = async (studentId, term) => {
       term,
       student.name,
       fileName,
-      student.grade
+      student.grade,
+      student.school
     ]);
 
   if (error) throw new Error('Upload to storage failed');
@@ -306,22 +308,22 @@ const generateSingleReportCard = async (studentId, term) => {
 };
 
 /**
- * GET /report-cards/status?term=Term 1
+ * GET /report-cards/status?term=Term 1&school=SchoolName
  */
 const getGeneratedReportCards = async (req, res) => {
-  const { term } = req.query;
+  const { term, school } = req.query;
 
-  if (!term) {
+  if (!term || !school) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing query parameter: term'
+      message: 'Missing query parameters: term and school are required'
     });
   }
 
   try {
     const { rows } = await db.query(
       reportCardQueries.selectGeneratedReportCards,
-      [term]
+      [term, school]
     );
 
     return res.status(200).json({
@@ -335,19 +337,19 @@ const getGeneratedReportCards = async (req, res) => {
 };
 
 const getGeneratedReportCardsByStudentId = async (req, res) => {
-  const { studentId, term } = req.query;
+  const { studentId, term, school } = req.query;
 
-  if (!studentId || !term) {
+  if (!studentId || !term || !school) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing query parameter: studentId or term'
+      message: 'Missing query parameters: studentId, term, and school are required'
     });
   }
 
   try {
     const { rows } = await db.query(
       reportCardQueries.selectGeneratedReportCardsByStudentId,
-      [studentId, term]
+      [studentId, term, school]
     );
 
     return res.status(200).json({

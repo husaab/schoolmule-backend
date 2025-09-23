@@ -370,12 +370,15 @@ const getAssessmentsByClass = async (req, res) => {
     return res.status(200).json({
       status: "success",
       data: rows.map((a) => ({
-        assessmentId:    a.assessment_id,
-        classId:         a.class_id,
-        name:            a.name,
-        weightPercent:   parseFloat(a.weight_percent),
-        createdAt:       a.created_at,
-        lastModifiedAt:  a.last_modified_at,
+        assessmentId:       a.assessment_id,
+        classId:            a.class_id,
+        name:               a.name,
+        weightPercent:      parseFloat(a.weight_percent),
+        createdAt:          a.created_at,
+        lastModifiedAt:     a.last_modified_at,
+        parentAssessmentId: a.parent_assessment_id || null,
+        isParent:           a.is_parent === true,
+        sortOrder:          a.sort_order,
       })),
     });
   } catch (error) {
