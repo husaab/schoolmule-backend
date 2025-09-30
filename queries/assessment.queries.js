@@ -15,7 +15,9 @@ const assessmentQueries = {
       last_modified_at,
       parent_assessment_id,
       is_parent,
-      sort_order
+      sort_order,
+      max_score,
+      weight_points
     FROM assessments
     WHERE assessment_id = $1
   `,
@@ -34,7 +36,9 @@ const assessmentQueries = {
       last_modified_at,
       parent_assessment_id,
       is_parent,
-      sort_order
+      sort_order,
+      max_score,
+      weight_points
     FROM assessments
     WHERE class_id = $1
     ORDER BY 
@@ -55,8 +59,10 @@ const assessmentQueries = {
       weight_percent,
       parent_assessment_id,
       is_parent,
-      sort_order
-    ) VALUES ($1, $2, $3, $4, $5, $6)
+      sort_order,
+      max_score,
+      weight_points
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
   `,
 
@@ -73,8 +79,10 @@ const assessmentQueries = {
       parent_assessment_id = COALESCE($4, parent_assessment_id),
       is_parent       = COALESCE($5, is_parent),
       sort_order      = COALESCE($6, sort_order),
+      max_score       = COALESCE($7, max_score),
+      weight_points   = COALESCE($8, weight_points),
       last_modified_at = NOW()
-    WHERE assessment_id = $7
+    WHERE assessment_id = $9
     RETURNING *
   `,
 
@@ -98,7 +106,9 @@ const assessmentQueries = {
       last_modified_at,
       parent_assessment_id,
       is_parent,
-      sort_order
+      sort_order,
+      max_score,
+      weight_points
     FROM assessments
     WHERE parent_assessment_id = $1
     ORDER BY sort_order ASC, created_at ASC
@@ -132,17 +142,52 @@ const assessmentQueries = {
     ORDER BY is_parent DESC, created_at ASC
   `,
 
-  // Updated grade calculation that handles parent assessments
+  // Batch update multiple assessments
+  batchUpdateAssessments: `
+    UPDATE assessments
+    SET
+      name = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $2::text[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE name
+      END,
+      weight_percent = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $3::numeric[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE weight_percent
+      END,
+      weight_points = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $4::numeric[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE weight_points
+      END,
+      max_score = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $5::numeric[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE max_score
+      END,
+      sort_order = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $6::integer[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE sort_order
+      END,
+      last_modified_at = NOW()
+    WHERE assessment_id = ANY($1::uuid[])
+    RETURNING *
+  `,
+
+  // Updated grade calculation that handles parent assessments with point-based system
   selectFinalGradesByStudent: `
     WITH assessment_scores AS (
       -- Get direct scores for child assessments and standalone assessments
       SELECT 
         a.assessment_id,
         a.parent_assessment_id,
-        a.weight_percent,
+        COALESCE(a.weight_points, a.weight_percent, 0) as weight_points,
+        a.max_score,
         a.is_parent,
         c.subject,
-        COALESCE(sa.score, 0) as score
+        COALESCE(sa.score, 0) as raw_score
       FROM assessments a
       JOIN classes c ON c.class_id = a.class_id
       JOIN class_students cs ON cs.class_id = c.class_id
@@ -154,30 +199,35 @@ const assessmentQueries = {
       SELECT 
         p.assessment_id,
         p.subject,
-        p.weight_percent,
+        p.weight_points,
         COALESCE(
-          SUM(c.score * c.weight_percent) / NULLIF(SUM(c.weight_percent), 0),
+          SUM(
+            (c.raw_score / NULLIF(c.max_score, 0)) * c.weight_points
+          ) / NULLIF(SUM(c.weight_points), 0) * 100,
           0
-        ) as calculated_score
+        ) as calculated_percentage
       FROM assessment_scores p
       JOIN assessment_scores c ON c.parent_assessment_id = p.assessment_id
       WHERE p.is_parent = true
-      GROUP BY p.assessment_id, p.subject, p.weight_percent
+      GROUP BY p.assessment_id, p.subject, p.weight_points
     ),
     final_scores AS (
       -- Combine standalone assessments and parent assessments
-      SELECT subject, weight_percent, score as final_score
+      SELECT 
+        subject, 
+        weight_points, 
+        (raw_score / NULLIF(max_score, 0)) * 100 as percentage_score
       FROM assessment_scores 
       WHERE parent_assessment_id IS NULL AND is_parent = false
       
       UNION ALL
       
-      SELECT subject, weight_percent, calculated_score as final_score
+      SELECT subject, weight_points, calculated_percentage as percentage_score
       FROM parent_scores
     )
     SELECT 
       subject AS subject_name,
-      ROUND(SUM(final_score * (weight_percent / 100.0))) AS final_grade
+      SUM(percentage_score * (weight_points / 100.0)) AS final_grade
     FROM final_scores
     GROUP BY subject
     ORDER BY subject

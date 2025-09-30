@@ -379,6 +379,8 @@ const getAssessmentsByClass = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       })),
     });
   } catch (error) {

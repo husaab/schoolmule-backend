@@ -7,6 +7,7 @@ const {
   createAssessment,
   updateAssessment,
   deleteAssessment,
+  batchUpdateAssessments,
 } = require('../controllers/assessment.controller')
 
 const router = express.Router()
@@ -14,6 +15,7 @@ const router = express.Router()
 router.get('/:id', getAssessmentById)
 router.get('/class/:classId', getAssessmentsByClass)
 router.post('/', createAssessment)
+router.patch('/batch', batchUpdateAssessments)
 router.patch('/:id', updateAssessment)
 router.delete('/:id', deleteAssessment)
 

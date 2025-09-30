@@ -33,6 +33,8 @@ const getAssessmentById = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       },
     })
   } catch (error) {
@@ -69,6 +71,8 @@ const getAssessmentsByClass = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       })),
     })
   } catch (error) {
@@ -91,14 +95,16 @@ const createAssessment = async (req, res) => {
     isParent = false, 
     childCount = 0,
     parentAssessmentId = null,
-    sortOrder = null 
+    sortOrder = null,
+    maxScore = null,
+    weightPoints = null
   } = req.body
 
   // Basic required‐field check
-  if (!classId || !name || weightPercent == null) {
+  if (!classId || !name) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing required fields: classId, name, weightPercent',
+      message: 'Missing required fields: classId, name',
     })
   }
 
@@ -116,6 +122,8 @@ const createAssessment = async (req, res) => {
       parentAssessmentId,
       isParent,
       sortOrder,
+      maxScore,
+      weightPoints,
     ]
     const { rows } = await db.query(assessmentQueries.createAssessment, vals)
 
@@ -133,6 +141,8 @@ const createAssessment = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       },
     })
   } catch (error) {
@@ -147,7 +157,7 @@ const createAssessment = async (req, res) => {
 // Helper function to create parent assessment with multiple children
 //
 const createParentWithChildren = async (req, res) => {
-  const { classId, name, weightPercent, childCount, childrenData } = req.body
+  const { classId, name, weightPercent, childCount, childrenData, weightPoints, maxScore } = req.body
 
   if (!childCount || childCount < 1) {
     return res.status(400).json({
@@ -197,7 +207,7 @@ const createParentWithChildren = async (req, res) => {
     if (client.query !== db.query) await client.query('BEGIN')
 
     // Create parent assessment
-    const parentVals = [classId, name.trim(), weightPercent, null, true, null]
+    const parentVals = [classId, name.trim(), weightPercent, null, true, null, null, weightPoints]
     const { rows: parentRows } = await client.query(
       assessmentQueries.createAssessment,
       parentVals
@@ -214,10 +224,12 @@ const createParentWithChildren = async (req, res) => {
         const childVals = [
           classId,
           child.name.trim(),
-          child.weightPercent,
+          child.weightPercent || 0,
           parent.assessment_id,
           false,
           child.sortOrder || (i + 1),
+          child.maxScore || null,
+          child.weightPoints || null,
         ]
         const { rows: childRows } = await client.query(
           assessmentQueries.createAssessment,
@@ -237,6 +249,8 @@ const createParentWithChildren = async (req, res) => {
           parent.assessment_id,
           false,
           i,
+          100, // Default max score
+          (weightPoints || 0) / childCount, // Default equal point distribution
         ]
         const { rows: childRows } = await client.query(
           assessmentQueries.createAssessment,
@@ -300,7 +314,9 @@ const updateAssessment = async (req, res) => {
     weightPercent, 
     parentAssessmentId, 
     isParent, 
-    sortOrder 
+    sortOrder,
+    maxScore,
+    weightPoints
   } = req.body
 
   // Note: you can allow partial update by passing null for missing fields
@@ -311,6 +327,8 @@ const updateAssessment = async (req, res) => {
     parentAssessmentId ?? null,
     isParent ?? null,
     sortOrder ?? null,
+    maxScore ?? null,
+    weightPoints ?? null,
     id,
   ]
 
@@ -341,6 +359,8 @@ const updateAssessment = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       },
     })
   } catch (error) {
@@ -404,6 +424,8 @@ const getChildAssessments = async (req, res) => {
         parentAssessmentId: a.parent_assessment_id || null,
         isParent:           a.is_parent === true,
         sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
       })),
     })
   } catch (error) {
@@ -415,6 +437,70 @@ const getChildAssessments = async (req, res) => {
   }
 }
 
+//
+// 7) PATCH /assessments/batch
+//    → Update multiple assessments at once
+//
+const batchUpdateAssessments = async (req, res) => {
+  const { updates } = req.body
+
+  // Validate input
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Updates array is required and must not be empty',
+    })
+  }
+
+  // Validate each update object
+  for (const update of updates) {
+    if (!update.assessmentId) {
+      return res.status(400).json({
+        status: 'failed',
+        message: 'Each update must include assessmentId',
+      })
+    }
+  }
+
+  try {
+    // Extract data for the batch update query
+    const assessmentIds = updates.map(u => u.assessmentId)
+    const names = updates.map(u => u.name || null)
+    const weightPercents = updates.map(u => u.weightPercent || null)
+    const weightPoints = updates.map(u => u.weightPoints || null)
+    const maxScores = updates.map(u => u.maxScore || null)
+    const sortOrders = updates.map(u => u.sortOrder || null)
+
+    const { rows } = await db.query(
+      assessmentQueries.batchUpdateAssessments,
+      [assessmentIds, names, weightPercents, weightPoints, maxScores, sortOrders]
+    )
+
+    logger.info(`Batch updated ${rows.length} assessments`)
+    return res.status(200).json({
+      status: 'success',
+      data: rows.map((a) => ({
+        assessmentId:       a.assessment_id,
+        classId:            a.class_id,
+        name:               a.name,
+        weightPercent:      parseFloat(a.weight_percent),
+        createdAt:          a.created_at,
+        lastModifiedAt:     a.last_modified_at,
+        parentAssessmentId: a.parent_assessment_id || null,
+        isParent:           a.is_parent === true,
+        sortOrder:          a.sort_order,
+        maxScore:           a.max_score,
+        weightPoints:       a.weight_points,
+      })),
+    })
+  } catch (error) {
+    logger.error(error)
+    return res
+      .status(500)
+      .json({ status: 'failed', message: 'Error batch updating assessments' })
+  }
+}
+
 module.exports = {
   getAssessmentById,
   getAssessmentsByClass,
@@ -423,4 +509,5 @@ module.exports = {
   updateAssessment,
   deleteAssessment,
   getChildAssessments,
+  batchUpdateAssessments,
 }

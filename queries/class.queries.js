@@ -185,7 +185,9 @@ const classQueries = {
       last_modified_at,
       parent_assessment_id,
       is_parent,
-      sort_order
+      sort_order,
+      max_score,
+      weight_points
     FROM assessments
     WHERE class_id = $1
     ORDER BY 

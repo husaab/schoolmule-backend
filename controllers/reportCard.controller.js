@@ -151,7 +151,7 @@ const generateReportCard = async (req, res) => {
 
     // Fetch student assessments and compute average per subject
     const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
-    const subjects = assessments.map(a => ({ subject: a.subject_name, grade: Math.round(a.final_grade) }));
+    const subjects = assessments.map(a => ({ subject: a.subject_name, grade: Number(a.final_grade).toFixed(1) }));
 
     // Fetch all class_ids for the student
     const { rows: classRows } = await db.query(`
@@ -243,7 +243,7 @@ const generateSingleReportCard = async (studentId, term) => {
   const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
   const subjects = assessments.map(a => ({
     subject: a.subject_name,
-    grade: Math.round(a.final_grade)
+    grade: Number(a.final_grade).toFixed(1)
   }));
 
   const { rows: classRows } = await db.query(`
