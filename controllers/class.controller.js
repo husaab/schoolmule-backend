@@ -381,6 +381,7 @@ const getAssessmentsByClass = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date || null
       })),
     });
   } catch (error) {

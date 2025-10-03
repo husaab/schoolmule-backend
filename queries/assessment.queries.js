@@ -17,7 +17,8 @@ const assessmentQueries = {
       is_parent,
       sort_order,
       max_score,
-      weight_points
+      weight_points,
+      date
     FROM assessments
     WHERE assessment_id = $1
   `,
@@ -38,7 +39,8 @@ const assessmentQueries = {
       is_parent,
       sort_order,
       max_score,
-      weight_points
+      weight_points,
+      date
     FROM assessments
     WHERE class_id = $1
     ORDER BY 
@@ -61,8 +63,9 @@ const assessmentQueries = {
       is_parent,
       sort_order,
       max_score,
-      weight_points
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      weight_points,
+      date
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING *
   `,
 
@@ -81,8 +84,9 @@ const assessmentQueries = {
       sort_order      = COALESCE($6, sort_order),
       max_score       = COALESCE($7, max_score),
       weight_points   = COALESCE($8, weight_points),
+      date            = COALESCE($9, date),
       last_modified_at = NOW()
-    WHERE assessment_id = $9
+    WHERE assessment_id = $10
     RETURNING *
   `,
 
@@ -108,7 +112,8 @@ const assessmentQueries = {
       is_parent,
       sort_order,
       max_score,
-      weight_points
+      weight_points,
+      date
     FROM assessments
     WHERE parent_assessment_id = $1
     ORDER BY sort_order ASC, created_at ASC
@@ -136,7 +141,8 @@ const assessmentQueries = {
       last_modified_at,
       parent_assessment_id,
       is_parent,
-      sort_order
+      sort_order,
+      date
     FROM assessments
     WHERE class_id = $1 AND (parent_assessment_id IS NULL)
     ORDER BY is_parent DESC, created_at ASC
@@ -170,6 +176,11 @@ const assessmentQueries = {
         WHEN assessment_id = ANY($1::uuid[]) THEN 
           (SELECT val FROM unnest($1::uuid[], $6::integer[]) AS t(id, val) WHERE t.id = assessment_id)
         ELSE sort_order
+      END,
+      date = CASE 
+        WHEN assessment_id = ANY($1::uuid[]) THEN 
+          (SELECT val FROM unnest($1::uuid[], $7::date[]) AS t(id, val) WHERE t.id = assessment_id)
+        ELSE date
       END,
       last_modified_at = NOW()
     WHERE assessment_id = ANY($1::uuid[])

@@ -35,6 +35,7 @@ const getAssessmentById = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       },
     })
   } catch (error) {
@@ -73,6 +74,7 @@ const getAssessmentsByClass = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       })),
     })
   } catch (error) {
@@ -97,7 +99,8 @@ const createAssessment = async (req, res) => {
     parentAssessmentId = null,
     sortOrder = null,
     maxScore = null,
-    weightPoints = null
+    weightPoints = null,
+    date = null
   } = req.body
 
   // Basic required‐field check
@@ -124,6 +127,7 @@ const createAssessment = async (req, res) => {
       sortOrder,
       maxScore,
       weightPoints,
+      date,
     ]
     const { rows } = await db.query(assessmentQueries.createAssessment, vals)
 
@@ -143,6 +147,7 @@ const createAssessment = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       },
     })
   } catch (error) {
@@ -157,7 +162,7 @@ const createAssessment = async (req, res) => {
 // Helper function to create parent assessment with multiple children
 //
 const createParentWithChildren = async (req, res) => {
-  const { classId, name, weightPercent, childCount, childrenData, weightPoints, maxScore } = req.body
+  const { classId, name, weightPercent, childCount, childrenData, weightPoints, maxScore, date } = req.body
 
   if (!childCount || childCount < 1) {
     return res.status(400).json({
@@ -207,7 +212,7 @@ const createParentWithChildren = async (req, res) => {
     if (client.query !== db.query) await client.query('BEGIN')
 
     // Create parent assessment
-    const parentVals = [classId, name.trim(), weightPercent, null, true, null, null, weightPoints]
+    const parentVals = [classId, name.trim(), weightPercent, null, true, null, null, weightPoints, date]
     const { rows: parentRows } = await client.query(
       assessmentQueries.createAssessment,
       parentVals
@@ -230,6 +235,7 @@ const createParentWithChildren = async (req, res) => {
           child.sortOrder || (i + 1),
           child.maxScore || null,
           child.weightPoints || null,
+          child.date || date, // Use child's date or parent's date as fallback
         ]
         const { rows: childRows } = await client.query(
           assessmentQueries.createAssessment,
@@ -251,6 +257,7 @@ const createParentWithChildren = async (req, res) => {
           i,
           100, // Default max score
           (weightPoints || 0) / childCount, // Default equal point distribution
+          date, // Use parent's date
         ]
         const { rows: childRows } = await client.query(
           assessmentQueries.createAssessment,
@@ -276,6 +283,9 @@ const createParentWithChildren = async (req, res) => {
           parentAssessmentId: parent.parent_assessment_id || null,
           isParent:           parent.is_parent === true,
           sortOrder:          parent.sort_order,
+          maxScore:           parent.max_score,
+          weightPoints:       parent.weight_points,
+          date:               parent.date,
         },
         children: children.map((c) => ({
           assessmentId:       c.assessment_id,
@@ -287,6 +297,9 @@ const createParentWithChildren = async (req, res) => {
           parentAssessmentId: c.parent_assessment_id || null,
           isParent:           c.is_parent === true,
           sortOrder:          c.sort_order,
+          maxScore:           c.max_score,
+          weightPoints:       c.weight_points,
+          date:               c.date,
         })),
       },
     })
@@ -316,7 +329,8 @@ const updateAssessment = async (req, res) => {
     isParent, 
     sortOrder,
     maxScore,
-    weightPoints
+    weightPoints,
+    date
   } = req.body
 
   // Note: you can allow partial update by passing null for missing fields
@@ -329,6 +343,7 @@ const updateAssessment = async (req, res) => {
     sortOrder ?? null,
     maxScore ?? null,
     weightPoints ?? null,
+    date ?? null,
     id,
   ]
 
@@ -361,6 +376,7 @@ const updateAssessment = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       },
     })
   } catch (error) {
@@ -426,6 +442,7 @@ const getChildAssessments = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       })),
     })
   } catch (error) {
@@ -470,10 +487,11 @@ const batchUpdateAssessments = async (req, res) => {
     const weightPoints = updates.map(u => u.weightPoints || null)
     const maxScores = updates.map(u => u.maxScore || null)
     const sortOrders = updates.map(u => u.sortOrder || null)
+    const dates = updates.map(u => u.date || null)
 
     const { rows } = await db.query(
       assessmentQueries.batchUpdateAssessments,
-      [assessmentIds, names, weightPercents, weightPoints, maxScores, sortOrders]
+      [assessmentIds, names, weightPercents, weightPoints, maxScores, sortOrders, dates]
     )
 
     logger.info(`Batch updated ${rows.length} assessments`)
@@ -491,6 +509,7 @@ const batchUpdateAssessments = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
+        date:               a.date,
       })),
     })
   } catch (error) {
