@@ -91,43 +91,55 @@ const generateStudentSummaryReport = async (req, res) => {
     logger.info(`Generating student summary report for student ${studentId} in class ${classId}`);
 
     // 1. Get student information
+    logger.info(`Fetching student with ID: ${studentId}`);
     const studentResult = await db.query(reportsQueries.getStudentById, [studentId]);
     if (studentResult.rows.length === 0) {
+      logger.error(`Student not found: ${studentId}`);
       return res.status(404).json({
         status: 'error',
         message: 'Student not found'
       });
     }
     const student = studentResult.rows[0];
+    logger.info(`Student found: ${student.name}`);
 
     // 2. Get class information
+    logger.info(`Fetching class with ID: ${classId}`);
     const classResult = await db.query(reportsQueries.getClassInfo, [classId]);
     if (classResult.rows.length === 0) {
+      logger.error(`Class not found: ${classId}`);
       return res.status(404).json({
         status: 'error',
         message: 'Class not found'
       });
     }
     const classInfo = classResult.rows[0];
+    logger.info(`Class found: ${classInfo.subject} - Teacher: ${classInfo.teacher_name}`);
 
     // 3. Verify student is enrolled in the class
+    logger.info(`Verifying student enrollment in class`);
     const enrollmentResult = await db.query(reportsQueries.verifyStudentEnrollment, [studentId, classId]);
     if (enrollmentResult.rows.length === 0) {
+      logger.error(`Student ${student.name} is not enrolled in class ${classInfo.subject}`);
       return res.status(400).json({
         status: 'error',
         message: 'Student is not enrolled in this class'
       });
     }
+    logger.info(`Student enrollment verified`);
 
     // 4. Get school information
+    logger.info(`Fetching school information for school: ${student.school}`);
     const schoolResult = await db.query(reportsQueries.getSchoolInfoByCode, [student.school]);
     if (schoolResult.rows.length === 0) {
+      logger.error(`School information not found for school: ${student.school}`);
       return res.status(404).json({
         status: 'error',
         message: 'School information not found'
       });
     }
     const schoolInfo = schoolResult.rows[0];
+    logger.info(`School information found: ${schoolInfo.name}`);
 
     // 5. Get term information
     const termResult = await db.query(reportsQueries.getTermById, [classInfo.term_id]);
