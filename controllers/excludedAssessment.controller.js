@@ -1,13 +1,9 @@
-// File: src/controllers/excludedAssessment.controller.js
+// src/controllers/excludedAssessment.controller.js
 
 const db = require('../config/database')
 const excludedAssessmentQueries = require('../queries/excludedAssessment.queries')
 const logger = require('../logger')
 
-//
-// 1) POST /excluded-assessments
-//    Create a new exclusion record
-//
 const createExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.body
 
@@ -54,10 +50,6 @@ const createExclusion = async (req, res) => {
   }
 }
 
-//
-// 2) DELETE /excluded-assessments/:studentId/:classId/:assessmentId
-//    Remove an exclusion record
-//
 const deleteExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.params
 
@@ -89,10 +81,6 @@ const deleteExclusion = async (req, res) => {
   }
 }
 
-//
-// 3) GET /excluded-assessments/:studentId/:classId
-//    Get all excluded assessments for a student in a specific class
-//
 const getExclusionsByStudentAndClass = async (req, res) => {
   const { studentId, classId } = req.params
 
@@ -121,10 +109,6 @@ const getExclusionsByStudentAndClass = async (req, res) => {
   }
 }
 
-//
-// 4) GET /excluded-assessments/:studentId/:classId/:assessmentId/check
-//    Check if specific assessment is excluded for student in class
-//
 const checkExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.params
 
