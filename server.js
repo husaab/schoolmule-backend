@@ -27,6 +27,7 @@ const schoolRoutes = require("./routes/school.routes")
 const termRoutes = require("./routes/term.routes")
 const reportsRoutes = require("./routes/reports.routes")
 const progressReportsRoutes = require("./routes/progressReports.routes")
+const excludedAssessmentRoutes = require("./routes/excludedAssessment.routes")
 
 
 const logger = require('./logger')
@@ -81,6 +82,7 @@ app.use("/api/schools", schoolRoutes);
 app.use("/api/terms", termRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/progress-reports", progressReportsRoutes);
+app.use("/api/excluded-assessments", excludedAssessmentRoutes);
 
 // Export app for testing
 module.exports = app;
