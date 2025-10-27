@@ -3,7 +3,7 @@
 const excludedAssessmentQueries = {
   //
   // 1) POST /excluded-assessments
-  //    ’ Create a new exclusion record
+  //  Create a new exclusion record
   //
   createExclusion: `
     INSERT INTO student_excluded_assessments (
@@ -17,7 +17,7 @@ const excludedAssessmentQueries = {
 
   //
   // 2) DELETE /excluded-assessments/:studentId/:classId/:assessmentId
-  //    ’ Remove an exclusion record
+  //Remove an exclusion record
   //
   deleteExclusion: `
     DELETE FROM student_excluded_assessments
@@ -28,7 +28,7 @@ const excludedAssessmentQueries = {
 
   //
   // 3) GET /excluded-assessments/:studentId/:classId
-  //    ’ Get all excluded assessments for a student in a specific class
+  // Get all excluded assessments for a student in a specific class
   //
   selectExclusionsByStudentAndClass: `
     SELECT

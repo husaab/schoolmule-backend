@@ -11,7 +11,7 @@ const {
 
 //
 // POST /api/excluded-assessments
-// � Create a new assessment exclusion
+// Create a new assessment exclusion
 //
 router.post('/', createExclusion)
 
