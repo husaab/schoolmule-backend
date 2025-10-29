@@ -50,6 +50,21 @@ const excludedAssessmentQueries = {
     WHERE student_id = $1 
       AND class_id = $2 
       AND assessment_id = $3
+  `,
+
+  //
+  // 5) GET /excluded-assessments/class/:classId
+  // Get all excluded assessments for an entire class
+  //
+  selectExclusionsByClass: `
+    SELECT
+      student_id,
+      class_id,
+      assessment_id,
+      created_at
+    FROM student_excluded_assessments
+    WHERE class_id = $1
+    ORDER BY student_id, created_at DESC
   `
 }
 

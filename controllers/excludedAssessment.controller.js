@@ -151,9 +151,39 @@ const checkExclusion = async (req, res) => {
   }
 }
 
+//
+// 5) GET /excluded-assessments/class/:classId
+// Get all excluded assessments for an entire class
+//
+const getExclusionsByClass = async (req, res) => {
+  const { classId } = req.params
+
+  try {
+    const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByClass, [classId])
+
+    logger.info(`Fetched ${rows.length} exclusions for class ${classId}`)
+
+    return res.status(200).json({
+      status: 'success',
+      data: rows.map((exclusion) => ({
+        studentId: exclusion.student_id,
+        classId: exclusion.class_id,
+        assessmentId: exclusion.assessment_id,
+        createdAt: exclusion.created_at,
+      })),
+    })
+  } catch (error) {
+    logger.error(error)
+    return res
+      .status(500)
+      .json({ status: 'failed', message: 'Error fetching class assessment exclusions' })
+  }
+}
+
 module.exports = {
   createExclusion,
   deleteExclusion,
   getExclusionsByStudentAndClass,
   checkExclusion,
+  getExclusionsByClass,
 }

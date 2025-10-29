@@ -67,15 +67,15 @@ const upsertScoresByClass = async (req, res) => {
 
   scores.forEach((entry, idx) => {
     const { studentId, assessmentId, score } = entry;
-    // Validate required fields
-    if (!studentId || !assessmentId || score == null) {
-      // If any row is missing data, we can abort
-      throw new Error('Every entry must include studentId, assessmentId, and score');
+    // Validate required fields - allow null scores for deletion
+    if (!studentId || !assessmentId) {
+      // If any row is missing required IDs, we can abort
+      throw new Error('Every entry must include studentId and assessmentId');
     }
     // Generate e.g. `($1,$2,$3)` for idx=0, then `($4,$5,$6)` for idx=1, etc.
     const base = idx * 3; // because each row uses 3 parameters
     valuePlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
-    paramsArray.push(studentId, assessmentId, score);
+    paramsArray.push(studentId, assessmentId, score); // score can now be null
   });
 
   // Now plug those placeholders into our query string:

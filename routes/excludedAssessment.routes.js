@@ -7,6 +7,7 @@ const {
   deleteExclusion,
   getExclusionsByStudentAndClass,
   checkExclusion,
+  getExclusionsByClass,
 } = require('../controllers/excludedAssessment.controller')
 
 //
@@ -22,15 +23,21 @@ router.post('/', createExclusion)
 router.delete('/:studentId/:classId/:assessmentId', deleteExclusion)
 
 //
-// GET /api/excluded-assessments/:studentId/:classId
-// Get all excluded assessments for a student in a specific class
+// GET /api/excluded-assessments/class/:classId
+// Get all excluded assessments for an entire class (PUT THIS FIRST - more specific)
 //
-router.get('/:studentId/:classId', getExclusionsByStudentAndClass)
+router.get('/class/:classId', getExclusionsByClass)
 
 //
 // GET /api/excluded-assessments/:studentId/:classId/:assessmentId/check
 // Check if specific assessment is excluded for student in class
 //
 router.get('/:studentId/:classId/:assessmentId/check', checkExclusion)
+
+//
+// GET /api/excluded-assessments/:studentId/:classId
+// Get all excluded assessments for a student in a specific class
+//
+router.get('/:studentId/:classId', getExclusionsByStudentAndClass)
 
 module.exports = router

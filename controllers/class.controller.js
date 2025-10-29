@@ -56,6 +56,14 @@ const getAllClasses = async (req, res) => {
 const getClassById = async (req, res) => {
   const { id } = req.params;
 
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(id)) {
+    return res
+      .status(400)
+      .json({ status: "error", message: `Invalid class ID format` });
+  }
+
   try {
     const { rows } = await db.query(classQueries.selectClassById, [id]);
     if (rows.length === 0) {
