@@ -1,5 +1,6 @@
 const db = require("../config/database");
 const progressReportsQueries = require("../queries/progressReports.queries");
+const schoolAssetsQueries = require("../queries/school-assets.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { createPDFBuffer } = require('../utils/pdfGenerator');
@@ -411,7 +412,7 @@ const generateSingleProgressReport = async (studentId, term) => {
 
   // 5. Get school information (if available)
   const { rows: schoolRows } = await db.query(`
-    SELECT name, address, phone, email
+    SELECT school_id, name, address, phone, email
     FROM schools
     WHERE school_code = $1
   `, [student.school]);
@@ -423,7 +424,40 @@ const generateSingleProgressReport = async (studentId, term) => {
     email: ''
   };
 
-  // 6. Generate HTML template
+  // 6. Get school assets if school exists
+  let schoolAssets = null;
+  if (schoolRows.length > 0) {
+    const { rows: assetRows } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolRows[0].school_id]);
+    
+    if (assetRows.length > 0) {
+      const assets = assetRows[0];
+      schoolAssets = {};
+      
+      // Generate signed URLs for assets
+      if (assets.logo_path) {
+        const { data: logoData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.logo_path, 3600); // 1 hour
+        schoolAssets.logoUrl = logoData?.signedUrl;
+      }
+      
+      if (assets.principal_signature_path) {
+        const { data: signatureData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.principal_signature_path, 3600);
+        schoolAssets.principalSignatureUrl = signatureData?.signedUrl;
+      }
+      
+      if (assets.school_stamp_path) {
+        const { data: stampData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.school_stamp_path, 3600);
+        schoolAssets.schoolStampUrl = stampData?.signedUrl;
+      }
+    }
+  }
+
+  // 7. Generate HTML template
   const htmlContent = getProgressReportHTML({
     schoolInfo,
     student: {
@@ -434,13 +468,14 @@ const generateSingleProgressReport = async (studentId, term) => {
     },
     term,
     progressData,
-    generatedDate: new Date().toLocaleDateString()
+    generatedDate: new Date().toLocaleDateString(),
+    schoolAssets
   });
 
-  // 7. Generate PDF buffer
+  // 8. Generate PDF buffer
   const pdfBuffer = await createPDFBuffer(htmlContent);
 
-  // 8. Upload to Supabase storage
+  // 9. Upload to Supabase storage
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
   const fileName = `${schoolFolder}/${student.name.replace(/\s+/g, '_')}_${term.replace(/\s+/g, '_')}_progress_report.pdf`;
 
@@ -457,7 +492,7 @@ const generateSingleProgressReport = async (studentId, term) => {
     throw new Error('Upload to storage failed');
   }
 
-  // 9. Save record to database
+  // 10. Save record to database
   const { rows: recordRows } = await db.query(progressReportsQueries.createProgressReport, [
     studentId,
     term,

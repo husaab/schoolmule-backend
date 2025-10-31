@@ -4,7 +4,7 @@
  */
 
 const getProgressReportHTML = (data) => {
-  const { schoolInfo, student, term, progressData, generatedDate } = data;
+  const { schoolInfo, student, term, progressData, generatedDate, schoolAssets } = data;
 
   return `
 <!DOCTYPE html>
@@ -22,11 +22,23 @@ const getProgressReportHTML = (data) => {
             line-height: 1.4;
         }
         
+        .corner-logo {
+            position: fixed;
+            top: 12px;
+            right: 12px;
+            width: 95px;
+            max-height: 80px;
+            object-fit: contain;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
         .header {
             text-align: center;
             border-bottom: 3px solid #2c5aa0;
             padding-bottom: 20px;
             margin-bottom: 30px;
+            position: relative;
         }
         
         .school-name {
@@ -187,7 +199,8 @@ const getProgressReportHTML = (data) => {
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
-            margin-top: 30px;
+            margin-top: 15px;
+            margin-bottom: 20px;
         }
         
         .legend-title {
@@ -228,6 +241,41 @@ const getProgressReportHTML = (data) => {
             text-align: center;
             font-size: 12px;
             color: #666;
+            position: relative;
+        }
+        
+        .footer-signatures {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 30px;
+            padding: 0 40px;
+        }
+        
+        .signature-section {
+            text-align: center;
+            flex: 1;
+        }
+        
+        .signature-image {
+            max-height: 60px;
+            max-width: 150px;
+            object-fit: contain;
+            margin-bottom: 10px;
+        }
+        
+        .signature-label {
+            font-size: 11px;
+            color: #666;
+            border-top: 1px solid #333;
+            padding-top: 5px;
+            margin-top: 10px;
+        }
+        
+        .school-stamp {
+            max-height: 80px;
+            max-width: 80px;
+            object-fit: contain;
         }
         
         .no-data {
@@ -235,14 +283,39 @@ const getProgressReportHTML = (data) => {
             font-style: italic;
         }
         
+        @page { 
+            margin: 18mm; 
+        }
+        
         @media print {
-            body { margin: 0; }
-            .header { page-break-after: avoid; }
-            .subject-card { page-break-inside: avoid; }
+            body{
+                margin: 0;
+                padding: 0;                 /* <- important */
+                -webkit-print-color-adjust: exact;
+            }
+            .corner-logo{
+                display: none !important;
+                position: fixed;
+                top: 0;                 
+                right: 0;
+                transform: translate(18mm, -18mm); 
+                width: 95px; max-height: 80px; z-index: 1000; pointer-events: none;
+            }
+            .header { 
+                padding-right: 0;
+                page-break-after: avoid; 
+            }
+            .subject-card { 
+                page-break-inside: avoid; 
+            }
         }
     </style>
 </head>
 <body>
+    ${schoolAssets && schoolAssets.logoUrl ? `
+    <img src="${schoolAssets.logoUrl}" alt="School Logo" class="corner-logo">
+    ` : ''}
+    
     <div class="header">
         <div class="school-name">${schoolInfo.name}</div>
         ${schoolInfo.address ? `<div class="school-details">${schoolInfo.address}</div>` : ''}
@@ -281,6 +354,28 @@ const getProgressReportHTML = (data) => {
                     <span>${student.oen}</span>
                 </div>
                 ` : ''}
+            </div>
+        </div>
+    </div>
+    
+    <div class="legend">
+        <div class="legend-title">Assessment Scale</div>
+        <div class="legend-grid">
+            <div class="legend-item">
+                <div class="legend-color rating-E">E</div>
+                <span>Excellent</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color rating-G">G</div>
+                <span>Good</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color rating-S">S</div>
+                <span>Satisfactory</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color rating-N">N</div>
+                <span>Needs Improvement</span>
             </div>
         </div>
     </div>
@@ -334,30 +429,23 @@ const getProgressReportHTML = (data) => {
         `).join('')}
     </div>
     
-    <div class="legend">
-        <div class="legend-title">Assessment Scale</div>
-        <div class="legend-grid">
-            <div class="legend-item">
-                <div class="legend-color rating-E">E</div>
-                <span>Excellent</span>
+    <div class="footer">  
+        ${schoolAssets && (schoolAssets.principalSignatureUrl || schoolAssets.schoolStampUrl) ? `
+        <div class="footer-signatures">
+            <div class="signature-section">
+                ${schoolAssets.principalSignatureUrl ? `
+                    <img src="${schoolAssets.principalSignatureUrl}" alt="Principal Signature" class="signature-image">
+                    <div class="signature-label">Principal Signature</div>
+                ` : ''}
             </div>
-            <div class="legend-item">
-                <div class="legend-color rating-G">G</div>
-                <span>Good</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color rating-S">S</div>
-                <span>Satisfactory</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-color rating-N">N</div>
-                <span>Needs Improvement</span>
+            <div class="signature-section">
+                ${schoolAssets.schoolStampUrl ? `
+                    <img src="${schoolAssets.schoolStampUrl}" alt="School Stamp" class="school-stamp">
+                ` : ''}
             </div>
         </div>
-    </div>
-    
-    <div class="footer">
-        <div>Generated on ${generatedDate}</div>
+        ` : ''}
+         <div>Created on ${generatedDate}</div>
         <div style="margin-top: 5px;">This progress report provides an overview of the student's current academic and behavioral progress.</div>
     </div>
 </body>
