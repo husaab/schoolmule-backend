@@ -8,6 +8,24 @@ const reportCardQueries = require('../queries/report_card.queries');
 const studentQueries = require('../queries/student.queries');
 const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../utils/emailTemplate');
 
+// Helper function to convert snake_case to camelCase
+const toCamelCase = (row) => ({
+  id: row.id,
+  reportType: row.report_type,
+  studentId: row.student_id,
+  term: row.term,
+  sentBy: row.sent_by,
+  emailAddresses: Array.isArray(row.email_addresses) ? row.email_addresses : JSON.parse(row.email_addresses || '[]'),
+  customHeader: row.custom_header,
+  customMessage: row.custom_message,
+  filePath: row.file_path,
+  sentAt: row.sent_at,
+  ccAddresses: row.cc_addresses ? (Array.isArray(row.cc_addresses) ? row.cc_addresses : JSON.parse(row.cc_addresses)) : [],
+  school: row.school,
+  studentName: row.student_name, // From joined queries
+  sentByUsername: row.sent_by_username // From joined queries
+});
+
 // Helper function to get school-specific API key
 const getSchoolApiKey = (school) => {
   // Convert school name to env variable format (e.g., "Al Haadi Academy" -> "ALHAADI_RESEND_API_KEY")
@@ -292,7 +310,7 @@ const getStudentEmailHistory = async (req, res) => {
 
     res.json({
       status: 'success',
-      data: rows
+      data: rows.map(toCamelCase)
     });
   } catch (error) {
     logger.error('Error fetching student email history:', error);
@@ -320,7 +338,7 @@ const getEmailHistoryByTermAndSchool = async (req, res) => {
 
     res.json({
       status: 'success',
-      data: rows
+      data: rows.map(toCamelCase)
     });
   } catch (error) {
     logger.error('Error fetching email history:', error);
