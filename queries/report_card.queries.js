@@ -28,15 +28,25 @@ const reportCardQueries = {
   `,
 
   selectGeneratedReportCards: `
-    SELECT student_id, term, student_name, file_path, generated_at, grade
+    SELECT student_id, term, student_name, file_path, generated_at, grade, email_sent, email_sent_at, email_sent_by
     FROM report_cards
     WHERE term = $1 AND school = $2
   `,
 
   selectGeneratedReportCardsByStudentId: `
-    SELECT student_id, term, student_name, file_path, generated_at, grade
+    SELECT student_id, term, student_name, file_path, generated_at, grade, email_sent, email_sent_at, email_sent_by
     FROM report_cards
     WHERE student_id = $1 AND term = $2 AND school = $3
+  `,
+
+  updateReportCardEmailStatus: `
+    UPDATE report_cards
+    SET 
+      email_sent = $3,
+      email_sent_at = $4,
+      email_sent_by = $5
+    WHERE student_id = $1 AND term = $2
+    RETURNING *
   `
 };
 

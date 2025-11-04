@@ -156,6 +156,50 @@ function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
   `;
 }
 
+function getProgressReportEmailHTML({ studentName, term, customMessage, schoolName, customHeader }) {
+  const subject = customHeader || `${studentName} - Progress Report (Term ${term})`;
+  
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">${subject} 📊</h2>
+      <p>Dear Parent/Guardian,</p>
+      <p>Please find attached the progress report for <strong>${studentName}</strong> for <strong>${term}</strong>.</p>
+      ${customMessage ? `
+        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
+          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Teacher's Message:</h3>
+          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
+        </div>
+      ` : ''}
+      <p>If you have any questions or concerns about your child's progress, please don't hesitate to contact us.</p>
+      <p style="margin-top: 30px;">Best regards,<br><strong>${schoolName}</strong></p>
+      <p style="color: #888; font-size: 12px; margin-top: 30px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
+function getReportCardEmailHTML({ studentName, term, customMessage, schoolName, customHeader }) {
+  const subject = customHeader || `${studentName} - Report Card (Term ${term})`;
+  
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">${subject} 🎓</h2>
+      <p>Dear Parent/Guardian,</p>
+      <p>Please find attached the report card for <strong>${studentName}</strong> for <strong>${term}</strong>.</p>
+      ${customMessage ? `
+        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
+          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Teacher's Message:</h3>
+          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
+        </div>
+      ` : ''}
+      <p>If you have any questions about your child's academic performance, please feel free to reach out.</p>
+      <p style="margin-top: 30px;">Best regards,<br><strong>${schoolName}</strong></p>
+      <p style="color: #888; font-size: 12px; margin-top: 30px;">— School Mule Team</p>
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
@@ -166,5 +210,7 @@ module.exports = {
   getContactEmailHTML,
   getTicketEmailHTML,
   getNewMessageEmailHTML,
-  getFeedbackEmailHTML
+  getFeedbackEmailHTML,
+  getProgressReportEmailHTML,
+  getReportCardEmailHTML
 };

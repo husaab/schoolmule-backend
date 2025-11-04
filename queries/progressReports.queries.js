@@ -115,7 +115,10 @@ const getStudentProgressReports = `
     grade,
     file_path,
     generated_at,
-    school
+    school,
+    email_sent,
+    email_sent_at,
+    email_sent_by
   FROM progress_reports
   WHERE student_id = $1
   ORDER BY generated_at DESC
@@ -130,7 +133,10 @@ const getProgressReportsByTermAndSchool = `
     grade,
     file_path,
     generated_at,
-    school
+    school,
+    email_sent,
+    email_sent_at,
+    email_sent_by
   FROM progress_reports
   WHERE term = $1 AND school = $2
   ORDER BY student_name ASC
@@ -145,9 +151,23 @@ const getProgressReportByStudentAndTerm = `
     grade,
     file_path,
     generated_at,
-    school
+    school,
+    email_sent,
+    email_sent_at,
+    email_sent_by
   FROM progress_reports
   WHERE student_id = $1 AND term = $2
+`;
+
+// Update email status for progress report
+const updateProgressReportEmailStatus = `
+  UPDATE progress_reports
+  SET 
+    email_sent = $3,
+    email_sent_at = $4,
+    email_sent_by = $5
+  WHERE student_id = $1 AND term = $2
+  RETURNING *
 `;
 
 module.exports = {
@@ -160,5 +180,6 @@ module.exports = {
   createProgressReport,
   getStudentProgressReports,
   getProgressReportsByTermAndSchool,
-  getProgressReportByStudentAndTerm
+  getProgressReportByStudentAndTerm,
+  updateProgressReportEmailStatus
 };
