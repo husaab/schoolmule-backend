@@ -156,13 +156,47 @@ function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
   `;
 }
 
-function getProgressReportEmailHTML({ studentName, term, customMessage, schoolName, customHeader }) {
+function getProgressReportEmailHTML({ studentName, term, customMessage, schoolName, customHeader, schoolInfo }) {
   const subject = customHeader || `${studentName} - Progress Report (Term ${term})`;
+  
+  // Create dynamic footer based on available school information
+  const createSchoolFooter = (school) => {
+    if (!school) {
+      return `
+        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">
+        <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
+          Powered by School Mule
+        </p>
+      `;
+    }
+
+    let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">`;
+    footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
+    footer += `<p style="margin: 0 0 4px 0;"><strong>${school.name || schoolName}</strong></p>`;
+    
+    // Address on its own line if available
+    if (school.address) {
+      footer += `<p style="margin: 0 0 2px 0;">${school.address}</p>`;
+    }
+    
+    // Phone and email on same line if both available
+    if (school.phone && school.email) {
+      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}  |  📧 ${school.email}</p>`;
+    } else if (school.phone) {
+      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}</p>`;
+    } else if (school.email) {
+      footer += `<p style="margin: 0 0 2px 0;">📧 ${school.email}</p>`;
+    }
+    
+    footer += `</div>`;
+    
+    return footer;
+  };
   
   return `
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
                 background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">${subject} 📊</h2>
+      <h2 style="color: #00ACC1;">${subject}</h2>
       <p>Dear Parent/Guardian,</p>
       <p>Please find attached the progress report for <strong>${studentName}</strong> for <strong>${term}</strong>.</p>
       ${customMessage ? `
@@ -172,8 +206,8 @@ function getProgressReportEmailHTML({ studentName, term, customMessage, schoolNa
         </div>
       ` : ''}
       <p>If you have any questions or concerns about your child's progress, please don't hesitate to contact us.</p>
-      <p style="margin-top: 30px;">Best regards,<br><strong>${schoolName}</strong></p>
-      <p style="color: #888; font-size: 12px; margin-top: 30px;">— School Mule Team</p>
+      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
+      ${createSchoolFooter(schoolInfo)}
     </div>
   `;
 }
@@ -194,8 +228,7 @@ function getReportCardEmailHTML({ studentName, term, customMessage, schoolName, 
         </div>
       ` : ''}
       <p>If you have any questions about your child's academic performance, please feel free to reach out.</p>
-      <p style="margin-top: 30px;">Best regards,<br><strong>${schoolName}</strong></p>
-      <p style="color: #888; font-size: 12px; margin-top: 30px;">— School Mule Team</p>
+      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
     </div>
   `;
 }

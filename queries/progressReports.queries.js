@@ -156,7 +156,7 @@ const getProgressReportByStudentAndTerm = `
     email_sent_at,
     email_sent_by
   FROM progress_reports
-  WHERE student_id = $1 AND term = $2
+  WHERE student_id = $1 AND term = $2 AND school = $3
 `;
 
 // Update email status for progress report
