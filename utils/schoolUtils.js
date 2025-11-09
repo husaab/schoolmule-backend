@@ -3,7 +3,7 @@
 const schoolDisplayNames = {
   PLAYGROUND: 'Playground School',
   ALHAADIACADEMY: 'Al Haadi Academy',
-  // add more enum’name mappings here as needed
+  // add more enum name mappings here as needed
 };
 
 /**
@@ -14,7 +14,7 @@ function getSchoolName(raw) {
   if (schoolDisplayNames[raw]) {
     return schoolDisplayNames[raw];
   }
-  // fallback: e.g. "MY_SCHOOL_ENUM" ’ "My School Enum"
+  // fallback: e.g. "MY_SCHOOL_ENUM" "My School Enum"
   return raw
     .toLowerCase()
     .split(/[_\s]+/)
