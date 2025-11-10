@@ -21,19 +21,30 @@ const getProgressReportHTML = (data) => {
             color: #333;
             line-height: 1.4;
         }
+
+        :root{
+            --logo-w: 160px;
+            --logo-h: 90px;
+            --logo-gutter: 0px;
+            --logo-nudge-x: -8px;
+            --logo-nudge-y: -6px;
+        }
         
-        .corner-logo {
+        .corner-logo{
             position: fixed;
-            top: 12px;
-            right: 12px;
-            width: 95px;
-            max-height: 80px;
+            top: var(--logo-gutter);
+            right: var(--logo-gutter);
+            width: var(--logo-w);
+            max-height: var(--logo-h);
+            height: auto;
             object-fit: contain;
             z-index: 1000;
             pointer-events: none;
+            transform: translate(var(--logo-nudge-x), var(--logo-nudge-y));
         }
+
         
-        .header {
+        .header{
             text-align: center;
             border-bottom: 3px solid #2c5aa0;
             padding-bottom: 20px;
@@ -287,28 +298,32 @@ const getProgressReportHTML = (data) => {
             margin: 18mm; 
         }
         
-        @media print {
+        @media print{
             body{
                 margin: 0;
-                padding: 0;                 /* <- important */
+                padding: 0;
                 -webkit-print-color-adjust: exact;
             }
+            :root{
+                --logo-w: 140px;
+                --logo-h: 90px;
+                --logo-gutter: 0mm;
+                --logo-nudge-x: -3mm; /* fine-tune for PDF */
+                --logo-nudge-y: -2mm;
+            }
             .corner-logo{
-                display: none !important;
-                position: fixed;
-                top: 0;                 
-                right: 0;
-                transform: translate(18mm, -18mm); 
-                width: 95px; max-height: 80px; z-index: 1000; pointer-events: none;
+                display: block !important;
+                position: absolute !important; /* still doesn't affect layout */
+                top: var(--logo-gutter) !important;
+                right: var(--logo-gutter) !important;
+                width: var(--logo-w) !important;
+                max-height: var(--logo-h) !important;
             }
-            .header { 
-                padding-right: 0;
-                page-break-after: avoid; 
+            .header{
+                page-break-after: avoid;
             }
-            .subject-card { 
-                page-break-inside: avoid; 
+            .subject-card{ page-break-inside: avoid; }
             }
-        }
     </style>
 </head>
 <body>
