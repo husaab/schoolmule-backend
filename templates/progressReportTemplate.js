@@ -253,6 +253,8 @@ const getProgressReportHTML = (data) => {
             font-size: 12px;
             color: #666;
             position: relative;
+            page-break-inside: avoid;
+            break-inside: avoid;
         }
         
         .footer-signatures {
@@ -261,6 +263,9 @@ const getProgressReportHTML = (data) => {
             align-items: center;
             margin-top: 30px;
             padding: 0 40px;
+            page-break-inside: avoid;
+            break-inside: avoid;
+            min-height: 100px;
         }
         
         .signature-section {
@@ -323,6 +328,14 @@ const getProgressReportHTML = (data) => {
                 page-break-after: avoid;
             }
             .subject-card{ page-break-inside: avoid; }
+            .footer {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+            .footer-signatures {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
             }
     </style>
 </head>
