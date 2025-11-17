@@ -70,11 +70,15 @@ const sendReportEmail = async (req, res) => {
       reportType, 
       studentId, 
       term, 
-      emailAddresses, 
-      ccAddresses, 
+      emailAddresses: rawEmailAddresses, 
+      ccAddresses: rawCcAddresses, 
       customHeader, 
       customMessage
     } = req.body;
+
+    // Trim whitespace from email addresses
+    const emailAddresses = rawEmailAddresses?.map(email => email.trim());
+    const ccAddresses = rawCcAddresses?.map(email => email.trim());
 
     const userId = req.user?.user_id;
     
@@ -392,8 +396,8 @@ const sendBulkReportEmails = async (req, res) => {
 
       // Get parent emails for this student
       const parentEmails = [];
-      if (student.mother_email) parentEmails.push(student.mother_email);
-      if (student.father_email) parentEmails.push(student.father_email);
+      if (student.mother_email) parentEmails.push(student.mother_email.trim());
+      if (student.father_email) parentEmails.push(student.father_email.trim());
 
       if (parentEmails.length === 0) {
         results.push({
