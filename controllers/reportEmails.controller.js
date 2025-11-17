@@ -10,6 +10,17 @@ const schoolQueries = require('../queries/school.queries');
 const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../utils/emailTemplate');
 const { getSchoolName } = require('../utils/schoolUtils');
 
+// Helper function to clean and validate email arrays
+const cleanEmailArray = (emails) => {
+  if (!emails) return [];
+  if (!Array.isArray(emails)) return [];
+  
+  return emails
+    .map(email => typeof email === 'string' ? email.trim() : '')
+    .filter(email => email.length > 0)
+    .filter(email => email.includes('@')); // Basic email validation
+};
+
 // Helper function to convert snake_case to camelCase
 const toCamelCase = (row) => ({
   id: row.id,
@@ -17,12 +28,12 @@ const toCamelCase = (row) => ({
   studentId: row.student_id,
   term: row.term,
   sentBy: row.sent_by,
-  emailAddresses: Array.isArray(row.email_addresses) ? row.email_addresses : JSON.parse(row.email_addresses || '[]'),
+  emailAddresses: cleanEmailArray(Array.isArray(row.email_addresses) ? row.email_addresses : JSON.parse(row.email_addresses || '[]')),
   customHeader: row.custom_header,
   customMessage: row.custom_message,
   filePath: row.file_path,
   sentAt: row.sent_at,
-  ccAddresses: row.cc_addresses ? (Array.isArray(row.cc_addresses) ? row.cc_addresses : JSON.parse(row.cc_addresses)) : [],
+  ccAddresses: cleanEmailArray(row.cc_addresses ? (Array.isArray(row.cc_addresses) ? row.cc_addresses : JSON.parse(row.cc_addresses)) : []),
   school: row.school,
   studentName: row.student_name, // From joined queries
   sentByUsername: row.sent_by_username // From joined queries
@@ -76,9 +87,9 @@ const sendReportEmail = async (req, res) => {
       customMessage
     } = req.body;
 
-    // Trim whitespace from email addresses
-    const emailAddresses = rawEmailAddresses?.map(email => email.trim());
-    const ccAddresses = rawCcAddresses?.map(email => email.trim());
+    // Clean and validate email addresses
+    const emailAddresses = cleanEmailArray(rawEmailAddresses);
+    const ccAddresses = cleanEmailArray(rawCcAddresses);
 
     const userId = req.user?.user_id;
     
@@ -395,9 +406,11 @@ const sendBulkReportEmails = async (req, res) => {
       }
 
       // Get parent emails for this student
-      const parentEmails = [];
-      if (student.mother_email) parentEmails.push(student.mother_email.trim());
-      if (student.father_email) parentEmails.push(student.father_email.trim());
+      const rawParentEmails = [];
+      if (student.mother_email) rawParentEmails.push(student.mother_email);
+      if (student.father_email) rawParentEmails.push(student.father_email);
+      
+      const parentEmails = cleanEmailArray(rawParentEmails);
 
       if (parentEmails.length === 0) {
         results.push({
@@ -416,7 +429,7 @@ const sendBulkReportEmails = async (req, res) => {
         parentEmails,
         customHeader: bulkConfig?.customHeader,
         customMessage: bulkConfig?.customMessage,
-        ccAddresses: bulkConfig?.ccAddresses || []
+        ccAddresses: cleanEmailArray(bulkConfig?.ccAddresses)
       });
     }
 
