@@ -14,6 +14,7 @@ const bulkQueries = {
     FROM students
     WHERE grade = $2
         AND school = $3
+        AND is_archived = false
     ON CONFLICT DO NOTHING
   `,
 

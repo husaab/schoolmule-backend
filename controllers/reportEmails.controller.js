@@ -334,7 +334,7 @@ const sendBulkReportEmails = async (req, res) => {
     const studentQuery = `
       SELECT student_id, name, school, grade, mother_email, father_email
       FROM students 
-      WHERE student_id = ANY($1)
+      WHERE student_id = ANY($1) AND is_archived = false
     `;
     const { rows: students } = await db.query(studentQuery, [studentIds]);
     

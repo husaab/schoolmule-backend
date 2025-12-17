@@ -8,7 +8,7 @@ const dashboardQueries = {
   selectTotalStudents: `
     SELECT COUNT(*)::int AS count
     FROM students
-    WHERE school = $1
+    WHERE school = $1 AND is_archived = false
   `,
 
   /**
@@ -46,7 +46,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1
+      WHERE school = $1 AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(*)::int AS present_count
@@ -55,6 +55,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date = $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
+        AND s.is_archived = false
     ) AS p
   `,
 
@@ -82,7 +83,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1
+      WHERE school = $1 AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(DISTINCT ga.student_id)::int AS present_count
@@ -91,6 +92,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date BETWEEN ($2::date - INTERVAL '6 days') AND $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
+        AND s.is_archived = false
     ) AS p
   `,
 
@@ -106,7 +108,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1
+      WHERE school = $1 AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(DISTINCT ga.student_id)::int AS present_count
@@ -115,6 +117,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date BETWEEN date_trunc('month', $2::date) AND $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
+        AND s.is_archived = false
     ) AS p
   `,
 
@@ -128,6 +131,7 @@ const dashboardQueries = {
     JOIN students s ON rc.student_id = s.student_id
     WHERE rc.term = $2
       AND s.school = $1
+      AND s.is_archived = false
   `,
 
   /**
@@ -145,7 +149,7 @@ const dashboardQueries = {
       JOIN assessments a ON sa.assessment_id = a.assessment_id
       JOIN classes c ON a.class_id = c.class_id
       JOIN students s ON sa.student_id = s.student_id
-      WHERE s.school = $1
+      WHERE s.school = $1 AND s.is_archived = false
       GROUP BY sa.student_id, c.class_id
     ) AS sub
   `,

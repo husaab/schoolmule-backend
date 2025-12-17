@@ -163,11 +163,14 @@ const classQueries = {
       s.father_number,
       s.emergency_contact,
       s.created_at,
-      s.last_modified_at
+      s.last_modified_at,
+      s.is_archived,
+      s.archived_at,
+      s.archived_by
     FROM students AS s
     INNER JOIN class_students AS cs
       ON s.student_id = cs.student_id
-    WHERE cs.class_id = $1
+    WHERE cs.class_id = $1 AND s.is_archived = false
     ORDER BY s.name
   `,
 

@@ -23,6 +23,9 @@ const toCamel = (s) => ({
   emergencyContact: s.emergency_contact,
   createdAt: s.created_at,
   lastModifiedAt: s.last_modified_at,
+  isArchived: s.is_archived,
+  archivedAt: s.archived_at,
+  archivedBy: s.archived_by,
 });
 
 const getAllStudents = async (req, res) => {
@@ -178,10 +181,135 @@ const deleteStudent = async (req, res) => {
   }
 };
 
+// Get archived students
+const getArchivedStudents = async (req, res) => {
+  try {
+    const requestedSchool = req.query.school;
+    if (!requestedSchool) {
+      return res.status(400).json({
+        status: "failed",
+        message: "Missing required query parameter: school",
+      });
+    }
+    
+    const { rows } = await db.query(studentQueries.selectArchivedStudentsBySchool, [requestedSchool]);
+    
+    logger.info("Archived students fetched successfully");
+    return res.status(200).json({
+      status: "success",
+      data: rows.map(toCamel)
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error fetching archived students" });
+  }
+};
+
+// Archive a student
+const archiveStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.user; // Get the user ID from the authenticated user
+    
+    // Check if student exists
+    const checkResult = await db.query(studentQueries.selectStudentById, [id]);
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ 
+        status: "failed", 
+        message: `Student with id ${id} not found` 
+      });
+    }
+    
+    if (checkResult.rows[0].is_archived) {
+      return res.status(400).json({ 
+        status: "failed", 
+        message: "Student is already archived" 
+      });
+    }
+    
+    // Archive the student
+    const { rows } = await db.query(studentQueries.archiveStudent, [id, userId]);
+    
+    logger.info(`Student ${id} archived by user ${userId}`);
+    return res.status(200).json({
+      status: "success",
+      message: "Student archived successfully",
+      data: toCamel(rows[0])
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error archiving student" });
+  }
+};
+
+// Unarchive a student
+const unarchiveStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if student exists
+    const checkResult = await db.query(studentQueries.selectStudentById, [id]);
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({ 
+        status: "failed", 
+        message: `Student with id ${id} not found` 
+      });
+    }
+    
+    if (!checkResult.rows[0].is_archived) {
+      return res.status(400).json({ 
+        status: "failed", 
+        message: "Student is not archived" 
+      });
+    }
+    
+    // Unarchive the student
+    const { rows } = await db.query(studentQueries.unarchiveStudent, [id]);
+    
+    logger.info(`Student ${id} unarchived`);
+    return res.status(200).json({
+      status: "success",
+      message: "Student unarchived successfully",
+      data: toCamel(rows[0])
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error unarchiving student" });
+  }
+};
+
+// Get all students including archived (with filter)
+const getAllStudentsWithArchived = async (req, res) => {
+  try {
+    const requestedSchool = req.query.school;
+    if (!requestedSchool) {
+      return res.status(400).json({
+        status: "failed",
+        message: "Missing required query parameter: school",
+      });
+    }
+    
+    const { rows } = await db.query(studentQueries.selectAllStudentsWithArchived, [requestedSchool]);
+    
+    logger.info("All students (including archived) fetched successfully");
+    return res.status(200).json({
+      status: "success",
+      data: rows.map(toCamel)
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error fetching students" });
+  }
+};
+
 module.exports = {
   getAllStudents,
   getStudentById,
   createStudent,
   updateStudent,
-  deleteStudent
+  deleteStudent,
+  getArchivedStudents,
+  archiveStudent,
+  unarchiveStudent,
+  getAllStudentsWithArchived
 };
