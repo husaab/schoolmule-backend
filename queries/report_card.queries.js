@@ -17,6 +17,13 @@ const reportCardQueries = {
     WHERE student_id = $1 AND class_id = $2 AND term = $3
   `,
 
+  selectFeedbackByClass: `
+    SELECT rcf.student_id, rcf.class_id, rcf.term, rcf.work_habits, rcf.behavior, rcf.comment, s.name as student_name
+    FROM report_card_feedback rcf
+    JOIN students s ON s.student_id = rcf.student_id
+    WHERE rcf.class_id = $1 AND rcf.term = $2
+  `,
+
   upsertGeneratedReportCard: `
     INSERT INTO report_cards (student_id, term, student_name, file_path, grade, school)
     VALUES ($1, $2, $3, $4, $5, $6)

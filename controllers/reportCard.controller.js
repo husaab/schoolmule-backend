@@ -90,6 +90,130 @@ const getFeedback = async (req, res) => {
   }
 };
 
+/**
+ * GET /report-cards/feedback/class/:classId?term=X
+ * Get all feedback for a class for a specific term
+ */
+const getClassFeedback = async (req, res) => {
+  const { classId } = req.params;
+  const { term } = req.query;
+
+  if (!classId || !term) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing required parameters: classId or term'
+    });
+  }
+
+  try {
+    const { rows } = await db.query(reportCardQueries.selectFeedbackByClass, [classId, term]);
+
+    const data = rows.map(row => ({
+      studentId: row.student_id,
+      studentName: row.student_name,
+      classId: row.class_id,
+      term: row.term,
+      workHabits: row.work_habits,
+      behavior: row.behavior,
+      comment: row.comment
+    }));
+
+    return res.status(200).json({
+      status: 'success',
+      data
+    });
+  } catch (err) {
+    logger.error(err);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching class feedback' });
+  }
+};
+
+/**
+ * POST /report-cards/feedback/bulk
+ * Upsert feedback for multiple students at once in a transaction
+ * Body: { feedbackEntries: Array<{ studentId, classId, term, workHabits?, behavior?, comment? }> }
+ */
+const upsertBulkFeedback = async (req, res) => {
+  const { feedbackEntries } = req.body;
+
+  if (!Array.isArray(feedbackEntries) || feedbackEntries.length === 0) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing or empty feedbackEntries array'
+    });
+  }
+
+  // Validate all entries first before starting transaction
+  const validationErrors = [];
+  for (let i = 0; i < feedbackEntries.length; i++) {
+    const entry = feedbackEntries[i];
+    if (!entry.studentId || !entry.classId || !entry.term) {
+      validationErrors.push({ index: i, studentId: entry.studentId, error: 'Missing required fields' });
+    }
+  }
+
+  if (validationErrors.length > 0) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Validation failed for some entries',
+      data: {
+        updated: 0,
+        failed: validationErrors.length,
+        errors: validationErrors
+      }
+    });
+  }
+
+  // Use a transaction for atomicity
+  try {
+    await db.query('BEGIN');
+
+    let successCount = 0;
+
+    for (const entry of feedbackEntries) {
+      const { studentId, classId, term, workHabits, behavior, comment } = entry;
+
+      // Handle empty strings explicitly - convert empty string to null for DB
+      const workHabitsValue = workHabits === '' ? null : (workHabits || null);
+      const behaviorValue = behavior === '' ? null : (behavior || null);
+      const commentValue = comment === '' ? null : (comment || null);
+
+      await db.query(reportCardQueries.upsertFeedback, [
+        studentId,
+        classId,
+        term,
+        workHabitsValue,
+        behaviorValue,
+        commentValue
+      ]);
+      successCount++;
+    }
+
+    await db.query('COMMIT');
+
+    return res.status(200).json({
+      status: 'success',
+      message: `Saved ${successCount} feedback entries`,
+      data: {
+        updated: successCount,
+        failed: 0
+      }
+    });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    logger.error('Bulk feedback transaction failed:', err);
+    return res.status(500).json({
+      status: 'failed',
+      message: 'Error saving bulk feedback - all changes rolled back',
+      data: {
+        updated: 0,
+        failed: feedbackEntries.length,
+        errors: [{ error: err.message }]
+      }
+    });
+  }
+};
+
 const generateReportCardsBulk = async (req, res) => {
   const { studentIds, term } = req.body;
 
@@ -395,6 +519,8 @@ module.exports = {
   generateReportCard,
   upsertFeedback,
   getFeedback,
+  getClassFeedback,
+  upsertBulkFeedback,
   generateReportCardsBulk,
   getGeneratedReportCards,
   deleteReportCard,

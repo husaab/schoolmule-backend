@@ -1,12 +1,14 @@
 const express = require('express');
 const supabase = require('../config/supabaseClient');
-const { generateReportCard, upsertFeedback, getFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, getGeneratedReportCardsByStudentId} = require('../controllers/reportCard.controller');
+const { generateReportCard, upsertFeedback, getFeedback, getClassFeedback, upsertBulkFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, getGeneratedReportCardsByStudentId} = require('../controllers/reportCard.controller');
 
 const router = express.Router();
 
 router.post('/generate', generateReportCard);
 router.post('/feedback', upsertFeedback);
 router.get('/feedback', getFeedback);
+router.get('/feedback/class/:classId', getClassFeedback);
+router.post('/feedback/bulk', upsertBulkFeedback);
 router.post('/generate/bulk', generateReportCardsBulk);
 router.get('/view', getGeneratedReportCards);
 router.get("/view/student", getGeneratedReportCardsByStudentId);
