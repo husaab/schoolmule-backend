@@ -266,12 +266,82 @@ const generateReportCard = async (req, res) => {
     }
     const student = studentRows[0];
 
-    const { rows: teacherRows } = await db.query(    `
+    const { rows: teacherRows } = await db.query(`
         SELECT username
         FROM users
         WHERE user_id = $1
     `, [student.homeroom_teacher_id]);
     const teacherName = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
+
+    // Calculate days of absence from general_attendance
+    let daysOfAbsence = 0;
+    try {
+      const { rows: attendanceRows } = await db.query(`
+        SELECT COUNT(*) as days_absent
+        FROM general_attendance
+        WHERE student_id = $1 AND status = 'absent'
+      `, [studentId]);
+      daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
+    } catch (err) {
+      logger.warn('Could not fetch attendance data:', err.message);
+    }
+
+    // Fetch school info (gracefully fallback if table doesn't exist)
+    let schoolInfo = {
+      name: student.school,
+      address: '',
+      phone: '',
+      email: ''
+    };
+    try {
+      const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+      const { rows: schoolRows } = await db.query(`
+        SELECT name, address, phone, email
+        FROM schools WHERE school_code = $1
+      `, [schoolCode]);
+      if (schoolRows.length > 0) {
+        schoolInfo = schoolRows[0];
+      }
+    } catch (err) {
+      // Table may not exist yet, use fallback
+      logger.debug('Schools table not available, using student.school as name');
+    }
+
+    // Fetch school assets and generate signed URLs (gracefully fallback)
+    let schoolAssets = { logoUrl: null, principalSignatureUrl: null, schoolStampUrl: null };
+    try {
+      const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+      const { rows: assetRows } = await db.query(`
+        SELECT logo_path, principal_signature_path, school_stamp_path
+        FROM school_assets
+        WHERE school_code = $1
+      `, [schoolCode]);
+
+      if (assetRows.length > 0) {
+        const assets = assetRows[0];
+        if (assets.logo_path) {
+          const { data: logoData } = await supabase.storage
+            .from('school-assets')
+            .createSignedUrl(assets.logo_path, 3600);
+          schoolAssets.logoUrl = logoData?.signedUrl || null;
+        }
+        if (assets.principal_signature_path) {
+          const { data: sigData } = await supabase.storage
+            .from('school-assets')
+            .createSignedUrl(assets.principal_signature_path, 3600);
+          schoolAssets.principalSignatureUrl = sigData?.signedUrl || null;
+        }
+        if (assets.school_stamp_path) {
+          const { data: stampData } = await supabase.storage
+            .from('school-assets')
+            .createSignedUrl(assets.school_stamp_path, 3600);
+          schoolAssets.schoolStampUrl = stampData?.signedUrl || null;
+        }
+      }
+    } catch (err) {
+      // Table may not exist yet, use empty assets
+      logger.debug('School assets not available');
+    }
 
     // Fetch student assessments and compute average per subject
     const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
@@ -307,17 +377,21 @@ const generateReportCard = async (req, res) => {
 
     // Render HTML → PDF
     const html = getReportCardHTML({
-        schoolName: student.school,
+        schoolInfo,
+        schoolAssets,
         term,
         student: {
             name: student.name,
             grade: student.grade,
             oen: student.oen,
-            homeroomTeacher: teacherName
+            homeroomTeacher: teacherName,
+            daysOfAbsence,
+            school: student.school
         },
         subjects,
-        feedbacks: feedbackRows
-        });
+        feedbacks: feedbackRows,
+        generatedDate: new Date().toLocaleDateString('en-CA')
+    });
 
     const pdfBuffer = await createPDFBuffer(html);
 
@@ -364,6 +438,74 @@ const generateSingleReportCard = async (studentId, term) => {
   `, [student.homeroom_teacher_id]);
   const teacherName = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
 
+  // Calculate days of absence from general_attendance
+  let daysOfAbsence = 0;
+  try {
+    const { rows: attendanceRows } = await db.query(`
+      SELECT COUNT(*) as days_absent
+      FROM general_attendance
+      WHERE student_id = $1 AND status = 'absent'
+    `, [studentId]);
+    daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
+  } catch (err) {
+    // Silently fallback to 0
+  }
+
+  // Fetch school info (gracefully fallback if table doesn't exist)
+  let schoolInfo = {
+    name: student.school,
+    address: '',
+    phone: '',
+    email: ''
+  };
+  try {
+    const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+    const { rows: schoolRows } = await db.query(`
+      SELECT name, address, phone, email
+      FROM schools WHERE school_code = $1
+    `, [schoolCode]);
+    if (schoolRows.length > 0) {
+      schoolInfo = schoolRows[0];
+    }
+  } catch (err) {
+    // Table may not exist yet, use fallback
+  }
+
+  // Fetch school assets and generate signed URLs (gracefully fallback)
+  let schoolAssets = { logoUrl: null, principalSignatureUrl: null, schoolStampUrl: null };
+  try {
+    const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+    const { rows: assetRows } = await db.query(`
+      SELECT logo_path, principal_signature_path, school_stamp_path
+      FROM school_assets
+      WHERE school_code = $1
+    `, [schoolCode]);
+
+    if (assetRows.length > 0) {
+      const assets = assetRows[0];
+      if (assets.logo_path) {
+        const { data: logoData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.logo_path, 3600);
+        schoolAssets.logoUrl = logoData?.signedUrl || null;
+      }
+      if (assets.principal_signature_path) {
+        const { data: sigData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.principal_signature_path, 3600);
+        schoolAssets.principalSignatureUrl = sigData?.signedUrl || null;
+      }
+      if (assets.school_stamp_path) {
+        const { data: stampData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.school_stamp_path, 3600);
+        schoolAssets.schoolStampUrl = stampData?.signedUrl || null;
+      }
+    }
+  } catch (err) {
+    // Table may not exist yet, use empty assets
+  }
+
   const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
   const subjects = assessments.map(a => ({
     subject: a.subject_name,
@@ -393,16 +535,20 @@ const generateSingleReportCard = async (studentId, term) => {
   }
 
   const html = getReportCardHTML({
-    schoolName: student.school,
+    schoolInfo,
+    schoolAssets,
     term,
     student: {
       name: student.name,
       grade: student.grade,
       oen: student.oen,
-      homeroomTeacher: teacherName
+      homeroomTeacher: teacherName,
+      daysOfAbsence,
+      school: student.school
     },
     subjects,
-    feedbacks: feedbackRows
+    feedbacks: feedbackRows,
+    generatedDate: new Date().toLocaleDateString('en-CA')
   });
 
   const pdfBuffer = await createPDFBuffer(html);
