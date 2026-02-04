@@ -21,15 +21,12 @@ function getReportCardHTML({
     email: schoolEmail = ''
   } = schoolInfo || {};
 
-  // Generate subject cards with dedicated comment boxes (2 per page max)
-  const subjectCards = subjects.map((sub, index) => {
+  // Generate subject cards grouped into pages (2 per page max, vertically centered)
+  const generateSubjectCard = (sub) => {
     const feedback = feedbacks.find(fb => fb.subject === sub.subject);
     const workHabits = feedback?.work_habits || '-';
     const behavior = feedback?.behavior || '-';
     const comment = feedback?.comment || '';
-
-    // Add page break after every 2nd card (but not after the last pair)
-    const needsPageBreak = (index + 1) % 2 === 0 && index < subjects.length - 1;
 
     return `
       <div class="subject-card">
@@ -53,9 +50,25 @@ function getReportCardHTML({
         <div class="comment-header">Teacher Comments</div>
         <div class="comment-box">${comment || '<span class="no-comment">No comments provided</span>'}</div>
       </div>
-      ${needsPageBreak ? '<div class="page-break"></div>' : ''}
     `;
-  }).join('');
+  };
+
+  // Group subjects into pairs and wrap each pair in a page container
+  const subjectPages = [];
+  for (let i = 0; i < subjects.length; i += 2) {
+    const card1 = generateSubjectCard(subjects[i]);
+    const card2 = subjects[i + 1] ? generateSubjectCard(subjects[i + 1]) : '';
+    const isLastPage = i + 2 >= subjects.length;
+
+    subjectPages.push(`
+      <div class="subject-page">
+        ${card1}
+        ${card2}
+      </div>
+      ${!isLastPage ? '<div class="page-break"></div>' : ''}
+    `);
+  }
+  const subjectCards = subjectPages.join('');
 
   // Format term for display (e.g., "Term 1" -> "FIRST TERM")
   const termDisplay = formatTermDisplay(term);
@@ -290,10 +303,19 @@ function getReportCardHTML({
           border-bottom: 2px solid var(--primary-blue);
         }
 
+        /* Container for 2 subject cards per page */
+        .subject-page {
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          gap: 40px;
+          min-height: 500px;
+          padding: 20px 0;
+        }
+
         .subject-card {
           border: 1px solid var(--border-color);
           border-radius: 5px;
-          margin-bottom: 15px;
           overflow: hidden;
           page-break-inside: avoid;
         }
@@ -371,20 +393,21 @@ function getReportCardHTML({
           font-style: italic;
         }
 
-        /* Footer Section */
+        /* Footer Section - keep all together, no breaks inside */
         .footer {
-          margin-top: 30px;
-          padding-top: 20px;
+          margin-top: 20px;
+          padding-top: 15px;
           border-top: 1px solid var(--border-color);
           page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .footer-signatures {
           display: flex;
           justify-content: space-around;
           align-items: flex-end;
-          margin-bottom: 20px;
-          min-height: 80px;
+          margin-bottom: 15px;
+          min-height: 70px;
         }
 
         .signature-block {
@@ -393,31 +416,31 @@ function getReportCardHTML({
         }
 
         .signature-image {
-          max-height: 60px;
-          max-width: 150px;
+          max-height: 50px;
+          max-width: 120px;
           object-fit: contain;
           margin-bottom: 5px;
         }
 
         .stamp-image {
-          max-height: 80px;
-          max-width: 80px;
+          max-height: 60px;
+          max-width: 60px;
           object-fit: contain;
         }
 
         .signature-line {
           border-top: 1px solid var(--text-primary);
           padding-top: 5px;
-          font-size: 10pt;
+          font-size: 9pt;
           color: var(--text-secondary);
-          margin-top: 10px;
+          margin-top: 8px;
         }
 
         .footer-info {
           text-align: center;
-          font-size: 10pt;
+          font-size: 9pt;
           color: var(--text-secondary);
-          margin-top: 20px;
+          margin-top: 15px;
         }
 
         .generation-date {
@@ -466,8 +489,15 @@ function getReportCardHTML({
             page-break-inside: avoid;
           }
 
+          .subject-page {
+            min-height: auto;
+            gap: 50px;
+            padding: 30px 0;
+          }
+
           .footer {
             page-break-inside: avoid;
+            break-inside: avoid;
           }
         }
       </style>
