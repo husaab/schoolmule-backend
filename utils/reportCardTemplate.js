@@ -98,11 +98,6 @@ function getReportCardHTML({
           --border-color: #cccccc;
           --white: #ffffff;
           --light-gray: #f8f9fa;
-          --logo-w: 160px;
-          --logo-h: 90px;
-          --logo-gutter: 0px;
-          --logo-nudge-x: -8px;
-          --logo-nudge-y: -6px;
         }
 
         * {
@@ -118,6 +113,7 @@ function getReportCardHTML({
           background: var(--white);
           line-height: 1.4;
           padding: 20px;
+          position: relative;
         }
 
         .container {
@@ -127,18 +123,15 @@ function getReportCardHTML({
           background: var(--white);
         }
 
-        /* Corner Logo - matches progress report */
+        /* Corner Logo - positioned at top right of page */
         .corner-logo {
-          position: fixed;
-          top: var(--logo-gutter);
-          right: var(--logo-gutter);
-          width: var(--logo-w);
-          max-height: var(--logo-h);
+          position: absolute;
+          top: 0;
+          right: 0;
+          width: 100px;
           height: auto;
           object-fit: contain;
           z-index: 1000;
-          pointer-events: none;
-          transform: translate(var(--logo-nudge-x), var(--logo-nudge-y));
         }
 
         /* Header Section */
@@ -461,23 +454,15 @@ function getReportCardHTML({
             padding: 0;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-          }
-
-          :root {
-            --logo-w: 140px;
-            --logo-h: 90px;
-            --logo-gutter: 0mm;
-            --logo-nudge-x: -3mm;
-            --logo-nudge-y: -2mm;
+            position: relative;
           }
 
           .corner-logo {
-            display: block !important;
             position: absolute !important;
-            top: var(--logo-gutter) !important;
-            right: var(--logo-gutter) !important;
-            width: var(--logo-w) !important;
-            max-height: var(--logo-h) !important;
+            top: 0 !important;
+            right: 0 !important;
+            width: 100px !important;
+            height: auto !important;
           }
 
           .container {
