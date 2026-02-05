@@ -54,16 +54,21 @@ const getAssessmentsByClass = `
     name ASC
 `;
 
-// Get student's assessment scores
+// Get student's assessment scores with exclusion status
 const getStudentAssessmentScores = `
-  SELECT 
+  SELECT
     sa.assessment_id,
     sa.score,
     a.max_score,
     a.weight_percent,
-    a.weight_points
+    a.weight_points,
+    CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
   FROM student_assessments sa
   JOIN assessments a ON sa.assessment_id = a.assessment_id
+  LEFT JOIN student_excluded_assessments sea
+    ON sea.student_id = sa.student_id
+    AND sea.class_id = a.class_id
+    AND sea.assessment_id = a.assessment_id
   WHERE sa.student_id = $1
     AND a.class_id = $2
 `;

@@ -3,78 +3,7 @@ const reportsQueries = require("../queries/reports.queries");
 const logger = require("../logger");
 const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStudentSummaryHTML } = require("../templates/studentSummaryTemplate");
-
-// Helper function to calculate weighted grade with parent/child assessment support
-const calculateWeightedGrade = (assessments, studentScores) => {
-  let totalWeightedScore = 0;
-  let totalWeight = 0;
-
-  // Group assessments by parent
-  const parentAssessments = assessments.filter(a => a.parent_assessment_id === null);
-  
-  parentAssessments.forEach(parentAssessment => {
-    // Get weight from weight_points only (weight_points = weight percentage)
-    const weight = parseFloat(parentAssessment.weight_points) || 0;
-    
-    if (weight === 0) return; // Skip assessments with no weight
-    
-    let assessmentScore = null;
-    
-    if (parentAssessment.is_parent) {
-      // This is a parent assessment - calculate score from children
-      const childAssessments = assessments.filter(a => a.parent_assessment_id === parentAssessment.assessment_id);
-      
-      if (childAssessments.length > 0) {
-        let childTotalScore = 0;
-        let childTotalPossible = 0;
-        let hasScores = false;
-        
-        childAssessments.forEach(child => {
-          const childScore = studentScores.find(score => score.assessment_id === child.assessment_id);
-          if (childScore && childScore.score !== null) {
-            const childWeight = parseFloat(child.weight_points) || 1;
-            const maxScore = parseFloat(child.max_score) || 100;
-            childTotalScore += (parseFloat(childScore.score) * childWeight);
-            childTotalPossible += (maxScore * childWeight);
-            hasScores = true;
-          }
-        });
-        
-        if (hasScores && childTotalPossible > 0) {
-          assessmentScore = (childTotalScore / childTotalPossible) * 100;
-        }
-      }
-    } else {
-      // This is a regular assessment
-      const studentScore = studentScores.find(score => score.assessment_id === parentAssessment.assessment_id);
-      
-      if (studentScore && studentScore.score !== null) {
-        const score = parseFloat(studentScore.score);
-        const maxScore = parseFloat(parentAssessment.max_score);
-        
-        if (maxScore && maxScore > 0) {
-          // Points-based assessment
-          assessmentScore = (score / maxScore) * 100;
-        } else {
-          // Percentage-based assessment
-          assessmentScore = score;
-        }
-      }
-    }
-    
-    // Add to total if we have a score
-    if (assessmentScore !== null && !isNaN(assessmentScore)) {
-      totalWeightedScore += (assessmentScore * weight) / 100;
-      totalWeight += weight;
-    }
-  });
-
-  // If no weighted assessments, return 0
-  if (totalWeight === 0) return 0;
-
-  // Return weighted average
-  return (totalWeightedScore / totalWeight) * 100;
-};
+const { calculateStudentGrade } = require("../utils/gradeCalculator");
 
 const generateStudentSummaryReport = async (req, res) => {
   try {
@@ -159,8 +88,9 @@ const generateStudentSummaryReport = async (req, res) => {
     const scoresResult = await db.query(reportsQueries.getStudentAssessmentScores, [studentId, classId]);
     const studentScores = scoresResult.rows;
 
-    // 8. Calculate weighted grade
-    const calculatedGrade = calculateWeightedGrade(assessments, studentScores);
+    // 8. Calculate weighted grade using shared utility
+    // Note: calculateStudentGrade expects studentScores with is_excluded flag (added to query)
+    const calculatedGrade = calculateStudentGrade(assessments, studentScores);
 
     // 9. Generate PDF HTML
     const htmlContent = getStudentSummaryHTML({

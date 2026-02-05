@@ -2,12 +2,99 @@
 
 const db = require('../config/database');
 const studentQueries = require('../queries/student.queries');
-const assessmentQueries = require('../queries/assessment.queries');
 const { getReportCardHTML } = require('../utils/reportCardTemplate');
 const reportCardQueries = require('../queries/report_card.queries');
 const { createPDFBuffer } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient'); // configure this file if not already
 const logger = require('../logger');
+const { calculateStudentGrade } = require('../utils/gradeCalculator');
+
+/**
+ * Calculate final grades per subject for a student using JavaScript-based calculation
+ * Handles exclusions, parent/child hierarchy, and weight scaling consistently with frontend
+ *
+ * @param {string} studentId - The student's UUID
+ * @returns {Promise<Array<{subject_name: string, final_grade: number}>>}
+ */
+async function calculateSubjectGradesForStudent(studentId) {
+  // 1. Get all classes the student is enrolled in
+  const { rows: classRows } = await db.query(`
+    SELECT c.class_id, c.subject
+    FROM class_students cs
+    JOIN classes c ON cs.class_id = c.class_id
+    WHERE cs.student_id = $1
+  `, [studentId]);
+
+  if (classRows.length === 0) {
+    return [];
+  }
+
+  // 2. For each class, calculate the grade using shared utility
+  const classGrades = [];
+
+  for (const cls of classRows) {
+    // Get all assessments for this class
+    const { rows: assessments } = await db.query(`
+      SELECT
+        assessment_id,
+        name,
+        weight_points,
+        max_score,
+        is_parent,
+        parent_assessment_id
+      FROM assessments
+      WHERE class_id = $1
+    `, [cls.class_id]);
+
+    // Get student's scores with exclusion flag
+    const { rows: studentScores } = await db.query(`
+      SELECT
+        sa.assessment_id,
+        sa.score,
+        CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
+      FROM student_assessments sa
+      JOIN assessments a ON sa.assessment_id = a.assessment_id
+      LEFT JOIN student_excluded_assessments sea
+        ON sea.student_id = sa.student_id
+        AND sea.class_id = a.class_id
+        AND sea.assessment_id = a.assessment_id
+      WHERE sa.student_id = $1
+        AND a.class_id = $2
+    `, [studentId, cls.class_id]);
+
+    // Calculate grade using shared utility
+    const grade = calculateStudentGrade(assessments, studentScores);
+
+    classGrades.push({
+      subject: cls.subject,
+      grade: grade
+    });
+  }
+
+  // 3. Group by subject and average if multiple classes share a subject
+  const subjectMap = new Map();
+  for (const cg of classGrades) {
+    if (!subjectMap.has(cg.subject)) {
+      subjectMap.set(cg.subject, []);
+    }
+    subjectMap.get(cg.subject).push(cg.grade);
+  }
+
+  // Calculate average for each subject
+  const results = [];
+  for (const [subject, grades] of subjectMap) {
+    const avgGrade = grades.reduce((sum, g) => sum + g, 0) / grades.length;
+    results.push({
+      subject_name: subject,
+      final_grade: avgGrade
+    });
+  }
+
+  // Sort by subject name for consistency
+  results.sort((a, b) => a.subject_name.localeCompare(b.subject_name));
+
+  return results;
+}
 
 /**
  * POST /report-cards/feedback
@@ -343,8 +430,9 @@ const generateReportCard = async (req, res) => {
       logger.debug('School assets not available');
     }
 
-    // Fetch student assessments and compute average per subject
-    const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
+    // Fetch student assessments and compute average per subject using JavaScript calculation
+    // This handles exclusions, parent/child hierarchy, and weight scaling consistently
+    const assessments = await calculateSubjectGradesForStudent(studentId);
     const subjects = assessments.map(a => ({ subject: a.subject_name, grade: Number(a.final_grade).toFixed(1) }));
 
     // Fetch all class_ids for the student
@@ -506,7 +594,8 @@ const generateSingleReportCard = async (studentId, term) => {
     // Table may not exist yet, use empty assets
   }
 
-  const { rows: assessments } = await db.query(assessmentQueries.selectFinalGradesByStudent, [studentId]);
+  // Use JavaScript calculation for consistent grade handling
+  const assessments = await calculateSubjectGradesForStudent(studentId);
   const subjects = assessments.map(a => ({
     subject: a.subject_name,
     grade: Number(a.final_grade).toFixed(1)

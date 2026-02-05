@@ -112,7 +112,7 @@ function getReportCardHTML({
           color: var(--text-primary);
           background: var(--white);
           line-height: 1.4;
-          padding: 20px;
+          padding: 5px;
           position: relative;
         }
 
