@@ -46,20 +46,23 @@ async function calculateSubjectGradesForStudent(studentId) {
       WHERE class_id = $1
     `, [cls.class_id]);
 
-    // Get student's scores with exclusion flag
+    // Get student's scores with exclusion flag for ALL assessments (not just ones with scores)
+    // This is critical: we need exclusion status even for assessments without scores
+    // because parent-level exclusions don't have entries in student_assessments
     const { rows: studentScores } = await db.query(`
       SELECT
-        sa.assessment_id,
+        a.assessment_id,
         sa.score,
         CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
-      FROM student_assessments sa
-      JOIN assessments a ON sa.assessment_id = a.assessment_id
+      FROM assessments a
+      LEFT JOIN student_assessments sa
+        ON sa.assessment_id = a.assessment_id
+        AND sa.student_id = $1
       LEFT JOIN student_excluded_assessments sea
-        ON sea.student_id = sa.student_id
+        ON sea.student_id = $1
         AND sea.class_id = a.class_id
         AND sea.assessment_id = a.assessment_id
-      WHERE sa.student_id = $1
-        AND a.class_id = $2
+      WHERE a.class_id = $2
     `, [studentId, cls.class_id]);
 
     // Calculate grade using shared utility
