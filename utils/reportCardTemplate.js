@@ -3,6 +3,8 @@
  * Generates a professional, print-ready report card with blue color scheme
  */
 
+const { formatCommentHTML } = require('./commentFormatter')
+
 function getReportCardHTML({
   schoolInfo,
   schoolAssets,
@@ -26,7 +28,7 @@ function getReportCardHTML({
     const feedback = feedbacks.find(fb => fb.subject === sub.subject);
     const workHabits = feedback?.work_habits || '-';
     const behavior = feedback?.behavior || '-';
-    const comment = feedback?.comment || '';
+    const comment = feedback?.comment ? formatCommentHTML(feedback.comment) : '';
 
     return `
       <div class="subject-card">
