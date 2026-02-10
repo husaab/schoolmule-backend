@@ -92,7 +92,20 @@ const generateStudentSummaryReport = async (req, res) => {
     // Note: calculateStudentGrade expects studentScores with is_excluded flag (added to query)
     const calculatedGrade = calculateStudentGrade(assessments, studentScores);
 
-    // 9. Generate PDF HTML
+    // 9. Get attendance data (days of absence)
+    let daysOfAbsence = 0;
+    try {
+      const { rows: attendanceRows } = await db.query(`
+        SELECT COUNT(*) as days_absent
+        FROM general_attendance
+        WHERE student_id = $1 AND status = 'absent'
+      `, [studentId]);
+      daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
+    } catch (err) {
+      logger.warn('Could not fetch attendance data:', err.message);
+    }
+
+    // 10. Generate PDF HTML
     const htmlContent = getStudentSummaryHTML({
       schoolInfo,
       student,
@@ -100,20 +113,21 @@ const generateStudentSummaryReport = async (req, res) => {
       term,
       assessments,
       studentAssessments: studentScores,
-      calculatedGrade
+      calculatedGrade,
+      daysOfAbsence
     });
 
-    // 10. Generate PDF buffer
+    // 11. Generate PDF buffer
     const pdfBuffer = await createPDFBuffer(htmlContent);
 
-    // 11. Set response headers for PDF download
+    // 12. Set response headers for PDF download
     const filename = `${student.name.replace(/\s+/g, '_')}_${classInfo.subject}_${term.name}_Summary.pdf`;
     
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', pdfBuffer.length);
 
-    // 12. Send PDF buffer
+    // 13. Send PDF buffer
     res.send(pdfBuffer);
 
     logger.info(`Student summary report generated successfully for student ${studentId} in class ${classId}`);

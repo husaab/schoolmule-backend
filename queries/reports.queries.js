@@ -34,23 +34,24 @@ const getTermById = `
 
 // Get all assessments for a class (including parent and child assessments)
 const getAssessmentsByClass = `
-  SELECT 
+  SELECT
     assessment_id,
     name,
     weight_percent,
     weight_points,
     max_score,
     date,
+    created_at,
     sort_order,
     parent_assessment_id,
     is_parent
   FROM assessments
   WHERE class_id = $1
-  ORDER BY 
+  ORDER BY
     CASE WHEN parent_assessment_id IS NULL THEN assessment_id ELSE parent_assessment_id END,
     parent_assessment_id NULLS FIRST,
-    sort_order ASC, 
-    date ASC, 
+    sort_order ASC,
+    date ASC,
     name ASC
 `;
 
