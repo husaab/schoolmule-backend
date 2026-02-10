@@ -3,6 +3,7 @@ const reportsQueries = require("../queries/reports.queries");
 const logger = require("../logger");
 const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStudentSummaryHTML } = require("../templates/studentSummaryTemplate");
+const { getStudentSummaryHTMLHorizontal } = require("../templates/studentSummaryTemplateHorizontal");
 const { calculateStudentGrade } = require("../utils/gradeCalculator");
 
 const generateStudentSummaryReport = async (req, res) => {
@@ -105,8 +106,13 @@ const generateStudentSummaryReport = async (req, res) => {
       logger.warn('Could not fetch attendance data:', err.message);
     }
 
-    // 10. Generate PDF HTML
-    const htmlContent = getStudentSummaryHTML({
+    // 10. Generate PDF HTML (horizontal layout by default, use ?orientation=vertical for vertical)
+    const orientation = req.query.orientation || 'horizontal';
+    const templateFn = orientation === 'vertical'
+      ? getStudentSummaryHTML
+      : getStudentSummaryHTMLHorizontal;
+
+    const htmlContent = templateFn({
       schoolInfo,
       student,
       classInfo,

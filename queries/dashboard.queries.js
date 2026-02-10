@@ -135,23 +135,63 @@ const dashboardQueries = {
   `,
 
   /**
-   * Average Student Grade: average of per-class final grades across students for school
+   * Get all class enrollments for students in a school
+   * Used for proper grade calculation with JavaScript utility
    * Params: school (public.school enum)
    */
-  selectAverageStudentGrade: `
-    SELECT ROUND(AVG(class_grade)::numeric, 2) AS average_grade
-    FROM (
-      SELECT
-        sa.student_id,
-        c.class_id,
-        SUM(COALESCE(sa.score, 0) * (a.weight_percent / 100.0)) AS class_grade
-      FROM student_assessments sa
-      JOIN assessments a ON sa.assessment_id = a.assessment_id
-      JOIN classes c ON a.class_id = c.class_id
-      JOIN students s ON sa.student_id = s.student_id
-      WHERE s.school = $1 AND s.is_archived = false
-      GROUP BY sa.student_id, c.class_id
-    ) AS sub
+  selectStudentClassEnrollments: `
+    SELECT
+      cs.student_id,
+      cs.class_id,
+      c.subject
+    FROM class_students cs
+    JOIN classes c ON cs.class_id = c.class_id
+    JOIN students s ON cs.student_id = s.student_id
+    WHERE c.school = $1 AND s.is_archived = false
+  `,
+
+  /**
+   * Get all assessments for classes in a school
+   * Params: school (public.school enum)
+   */
+  selectAssessmentsBySchool: `
+    SELECT
+      a.assessment_id,
+      a.class_id,
+      a.name,
+      a.weight_points,
+      a.max_score,
+      a.is_parent,
+      a.parent_assessment_id
+    FROM assessments a
+    JOIN classes c ON a.class_id = c.class_id
+    WHERE c.school = $1
+  `,
+
+  /**
+   * Get all student scores with exclusion flags for a school
+   * Includes all assessments (not just ones with scores) to properly handle exclusions
+   * Params: school (public.school enum)
+   */
+  selectStudentScoresBySchool: `
+    SELECT
+      cs.student_id,
+      a.assessment_id,
+      a.class_id,
+      sa.score,
+      CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
+    FROM class_students cs
+    JOIN classes c ON cs.class_id = c.class_id
+    JOIN assessments a ON a.class_id = c.class_id
+    JOIN students s ON cs.student_id = s.student_id
+    LEFT JOIN student_assessments sa
+      ON sa.assessment_id = a.assessment_id
+      AND sa.student_id = cs.student_id
+    LEFT JOIN student_excluded_assessments sea
+      ON sea.student_id = cs.student_id
+      AND sea.class_id = c.class_id
+      AND sea.assessment_id = a.assessment_id
+    WHERE c.school = $1 AND s.is_archived = false
   `,
 
   /**

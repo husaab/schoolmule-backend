@@ -3,6 +3,90 @@
 const db = require('../config/database');
 const dashboardQueries = require('../queries/dashboard.queries');
 const logger = require('../logger');
+const { calculateStudentGrade } = require('../utils/gradeCalculator');
+
+// Simple in-memory cache with TTL for school average grades
+// Railway server runs continuously, so this persists between requests
+const gradeCache = new Map(); // key: school, value: { average, timestamp }
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
+
+/**
+ * Calculate school-wide average grade using proper grade calculation
+ * Handles exclusions, parent/child hierarchy, max_score conversion, and weight scaling
+ *
+ * @param {string} school - The school enum value
+ * @returns {Promise<number|null>} Average grade percentage or null if no data
+ */
+async function calculateSchoolAverageGrade(school) {
+  // 1. Fetch all data in parallel for efficiency
+  const [enrollmentsRes, assessmentsRes, scoresRes] = await Promise.all([
+    db.query(dashboardQueries.selectStudentClassEnrollments, [school]),
+    db.query(dashboardQueries.selectAssessmentsBySchool, [school]),
+    db.query(dashboardQueries.selectStudentScoresBySchool, [school])
+  ]);
+
+  const enrollments = enrollmentsRes.rows;
+  const allAssessments = assessmentsRes.rows;
+  const allScores = scoresRes.rows;
+
+  if (enrollments.length === 0) return null;
+
+  // 2. Group assessments by class_id for quick lookup
+  const assessmentsByClass = {};
+  allAssessments.forEach(a => {
+    if (!assessmentsByClass[a.class_id]) assessmentsByClass[a.class_id] = [];
+    assessmentsByClass[a.class_id].push(a);
+  });
+
+  // 3. Group scores by student_id and class_id for quick lookup
+  const scoresByStudentAndClass = {};
+  allScores.forEach(s => {
+    const key = `${s.student_id}:${s.class_id}`;
+    if (!scoresByStudentAndClass[key]) scoresByStudentAndClass[key] = [];
+    scoresByStudentAndClass[key].push(s);
+  });
+
+  // 4. Calculate grades for each student-class combination
+  const allGrades = [];
+
+  for (const enrollment of enrollments) {
+    const classAssessments = assessmentsByClass[enrollment.class_id] || [];
+    const key = `${enrollment.student_id}:${enrollment.class_id}`;
+    const studentScores = scoresByStudentAndClass[key] || [];
+
+    if (classAssessments.length === 0) continue;
+
+    // Calculate grade using shared utility (handles all edge cases)
+    const grade = calculateStudentGrade(classAssessments, studentScores);
+    allGrades.push(grade);
+  }
+
+  // 5. Calculate school-wide average
+  if (allGrades.length === 0) return null;
+
+  const sum = allGrades.reduce((acc, g) => acc + g, 0);
+  return sum / allGrades.length;
+}
+
+/**
+ * Get school average grade with 24-hour caching
+ *
+ * @param {string} school - The school enum value
+ * @returns {Promise<number|null>} Cached or freshly calculated average
+ */
+async function getSchoolAverageGrade(school) {
+  const cached = gradeCache.get(school);
+  const now = Date.now();
+
+  if (cached && (now - cached.timestamp) < CACHE_TTL) {
+    return cached.average;
+  }
+
+  // Calculate fresh and cache the result
+  const average = await calculateSchoolAverageGrade(school);
+  gradeCache.set(school, { average, timestamp: now });
+  return average;
+}
 
 /**
  * GET /api/dashboard/summary
@@ -22,6 +106,7 @@ const getSummary = async (req, res) => {
 
   try {
     // Parallel queries for performance, now including date for attendance queries
+    // Note: Average grade uses JavaScript calculation with caching (separate from SQL queries)
     const [
       totalStudentsRes,
       totalTeachersRes,
@@ -29,9 +114,9 @@ const getSummary = async (req, res) => {
       todaysAttRes,
       weeklyAttRes,
       monthlyAttRes,
-      avgGradeRes,
       reportCardsRes,
-      avgClassSizeRes
+      avgClassSizeRes,
+      averageGrade
     ] = await Promise.all([
       db.query(dashboardQueries.selectTotalStudents, [school]),
       db.query(dashboardQueries.selectTotalTeachers, [school]),
@@ -39,9 +124,9 @@ const getSummary = async (req, res) => {
       db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date]),
       db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, date]),
       db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, date]),
-      db.query(dashboardQueries.selectAverageStudentGrade, [school]),
       db.query(dashboardQueries.selectReportCardsCount, [school, term]),
-      db.query(dashboardQueries.selectAverageClassSize, [school])
+      db.query(dashboardQueries.selectAverageClassSize, [school]),
+      getSchoolAverageGrade(school)
     ]);
 
     const totalStudents       = totalStudentsRes.rows[0].count;
@@ -50,7 +135,7 @@ const getSummary = async (req, res) => {
     const todaysAttendance    = parseFloat(todaysAttRes.rows[0].rate);
     const weeklyAttendance    = parseFloat(weeklyAttRes.rows[0].rate);
     const monthlyAttendance   = parseFloat(monthlyAttRes.rows[0].rate);
-    const averageStudentGrade = parseFloat(avgGradeRes.rows[0].average_grade);
+    const averageStudentGrade = averageGrade !== null ? parseFloat(averageGrade.toFixed(2)) : null;
     const reportCardsCount    = reportCardsRes.rows[0].count;
     const avgClassSize = parseFloat(avgClassSizeRes.rows[0].avg_class_size);
 
@@ -278,11 +363,42 @@ const getFinancialOverview = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/dashboard/refresh-grade-cache
+ * Query params: school
+ * Manually invalidates the grade cache for a school (useful after bulk grade uploads)
+ */
+const refreshGradeCache = async (req, res) => {
+  const { school } = req.query;
+  if (!school) {
+    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
+  }
+
+  try {
+    // Invalidate cached value by deleting it
+    gradeCache.delete(school);
+
+    // Recalculate immediately so the next request is fast
+    const average = await calculateSchoolAverageGrade(school);
+    gradeCache.set(school, { average, timestamp: Date.now() });
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Grade cache refreshed',
+      data: { averageStudentGrade: average !== null ? parseFloat(average.toFixed(2)) : null }
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Error refreshing grade cache' });
+  }
+};
+
 module.exports = {
   getSummary,
   getTodaysAttendanceRate,
   getWeeklyAttendanceRate,
   getMonthlyAttendanceRate,
   getAttendanceTrend,
-  getFinancialOverview
+  getFinancialOverview,
+  refreshGradeCache
 };
