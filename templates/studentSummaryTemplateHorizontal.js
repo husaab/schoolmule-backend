@@ -454,7 +454,7 @@ function getStudentSummaryHTMLHorizontal({
         /* Assessment Table */
         .assessment-table-wrapper {
           flex: 1;
-          overflow: hidden;
+          overflow: visible;
         }
 
         .assessment-table {
