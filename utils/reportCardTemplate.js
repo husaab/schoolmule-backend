@@ -532,9 +532,9 @@ function getReportCardHTML({
           <table class="work-habits-table">
             <thead>
               <tr>
-                <th>Unsatisfactory</th>
                 <th>Needs Improvement</th>
                 <th>Satisfactory</th>
+                <th>Good</th>
                 <th>Excellent</th>
               </tr>
             </thead>
