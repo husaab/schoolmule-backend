@@ -5,6 +5,31 @@
 
 const { formatCommentHTML } = require('./commentFormatter')
 
+/**
+ * Convert a numeric percentage to a letter grade based on school rubric.
+ * Used for grades 1-3 report cards where letters are shown instead of percentages.
+ *
+ * @param {number} percent - The grade percentage (0-100)
+ * @returns {string} Letter grade (A+, A, A-, B+, B, B-, C+, C, C-, D+, D, D-, or F)
+ */
+function percentToLetterGrade(percent) {
+  if (percent == null || isNaN(percent)) return '-';
+  const rounded = Math.round(percent);
+  if (rounded >= 90) return 'A+';
+  if (rounded >= 85) return 'A';
+  if (rounded >= 80) return 'A-';
+  if (rounded >= 77) return 'B+';
+  if (rounded >= 73) return 'B';
+  if (rounded >= 70) return 'B-';
+  if (rounded >= 67) return 'C+';
+  if (rounded >= 63) return 'C';
+  if (rounded >= 60) return 'C-';
+  if (rounded >= 57) return 'D+';
+  if (rounded >= 53) return 'D';
+  if (rounded >= 50) return 'D-';
+  return 'F';
+}
+
 function getReportCardHTML({
   schoolInfo,
   schoolAssets,
@@ -43,7 +68,7 @@ function getReportCardHTML({
           </thead>
           <tbody>
             <tr>
-              <td class="grade-cell">${sub.grade}%</td>
+              <td class="grade-cell">${Number(grade) <= 3 ? percentToLetterGrade(parseFloat(sub.grade)) : sub.grade + '%'}</td>
               <td class="habit-cell">${workHabits}</td>
               <td class="habit-cell">${behavior}</td>
             </tr>
@@ -540,9 +565,9 @@ function getReportCardHTML({
             </thead>
             <tbody>
               <tr>
-                <td>U</td>
                 <td>N</td>
                 <td>S</td>
+                <td>G</td>
                 <td>E</td>
               </tr>
             </tbody>

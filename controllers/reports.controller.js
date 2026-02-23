@@ -99,7 +99,7 @@ const generateStudentSummaryReport = async (req, res) => {
       const { rows: attendanceRows } = await db.query(`
         SELECT COUNT(*) as days_absent
         FROM general_attendance
-        WHERE student_id = $1 AND status = 'absent'
+        WHERE student_id = $1 AND status = 'ABSENT'
       `, [studentId]);
       daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
     } catch (err) {
