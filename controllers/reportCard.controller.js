@@ -322,7 +322,7 @@ const generateReportCardsBulk = async (req, res) => {
       const result = await generateSingleReportCard(studentId, term);
       successes.push({ studentId, message: result });
     } catch (err) {
-      logger.error(`Failed to generate report card for ${studentId}`, err);
+      logger.error({ err, studentId }, `Failed to generate report card for ${studentId}`);
       failures.push({ studentId, error: err.message || 'Unknown error' });
     }
   }
