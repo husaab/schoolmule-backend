@@ -581,7 +581,7 @@ const sendBulkReportEmails = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Error in bulk email sending:', error);
+    logger.error({ err: error }, 'Error in bulk email sending');
     res.status(500).json({
       status: 'error',
       message: 'Failed to send bulk emails',
