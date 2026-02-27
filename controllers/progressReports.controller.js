@@ -350,7 +350,7 @@ const generateProgressReportsBulk = async (req, res) => {
       failed: failures
     });
   } catch (error) {
-    logger.error('Error in bulk progress report generation:', error);
+    logger.error({ err: error }, 'Error in bulk progress report generation');
     res.status(500).json({
       status: 'error',
       message: 'Failed to generate progress reports',

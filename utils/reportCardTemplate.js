@@ -27,7 +27,7 @@ function percentToLetterGrade(percent) {
   if (rounded >= 57) return 'D+';
   if (rounded >= 53) return 'D';
   if (rounded >= 50) return 'D-';
-  return 'F';
+  return 'D-';
 }
 
 function getReportCardHTML({
