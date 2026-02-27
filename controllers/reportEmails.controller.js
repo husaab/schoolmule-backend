@@ -374,8 +374,8 @@ const sendBulkReportEmails = async (req, res) => {
     } else {
       reportQuery = `
         SELECT student_id, term, file_path, student_name
-        FROM report_cards 
-        WHERE student_id = ANY($1) AND term = $2
+        FROM report_cards
+        WHERE student_id = ANY($1) AND term = $2 AND school = $3
       `;
       storageFolder = 'report-cards';
     }
