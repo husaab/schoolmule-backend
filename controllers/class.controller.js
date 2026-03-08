@@ -5,6 +5,7 @@ const classQueries = require("../queries/class.queries");
 const bulkQueries = require("../queries/bulk.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
+const { v4: uuidv4 } = require("uuid");
 
 //
 // 1) GET /classes?school={school}
@@ -640,6 +641,159 @@ const getClassesByTeacherId = async (req, res) => {
   }
 }
 
+//
+// POST /classes/:sourceClassId/duplicate
+//    → Duplicate a class with its assessments and student enrollments (no scores)
+//
+const duplicateClass = async (req, res) => {
+  const { sourceClassId } = req.params;
+  const { grade, subject, teacherName, teacherId, termId, termName } = req.body;
+
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(sourceClassId)) {
+    return res
+      .status(400)
+      .json({ status: "error", message: "Invalid source class ID format" });
+  }
+
+  // Validate required body fields
+  if (grade == null || !subject || !teacherName || !teacherId || !termId || !termName) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required fields: grade, subject, teacherName, teacherId, termId, termName",
+    });
+  }
+
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 1) Fetch source class
+    const { rows: sourceRows } = await client.query(
+      classQueries.selectClassById,
+      [sourceClassId]
+    );
+    if (sourceRows.length === 0) {
+      await client.query("ROLLBACK");
+      return res
+        .status(404)
+        .json({ status: "failed", message: `Source class ${sourceClassId} not found` });
+    }
+    const sourceClass = sourceRows[0];
+
+    // 2) Insert new class using source's school
+    const { rows: newClassRows } = await client.query(classQueries.createClass, [
+      sourceClass.school,
+      grade,
+      subject,
+      teacherName,
+      teacherId,
+      termId,
+      termName,
+    ]);
+    const newClass = newClassRows[0];
+
+    // 3) Fetch all assessments for source class (parents first)
+    const { rows: sourceAssessments } = await client.query(
+      classQueries.duplicateSelectAssessments,
+      [sourceClassId]
+    );
+
+    // 4) Copy assessments in two passes: parents/standalone first, then children
+    const idMap = {}; // oldId → newId
+    let assessmentsCopied = 0;
+
+    // Pass 1: parents and standalone (no parent_assessment_id)
+    for (const a of sourceAssessments) {
+      if (a.parent_assessment_id) continue;
+      const newId = uuidv4();
+      idMap[a.assessment_id] = newId;
+      await client.query(classQueries.duplicateInsertAssessment, [
+        newId,
+        newClass.class_id,
+        a.name,
+        a.weight_percent,
+        null, // parent_assessment_id
+        a.is_parent,
+        a.sort_order,
+        a.max_score,
+        a.weight_points,
+      ]);
+      assessmentsCopied++;
+    }
+
+    // Pass 2: children (have parent_assessment_id)
+    for (const a of sourceAssessments) {
+      if (!a.parent_assessment_id) continue;
+      const newId = uuidv4();
+      idMap[a.assessment_id] = newId;
+      const newParentId = idMap[a.parent_assessment_id] || null;
+      await client.query(classQueries.duplicateInsertAssessment, [
+        newId,
+        newClass.class_id,
+        a.name,
+        a.weight_percent,
+        newParentId,
+        a.is_parent,
+        a.sort_order,
+        a.max_score,
+        a.weight_points,
+      ]);
+      assessmentsCopied++;
+    }
+
+    // 5) Copy student enrollments
+    const { rows: sourceStudents } = await client.query(
+      classQueries.duplicateSelectStudents,
+      [sourceClassId]
+    );
+    const studentIds = sourceStudents.map((s) => s.student_id);
+    let studentsCopied = 0;
+
+    if (studentIds.length > 0) {
+      await client.query(classQueries.duplicateEnrollStudents, [
+        newClass.class_id,
+        studentIds,
+      ]);
+      studentsCopied = studentIds.length;
+    }
+
+    await client.query("COMMIT");
+
+    logger.info(
+      `Class ${sourceClassId} duplicated → ${newClass.class_id} (${assessmentsCopied} assessments, ${studentsCopied} students)`
+    );
+
+    return res.status(201).json({
+      status: "success",
+      data: {
+        classId:        newClass.class_id,
+        school:         newClass.school,
+        grade:          newClass.grade,
+        subject:        newClass.subject,
+        teacherName:    newClass.teacher_name,
+        teacherId:      newClass.teacher_id,
+        termId:         newClass.term_id,
+        termName:       newClass.term_name,
+        createdAt:      newClass.created_at,
+        lastModifiedAt: newClass.last_modified_at,
+        assessmentsCopied,
+        studentsCopied,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    logger.error(error);
+    return res
+      .status(500)
+      .json({ status: "failed", message: "Error duplicating class" });
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAllClasses,
   getClassById,
@@ -654,5 +808,6 @@ module.exports = {
   removeStudentFromClass,
   bulkEnrollStudentsToClass,
   bulkUnenrollStudentsFromClass,
-  getClassesByTeacherId
+  getClassesByTeacherId,
+  duplicateClass
 };

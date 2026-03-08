@@ -229,6 +229,43 @@ const classQueries = {
       WHERE teacher_id = $1
       ORDER BY grade, subject
     `,
+
+    // ── Duplicate Class queries ──
+
+    duplicateSelectAssessments: `
+      SELECT
+        assessment_id,
+        class_id,
+        name,
+        weight_percent,
+        parent_assessment_id,
+        is_parent,
+        sort_order,
+        max_score,
+        weight_points
+      FROM assessments
+      WHERE class_id = $1
+      ORDER BY is_parent DESC, sort_order ASC, created_at ASC
+    `,
+
+    duplicateInsertAssessment: `
+      INSERT INTO assessments
+        (assessment_id, class_id, name, weight_percent, parent_assessment_id, is_parent, sort_order, max_score, weight_points, date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
+      RETURNING *
+    `,
+
+    duplicateSelectStudents: `
+      SELECT student_id
+      FROM class_students
+      WHERE class_id = $1
+    `,
+
+    duplicateEnrollStudents: `
+      INSERT INTO class_students (class_id, student_id)
+      SELECT $1, unnest($2::uuid[])
+      ON CONFLICT DO NOTHING
+    `,
 };
 
 module.exports = classQueries;
