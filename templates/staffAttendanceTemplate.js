@@ -1,3 +1,11 @@
+const escHtml = (str) =>
+  String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 const getStaffAttendanceHTML = (data) => {
   const { school, month, teachers, workingDays } = data;
 
@@ -20,7 +28,7 @@ const getStaffAttendanceHTML = (data) => {
       const recordMap = {};
       t.records.forEach((r) => {
         const d = new Date(r.attendanceDate).getDate();
-        recordMap[d] = r.status;
+        recordMap[d] = r;
       });
 
       const presentCount = t.records.filter((r) => r.status === "PRESENT").length;
@@ -28,7 +36,9 @@ const getStaffAttendanceHTML = (data) => {
 
       const cells = dayHeaders
         .map((dh) => {
-          const status = recordMap[dh.day];
+          const record = recordMap[dh.day];
+          const status = record?.status;
+          const hasNote = !!(record?.notes);
           let bg = dh.isWeekend ? "#f1f5f9" : "#ffffff";
           let text = "";
           if (status === "PRESENT") {
@@ -38,7 +48,8 @@ const getStaffAttendanceHTML = (data) => {
             bg = "#fee2e2";
             text = "A";
           }
-          return `<td style="padding:4px;text-align:center;font-size:11px;background:${bg};border:1px solid #e2e8f0;">${text}</td>`;
+          const border = hasNote ? "2px solid #fde047" : "1px solid #e2e8f0";
+          return `<td style="padding:4px;text-align:center;font-size:11px;background:${bg};border:${border};">${text}</td>`;
         })
         .join("");
 
@@ -52,6 +63,25 @@ const getStaffAttendanceHTML = (data) => {
           <td style="padding:4px;text-align:center;font-size:11px;font-weight:600;background:#fee2e2;border:1px solid #e2e8f0;">${absentCount}</td>
         </tr>
       `;
+    })
+    .join("");
+
+  // Build notes appendix
+  const notesRows = teachers
+    .map((t) => {
+      const notedRecords = t.records.filter((r) => r.notes);
+      if (!notedRecords.length) return "";
+      const lines = notedRecords
+        .map((r) => {
+          const dateLabel = new Date(r.attendanceDate).toLocaleDateString("default", { month: "short", day: "numeric" });
+          return `<li style="margin:2px 0;">${dateLabel} (${r.status === "PRESENT" ? "P" : "A"}): ${escHtml(r.notes)}</li>`;
+        })
+        .join("");
+      return `
+        <div style="margin-bottom:8px;">
+          <strong style="font-size:12px;">${t.firstName || ""} ${t.lastName || t.username || ""}</strong>
+          <ul style="margin:4px 0 0 16px;padding:0;font-size:11px;color:#475569;">${lines}</ul>
+        </div>`;
     })
     .join("");
 
@@ -91,6 +121,7 @@ const getStaffAttendanceHTML = (data) => {
     <div class="legend-item"><div class="legend-box" style="background:#dcfce7;"></div> Present</div>
     <div class="legend-item"><div class="legend-box" style="background:#fee2e2;"></div> Absent</div>
     <div class="legend-item"><div class="legend-box" style="background:#f1f5f9;"></div> Weekend</div>
+    <div class="legend-item"><div class="legend-box" style="background:#fefce8;border-color:#fde047;"></div> Has note</div>
   </div>
 
   <table>
@@ -110,6 +141,12 @@ const getStaffAttendanceHTML = (data) => {
   <div class="summary">
     Working days in ${monthName}: <strong>${workingDays}</strong> &nbsp;|&nbsp; Teachers: <strong>${teachers.length}</strong>
   </div>
+
+  ${notesRows ? `
+  <div style="margin-top:24px;border-top:1px solid #e2e8f0;padding-top:16px;">
+    <h2 style="font-size:13px;font-weight:600;color:#1e293b;margin:0 0 12px;">Notes</h2>
+    ${notesRows}
+  </div>` : ""}
 </body>
 </html>`;
 };

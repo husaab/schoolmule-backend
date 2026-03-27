@@ -4,17 +4,24 @@ const logger = require("../logger");
 const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStaffAttendanceHTML } = require("../templates/staffAttendanceTemplate");
 
-// GET /today
+// GET /today?date=YYYY-MM-DD
 const getTodayStatus = async (req, res) => {
   try {
     const { userId } = req.user;
-    const { rows } = await db.query(teacherAttendanceQueries.selectTodayStatus, [userId]);
+    const { date } = req.query;
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ status: "failed", message: "date query param required (YYYY-MM-DD)" });
+    }
+
+    const { rows } = await db.query(teacherAttendanceQueries.selectTodayStatus, [userId, date]);
 
     return res.status(200).json({
       status: "success",
       data: {
         checkedIn: rows.length > 0,
         status: rows.length > 0 ? rows[0].status : null,
+        notes: rows.length > 0 ? rows[0].notes : null,
       },
     });
   } catch (error) {
@@ -27,13 +34,18 @@ const getTodayStatus = async (req, res) => {
 const checkIn = async (req, res) => {
   try {
     const { userId, school } = req.user;
-    const { status } = req.body;
+    const { status, notes, date } = req.body;
 
     if (!status || !["PRESENT", "ABSENT"].includes(status)) {
       return res.status(400).json({ status: "failed", message: "Status must be PRESENT or ABSENT" });
     }
 
-    const { rows } = await db.query(teacherAttendanceQueries.upsertCheckin, [userId, status, school]);
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ status: "failed", message: "date is required (YYYY-MM-DD)" });
+    }
+
+    const trimmedNotes = notes ? String(notes).trim() || null : null;
+    const { rows } = await db.query(teacherAttendanceQueries.upsertCheckin, [userId, date, status, school, trimmedNotes]);
 
     return res.status(200).json({
       status: "success",
@@ -41,6 +53,7 @@ const checkIn = async (req, res) => {
         teacherId: rows[0].teacher_id,
         attendanceDate: rows[0].attendance_date,
         status: rows[0].status,
+        notes: rows[0].notes,
       },
     });
   } catch (error) {
@@ -67,6 +80,7 @@ const getMyMonth = async (req, res) => {
     const records = recordsResult.rows.map((r) => ({
       attendanceDate: r.attendance_date,
       status: r.status,
+      notes: r.notes ?? null,
     }));
 
     const workingDays = workingDaysResult.rows[0].working_days;
@@ -87,13 +101,14 @@ const updateMyRecord = async (req, res) => {
   try {
     const { userId, school } = req.user;
     const { date } = req.params;
-    const { status } = req.body;
+    const { status, notes } = req.body;
 
     if (!status || !["PRESENT", "ABSENT"].includes(status)) {
       return res.status(400).json({ status: "failed", message: "Status must be PRESENT or ABSENT" });
     }
 
-    const { rows } = await db.query(teacherAttendanceQueries.updateMyRecord, [userId, date, status, school]);
+    const trimmedNotes = notes ? String(notes).trim() || null : null;
+    const { rows } = await db.query(teacherAttendanceQueries.updateMyRecord, [userId, date, status, school, trimmedNotes]);
 
     return res.status(200).json({
       status: "success",
@@ -101,6 +116,7 @@ const updateMyRecord = async (req, res) => {
         teacherId: rows[0].teacher_id,
         attendanceDate: rows[0].attendance_date,
         status: rows[0].status,
+        notes: rows[0].notes,
       },
     });
   } catch (error) {
@@ -146,6 +162,7 @@ const getAllForSchoolMonth = async (req, res) => {
         teacherMap[tid].records.push({
           attendanceDate: row.attendance_date,
           status: row.status,
+          notes: row.notes ?? null,
         });
       }
     });
@@ -170,13 +187,14 @@ const updateAnyRecord = async (req, res) => {
     }
 
     const { teacherId, date } = req.params;
-    const { status } = req.body;
+    const { status, notes } = req.body;
 
     if (!status || !["PRESENT", "ABSENT"].includes(status)) {
       return res.status(400).json({ status: "failed", message: "Status must be PRESENT or ABSENT" });
     }
 
-    const { rows } = await db.query(teacherAttendanceQueries.updateAnyRecord, [teacherId, date, status, req.user.school]);
+    const trimmedNotes = notes ? String(notes).trim() || null : null;
+    const { rows } = await db.query(teacherAttendanceQueries.updateAnyRecord, [teacherId, date, status, req.user.school, trimmedNotes]);
 
     return res.status(200).json({
       status: "success",
@@ -184,6 +202,7 @@ const updateAnyRecord = async (req, res) => {
         teacherId: rows[0].teacher_id,
         attendanceDate: rows[0].attendance_date,
         status: rows[0].status,
+        notes: rows[0].notes,
       },
     });
   } catch (error) {
@@ -229,6 +248,7 @@ const downloadPDF = async (req, res) => {
         teacherMap[tid].records.push({
           attendanceDate: row.attendance_date,
           status: row.status,
+          notes: row.notes ?? null,
         });
       }
     });

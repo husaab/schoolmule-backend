@@ -1,24 +1,24 @@
 const teacherAttendanceQueries = {
   // GET /today — check if user already checked in today
   selectTodayStatus: `
-    SELECT status
+    SELECT status, notes
     FROM teacher_attendance
     WHERE teacher_id = $1
-      AND attendance_date = CURRENT_DATE
+      AND attendance_date = $2::date
   `,
 
   // POST /checkin — upsert own attendance for today
   upsertCheckin: `
-    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school)
-    VALUES ($1, CURRENT_DATE, $2, $3)
+    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school, notes)
+    VALUES ($1, $2::date, $3, $4, $5)
     ON CONFLICT (teacher_id, attendance_date)
-    DO UPDATE SET status = EXCLUDED.status, updated_at = now()
+    DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = now()
     RETURNING *
   `,
 
   // GET /me?month=YYYY-MM — own monthly records
   selectMyMonth: `
-    SELECT attendance_date, status, created_at, updated_at
+    SELECT attendance_date, status, notes, created_at, updated_at
     FROM teacher_attendance
     WHERE teacher_id = $1
       AND attendance_date >= ($2 || '-01')::date
@@ -28,10 +28,10 @@ const teacherAttendanceQueries = {
 
   // PATCH /me/:date — edit own past record
   updateMyRecord: `
-    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school)
-    VALUES ($1, $2::date, $3, $4)
+    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school, notes)
+    VALUES ($1, $2::date, $3, $4, $5)
     ON CONFLICT (teacher_id, attendance_date)
-    DO UPDATE SET status = EXCLUDED.status, updated_at = now()
+    DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = now()
     RETURNING *
   `,
 
@@ -43,7 +43,8 @@ const teacherAttendanceQueries = {
       u.last_name,
       u.username,
       ta.attendance_date,
-      ta.status
+      ta.status,
+      ta.notes
     FROM users u
     LEFT JOIN teacher_attendance ta
       ON ta.teacher_id = u.user_id
@@ -56,10 +57,10 @@ const teacherAttendanceQueries = {
 
   // PATCH /:teacherId/:date — admin edit any teacher's record
   updateAnyRecord: `
-    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school)
-    VALUES ($1, $2::date, $3, $4)
+    INSERT INTO teacher_attendance (teacher_id, attendance_date, status, school, notes)
+    VALUES ($1, $2::date, $3, $4, $5)
     ON CONFLICT (teacher_id, attendance_date)
-    DO UPDATE SET status = EXCLUDED.status, updated_at = now()
+    DO UPDATE SET status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = now()
     RETURNING *
   `,
 
