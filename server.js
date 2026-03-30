@@ -32,6 +32,7 @@ const schoolAssetRoutes = require("./routes/school-assets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
 const teacherAttendanceRoutes = require("./routes/teacher-attendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
+const jkskRoutes = require("./routes/jksk.routes")
 
 const logger = require('./logger')
 const RequestLogger = require("./middleware/requestLogger")
@@ -90,6 +91,7 @@ app.use("/api/school-assets", schoolAssetRoutes);
 app.use("/api/report-emails", reportEmailRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
+app.use("/api/jksk", jkskRoutes);
 
 // Export app for testing
 module.exports = app;

@@ -524,6 +524,12 @@ const generateSingleReportCard = async (studentId, term) => {
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];
 
+  // Route JK/SK students to the dedicated JK/SK report card generator
+  if (student.grade === 'JK' || student.grade === 'SK') {
+    const { generateSingleJKSKReportCard } = require('./jksk.controller');
+    return generateSingleJKSKReportCard(studentId, term);
+  }
+
   const { rows: teacherRows } = await db.query(`
     SELECT username FROM users WHERE user_id = $1
   `, [student.homeroom_teacher_id]);

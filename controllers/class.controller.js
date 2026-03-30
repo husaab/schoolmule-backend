@@ -7,6 +7,55 @@ const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { v4: uuidv4 } = require("uuid");
 
+// ── Shared helper: fetch additional teachers for a single class ──
+const fetchAdditionalTeachers = async (classId) => {
+  const { rows } = await db.query(
+    classQueries.selectAdditionalTeachersByClassId,
+    [classId]
+  );
+  return rows.map((t) => ({
+    teacherId: t.teacher_id,
+    fullName:  `${t.first_name} ${t.last_name}`,
+    email:     t.email,
+    addedAt:   t.created_at,
+  }));
+};
+
+// ── Shared helper: batch-fetch additional teachers for multiple classes ──
+const batchFetchAdditionalTeachers = async (classIds) => {
+  if (classIds.length === 0) return {};
+  const { rows } = await db.query(
+    classQueries.selectAdditionalTeachersByClassIds,
+    [classIds]
+  );
+  const map = {};
+  for (const t of rows) {
+    if (!map[t.class_id]) map[t.class_id] = [];
+    map[t.class_id].push({
+      teacherId: t.teacher_id,
+      fullName:  `${t.first_name} ${t.last_name}`,
+      email:     t.email,
+      addedAt:   t.created_at,
+    });
+  }
+  return map;
+};
+
+// ── Shared helper: map a class row to camelCase response ──
+const mapClassRow = (c, additionalTeachers = []) => ({
+  classId:        c.class_id,
+  school:         c.school,
+  grade:          c.grade,
+  subject:        c.subject,
+  teacherName:    c.teacher_name,
+  teacherId:      c.teacher_id,
+  termId:         c.term_id,
+  termName:       c.term_name,
+  createdAt:      c.created_at,
+  lastModifiedAt: c.last_modified_at,
+  additionalTeachers,
+});
+
 //
 // 1) GET /classes?school={school}
 //    → List all classes for a given school
@@ -26,21 +75,13 @@ const getAllClasses = async (req, res) => {
       [requestedSchool]
     );
 
+    const classIds = rows.map((c) => c.class_id);
+    const atMap = await batchFetchAdditionalTeachers(classIds);
+
     logger.info(`All classes fetched successfully for school="${requestedSchool}"`);
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => ({
-        classId:      c.class_id,
-        school:       c.school,
-        grade:        c.grade,
-        subject:      c.subject,
-        teacherName:  c.teacher_name,
-        teacherId:    c.teacher_id,
-        termId:       c.term_id,
-        termName:     c.term_name,
-        createdAt:    c.created_at,
-        lastModifiedAt: c.last_modified_at
-      })),
+      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -74,20 +115,10 @@ const getClassById = async (req, res) => {
     }
 
     const c = rows[0];
+    const additionalTeachers = await fetchAdditionalTeachers(id);
     return res.status(200).json({
       status: "success",
-      data: {
-        classId:        c.class_id,
-        school:         c.school,
-        grade:          c.grade,
-        subject:        c.subject,
-        teacherName:    c.teacher_name,
-        teacherId:      c.teacher_id,
-        termId:         c.term_id,
-        termName:       c.term_name,
-        createdAt:      c.created_at,
-        lastModifiedAt: c.last_modified_at
-      },
+      data: mapClassRow(c, additionalTeachers),
     });
   } catch (error) {
     logger.error(error);
@@ -123,23 +154,15 @@ const getClassesByGrade = async (req, res) => {
       [requestedSchool, gradeInt]
     );
 
+    const classIds = rows.map((c) => c.class_id);
+    const atMap = await batchFetchAdditionalTeachers(classIds);
+
     logger.info(
       `Classes fetched successfully for school="${requestedSchool}", grade=${gradeInt}`
     );
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => ({
-        classId:        c.class_id,
-        school:         c.school,
-        grade:          c.grade,
-        subject:        c.subject,
-        teacherName:    c.teacher_name, 
-        teacherId:      c.teacher_id, 
-        termId:         c.term_id,
-        termName:       c.term_name,
-        createdAt:      c.created_at,
-        lastModifiedAt: c.last_modified_at
-      })),
+      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -168,21 +191,13 @@ const getClassesByTeacher = async (req, res) => {
       [teacherName]
     );
 
+    const classIds = rows.map((c) => c.class_id);
+    const atMap = await batchFetchAdditionalTeachers(classIds);
+
     logger.info(`Classes fetched successfully for teacherName="${teacherName}"`);
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => ({
-        classId:        c.class_id,
-        school:         c.school,
-        grade:          c.grade,
-        subject:        c.subject,
-        teacherName:    c.teacher_name, 
-        teacherId:      c.teacher_id,
-        termId:         c.term_id,
-        termName:       c.term_name,
-        createdAt:      c.created_at,
-        lastModifiedAt: c.last_modified_at
-      })),
+      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -617,21 +632,13 @@ const getClassesByTeacherId = async (req, res) => {
       [teacherId]
     )
 
+    const classIds = rows.map((c) => c.class_id);
+    const atMap = await batchFetchAdditionalTeachers(classIds);
+
     logger.info(`Classes fetched successfully for teacher_id="${teacherId}"`)
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => ({
-        classId:        c.class_id,
-        school:         c.school,
-        grade:          c.grade,
-        subject:        c.subject,
-        teacherName:    c.teacher_name,
-        teacherId:      c.teacher_id,
-        termId:         c.term_id,
-        termName:       c.term_name,
-        createdAt:      c.created_at,
-        lastModifiedAt: c.last_modified_at
-      }))
+      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || []))
     })
   } catch (error) {
     logger.error(error)
@@ -760,6 +767,19 @@ const duplicateClass = async (req, res) => {
       studentsCopied = studentIds.length;
     }
 
+    // 6) Copy additional teacher assignments
+    const { rows: sourceTeachers } = await client.query(
+      classQueries.duplicateSelectClassTeachers,
+      [sourceClassId]
+    );
+    const additionalTeacherIds = sourceTeachers.map((t) => t.teacher_id);
+    if (additionalTeacherIds.length > 0) {
+      await client.query(classQueries.duplicateInsertClassTeachers, [
+        newClass.class_id,
+        additionalTeacherIds,
+      ]);
+    }
+
     await client.query("COMMIT");
 
     logger.info(
@@ -794,6 +814,99 @@ const duplicateClass = async (req, res) => {
   }
 };
 
+//
+// POST /classes/:classId/teachers
+//    → Add an additional teacher to a class
+//
+const addTeacherToClass = async (req, res) => {
+  const { classId } = req.params;
+  const { teacherId } = req.body;
+
+  if (!classId || !teacherId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required fields: classId and teacherId",
+    });
+  }
+
+  try {
+    // Guard: prevent adding the primary teacher as an additional teacher
+    const { rows: classRows } = await db.query(classQueries.selectClassById, [classId]);
+    if (classRows.length === 0) {
+      return res.status(404).json({ status: "failed", message: "Class not found" });
+    }
+    if (classRows[0].teacher_id === teacherId) {
+      return res.status(409).json({
+        status: "failed",
+        message: "This teacher is already the primary teacher for this class",
+      });
+    }
+
+    const { rows } = await db.query(classQueries.insertClassTeacher, [classId, teacherId]);
+
+    if (rows.length === 0) {
+      return res.status(409).json({
+        status: "failed",
+        message: "Teacher is already assigned to this class",
+      });
+    }
+
+    logger.info(`Teacher ${teacherId} added to class ${classId}`);
+    return res.status(201).json({
+      status: "success",
+      data: {
+        classId:   rows[0].class_id,
+        teacherId: rows[0].teacher_id,
+        addedAt:   rows[0].created_at,
+      },
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({
+      status: "failed",
+      message: "Error adding teacher to class",
+    });
+  }
+};
+
+//
+// DELETE /classes/:classId/teachers/:teacherId
+//    → Remove an additional teacher from a class
+//
+const removeTeacherFromClass = async (req, res) => {
+  const { classId, teacherId } = req.params;
+
+  if (!classId || !teacherId) {
+    return res.status(400).json({
+      status: "failed",
+      message: "Missing required path parameters: classId and teacherId",
+    });
+  }
+
+  try {
+    const result = await db.query(classQueries.deleteClassTeacher, [classId, teacherId]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        status: "failed",
+        message: "No assignment found for this teacher in this class",
+      });
+    }
+
+    logger.info(`Teacher ${teacherId} removed from class ${classId}`);
+    return res.status(200).json({
+      status: "success",
+      message: "Teacher removed from class",
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({
+      status: "failed",
+      message: "Error removing teacher from class",
+    });
+  }
+};
+
 module.exports = {
   getAllClasses,
   getClassById,
@@ -809,5 +922,7 @@ module.exports = {
   bulkEnrollStudentsToClass,
   bulkUnenrollStudentsFromClass,
   getClassesByTeacherId,
-  duplicateClass
+  duplicateClass,
+  addTeacherToClass,
+  removeTeacherFromClass,
 };

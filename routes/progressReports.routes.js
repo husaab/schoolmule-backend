@@ -13,7 +13,10 @@ router.delete('/feedback/student/:studentId/class/:classId',  progressReportsCon
 router.get('/feedback/student/:studentId', progressReportsController.getStudentProgressReportFeedback);
 
 // Get all feedback for a class
-router.get('/feedback/class/:classId',progressReportsController.getClassProgressReportFeedback);
+router.get('/feedback/class/:classId', progressReportsController.getClassProgressReportFeedback);
+
+// Bulk upsert feedback for multiple students
+router.post('/feedback/bulk', progressReportsController.upsertBulkProgressReportFeedback);
 
 // Progress Report Records Routes
 router.post('/reports', progressReportsController.createProgressReport);

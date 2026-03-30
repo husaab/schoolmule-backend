@@ -1,51 +1,40 @@
-// Get progress report feedback for a specific student and class
+// Get progress report feedback for a specific student, class, and term
 const getProgressReportFeedback = `
-  SELECT 
+  SELECT
     id,
     student_id,
     class_id,
+    term,
     core_standards,
     work_habit,
     behavior,
     comment,
     created_at
   FROM progress_report_feedback
-  WHERE student_id = $1 AND class_id = $2
+  WHERE student_id = $1 AND class_id = $2 AND term = $3
 `;
 
-// Create new progress report feedback
-const createProgressReportFeedback = `
-  INSERT INTO progress_report_feedback (
-    student_id,
-    class_id,
-    core_standards,
-    work_habit,
-    behavior,
-    comment
-  )
-  VALUES ($1, $2, $3, $4, $5, $6)
-  RETURNING *
-`;
-
-// Update existing progress report feedback
-const updateProgressReportFeedback = `
-  UPDATE progress_report_feedback
-  SET 
-    core_standards = $1,
-    work_habit = $2,
-    behavior = $3,
-    comment = $4,
+// Upsert progress report feedback (ON CONFLICT replaces separate create/update)
+const upsertProgressReportFeedback = `
+  INSERT INTO progress_report_feedback (student_id, class_id, term, core_standards, work_habit, behavior, comment)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  ON CONFLICT (student_id, class_id, term) DO UPDATE
+  SET
+    core_standards = EXCLUDED.core_standards,
+    work_habit = EXCLUDED.work_habit,
+    behavior = EXCLUDED.behavior,
+    comment = EXCLUDED.comment,
     created_at = NOW()
-  WHERE student_id = $5 AND class_id = $6
   RETURNING *
 `;
 
 // Get all progress report feedback for a student across all classes
 const getStudentProgressReportFeedback = `
-  SELECT 
+  SELECT
     prf.id,
     prf.student_id,
     prf.class_id,
+    prf.term,
     prf.core_standards,
     prf.work_habit,
     prf.behavior,
@@ -60,12 +49,13 @@ const getStudentProgressReportFeedback = `
   ORDER BY c.subject ASC
 `;
 
-// Get all progress report feedback for a class
+// Get all progress report feedback for a class and term
 const getClassProgressReportFeedback = `
-  SELECT 
+  SELECT
     prf.id,
     prf.student_id,
     prf.class_id,
+    prf.term,
     prf.core_standards,
     prf.work_habit,
     prf.behavior,
@@ -75,14 +65,14 @@ const getClassProgressReportFeedback = `
     s.grade as student_grade
   FROM progress_report_feedback prf
   JOIN students s ON prf.student_id = s.student_id
-  WHERE prf.class_id = $1
+  WHERE prf.class_id = $1 AND prf.term = $2
   ORDER BY s.name ASC
 `;
 
 // Delete progress report feedback
 const deleteProgressReportFeedback = `
   DELETE FROM progress_report_feedback
-  WHERE student_id = $1 AND class_id = $2
+  WHERE student_id = $1 AND class_id = $2 AND term = $3
 `;
 
 // Create progress report record
@@ -172,8 +162,7 @@ const updateProgressReportEmailStatus = `
 
 module.exports = {
   getProgressReportFeedback,
-  createProgressReportFeedback,
-  updateProgressReportFeedback,
+  upsertProgressReportFeedback,
   getStudentProgressReportFeedback,
   getClassProgressReportFeedback,
   deleteProgressReportFeedback,

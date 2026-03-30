@@ -2,8 +2,9 @@
 
 const express = require("express");
 const { getAllClasses, getClassById, getClassesByGrade, getClassesByTeacher, createClass,
-  updateClass, deleteClass, getStudentsInClass, getAssessmentsByClass,  addStudentToClass, bulkEnrollStudentsToClass,
-  removeStudentFromClass, bulkUnenrollStudentsFromClass, getClassesByTeacherId, duplicateClass } = require("../controllers/class.controller");
+  updateClass, deleteClass, getStudentsInClass, getAssessmentsByClass, addStudentToClass, bulkEnrollStudentsToClass,
+  removeStudentFromClass, bulkUnenrollStudentsFromClass, getClassesByTeacherId, duplicateClass,
+  addTeacherToClass, removeTeacherFromClass } = require("../controllers/class.controller");
 
 const router = express.Router();
 
@@ -30,5 +31,9 @@ router.delete("/:classId/students/:studentId", removeStudentFromClass);
 
 router.post("/:classId/students/bulk", bulkEnrollStudentsToClass);
 router.post("/:classId/students/bulk-unenroll", bulkUnenrollStudentsFromClass);
+
+// Additional teachers
+router.post("/:classId/teachers", addTeacherToClass);
+router.delete("/:classId/teachers/:teacherId", removeTeacherFromClass);
 
 module.exports = router;

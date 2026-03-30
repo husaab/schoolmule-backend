@@ -11,6 +11,7 @@ const toCamel = row => ({
   id: row.id,
   studentId: row.student_id,
   classId: row.class_id,
+  term: row.term,
   coreStandards: row.core_standards,
   workHabit: row.work_habit,
   behavior: row.behavior,
@@ -24,10 +25,11 @@ const toCamel = row => ({
   studentGrade: row.student_grade
 });
 
-// Get progress report feedback for a student in a specific class
+// Get progress report feedback for a student in a specific class and term
 const getProgressReportFeedback = async (req, res) => {
   try {
     const { studentId, classId } = req.params;
+    const { term = 'General' } = req.query;
 
     if (!studentId || !classId) {
       return res.status(400).json({
@@ -36,7 +38,7 @@ const getProgressReportFeedback = async (req, res) => {
       });
     }
 
-    const result = await db.query(progressReportsQueries.getProgressReportFeedback, [studentId, classId]);
+    const result = await db.query(progressReportsQueries.getProgressReportFeedback, [studentId, classId, term]);
     
     res.json({
       status: 'success',
@@ -56,7 +58,7 @@ const getProgressReportFeedback = async (req, res) => {
 const upsertProgressReportFeedback = async (req, res) => {
   try {
     const { studentId, classId } = req.params;
-    const { coreStandards, workHabit, behavior, comment } = req.body;
+    const { term = 'General', coreStandards, workHabit, behavior, comment } = req.body;
 
     if (!studentId || !classId) {
       return res.status(400).json({
@@ -65,31 +67,15 @@ const upsertProgressReportFeedback = async (req, res) => {
       });
     }
 
-    // Check if feedback already exists
-    const existingResult = await db.query(progressReportsQueries.getProgressReportFeedback, [studentId, classId]);
-    
-    let result;
-    if (existingResult.rows.length > 0) {
-      // Update existing feedback
-      result = await db.query(progressReportsQueries.updateProgressReportFeedback, [
-        coreStandards || null,
-        workHabit || null,
-        behavior || null,
-        comment || null,
-        studentId,
-        classId
-      ]);
-    } else {
-      // Create new feedback
-      result = await db.query(progressReportsQueries.createProgressReportFeedback, [
-        studentId,
-        classId,
-        coreStandards || null,
-        workHabit || null,
-        behavior || null,
-        comment || null
-      ]);
-    }
+    const result = await db.query(progressReportsQueries.upsertProgressReportFeedback, [
+      studentId,
+      classId,
+      term,
+      coreStandards || null,
+      workHabit || null,
+      behavior || null,
+      comment || null
+    ]);
 
     res.json({
       status: 'success',
@@ -134,10 +120,11 @@ const getStudentProgressReportFeedback = async (req, res) => {
   }
 };
 
-// Get all progress report feedback for a class
+// Get all progress report feedback for a class and term
 const getClassProgressReportFeedback = async (req, res) => {
   try {
     const { classId } = req.params;
+    const { term = 'General' } = req.query;
 
     if (!classId) {
       return res.status(400).json({
@@ -146,7 +133,7 @@ const getClassProgressReportFeedback = async (req, res) => {
       });
     }
 
-    const result = await db.query(progressReportsQueries.getClassProgressReportFeedback, [classId]);
+    const result = await db.query(progressReportsQueries.getClassProgressReportFeedback, [classId, term]);
     
     res.json({
       status: 'success',
@@ -166,6 +153,7 @@ const getClassProgressReportFeedback = async (req, res) => {
 const deleteProgressReportFeedback = async (req, res) => {
   try {
     const { studentId, classId } = req.params;
+    const { term = 'General' } = req.query;
 
     if (!studentId || !classId) {
       return res.status(400).json({
@@ -174,7 +162,7 @@ const deleteProgressReportFeedback = async (req, res) => {
       });
     }
 
-    const result = await db.query(progressReportsQueries.deleteProgressReportFeedback, [studentId, classId]);
+    const result = await db.query(progressReportsQueries.deleteProgressReportFeedback, [studentId, classId, term]);
     
     if (result.rowCount === 0) {
       return res.status(404).json({
@@ -368,6 +356,12 @@ const generateSingleProgressReport = async (studentId, term) => {
   }
   const student = studentRows[0];
 
+  // Route JK/SK students to the dedicated JK/SK progress report generator
+  if (student.grade === 'JK' || student.grade === 'SK') {
+    const { generateSingleJKSKProgressReport } = require('./jksk.controller');
+    return generateSingleJKSKProgressReport(studentId, term);
+  }
+
   // 2. Get homeroom teacher name
   const { rows: teacherRows } = await db.query(`
     SELECT username
@@ -393,8 +387,8 @@ const generateSingleProgressReport = async (studentId, term) => {
   const progressData = [];
   for (const classInfo of classRows) {
     const { rows: feedbackRows } = await db.query(
-      progressReportsQueries.getProgressReportFeedback, 
-      [studentId, classInfo.class_id]
+      progressReportsQueries.getProgressReportFeedback,
+      [studentId, classInfo.class_id, term]
     );
 
     const feedback = feedbackRows.length > 0 ? feedbackRows[0] : null;
@@ -552,9 +546,75 @@ const deleteProgressReport = async (req, res) => {
   }
 };
 
+// Bulk upsert progress report feedback for multiple students
+const upsertBulkProgressReportFeedback = async (req, res) => {
+  const { feedbackEntries } = req.body;
+
+  if (!Array.isArray(feedbackEntries) || feedbackEntries.length === 0) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Missing or empty feedbackEntries array'
+    });
+  }
+
+  // Validate all entries first
+  const validationErrors = [];
+  for (let i = 0; i < feedbackEntries.length; i++) {
+    const entry = feedbackEntries[i];
+    if (!entry.studentId || !entry.classId || !entry.term) {
+      validationErrors.push({ index: i, studentId: entry.studentId, error: 'Missing required fields' });
+    }
+  }
+
+  if (validationErrors.length > 0) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Validation failed for some entries',
+      data: { updated: 0, failed: validationErrors.length, errors: validationErrors }
+    });
+  }
+
+  try {
+    await db.query('BEGIN');
+    let successCount = 0;
+
+    for (const entry of feedbackEntries) {
+      const { studentId, classId, term, coreStandards, workHabit, behavior, comment } = entry;
+
+      const coreStandardsValue = coreStandards === '' ? null : (coreStandards || null);
+      const workHabitValue = workHabit === '' ? null : (workHabit || null);
+      const behaviorValue = behavior === '' ? null : (behavior || null);
+      const commentValue = comment === '' ? null : (comment || null);
+
+      await db.query(progressReportsQueries.upsertProgressReportFeedback, [
+        studentId, classId, term,
+        coreStandardsValue, workHabitValue, behaviorValue, commentValue
+      ]);
+      successCount++;
+    }
+
+    await db.query('COMMIT');
+
+    return res.status(200).json({
+      status: 'success',
+      message: `Saved ${successCount} progress report entries`,
+      data: { updated: successCount, failed: 0 }
+    });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    logger.error('Bulk progress report transaction failed:', err);
+    return res.status(500).json({
+      status: 'failed',
+      message: 'Error saving bulk progress report feedback — all changes rolled back',
+      data: { updated: 0, failed: feedbackEntries.length, errors: [{ error: err.message }] }
+    });
+  }
+};
+
 module.exports = {
   getProgressReportFeedback,
   upsertProgressReportFeedback,
+  upsertBulkProgressReportFeedback,
   getStudentProgressReportFeedback,
   getClassProgressReportFeedback,
   deleteProgressReportFeedback,

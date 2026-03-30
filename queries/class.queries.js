@@ -215,19 +215,91 @@ const classQueries = {
 
     selectClassesByTeacherId: `
       SELECT
-        class_id,
-        school,
-        grade,
-        subject,
-        teacher_name,
-        teacher_id,
-        term_id,
-        term_name,
-        created_at,
-        last_modified_at
-      FROM classes
-      WHERE teacher_id = $1
+        c.class_id,
+        c.school,
+        c.grade,
+        c.subject,
+        c.teacher_name,
+        c.teacher_id,
+        c.term_id,
+        c.term_name,
+        c.created_at,
+        c.last_modified_at
+      FROM classes c
+      WHERE c.teacher_id = $1
+
+      UNION
+
+      SELECT
+        c.class_id,
+        c.school,
+        c.grade,
+        c.subject,
+        c.teacher_name,
+        c.teacher_id,
+        c.term_id,
+        c.term_name,
+        c.created_at,
+        c.last_modified_at
+      FROM classes c
+      INNER JOIN class_teachers ct ON ct.class_id = c.class_id
+      WHERE ct.teacher_id = $1
+
       ORDER BY grade, subject
+    `,
+
+    // ── Additional Teachers queries ──
+
+    selectAdditionalTeachersByClassId: `
+      SELECT
+        ct.teacher_id,
+        ct.created_at,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM class_teachers ct
+      INNER JOIN users u ON u.user_id = ct.teacher_id
+      WHERE ct.class_id = $1
+      ORDER BY u.last_name, u.first_name
+    `,
+
+    selectAdditionalTeachersByClassIds: `
+      SELECT
+        ct.class_id,
+        ct.teacher_id,
+        ct.created_at,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM class_teachers ct
+      INNER JOIN users u ON u.user_id = ct.teacher_id
+      WHERE ct.class_id = ANY($1::uuid[])
+      ORDER BY u.last_name, u.first_name
+    `,
+
+    insertClassTeacher: `
+      INSERT INTO class_teachers (class_id, teacher_id)
+      VALUES ($1, $2)
+      ON CONFLICT DO NOTHING
+      RETURNING class_id, teacher_id, created_at
+    `,
+
+    deleteClassTeacher: `
+      DELETE FROM class_teachers
+      WHERE class_id = $1
+        AND teacher_id = $2
+    `,
+
+    duplicateSelectClassTeachers: `
+      SELECT teacher_id
+      FROM class_teachers
+      WHERE class_id = $1
+    `,
+
+    duplicateInsertClassTeachers: `
+      INSERT INTO class_teachers (class_id, teacher_id)
+      SELECT $1, unnest($2::uuid[])
+      ON CONFLICT DO NOTHING
     `,
 
     // ── Duplicate Class queries ──
