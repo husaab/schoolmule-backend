@@ -460,7 +460,7 @@ function buildTeacherAttendanceRow(overrides = {}) {
   };
 }
 
-function buildJkskSkillDomainRow(overrides = {}) {
+function buildJkSkillDomainRow(overrides = {}) {
   return {
     domain_id: uuidv4(),
     document_type: 'progress_report',
@@ -472,7 +472,7 @@ function buildJkskSkillDomainRow(overrides = {}) {
   };
 }
 
-function buildJkskSkillRow(overrides = {}) {
+function buildJkSkillRow(overrides = {}) {
   return {
     skill_id: uuidv4(),
     domain_id: uuidv4(),
@@ -484,7 +484,7 @@ function buildJkskSkillRow(overrides = {}) {
   };
 }
 
-function buildJkskSkillAssessmentRow(overrides = {}) {
+function buildJkSkillAssessmentRow(overrides = {}) {
   return {
     id: uuidv4(),
     student_id: uuidv4(),
@@ -499,7 +499,7 @@ function buildJkskSkillAssessmentRow(overrides = {}) {
   };
 }
 
-function buildJkskLearningSkillRow(overrides = {}) {
+function buildJkLearningSkillRow(overrides = {}) {
   return {
     id: uuidv4(),
     student_id: uuidv4(),
@@ -513,7 +513,7 @@ function buildJkskLearningSkillRow(overrides = {}) {
   };
 }
 
-function buildJkskDomainCommentRow(overrides = {}) {
+function buildJkDomainCommentRow(overrides = {}) {
   return {
     id: uuidv4(),
     student_id: uuidv4(),
@@ -527,7 +527,7 @@ function buildJkskDomainCommentRow(overrides = {}) {
   };
 }
 
-function buildJkskTeacherAssistantRow(overrides = {}) {
+function buildJkTeacherAssistantRow(overrides = {}) {
   return {
     id: uuidv4(),
     student_id: uuidv4(),
@@ -539,7 +539,7 @@ function buildJkskTeacherAssistantRow(overrides = {}) {
   };
 }
 
-function buildJkskProgressReportCommentRow(overrides = {}) {
+function buildJkProgressReportCommentRow(overrides = {}) {
   return {
     id: uuidv4(),
     student_id: uuidv4(),
@@ -650,13 +650,13 @@ module.exports = {
   buildSchoolAssetRow,
   buildReportEmailRow,
   buildTeacherAttendanceRow,
-  buildJkskSkillDomainRow,
-  buildJkskSkillRow,
-  buildJkskSkillAssessmentRow,
-  buildJkskLearningSkillRow,
-  buildJkskDomainCommentRow,
-  buildJkskTeacherAssistantRow,
-  buildJkskProgressReportCommentRow,
+  buildJkSkillDomainRow,
+  buildJkSkillRow,
+  buildJkSkillAssessmentRow,
+  buildJkLearningSkillRow,
+  buildJkDomainCommentRow,
+  buildJkTeacherAssistantRow,
+  buildJkProgressReportCommentRow,
   // Request body builders
   buildRegisterBody,
   buildLoginBody,

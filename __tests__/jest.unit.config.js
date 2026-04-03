@@ -7,7 +7,6 @@ module.exports = {
   moduleNameMapper: {
     '^(.*)/config/database$': '<rootDir>/__tests__/__mocks__/config/database.js',
     '^(.*)/config/supabaseClient$': '<rootDir>/__tests__/__mocks__/config/supabaseClient.js',
-    '^(.*)/utils/emailTemplate$': '<rootDir>/templates/emailTemplate.js',
   },
   silent: true,
   forceExit: true,

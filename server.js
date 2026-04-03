@@ -32,7 +32,8 @@ const schoolAssetRoutes = require("./routes/schoolAssets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
 const teacherAttendanceRoutes = require("./routes/teacherAttendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
-const jkskRoutes = require("./routes/jksk.routes")
+const jkRoutes = require("./routes/jk.routes")
+const skRoutes = require("./routes/sk.routes")
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -92,7 +93,8 @@ app.use("/api/school-assets", schoolAssetRoutes);
 app.use("/api/report-emails", reportEmailRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
-app.use("/api/jksk", jkskRoutes);
+app.use("/api/jk", jkRoutes);
+app.use("/api/sk", skRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);

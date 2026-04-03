@@ -356,10 +356,14 @@ const generateSingleProgressReport = async (studentId, term) => {
   }
   const student = studentRows[0];
 
-  // Route JK/SK students to the dedicated JK/SK progress report generator
-  if (student.grade === 'JK' || student.grade === 'SK') {
-    const { generateSingleJKSKProgressReport } = require('./jksk.controller');
-    return generateSingleJKSKProgressReport(studentId, term);
+  // Route JK/SK students to their dedicated progress report generators
+  if (student.grade === 'JK') {
+    const { generateSingleJKProgressReport } = require('./jk.controller');
+    return generateSingleJKProgressReport(studentId, term);
+  }
+  if (student.grade === 'SK') {
+    const { generateSingleSKProgressReport } = require('./sk.controller');
+    return generateSingleSKProgressReport(studentId, term);
   }
 
   // 2. Get homeroom teacher name

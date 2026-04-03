@@ -393,9 +393,9 @@ CREATE TABLE patch_note_dismissals (
   dismissed_at           TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ─── JKSK Tables ─────────────────────────────────────────────
+-- ─── JK Tables (Junior Kindergarten) ─────────────────────────
 
-CREATE TABLE jksk_skill_domains (
+CREATE TABLE jk_skill_domains (
   domain_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   document_type          TEXT NOT NULL CHECK (document_type IN ('progress_report', 'report_card')),
   name                   TEXT NOT NULL,
@@ -405,9 +405,9 @@ CREATE TABLE jksk_skill_domains (
   UNIQUE(document_type, name, school)
 );
 
-CREATE TABLE jksk_skills (
+CREATE TABLE jk_skills (
   skill_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  domain_id              UUID NOT NULL REFERENCES jksk_skill_domains(domain_id) ON DELETE CASCADE,
+  domain_id              UUID NOT NULL REFERENCES jk_skill_domains(domain_id) ON DELETE CASCADE,
   name                   TEXT NOT NULL,
   description            TEXT,
   sort_order             INT DEFAULT 0,
@@ -415,10 +415,10 @@ CREATE TABLE jksk_skills (
   UNIQUE(domain_id, name)
 );
 
-CREATE TABLE jksk_skill_assessments (
+CREATE TABLE jk_skill_assessments (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
-  skill_id               UUID NOT NULL REFERENCES jksk_skills(skill_id) ON DELETE CASCADE,
+  skill_id               UUID NOT NULL REFERENCES jk_skills(skill_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   rating                 TEXT,
   school                 school NOT NULL,
@@ -428,7 +428,7 @@ CREATE TABLE jksk_skill_assessments (
   UNIQUE(student_id, skill_id, term)
 );
 
-CREATE TABLE jksk_learning_skills (
+CREATE TABLE jk_learning_skills (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
@@ -440,10 +440,10 @@ CREATE TABLE jksk_learning_skills (
   UNIQUE(student_id, term, skill_name)
 );
 
-CREATE TABLE jksk_domain_comments (
+CREATE TABLE jk_domain_comments (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
-  domain_id              UUID NOT NULL REFERENCES jksk_skill_domains(domain_id) ON DELETE CASCADE,
+  domain_id              UUID NOT NULL REFERENCES jk_skill_domains(domain_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   comment                TEXT,
   school                 school NOT NULL,
@@ -452,7 +452,7 @@ CREATE TABLE jksk_domain_comments (
   UNIQUE(student_id, domain_id, term)
 );
 
-CREATE TABLE jksk_teacher_assistants (
+CREATE TABLE jk_teacher_assistants (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   teacher_assistant_name TEXT,
@@ -462,11 +462,80 @@ CREATE TABLE jksk_teacher_assistants (
   UNIQUE(student_id, term)
 );
 
-CREATE TABLE jksk_progress_report_comments (
+CREATE TABLE jk_progress_report_comments (
   id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   section_type           TEXT NOT NULL CHECK (section_type IN ('academic_achievement', 'socio_emotional')),
+  comment                TEXT,
+  school                 school NOT NULL,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(student_id, term, section_type)
+);
+
+-- ─── SK Tables (Senior Kindergarten) ─────────────────────────
+
+CREATE TABLE sk_subjects (
+  subject_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_type          TEXT NOT NULL CHECK (document_type IN ('progress_report', 'report_card')),
+  name                   TEXT NOT NULL,
+  sort_order             INT NOT NULL DEFAULT 0,
+  school                 school NOT NULL,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(document_type, name, school)
+);
+
+CREATE TABLE sk_standards (
+  standard_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  subject_id             UUID NOT NULL REFERENCES sk_subjects(subject_id) ON DELETE CASCADE,
+  name                   TEXT NOT NULL,
+  description            TEXT,
+  sort_order             INT NOT NULL DEFAULT 0,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(subject_id, name)
+);
+
+CREATE TABLE sk_standard_assessments (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  standard_id            UUID NOT NULL REFERENCES sk_standards(standard_id) ON DELETE CASCADE,
+  term                   TEXT NOT NULL,
+  rating                 TEXT,
+  school                 school NOT NULL,
+  assessed_by            UUID REFERENCES users(user_id),
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(student_id, standard_id, term)
+);
+
+CREATE TABLE sk_subject_comments (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  subject_id             UUID NOT NULL REFERENCES sk_subjects(subject_id) ON DELETE CASCADE,
+  term                   TEXT NOT NULL,
+  comment                TEXT,
+  school                 school NOT NULL,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(student_id, subject_id, term)
+);
+
+CREATE TABLE sk_teacher_assistants (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  teacher_assistant_name TEXT,
+  term                   TEXT NOT NULL,
+  school                 school NOT NULL,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(student_id, term)
+);
+
+CREATE TABLE sk_progress_report_comments (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  term                   TEXT NOT NULL,
+  section_type           TEXT NOT NULL,
   comment                TEXT,
   school                 school NOT NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
@@ -490,8 +559,13 @@ CREATE INDEX idx_messages_sender ON messages(sender_id);
 CREATE INDEX idx_messages_recipient ON messages(recipient_id);
 CREATE INDEX idx_feedback_sender ON feedback(sender_id);
 CREATE INDEX idx_feedback_recipient ON feedback(recipient_id);
-CREATE INDEX idx_jksk_skill_assessments_student_term ON jksk_skill_assessments(student_id, term);
-CREATE INDEX idx_jksk_learning_skills_student_term ON jksk_learning_skills(student_id, term);
-CREATE INDEX idx_jksk_domain_comments_student_term ON jksk_domain_comments(student_id, term);
-CREATE INDEX idx_jksk_skills_domain ON jksk_skills(domain_id);
+CREATE INDEX idx_jk_skill_assessments_student_term ON jk_skill_assessments(student_id, term);
+CREATE INDEX idx_jk_learning_skills_student_term ON jk_learning_skills(student_id, term);
+CREATE INDEX idx_jk_domain_comments_student_term ON jk_domain_comments(student_id, term);
+CREATE INDEX idx_jk_skills_domain ON jk_skills(domain_id);
+CREATE INDEX idx_jk_progress_report_comments_student_term ON jk_progress_report_comments(student_id, term);
+CREATE INDEX idx_sk_standard_assessments_student_term ON sk_standard_assessments(student_id, term);
+CREATE INDEX idx_sk_subject_comments_student_term ON sk_subject_comments(student_id, term);
+CREATE INDEX idx_sk_standards_subject ON sk_standards(subject_id);
+CREATE INDEX idx_sk_progress_report_comments_student_term ON sk_progress_report_comments(student_id, term);
 CREATE INDEX idx_class_teachers_teacher_id ON class_teachers(teacher_id);
