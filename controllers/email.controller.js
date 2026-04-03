@@ -1,7 +1,7 @@
 // src/controllers/email.controller.js
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
-const { getContactEmailHTML, getTicketEmailHTML } = require('../utils/emailTemplate');
+const { getContactEmailHTML, getTicketEmailHTML } = require('../templates/emailTemplate');
 
 async function sendContactEmail(req, res) {
   const { name, email, message } = req.body;

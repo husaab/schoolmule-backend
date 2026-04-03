@@ -7,7 +7,7 @@ const feedbackQueries = require("../queries/feedback.queries");
 const logger = require("../logger");
 
 const { Resend } = require('resend');
-const { getFeedbackEmailHTML } = require('../utils/emailTemplate');
+const { getFeedbackEmailHTML } = require('../templates/emailTemplate');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const toCamel = row => ({

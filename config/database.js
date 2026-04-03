@@ -20,16 +20,16 @@ const pool = new Pool({
 const db = pool;
 
 pool.on('error', (err) => {
-  logger?.error?.('Unexpected error on idle PostgreSQL client', err) || console.error(err);
+  logger.error({ err }, 'Unexpected error on idle PostgreSQL client');
   process.exit(-1);
 });
 
 const testConnection = async () => {
   try {
     const res = await db.query('SELECT NOW()');
-    logger?.info?.('PostgreSQL connected at: ' + res.rows[0].now) || console.log('Connected:', res.rows[0].now);
+    logger.info({ connectedAt: res.rows[0].now }, 'PostgreSQL connected');
   } catch (err) {
-    logger?.error?.('PostgreSQL connection failed:', err) || console.error('Connection failed:', err);
+    logger.error({ err }, 'PostgreSQL connection failed');
     process.exit(1);
   }
 };

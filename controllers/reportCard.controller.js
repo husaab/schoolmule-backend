@@ -2,8 +2,8 @@
 
 const db = require('../config/database');
 const studentQueries = require('../queries/student.queries');
-const { getReportCardHTML } = require('../utils/reportCardTemplate');
-const reportCardQueries = require('../queries/report_card.queries');
+const { getReportCardHTML } = require('../templates/reportCardTemplate');
+const reportCardQueries = require('../queries/reportCard.queries');
 const { createPDFBuffer } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient'); // configure this file if not already
 const logger = require('../logger');
@@ -134,7 +134,7 @@ const upsertFeedback = async (req, res) => {
       message: 'Feedback saved successfully'
     });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Error saving feedback");
     return res.status(500).json({ status: 'failed', message: 'Error saving feedback' });
   }
 };
@@ -175,7 +175,7 @@ const getFeedback = async (req, res) => {
         }
     });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Error fetching feedback");
     return res.status(500).json({ status: 'failed', message: 'Error fetching feedback' });
   }
 };
@@ -213,7 +213,7 @@ const getClassFeedback = async (req, res) => {
       data
     });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Error fetching class feedback");
     return res.status(500).json({ status: 'failed', message: 'Error fetching class feedback' });
   }
 };
@@ -291,7 +291,7 @@ const upsertBulkFeedback = async (req, res) => {
     });
   } catch (err) {
     await db.query('ROLLBACK');
-    logger.error('Bulk feedback transaction failed:', err);
+    logger.error({ err }, "Bulk feedback transaction failed");
     return res.status(500).json({
       status: 'failed',
       message: 'Error saving bulk feedback - all changes rolled back',
@@ -373,7 +373,7 @@ const generateReportCard = async (req, res) => {
       `, [studentId]);
       daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
     } catch (err) {
-      logger.warn('Could not fetch attendance data:', err.message);
+      logger.warn({ err }, "Could not fetch attendance data");
     }
 
     // Fetch school info (gracefully fallback if table doesn't exist)
@@ -508,13 +508,13 @@ const generateReportCard = async (req, res) => {
       ]);
 
     if (error) {
-      logger.error(error);
+      logger.error({ err: error }, "Upload to storage failed");
       return res.status(500).json({ status: 'failed', message: 'Upload to storage failed' });
     }
 
     return res.status(200).json({ status: 'success', message: 'Report card generated and uploaded' });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Report card generation failed");
     return res.status(500).json({ status: 'failed', message: 'Internal server error' });
   }
 };
@@ -699,7 +699,7 @@ const getGeneratedReportCards = async (req, res) => {
       data: rows
     });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Error fetching report card status");
     return res.status(500).json({ status: 'failed', message: 'Error fetching report card status' });
   }
 };
@@ -725,7 +725,7 @@ const getGeneratedReportCardsByStudentId = async (req, res) => {
       data: rows
     });
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "Error fetching generated report cards");
     return res.status(500).json({ status: 'failed', message: 'Error fetching report card status' });
   }
 };
@@ -744,7 +744,7 @@ const deleteReportCard = async (req, res) => {
       .remove([filePath]);
 
     if (error) {
-      console.error('Supabase delete error:', error);
+      logger.error({ err: error }, "Supabase delete error");
       return res.status(500).json({ status: 'failed', message: 'Failed to delete file from storage' });
     }
 
@@ -753,7 +753,7 @@ const deleteReportCard = async (req, res) => {
 
     return res.status(200).json({ status: 'success', message: 'Report card deleted' });
   } catch (err) {
-    console.error('Delete report card error:', err);
+    logger.error({ err }, "Delete report card error");
     return res.status(500).json({ status: 'failed', message: 'Server error' });
   }
 };

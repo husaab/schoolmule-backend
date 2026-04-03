@@ -35,8 +35,12 @@
     "nodemon": "^3.1.10",
     "pg": "^8.16.0",
     "pino": "^9.7.0",
+    "pino-http": "^11.0.0",
     "puppeteer": "^24.10.0",
     "resend": "^4.5.1",
     "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.3"
   }
 }

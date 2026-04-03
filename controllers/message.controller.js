@@ -3,7 +3,7 @@ const db = require("../config/database");
 const messageQueries = require("../queries/message.queries");
 const logger = require("../logger");
 const { Resend } = require("resend")
-const { getNewMessageEmailHTML } = require("../utils/emailTemplate")
+const { getNewMessageEmailHTML } = require("../templates/emailTemplate")
 const { selectParentsBySchool } = require('../queries/user.queries');
 
 const resend = new Resend(process.env.RESEND_API_KEY)

@@ -1,9 +1,9 @@
 const db = require("../config/database");
 const jkskQueries = require("../queries/jksk.queries");
 const studentQueries = require("../queries/student.queries");
-const reportCardQueries = require("../queries/report_card.queries");
+const reportCardQueries = require("../queries/reportCard.queries");
 const progressReportsQueries = require("../queries/progressReports.queries");
-const schoolAssetsQueries = require("../queries/school-assets.queries");
+const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const { createPDFBuffer } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const logger = require("../logger");

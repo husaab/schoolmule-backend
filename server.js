@@ -28,14 +28,15 @@ const termRoutes = require("./routes/term.routes")
 const reportsRoutes = require("./routes/reports.routes")
 const progressReportsRoutes = require("./routes/progressReports.routes")
 const excludedAssessmentRoutes = require("./routes/excludedAssessment.routes")
-const schoolAssetRoutes = require("./routes/school-assets.routes")
+const schoolAssetRoutes = require("./routes/schoolAssets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
-const teacherAttendanceRoutes = require("./routes/teacher-attendance.routes")
+const teacherAttendanceRoutes = require("./routes/teacherAttendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
 const jkskRoutes = require("./routes/jksk.routes")
 
 const logger = require('./logger')
-const RequestLogger = require("./middleware/requestLogger")
+const httpLogger = require("./middleware/httpLogger")
+const errorHandler = require("./middleware/errorHandler")
 
 // instantiating
 const app = express();
@@ -57,7 +58,7 @@ const limiter = rateLimit({
 
 // Apply the limiter to all requests
 app.use(limiter);
-app.use(RequestLogger);
+app.use(httpLogger);
 
 app.use("/api/auth", authRoutes); 
 app.use("/api/email", emailRoutes);
@@ -92,6 +93,9 @@ app.use("/api/report-emails", reportEmailRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
 app.use("/api/jksk", jkskRoutes);
+
+// Global error handler — must be after all routes
+app.use(errorHandler);
 
 // Export app for testing
 module.exports = app;

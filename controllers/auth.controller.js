@@ -8,7 +8,7 @@ const termQueries = require('../queries/term.queries');
 const logger = require("../logger");
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML
   , getResetEmailHTML
- } = require('../utils/emailTemplate');
+ } = require('../templates/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -18,7 +18,7 @@ const getActiveTermForSchool = async (school) => {
     const result = await db.query(termQueries.selectActiveTermBySchool, [school]);
     return result.rows.length > 0 ? result.rows[0] : null;
   } catch (error) {
-    logger.error('Error fetching active term:', error);
+    logger.error({ err: error }, 'Error fetching active term');
     return null;
   }
 };
@@ -117,7 +117,7 @@ const getActiveTermForSchool = async (school) => {
 
     } catch (error) {
       await client.query('ROLLBACK');
-      logger.error(error);
+      logger.error({ err: error }, "User registration failed");
       if (error.code === '23505' && error.constraint === 'users_duplicate_email_key') {
         return {
           status: 400,
@@ -197,7 +197,7 @@ const getActiveTermForSchool = async (school) => {
       };
 
     } catch (error) {
-      logger.error(error);
+      logger.error({ err: error }, "Login failed");
       return {
         status: 500,
         message: error.message || "Internal Server Error"
@@ -242,7 +242,7 @@ const getActiveTermForSchool = async (school) => {
         message: "Verification email sent successfully"
       });
     } catch (error) {
-      logger.error("Verification email error:", error);
+      logger.error({ err: error }, "Verification email error");
       throw { status: error.status || 500, message: error.message || "Failed to send verification email" };
     }
   };
@@ -274,7 +274,7 @@ const getActiveTermForSchool = async (school) => {
 
       const admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
 
-      console.log("Admins found for school:", user.school, admins.rows);
+      logger.info({ school: user.school, adminCount: admins.rows.length }, "Admins found for school");
       const recipients = [...new Set(admins.rows.map(a => a.email).filter(Boolean))];
 
       const adminHtml = getAdminNotifyEmailHTML({
@@ -282,7 +282,7 @@ const getActiveTermForSchool = async (school) => {
         school: user.school,
       });
 
-      console.log("Notifying admins:", recipients);
+      logger.info({ recipientCount: recipients.length }, "Notifying admins");
       await resend.emails.send({
         from: 'notification@schoolmule.ca',
         to: recipients,
@@ -301,7 +301,7 @@ const getActiveTermForSchool = async (school) => {
         }
       });
     } catch (error) {
-      logger.error(error);
+      logger.error({ err: error }, "Email verification failed");
       throw { status: error.status || 500, message: error.message || "Failed to verify email" };
     }
   };
@@ -331,7 +331,7 @@ const approveUserForSchool = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error(error);
+    logger.error({ err: error }, "Failed to approve user for school");
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Failed to approve user",
@@ -357,7 +357,7 @@ const getPendingApprovals = async (req, res) => {
       users: result.rows,
     });
   } catch (error) {
-    logger.error(error);
+    logger.error({ err: error }, "Failed to fetch pending approvals");
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch pending approvals',
@@ -390,7 +390,7 @@ const resendSchoolApprovalEmail = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error(error);
+    logger.error({ err: error }, "Failed to resend approval email");
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Failed to resend approval email",
@@ -413,7 +413,7 @@ const deleteUserAccount = async (req, res) => {
       message: "User account deleted",
     });
   } catch (error) {
-    logger.error(error);
+    logger.error({ err: error }, "Failed to delete user account");
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Failed to delete user",
@@ -442,7 +442,7 @@ const declineUserForSchool = async (req, res) => {
 
     return res.status(200).json({ success: true, message: 'User declined and email sent.' });
   } catch (error) {
-    logger.error(error);
+    logger.error({ err: error }, "Failed to decline user for school");
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Failed to decline user",
@@ -481,7 +481,7 @@ const requestPasswordReset = async (req, res) => {
 
     res.json({ success: true, message: 'Password reset email sent.' });
   } catch (err) {
-    console.error(err);
+    logger.error({ err }, "Password reset request failed");
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -508,7 +508,7 @@ const validateResetToken = async (req, res) => {
 
     res.json({ success: true, message: 'Token is valid.' });
   } catch (err) {
-    console.error(err);
+    logger.error({ err }, "Reset token validation failed");
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -531,7 +531,7 @@ const resetPassword = async (req, res) => {
 
     res.json({ success: true, message: 'Password updated successfully.' });
   } catch (err) {
-    console.error(err);
+    logger.error({ err }, "Password reset failed");
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
@@ -596,7 +596,7 @@ const validateSession = async (req, res) => {
         message: 'Token expired'
       });
     } else {
-      logger.error('Session validation error:', error);
+      logger.error({ err: error }, "Session validation error");
       return res.status(500).json({
         success: false,
         message: 'Session validation failed'

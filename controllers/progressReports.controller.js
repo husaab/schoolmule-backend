@@ -1,6 +1,6 @@
 const db = require("../config/database");
 const progressReportsQueries = require("../queries/progressReports.queries");
-const schoolAssetsQueries = require("../queries/school-assets.queries");
+const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { createPDFBuffer } = require('../utils/pdfGenerator');

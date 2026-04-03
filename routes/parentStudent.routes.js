@@ -7,7 +7,7 @@ const {
   createParentStudent, 
   updateParentStudent, 
   deleteParentStudent 
-} = require("../controllers/parent_student.controller");
+} = require("../controllers/parentStudent.controller");
 
 const router = express.Router();
 

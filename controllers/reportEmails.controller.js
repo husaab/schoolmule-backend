@@ -4,10 +4,10 @@ const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const reportEmailsQueries = require('../queries/reportEmails.queries');
 const progressReportsQueries = require('../queries/progressReports.queries');
-const reportCardQueries = require('../queries/report_card.queries');
+const reportCardQueries = require('../queries/reportCard.queries');
 const studentQueries = require('../queries/student.queries');
 const schoolQueries = require('../queries/school.queries');
-const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../utils/emailTemplate');
+const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../templates/emailTemplate');
 const { getSchoolName } = require('../utils/schoolUtils');
 
 // Helper function to clean and validate email arrays

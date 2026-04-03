@@ -1,7 +1,7 @@
 // src/controllers/studentAssessment.controller.js
 
 const db = require('../config/database');
-const { selectScoresByClass, upsertStudentAssessments, selectStudentAssessment } = require('../queries/student_assessment.queries');
+const { selectScoresByClass, upsertStudentAssessments, selectStudentAssessment } = require('../queries/studentAssessment.queries');
 const logger = require('../logger');
 const ExcelJS = require('exceljs');
 const { calculateStudentGrade } = require('../utils/gradeCalculator');
