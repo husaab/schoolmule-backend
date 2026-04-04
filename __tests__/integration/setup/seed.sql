@@ -13,6 +13,7 @@ CREATE TABLE schools (
   school_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school_code            school NOT NULL UNIQUE,
   name                   TEXT NOT NULL,
+  slug                   VARCHAR(100) UNIQUE,
   address                TEXT,
   phone                  TEXT,
   email                  TEXT,
