@@ -37,8 +37,8 @@ describe('Integration: Tuition Invoice Routes', () => {
   // Seed a tuition plan and return its ID
   const seedTuitionPlan = async () => {
     const { rows } = await pool.query(
-      `INSERT INTO tuition_plans (school, grade, amount, frequency)
-       VALUES ('ALHAADIACADEMY', '5', 500.00, 'Monthly') RETURNING plan_id`
+      `INSERT INTO tuition_plans (school, grade, amount, frequency, effective_from)
+       VALUES ('ALHAADIACADEMY', '5', 500.00, 'Monthly', '2025-09-01') RETURNING plan_id`
     );
     return rows[0].plan_id;
   };

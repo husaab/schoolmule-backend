@@ -64,33 +64,48 @@ module.exports = async function globalSetup() {
     }
 
     // Terminate stale connections from previous test runs
-    await pool.query(`
-      SELECT pg_terminate_backend(pid)
-      FROM pg_stat_activity
-      WHERE datname = current_database()
-        AND pid != pg_backend_pid()
-    `);
+    try {
+      await pool.query(`
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid != pg_backend_pid()
+      `);
+    } catch (e) {
+      // Ignore errors from termination
+    }
     await pool.end();
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 500));
 
-    // Fresh pool with clean connections
-    pool = new Pool({ ...pgConfig, ssl: false });
+    // Fresh pool with clean connections — retry if connection was terminated
+    let schemaRetries = 3;
+    while (schemaRetries > 0) {
+      pool = new Pool({ ...pgConfig, ssl: false });
+      try {
+        // Drop all existing tables/types so seed.sql always creates fresh schema
+        console.log('[Integration] Dropping existing schema...');
+        await pool.query(`
+          DROP SCHEMA IF EXISTS public CASCADE;
+          CREATE SCHEMA public;
+          GRANT ALL ON SCHEMA public TO test_user;
+        `);
 
-    // Drop all existing tables/types so seed.sql always creates fresh schema
-    console.log('[Integration] Dropping existing schema...');
-    await pool.query(`
-      DROP SCHEMA IF EXISTS public CASCADE;
-      CREATE SCHEMA public;
-      GRANT ALL ON SCHEMA public TO test_user;
-    `);
-
-    console.log('[Integration] Running seed.sql...');
-    const seedSql = fs.readFileSync(
-      path.resolve(__dirname, 'seed.sql'),
-      'utf-8'
-    );
-    await pool.query(seedSql);
-    console.log('[Integration] Schema created successfully');
+        console.log('[Integration] Running seed.sql...');
+        const seedSql = fs.readFileSync(
+          path.resolve(__dirname, 'seed.sql'),
+          'utf-8'
+        );
+        await pool.query(seedSql);
+        console.log('[Integration] Schema created successfully');
+        break;
+      } catch (e) {
+        schemaRetries--;
+        console.warn(`[Integration] Schema setup failed (${schemaRetries} retries left):`, e.message);
+        await pool.end();
+        if (schemaRetries === 0) throw e;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
   } finally {
     await pool.end();
   }

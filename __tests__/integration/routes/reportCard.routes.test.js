@@ -188,9 +188,9 @@ describe('Integration: Report Card Routes (Feedback CRUD)', () => {
       // Insert feedback
       await pool.query(
         `INSERT INTO report_card_feedback (student_id, class_id, term, work_habits, behavior, comment) VALUES
-         ($1, $4, 'Term 1 2025-2026', 'Good', 'Good', 'Nice'),
-         ($2, $4, 'Term 1 2025-2026', 'Excellent', 'Excellent', 'Great')`,
-        [studentId1, studentId2, null, classId]
+         ($1, $3, 'Term 1 2025-2026', 'Good', 'Good', 'Nice'),
+         ($2, $3, 'Term 1 2025-2026', 'Excellent', 'Excellent', 'Great')`,
+        [studentId1, studentId2, classId]
       );
 
       const res = await authenticatedRequest('get', `/api/report-cards/feedback/class/${classId}?term=Term 1 2025-2026`);

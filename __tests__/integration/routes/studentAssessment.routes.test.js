@@ -119,7 +119,8 @@ describe('Integration: Student Assessment Routes', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(res.body.data[0].score).toBe(95);
+      // PostgreSQL NUMERIC returns as string
+      expect(parseFloat(res.body.data[0].score)).toBe(95);
 
       // Verify single row in DB
       const dbResult = await pool.query(
@@ -127,7 +128,7 @@ describe('Integration: Student Assessment Routes', () => {
         [studentId, assessmentId1]
       );
       expect(dbResult.rows).toHaveLength(1);
-      expect(dbResult.rows[0].score).toBe(95);
+      expect(parseFloat(dbResult.rows[0].score)).toBe(95);
     });
 
     it('allows null scores for clearing', async () => {
@@ -200,7 +201,7 @@ describe('Integration: Student Assessment Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data).not.toBeNull();
-      expect(res.body.data.score).toBe(90);
+      expect(parseFloat(res.body.data.score)).toBe(90);
     });
 
     it('returns null data when no score exists', async () => {

@@ -96,7 +96,7 @@ describe('Integration: Class Routes', () => {
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('success');
       expect(res.body.data.subject).toBe('Math');
-      expect(res.body.data.grade).toBe(5);
+      expect(res.body.data.grade).toBe('5');
 
       const dbResult = await pool.query('SELECT * FROM classes WHERE subject = $1', ['Math']);
       expect(dbResult.rows).toHaveLength(1);
