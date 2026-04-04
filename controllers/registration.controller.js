@@ -452,6 +452,20 @@ const updateSubmission = async (req, res) => {
   }
 };
 
+const deleteSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    const { rows } = await db.query(registrationQueries.deleteSubmission, [submissionId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Submission not found' });
+    }
+    return res.status(200).json({ status: 'success', message: 'Submission deleted' });
+  } catch (error) {
+    logger.error({ err: error }, 'Error deleting submission');
+    return res.status(500).json({ status: 'failed', message: 'Error deleting submission' });
+  }
+};
+
 // ─── CSV Export ─────────────────────────────────────────────────────
 
 const exportSubmissions = async (req, res) => {
@@ -551,6 +565,7 @@ module.exports = {
   getSubmissions,
   getSubmission,
   updateSubmission,
+  deleteSubmission,
   exportSubmissions,
   getNewCount,
 };

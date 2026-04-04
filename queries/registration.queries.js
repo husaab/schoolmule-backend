@@ -149,6 +149,12 @@ const registrationQueries = {
     ORDER BY submitted_at DESC
   `,
 
+  deleteSubmission: `
+    DELETE FROM registration_form_submissions
+    WHERE submission_id = $1
+    RETURNING *
+  `,
+
   countNewSubmissionsBySchool: `
     SELECT COUNT(*) AS count
     FROM registration_form_submissions s
