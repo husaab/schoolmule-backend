@@ -34,6 +34,8 @@ const teacherAttendanceRoutes = require("./routes/teacherAttendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
 const jkRoutes = require("./routes/jk.routes")
 const skRoutes = require("./routes/sk.routes")
+const registrationRoutes = require("./routes/registration.routes")
+const registrationPublicRoutes = require("./routes/registrationPublic.routes")
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -61,8 +63,9 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(httpLogger);
 
-app.use("/api/auth", authRoutes); 
+app.use("/api/auth", authRoutes);
 app.use("/api/email", emailRoutes);
+app.use("/api/registration/public", registrationPublicRoutes);
 
 app.use(verifyUser);
 
@@ -95,6 +98,7 @@ app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
 app.use("/api/jk", jkRoutes);
 app.use("/api/sk", skRoutes);
+app.use("/api/registration", registrationRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);
