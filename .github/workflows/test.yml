@@ -10,9 +10,6 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: schoolmule-backend
     steps:
       - uses: actions/checkout@v4
 
@@ -21,7 +18,6 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: schoolmule-backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -34,14 +30,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: unit-coverage
-          path: schoolmule-backend/coverage/unit/
+          path: coverage/unit/
 
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: schoolmule-backend
     services:
       postgres:
         image: postgres:16-alpine
@@ -83,7 +76,6 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: schoolmule-backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -96,4 +88,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-coverage
-          path: schoolmule-backend/coverage/integration/
+          path: coverage/integration/
