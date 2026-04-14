@@ -88,6 +88,18 @@ const registrationQueries = {
     DELETE FROM registration_form_fields WHERE form_id = $1
   `,
 
+  deleteFieldsByIds: `
+    DELETE FROM registration_form_fields
+    WHERE form_id = $1 AND field_id = ANY($2)
+  `,
+
+  updateField: `
+    UPDATE registration_form_fields
+    SET field_type = $1, label = $2, placeholder = $3, is_required = $4, options = $5, sort_order = $6
+    WHERE field_id = $7 AND form_id = $8
+    RETURNING *
+  `,
+
   insertField: `
     INSERT INTO registration_form_fields
       (form_id, field_type, label, placeholder, is_required, options, sort_order)

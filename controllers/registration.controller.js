@@ -321,11 +321,13 @@ const upsertFields = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Delete existing fields
-    await client.query(registrationQueries.deleteFieldsByFormId, [formId]);
+    // Fetch existing field IDs so we know which to update vs insert
+    const { rows: existingFields } = await client.query(registrationQueries.selectFieldsByFormId, [formId]);
+    const existingIds = new Set(existingFields.map(f => f.field_id));
 
-    // Insert new fields
     const validTypes = ['text', 'email', 'phone', 'date', 'select', 'radio', 'textarea'];
+    const incomingIds = new Set();
+
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
       if (!f.fieldType || !validTypes.includes(f.fieldType)) {
@@ -336,21 +338,46 @@ const upsertFields = async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ status: 'failed', message: 'Field label is required' });
       }
-      await client.query(registrationQueries.insertField, [
-        formId,
-        f.fieldType,
-        f.label.trim(),
-        f.placeholder || null,
-        f.isRequired || false,
-        f.options ? JSON.stringify(f.options) : null,
-        i,
-      ]);
+
+      if (f.fieldId && existingIds.has(f.fieldId)) {
+        // Update existing field — preserves the UUID
+        await client.query(registrationQueries.updateField, [
+          f.fieldType,
+          f.label.trim(),
+          f.placeholder || null,
+          f.isRequired || false,
+          f.options ? JSON.stringify(f.options) : null,
+          i,
+          f.fieldId,
+          formId,
+        ]);
+        incomingIds.add(f.fieldId);
+      } else {
+        // Insert new field — gets a new UUID
+        await client.query(registrationQueries.insertField, [
+          formId,
+          f.fieldType,
+          f.label.trim(),
+          f.placeholder || null,
+          f.isRequired || false,
+          f.options ? JSON.stringify(f.options) : null,
+          i,
+        ]);
+      }
+    }
+
+    // Delete fields that were removed by the admin
+    const removedIds = existingFields
+      .map(f => f.field_id)
+      .filter(id => !incomingIds.has(id));
+    if (removedIds.length > 0) {
+      await client.query(registrationQueries.deleteFieldsByIds, [formId, removedIds]);
     }
 
     await client.query('COMMIT');
 
     // Return updated fields
-    const { rows: updatedFields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
+    const { rows: updatedFields } = await client.query(registrationQueries.selectFieldsByFormId, [formId]);
     return res.status(200).json({
       status: 'success',
       data: updatedFields.map(ff => ({
