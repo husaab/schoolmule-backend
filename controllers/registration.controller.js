@@ -49,6 +49,79 @@ function toCamelSubmission(row) {
   };
 }
 
+// ─── Sorting Helpers ──────────────────────────────────────────────────
+// Submissions store answers as JSONB keyed by field UUIDs. Sorting must
+// happen at the DB level because the data is paginated. For radio fields
+// (e.g. Grade) we want natural order using the field's own options array,
+// not alphabetical (which would put "Grade 10" before "Grade 2").
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Builds a single ORDER BY fragment for one field.
+// Mutates `params` to append any new bind values; returns the SQL fragment.
+function buildFieldSortClause(field, dir, params) {
+  if (!UUID_REGEX.test(field.field_id)) {
+    throw new Error('Invalid field_id format'); // should never happen — defensive
+  }
+  const direction = dir === 'desc' ? 'DESC' : 'ASC';
+
+  if ((field.field_type === 'radio' || field.field_type === 'select') && Array.isArray(field.options) && field.options.length > 0) {
+    // Natural sort using the form's option order
+    params.push(field.options);
+    return `array_position($${params.length}::text[], answers->>'${field.field_id}') ${direction} NULLS LAST`;
+  }
+
+  // Plain text comparison (works for text/email/phone/textarea/date)
+  return `LOWER(answers->>'${field.field_id}') ${direction} NULLS LAST`;
+}
+
+// Heuristic: identify the "Grade" and "Name" fields for default CSV sort
+function findGradeField(fields) {
+  return fields.find(f =>
+    (f.field_type === 'radio' || f.field_type === 'select') &&
+    /grade|kindergarten/i.test(f.label || '')
+  ) || null;
+}
+
+function findStudentNameField(fields) {
+  return fields.find(f => /name of student/i.test(f.label || '')) || null;
+}
+
+// Builds the ORDER BY clause for submissions queries.
+// - explicitSortFieldId: a UUID matching one of the form's fields (overrides default)
+// - explicitSortDir: 'asc' or 'desc'
+// - useExportDefault: if true and no explicit sort, sort by Grade ASC, Name ASC
+// Returns { clause: string, params: array }
+function buildSubmissionsSort(fields, explicitSortFieldId, explicitSortDir, useExportDefault) {
+  const params = [];
+
+  if (explicitSortFieldId === 'submittedAt') {
+    return { clause: `submitted_at ${explicitSortDir === 'asc' ? 'ASC' : 'DESC'}`, params };
+  }
+
+  if (explicitSortFieldId) {
+    const field = fields.find(f => f.field_id === explicitSortFieldId);
+    if (field) {
+      const fragment = buildFieldSortClause(field, explicitSortDir, params);
+      // Stable secondary sort
+      return { clause: `${fragment}, submitted_at DESC`, params };
+    }
+  }
+
+  if (useExportDefault) {
+    const fragments = [];
+    const grade = findGradeField(fields);
+    const name = findStudentNameField(fields);
+    if (grade) fragments.push(buildFieldSortClause(grade, 'asc', params));
+    if (name) fragments.push(buildFieldSortClause(name, 'asc', params));
+    if (fragments.length > 0) {
+      return { clause: `${fragments.join(', ')}, submitted_at DESC`, params };
+    }
+  }
+
+  return { clause: 'submitted_at DESC', params };
+}
+
 // Multer config for banner upload
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -405,7 +478,15 @@ const getSubmissions = async (req, res) => {
   try {
     const { formId } = req.params;
     const school = req.user.school;
-    const { status: filterStatus, dateFrom, dateTo, page = 1, limit = 25 } = req.query;
+    const {
+      status: filterStatus,
+      dateFrom,
+      dateTo,
+      page = 1,
+      limit = 25,
+      sortFieldId,
+      sortDir,
+    } = req.query;
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -413,13 +494,49 @@ const getSubmissions = async (req, res) => {
       return res.status(404).json({ status: 'failed', message: 'Form not found' });
     }
 
+    // Load the form's fields so we can validate sortFieldId and look up
+    // the field type/options for natural ordering.
+    const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
+
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
-    const { rows } = await db.query(registrationQueries.selectSubmissionsFiltered, [
+    // Build dynamic ORDER BY clause
+    const { clause: orderClause, params: orderParams } = buildSubmissionsSort(
+      fields,
+      sortFieldId,
+      sortDir,
+      false, // not export default
+    );
+
+    // The base WHERE clause uses params $1..$4. orderParams come after.
+    // Then LIMIT/OFFSET come after orderParams.
+    const baseParams = [
       formId,
       filterStatus || null,
       dateFrom || null,
       dateTo || null,
+    ];
+    // Re-number the order params relative to the final query's parameter list.
+    // buildSubmissionsSort placed them at $1, $2, ... — shift them by baseParams.length.
+    const shift = baseParams.length;
+    const shiftedOrderClause = orderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
+
+    const limitIdx = shift + orderParams.length + 1;
+    const offsetIdx = limitIdx + 1;
+
+    const sql = `
+      SELECT * FROM registration_form_submissions
+      WHERE form_id = $1
+        AND ($2::varchar IS NULL OR status = $2)
+        AND ($3::timestamptz IS NULL OR submitted_at >= $3)
+        AND ($4::timestamptz IS NULL OR submitted_at <= $4)
+      ORDER BY ${shiftedOrderClause}
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
+    `;
+
+    const { rows } = await db.query(sql, [
+      ...baseParams,
+      ...orderParams,
       parseInt(limit, 10),
       offset,
     ]);
@@ -499,7 +616,7 @@ const exportSubmissions = async (req, res) => {
   try {
     const { formId } = req.params;
     const school = req.user.school;
-    const { status: filterStatus, dateFrom, dateTo } = req.query;
+    const { status: filterStatus, dateFrom, dateTo, sortFieldId, sortDir } = req.query;
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -510,13 +627,28 @@ const exportSubmissions = async (req, res) => {
     // Get field definitions for column headers
     const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
 
-    // Get filtered submissions
-    const { rows: submissions } = await db.query(registrationQueries.selectSubmissionsForExport, [
-      formId,
-      filterStatus || null,
-      dateFrom || null,
-      dateTo || null,
-    ]);
+    // Build dynamic ORDER BY: explicit sort wins; otherwise default to Grade ASC, Name ASC
+    const { clause: orderClause, params: orderParams } = buildSubmissionsSort(
+      fields,
+      sortFieldId,
+      sortDir,
+      true, // useExportDefault — multi-column Grade+Name when no explicit sort
+    );
+
+    const baseParams = [formId, filterStatus || null, dateFrom || null, dateTo || null];
+    const shift = baseParams.length;
+    const shiftedOrderClause = orderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
+
+    const sql = `
+      SELECT * FROM registration_form_submissions
+      WHERE form_id = $1
+        AND ($2::varchar IS NULL OR status = $2)
+        AND ($3::timestamptz IS NULL OR submitted_at >= $3)
+        AND ($4::timestamptz IS NULL OR submitted_at <= $4)
+      ORDER BY ${shiftedOrderClause}
+    `;
+
+    const { rows: submissions } = await db.query(sql, [...baseParams, ...orderParams]);
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Submissions');
@@ -551,14 +683,21 @@ const exportSubmissions = async (req, res) => {
       col.width = maxLen + 2;
     });
 
-    const formTitle = formRows[0].title.replace(/[^a-zA-Z0-9]/g, '_');
+    // Build a clean filename from the form's title:
+    //   "Al Haadi Academy ... 2026-2027" → "Al_Haadi_Academy_..._2026_2027_Submissions.csv"
+    const formTitle = formRows[0].title
+      .replace(/[^a-zA-Z0-9]+/g, '_') // collapse runs of non-alphanumeric → single underscore
+      .replace(/^_+|_+$/g, '');         // trim leading/trailing underscores
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${formTitle}_submissions.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${formTitle}_Submissions.csv"`);
+    // ExcelJS closes the stream itself — don't call res.end() after.
     await workbook.csv.write(res);
-    res.end();
   } catch (error) {
     logger.error({ err: error }, 'Error exporting submissions');
-    return res.status(500).json({ status: 'failed', message: 'Error exporting submissions' });
+    // If streaming has already started, headers are sent — cannot send JSON error
+    if (!res.headersSent) {
+      return res.status(500).json({ status: 'failed', message: 'Error exporting submissions' });
+    }
   }
 };
 

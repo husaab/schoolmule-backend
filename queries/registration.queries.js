@@ -122,15 +122,10 @@ const registrationQueries = {
     LIMIT $2 OFFSET $3
   `,
 
-  selectSubmissionsFiltered: `
-    SELECT * FROM registration_form_submissions
-    WHERE form_id = $1
-      AND ($2::varchar IS NULL OR status = $2)
-      AND ($3::timestamptz IS NULL OR submitted_at >= $3)
-      AND ($4::timestamptz IS NULL OR submitted_at <= $4)
-    ORDER BY submitted_at DESC
-    LIMIT $5 OFFSET $6
-  `,
+  // selectSubmissionsFiltered is now built dynamically in the controller
+  // because the ORDER BY clause must vary based on sort parameters
+  // (specifically for radio fields that need array_position-based natural sort).
+  // See buildSubmissionsQuery() in registration.controller.js
 
   countSubmissionsFiltered: `
     SELECT COUNT(*) FROM registration_form_submissions
@@ -152,14 +147,8 @@ const registrationQueries = {
     RETURNING *
   `,
 
-  selectSubmissionsForExport: `
-    SELECT * FROM registration_form_submissions
-    WHERE form_id = $1
-      AND ($2::varchar IS NULL OR status = $2)
-      AND ($3::timestamptz IS NULL OR submitted_at >= $3)
-      AND ($4::timestamptz IS NULL OR submitted_at <= $4)
-    ORDER BY submitted_at DESC
-  `,
+  // selectSubmissionsForExport is also built dynamically in the controller
+  // for the same reason as selectSubmissionsFiltered.
 
   deleteSubmission: `
     DELETE FROM registration_form_submissions
