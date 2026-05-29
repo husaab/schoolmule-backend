@@ -36,6 +36,7 @@ const jkRoutes = require("./routes/jk.routes")
 const skRoutes = require("./routes/sk.routes")
 const registrationRoutes = require("./routes/registration.routes")
 const registrationPublicRoutes = require("./routes/registrationPublic.routes")
+const studentViewRoutes = require("./routes/studentView.routes")
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -99,6 +100,7 @@ app.use("/api/patch-notes", patchNoteRoutes);
 app.use("/api/jk", jkRoutes);
 app.use("/api/sk", skRoutes);
 app.use("/api/registration", registrationRoutes);
+app.use("/api/student-views", studentViewRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);

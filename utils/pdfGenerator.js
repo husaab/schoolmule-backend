@@ -1,6 +1,12 @@
 const puppeteer = require('puppeteer');
 
-async function createPDFBuffer(html) {
+async function createPDFBuffer(html, options = {}) {
+  const {
+    landscape = false,
+    margin = { top: '40px', bottom: '40px', left: '40px', right: '40px' },
+    preferCSSPageSize = false,
+  } = options;
+
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox'], // helps when deploying to Vercel or Docker
@@ -11,8 +17,10 @@ async function createPDFBuffer(html) {
 
   const pdfBuffer = await page.pdf({
     format: 'A4',
+    landscape,
     printBackground: true,
-    margin: { top: '40px', bottom: '40px', left: '40px', right: '40px' },
+    margin,
+    preferCSSPageSize,
   });
 
   await browser.close();
