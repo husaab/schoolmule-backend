@@ -9,17 +9,7 @@ const studentQueries = require('../queries/student.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../templates/emailTemplate');
 const { getSchoolName } = require('../utils/schoolUtils');
-
-// Helper function to clean and validate email arrays
-const cleanEmailArray = (emails) => {
-  if (!emails) return [];
-  if (!Array.isArray(emails)) return [];
-  
-  return emails
-    .map(email => typeof email === 'string' ? email.trim() : '')
-    .filter(email => email.length > 0)
-    .filter(email => email.includes('@')); // Basic email validation
-};
+const { cleanEmailArray, getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
 
 // Helper function to convert snake_case to camelCase
 const toCamelCase = (row) => ({
@@ -38,39 +28,6 @@ const toCamelCase = (row) => ({
   studentName: row.student_name, // From joined queries
   sentByUsername: row.sent_by_username // From joined queries
 });
-
-// Helper function to get school-specific API key
-const getSchoolApiKey = (school) => {
-  // Convert school name to env variable format (e.g., "Al Haadi Academy" -> "ALHAADI_RESEND_API_KEY")
-  const schoolKey = school
-    .replace(/\s+/g, '') // Remove spaces
-    .replace(/[^A-Za-z0-9]/g, '') // Remove special characters
-    .toUpperCase();
-  
-  logger.info("school key is" + schoolKey)
-  
-  const apiKeyVar = `${schoolKey}_RESEND_API_KEY`;
-  const schoolApiKey = process.env[apiKeyVar];
-  
-  if (!schoolApiKey) {
-    return process.env.RESEND_API_KEY
-  }
-  
-  return schoolApiKey;
-};
-
-const getSchoolDomain = (school) => {
-
-  switch (school) {
-    case "ALHAADIACADEMY":
-      logger.info("School Domain Found: alhaadiacademy.ca")
-      return "alhaadiacademy.ca"
-    default:
-      logger.info("No domain found for school")
-      return "schoolmule.ca"
-  }
-
-}
 
 // Send progress report or report card email
 const sendReportEmail = async (req, res) => {

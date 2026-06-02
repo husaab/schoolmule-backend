@@ -27,4 +27,47 @@ async function createPDFBuffer(html, options = {}) {
   return pdfBuffer;
 }
 
-module.exports = { createPDFBuffer };
+// Render many HTML documents to PDF buffers in a SINGLE browser launch.
+// Used by batch flows (e.g. certificate emails) where calling
+// createPDFBuffer per item would launch one Chromium per document —
+// the dominant cost. Returns buffers in the same order as `htmls`.
+async function createPDFBuffers(htmls, options = {}) {
+  const {
+    landscape = false,
+    margin = { top: '40px', bottom: '40px', left: '40px', right: '40px' },
+    preferCSSPageSize = false,
+  } = options;
+
+  if (!Array.isArray(htmls) || htmls.length === 0) return [];
+
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+
+  try {
+    const buffers = [];
+    for (const html of htmls) {
+      const page = await browser.newPage();
+      try {
+        await page.setContent(html, { waitUntil: 'networkidle0' });
+        buffers.push(
+          await page.pdf({
+            format: 'A4',
+            landscape,
+            printBackground: true,
+            margin,
+            preferCSSPageSize,
+          }),
+        );
+      } finally {
+        await page.close();
+      }
+    }
+    return buffers;
+  } finally {
+    await browser.close();
+  }
+}
+
+module.exports = { createPDFBuffer, createPDFBuffers };

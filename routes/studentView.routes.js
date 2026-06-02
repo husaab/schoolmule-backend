@@ -11,6 +11,8 @@ const {
   evaluatePreview,
   exportCsv,
   generateCertificates,
+  sendStudentViewCertificateEmails,
+  sendSingleStudentViewCertificateEmail,
 } = require('../controllers/studentView.controller');
 
 const router = express.Router();
@@ -26,5 +28,7 @@ router.delete('/:viewId', deleteView);
 router.post('/:viewId/evaluate', evaluateSavedView);
 router.get('/:viewId/export.csv', exportCsv);
 router.post('/:viewId/certificates.pdf', generateCertificates);
+router.post('/:viewId/email', sendStudentViewCertificateEmails);
+router.post('/:viewId/email/student/:studentId', sendSingleStudentViewCertificateEmail);
 
 module.exports = router;

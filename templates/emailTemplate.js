@@ -233,6 +233,65 @@ function getReportCardEmailHTML({ studentName, term, customMessage, schoolName, 
   `;
 }
 
+// Certificate award email — sent from a Student View with the child's
+// certificate PDF attached. Mirrors the report-card/progress-report
+// templates: customHeader is the whole subject, customMessage is an
+// optional shared "Message" block. No per-student merge tags.
+function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolName, customHeader, schoolInfo }) {
+  const subject = customHeader || `${studentName} — ${viewName}`;
+
+  // Same dynamic footer the progress-report template uses.
+  const createSchoolFooter = (school) => {
+    if (!school) {
+      return `
+        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">
+        <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
+          Powered by School Mule
+        </p>
+      `;
+    }
+
+    let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">`;
+    footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
+    footer += `<p style="margin: 0 0 4px 0;"><strong>${school.name || schoolName}</strong></p>`;
+
+    if (school.address) {
+      footer += `<p style="margin: 0 0 2px 0;">${school.address}</p>`;
+    }
+
+    if (school.phone && school.email) {
+      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}  |  📧 ${school.email}</p>`;
+    } else if (school.phone) {
+      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}</p>`;
+    } else if (school.email) {
+      footer += `<p style="margin: 0 0 2px 0;">📧 ${school.email}</p>`;
+    }
+
+    footer += `</div>`;
+
+    return footer;
+  };
+
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">${subject} 🏆</h2>
+      <p>Dear Parent/Guardian,</p>
+      <p>Congratulations! <strong>${studentName}</strong> has been recognized for
+         <strong>${viewName}</strong>. Please find the attached certificate celebrating this achievement.</p>
+      ${customMessage ? `
+        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
+          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Message:</h3>
+          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
+        </div>
+      ` : ''}
+      <p>We're proud of your child's hard work and accomplishment.</p>
+      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
+      ${createSchoolFooter(schoolInfo)}
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
@@ -245,5 +304,6 @@ module.exports = {
   getNewMessageEmailHTML,
   getFeedbackEmailHTML,
   getProgressReportEmailHTML,
-  getReportCardEmailHTML
+  getReportCardEmailHTML,
+  getCertificateEmailHTML
 };

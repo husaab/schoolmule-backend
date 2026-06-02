@@ -1,12 +1,20 @@
 // controllers/studentView.controller.js
 
+const { Resend } = require('resend');
 const db = require('../config/database');
 const ExcelJS = require('exceljs');
 const logger = require('../logger');
 const q = require('../queries/studentView.queries');
+const studentViewEmailsQueries = require('../queries/studentViewEmails.queries');
+const schoolQueries = require('../queries/school.queries');
 const { evaluateView } = require('../services/studentViewEvaluator');
-const { createPDFBuffer } = require('../utils/pdfGenerator');
+const { createPDFBuffer, createPDFBuffers } = require('../utils/pdfGenerator');
 const certificateTemplate = require('../templates/certificateTemplate');
+const { getCertificateEmailHTML } = require('../templates/emailTemplate');
+const { getSchoolName } = require('../utils/schoolUtils');
+const { cleanEmailArray, getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -364,6 +372,328 @@ const generateCertificates = async (req, res) => {
   }
 };
 
+// ────────────────────────────────────────────────────────────────────
+// Email certificates to parents
+// ────────────────────────────────────────────────────────────────────
+//
+// Mirrors sendBulkReportEmails (reportEmails.controller.js): one email
+// per student to their parents, the child's certificate PDF attached,
+// sent sequentially with a 600ms gap to respect Resend's rate limit,
+// failures captured per-student so the batch always completes. Unlike
+// report cards, the PDF is generated in-memory (not pulled from
+// Supabase Storage), so all certificates are rendered up front in a
+// single Puppeteer browser pass before the rate-limited send loop.
+
+const sendStudentViewCertificateEmails = async (req, res) => {
+  const startTime = Date.now();
+  const { userId, school } = req.user;
+  const { viewId } = req.params;
+  const { studentIds, customHeader, customMessage, ccAddresses: rawCcAddresses } = req.body;
+
+  if (!Array.isArray(studentIds) || studentIds.length === 0) {
+    return res.status(400).json({ status: 'failed', message: 'studentIds is required' });
+  }
+
+  try {
+    const { rows } = await db.query(q.selectViewById, [viewId]);
+    const view = rows[0];
+    if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
+    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+
+    // Qualifying students for this view, narrowed to the caller's selection.
+    const evaluated = await evaluateView(view);
+    const selected = evaluated.filter((s) => studentIds.includes(s.studentId));
+    if (selected.length === 0) {
+      return res.status(400).json({ status: 'failed', message: 'No matching students for given studentIds' });
+    }
+
+    // Parent emails aren't part of the evaluator output — fetch them.
+    const { rows: contactRows } = await db.query(
+      studentViewEmailsQueries.selectStudentEmailsByIds,
+      [selected.map((s) => s.studentId)],
+    );
+    const contactById = new Map(contactRows.map((r) => [r.student_id, r]));
+
+    // School info for the footer (best-effort, mirrors the report flow).
+    let schoolInfo = null;
+    try {
+      const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [view.school]);
+      if (schoolRows.length > 0) schoolInfo = schoolRows[0];
+    } catch (schoolError) {
+      logger.warn({ err: schoolError }, 'sendStudentViewCertificateEmails: school info lookup failed');
+    }
+
+    const schoolName = getSchoolName(view.school);
+    const schoolDomain = getSchoolDomain(view.school);
+    const resend = new Resend(getSchoolApiKey(view.school));
+    const ccAddresses = cleanEmailArray(rawCcAddresses);
+    const issuedDate = new Date().toLocaleDateString('en-CA');
+
+    // Split the selection into sendable tasks vs. students with no parent email.
+    const results = [];
+    const tasks = [];
+    for (const student of selected) {
+      const contact = contactById.get(student.studentId);
+      const parentEmails = cleanEmailArray([contact?.mother_email, contact?.father_email]);
+      if (parentEmails.length === 0) {
+        results.push({
+          studentId: student.studentId,
+          studentName: student.studentName,
+          status: 'failed',
+          error: 'No parent email addresses found',
+        });
+        continue;
+      }
+      tasks.push({ student, parentEmails });
+    }
+
+    // Render every certificate PDF in a SINGLE browser launch (one page per
+    // child), instead of relaunching Puppeteer inside the rate-limited loop.
+    const pdfBuffers = await createPDFBuffers(
+      tasks.map((t) =>
+        certificateTemplate({
+          schoolName: view.school,
+          viewName: view.name,
+          viewDescription: view.description,
+          students: [
+            {
+              studentName: t.student.studentName,
+              grade: t.student.grade,
+              metric: Number(t.student.displayMetric.toFixed(2)),
+            },
+          ],
+          issuedDate,
+        }),
+      ),
+      { landscape: true, margin: { top: '0', bottom: '0', left: '0', right: '0' } },
+    );
+
+    // Send sequentially, respecting Resend's rate limit (2 req/sec max).
+    for (let i = 0; i < tasks.length; i++) {
+      const { student, parentEmails } = tasks[i];
+      try {
+        const subject = customHeader && customHeader.trim()
+          ? customHeader.trim()
+          : `${student.studentName} — ${view.name}`;
+
+        const html = getCertificateEmailHTML({
+          studentName: student.studentName,
+          viewName: view.name,
+          customMessage,
+          schoolName,
+          customHeader: subject,
+          schoolInfo,
+        });
+
+        const safeStudent = student.studentName.replace(/[^a-z0-9-_]+/gi, '_');
+        const safeView = view.name.replace(/[^a-z0-9-_]+/gi, '_');
+
+        const emailPayload = {
+          from: `certificates@${schoolDomain}`,
+          to: parentEmails,
+          subject,
+          html,
+          attachments: [
+            {
+              filename: `${safeView}_${safeStudent}.pdf`,
+              content: Buffer.from(pdfBuffers[i]),
+            },
+          ],
+        };
+
+        if (ccAddresses.length) emailPayload.cc = ccAddresses;
+
+        const emailResult = await resend.emails.send(emailPayload);
+        if (emailResult.error) {
+          throw new Error(emailResult.error.message || 'Email sending failed');
+        }
+
+        await db.query(studentViewEmailsQueries.createStudentViewCertificateEmail, [
+          view.view_id,
+          student.studentId,
+          userId || null,
+          JSON.stringify(parentEmails),
+          ccAddresses.length ? JSON.stringify(ccAddresses) : null,
+          customHeader || null,
+          customMessage || null,
+          Number(student.displayMetric.toFixed(2)),
+          view.school,
+        ]);
+
+        results.push({
+          studentId: student.studentId,
+          studentName: student.studentName,
+          status: 'success',
+          emailId: emailResult.data?.id,
+          sentTo: parentEmails,
+        });
+      } catch (err) {
+        logger.error({ err }, `Failed to send certificate email for student ${tasks[i].student.studentName}`);
+        results.push({
+          studentId: tasks[i].student.studentId,
+          studentName: tasks[i].student.studentName,
+          status: 'failed',
+          error: err.message,
+        });
+      }
+
+      // Rate limiting: wait 600ms between sends (< 2 req/sec).
+      if (i < tasks.length - 1) await sleep(600);
+    }
+
+    const duration = (Date.now() - startTime) / 1000;
+    const successful = results.filter((r) => r.status === 'success');
+    const failed = results.filter((r) => r.status === 'failed');
+
+    logger.info(
+      `Certificate email batch for view ${view.view_id} completed: ${successful.length} sent, ${failed.length} failed in ${duration}s`,
+    );
+
+    return res.status(200).json({
+      status: 'completed',
+      viewId: view.view_id,
+      summary: {
+        total: results.length,
+        sent: successful.length,
+        failed: failed.length,
+        duration: `${duration}s`,
+      },
+      results: results.map((r) => ({
+        studentId: r.studentId,
+        studentName: r.studentName,
+        status: r.status,
+        ...(r.status === 'success' ? { sentTo: r.sentTo } : { error: r.error }),
+      })),
+    });
+  } catch (e) {
+    logger.error({ err: e }, 'sendStudentViewCertificateEmails failed');
+    return res.status(500).json({ status: 'failed', message: 'Failed to send certificate emails' });
+  }
+};
+
+// Email ONE student's certificate to an explicit recipient list (e.g. a
+// single parent). Same building blocks as the bulk flow, but the caller
+// supplies the recipients instead of them being assembled from
+// mother_email/father_email — mirrors report cards' single /send.
+const sendSingleStudentViewCertificateEmail = async (req, res) => {
+  const { userId } = req.user;
+  const { viewId, studentId } = req.params;
+  const { emailAddresses: rawEmailAddresses, customHeader, customMessage, ccAddresses: rawCcAddresses } = req.body;
+
+  const emailAddresses = cleanEmailArray(rawEmailAddresses);
+  if (emailAddresses.length === 0) {
+    return res.status(400).json({ status: 'failed', message: 'At least one recipient email address is required' });
+  }
+
+  try {
+    const { rows } = await db.query(q.selectViewById, [viewId]);
+    const view = rows[0];
+    if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
+    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+
+    // The certificate states the student's metric/award, so only send for a
+    // student who currently qualifies for this view.
+    const evaluated = await evaluateView(view);
+    const student = evaluated.find((s) => s.studentId === studentId);
+    if (!student) {
+      return res.status(400).json({ status: 'failed', message: 'Student does not currently qualify for this view' });
+    }
+
+    let schoolInfo = null;
+    try {
+      const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [view.school]);
+      if (schoolRows.length > 0) schoolInfo = schoolRows[0];
+    } catch (schoolError) {
+      logger.warn({ err: schoolError }, 'sendSingleStudentViewCertificateEmail: school info lookup failed');
+    }
+
+    const schoolName = getSchoolName(view.school);
+    const schoolDomain = getSchoolDomain(view.school);
+    const resend = new Resend(getSchoolApiKey(view.school));
+    const ccAddresses = cleanEmailArray(rawCcAddresses);
+
+    const pdfBuffer = await createPDFBuffer(
+      certificateTemplate({
+        schoolName: view.school,
+        viewName: view.name,
+        viewDescription: view.description,
+        students: [
+          {
+            studentName: student.studentName,
+            grade: student.grade,
+            metric: Number(student.displayMetric.toFixed(2)),
+          },
+        ],
+        issuedDate: new Date().toLocaleDateString('en-CA'),
+      }),
+      { landscape: true, margin: { top: '0', bottom: '0', left: '0', right: '0' } },
+    );
+
+    const subject = customHeader && customHeader.trim()
+      ? customHeader.trim()
+      : `${student.studentName} — ${view.name}`;
+
+    const html = getCertificateEmailHTML({
+      studentName: student.studentName,
+      viewName: view.name,
+      customMessage,
+      schoolName,
+      customHeader: subject,
+      schoolInfo,
+    });
+
+    const safeStudent = student.studentName.replace(/[^a-z0-9-_]+/gi, '_');
+    const safeView = view.name.replace(/[^a-z0-9-_]+/gi, '_');
+
+    const emailPayload = {
+      from: `certificates@${schoolDomain}`,
+      to: emailAddresses,
+      subject,
+      html,
+      attachments: [
+        {
+          filename: `${safeView}_${safeStudent}.pdf`,
+          content: Buffer.from(pdfBuffer),
+        },
+      ],
+    };
+
+    if (ccAddresses.length) emailPayload.cc = ccAddresses;
+
+    const emailResult = await resend.emails.send(emailPayload);
+    if (emailResult.error) {
+      logger.error({ err: emailResult.error }, 'Single certificate email send failed');
+      return res.status(500).json({ status: 'failed', message: 'Failed to send certificate email', error: emailResult.error });
+    }
+
+    const { rows: logRows } = await db.query(studentViewEmailsQueries.createStudentViewCertificateEmail, [
+      view.view_id,
+      student.studentId,
+      userId || null,
+      JSON.stringify(emailAddresses),
+      ccAddresses.length ? JSON.stringify(ccAddresses) : null,
+      customHeader || null,
+      customMessage || null,
+      Number(student.displayMetric.toFixed(2)),
+      view.school,
+    ]);
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Certificate email sent successfully',
+      data: {
+        id: logRows[0]?.id,
+        sentAt: logRows[0]?.sent_at,
+        emailId: emailResult.data?.id,
+        sentTo: emailAddresses,
+      },
+    });
+  } catch (e) {
+    logger.error({ err: e }, 'sendSingleStudentViewCertificateEmail failed');
+    return res.status(500).json({ status: 'failed', message: 'Failed to send certificate email' });
+  }
+};
+
 module.exports = {
   listViews,
   getView,
@@ -374,4 +704,6 @@ module.exports = {
   evaluatePreview,
   exportCsv,
   generateCertificates,
+  sendStudentViewCertificateEmails,
+  sendSingleStudentViewCertificateEmail,
 };
