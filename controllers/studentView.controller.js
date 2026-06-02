@@ -146,11 +146,18 @@ const createView = async (req, res) => {
 const updateView = async (req, res) => {
   const { userId, role } = req.user;
   const { viewId } = req.params;
-  const { name, description, isShared, criteria } = req.body;
+  const { name, description, isShared, isSystem, criteria } = req.body;
 
   if (criteria != null) {
     const err = validateCriteria(criteria);
     if (err) return res.status(400).json({ status: 'failed', message: err });
+  }
+
+  // System-flag flips (promote/demote) are admin-only.
+  if (isSystem != null && role !== 'ADMIN') {
+    return res
+      .status(403)
+      .json({ status: 'failed', message: 'Only admins can change a view\'s system status' });
   }
 
   try {
@@ -166,15 +173,42 @@ const updateView = async (req, res) => {
       });
     }
 
+    // Compute owner/shared transitions implied by isSystem changes.
+    //   promote (false → true): clear owner, force shared on.
+    //   demote  (true → false): assign admin as owner; leave is_shared alone
+    //                           unless the body explicitly toggles it.
+    let nextIsShared = isShared;
+    let nextOwnerUserId = null;
+    let shouldReplaceOwner = false;
+    if (isSystem === true && !view.is_system) {
+      nextOwnerUserId = null;
+      shouldReplaceOwner = true;
+      nextIsShared = true;
+    } else if (isSystem === false && view.is_system) {
+      nextOwnerUserId = userId;
+      shouldReplaceOwner = true;
+    }
+
     const { rows } = await db.query(q.updateView, [
       viewId,
       name ?? null,
       description ?? null,
-      isShared ?? null,
+      nextIsShared ?? null,
       criteria == null ? null : JSON.stringify(criteria),
+      isSystem ?? null,
+      nextOwnerUserId,
+      shouldReplaceOwner,
     ]);
     return res.status(200).json({ status: 'success', data: mapViewRow(rows[0]) });
   } catch (e) {
+    // Same unique-index hit that creation catches — when promoting to a name
+    // already used by another system view in this school.
+    if (e && e.code === '23505') {
+      return res.status(409).json({
+        status: 'failed',
+        message: 'A system view with that name already exists for this school',
+      });
+    }
     logger.error({ err: e }, 'updateView failed');
     return res.status(500).json({ status: 'failed', message: 'Failed to update view' });
   }

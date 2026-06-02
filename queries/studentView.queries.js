@@ -46,12 +46,19 @@ const studentViewQueries = {
 
   // System-view editability is enforced in the controller (admin-only).
   // SQL accepts the update for any non-deleted view and lets the caller decide.
+  // $6 (is_system) and $7 (owner_user_id) are admin-only flip semantics handled
+  // upstream; COALESCE keeps them no-op for the common rename/criteria-edit path.
   updateView: `
     UPDATE public.student_views
-       SET name        = COALESCE($2, name),
-           description = COALESCE($3, description),
-           is_shared   = COALESCE($4, is_shared),
-           criteria    = COALESCE($5::jsonb, criteria)
+       SET name          = COALESCE($2, name),
+           description   = COALESCE($3, description),
+           is_shared     = COALESCE($4, is_shared),
+           criteria      = COALESCE($5::jsonb, criteria),
+           is_system     = COALESCE($6, is_system),
+           owner_user_id = CASE
+             WHEN $8::boolean = TRUE THEN $7
+             ELSE owner_user_id
+           END
      WHERE view_id = $1
     RETURNING view_id, school, owner_user_id, name, description,
               is_shared, is_system, criteria, created_at, updated_at
