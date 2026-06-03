@@ -376,4 +376,7 @@ module.exports = {
   applyAggregation,
   combinePerTerm,
   resolveTermIds,
+  // shared with the Al Haadi T2 report card so its T1/T2 rows can never
+  // disagree with the student view numbers
+  computeClassPctForStudent,
 };

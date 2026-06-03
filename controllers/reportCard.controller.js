@@ -3,11 +3,15 @@
 const db = require('../config/database');
 const studentQueries = require('../queries/student.queries');
 const { getReportCardHTML } = require('../templates/reportCardTemplate');
+const { getAlHaadiT2ReportCardHTML } = require('../templates/alHaadiT2ReportCardTemplate');
 const reportCardQueries = require('../queries/reportCard.queries');
-const { createPDFBuffer } = require('../utils/pdfGenerator');
+const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient'); // configure this file if not already
 const logger = require('../logger');
 const { calculateStudentGrade } = require('../utils/gradeCalculator');
+const { computeClassPctForStudent } = require('../services/studentViewEvaluator');
+const studentViewQueries = require('../queries/studentView.queries');
+const alHaadiT2Queries = require('../queries/alHaadiT2ReportCard.queries');
 
 /**
  * Calculate final grades per subject for a student using JavaScript-based calculation
@@ -97,6 +101,145 @@ async function calculateSubjectGradesForStudent(studentId) {
   results.sort((a, b) => a.subject_name.localeCompare(b.subject_name));
 
   return results;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Al Haadi Academy Term-2 three-row report card (grades 1-8)
+// ────────────────────────────────────────────────────────────────────
+//
+// The T2 variant shows First Term / Second Term / Final Term rows per
+// subject. T1 and T2 percentages reuse computeClassPctForStudent (the
+// student-view engine: null scores skipped, exclusions and parent/child
+// hierarchies handled) so the card never disagrees with the student view.
+
+/**
+ * Resolve the school's Term 1 and Term 2 term rows for the academic year
+ * implied by the term string the frontend sent.
+ *
+ * @param {string} school     school enum value (e.g. 'ALHAADIACADEMY')
+ * @param {string} termString human term name, e.g. "Term 2" or "Term 2 2025-2026"
+ * @returns {Promise<{ t1: object|null, t2: object|null }>}
+ */
+async function resolveAlHaadiTermPair(school, termString) {
+  // T2: exact name match first, LIKE fallback for formatting drift.
+  let t2 = null;
+  const { rows: exactRows } = await db.query(
+    alHaadiT2Queries.selectTermByNameAndSchool, [termString, school]
+  );
+  if (exactRows.length > 0) {
+    t2 = exactRows[0];
+  } else {
+    const { rows: likeRows } = await db.query(
+      alHaadiT2Queries.selectTermLike, [school, '%term 2%']
+    );
+    t2 = likeRows[0] || null;
+  }
+
+  // T1: same academic year as T2, falling back to the most recent Term 1.
+  let t1 = null;
+  if (t2) {
+    const { rows: t1Rows } = await db.query(
+      alHaadiT2Queries.selectTerm1ForAcademicYear, [school, t2.academic_year]
+    );
+    t1 = t1Rows[0] || null;
+  }
+  if (!t1) {
+    const { rows: fallbackRows } = await db.query(
+      alHaadiT2Queries.selectTermLike, [school, '%term 1%']
+    );
+    t1 = fallbackRows[0] || null;
+  }
+
+  logger.info(
+    { school, termString, t1: t1?.term_id, t1Name: t1?.name, t2: t2?.term_id, t2Name: t2?.name },
+    'Resolved Al Haadi T1/T2 term pair'
+  );
+  return { t1, t2 };
+}
+
+/**
+ * Compute a student's per-subject percentage for ONE term using
+ * computeClassPctForStudent semantics (null = zero graded work).
+ * Multiple classes sharing a subject average their non-null pcts,
+ * mirroring calculateSubjectGradesForStudent's grouping; all-null → null.
+ *
+ * @param {string} studentId
+ * @param {string|null} termId  null → empty map (term not found)
+ * @returns {Promise<Map<string, number|null>>}  subject → pct | null
+ */
+async function computeTermSubjectGrades(studentId, termId) {
+  const subjectPcts = new Map(); // subject → Array<number|null>
+  if (!termId) return new Map();
+
+  const { rows: classRows } = await db.query(
+    alHaadiT2Queries.selectStudentClassesForTerm, [studentId, termId]
+  );
+
+  for (const cls of classRows) {
+    const { rows: scoreRows } = await db.query(
+      studentViewQueries.selectScoresForClass, [cls.class_id]
+    );
+
+    // De-dupe the joined rows into an assessment list (same loop as
+    // studentViewEvaluator.evaluateTerm).
+    const seen = new Set();
+    const assessments = [];
+    for (const r of scoreRows) {
+      if (seen.has(r.assessment_id)) continue;
+      seen.add(r.assessment_id);
+      assessments.push({
+        assessment_id: r.assessment_id,
+        name: r.assessment_name,
+        weight_percent: r.weight_percent,
+        weight_points: r.weight_points,
+        max_score: r.max_score,
+        is_parent: r.is_parent,
+        parent_assessment_id: r.parent_assessment_id,
+      });
+    }
+
+    const studentRows = scoreRows.filter((r) => r.student_id === studentId);
+    const pct = computeClassPctForStudent(assessments, studentRows);
+
+    if (!subjectPcts.has(cls.subject)) subjectPcts.set(cls.subject, []);
+    subjectPcts.get(cls.subject).push(pct);
+  }
+
+  const result = new Map();
+  for (const [subject, pcts] of subjectPcts) {
+    const graded = pcts.filter((p) => p != null);
+    result.set(
+      subject,
+      graded.length > 0 ? graded.reduce((s, p) => s + p, 0) / graded.length : null
+    );
+  }
+  return result;
+}
+
+/**
+ * Merge the per-term subject maps into the row model the T2 template renders.
+ *
+ *   Rule A — T1-only subject (e.g. Gr4-8 PE):   t2 missing → final null ("—")
+ *   Rule B — T2 subject with no T1 record:      t1 missing → final null ("—")
+ *   Rule E — zero graded work in a term:        map holds null → same as missing
+ *   Final Term = (t1 + t2) / 2 ONLY when both are present.
+ *
+ * @param {Map<string, number|null>} t1Map
+ * @param {Map<string, number|null>} t2Map
+ * @returns {Array<{ subject: string, t1: number|null, t2: number|null, final: number|null }>}
+ *          one entry per subject in the union of both maps, sorted alphabetically
+ */
+function mergeTermSubjects(t1Map, t2Map) {
+  const subjects = new Set([...t1Map.keys(), ...t2Map.keys()]);
+  const rows = [];
+  for (const subject of subjects) {
+    const t1 = t1Map.get(subject) ?? null;
+    const t2 = t2Map.get(subject) ?? null;
+    const final = t1 != null && t2 != null ? (t1 + t2) / 2 : null;
+    rows.push({ subject, t1, t2, final });
+  }
+  rows.sort((a, b) => a.subject.localeCompare(b.subject));
+  return rows;
 }
 
 /**
@@ -317,13 +460,32 @@ const generateReportCardsBulk = async (req, res) => {
   const successes = [];
   const failures = [];
 
-  for (const studentId of studentIds) {
-    try {
-      const result = await generateSingleReportCard(studentId, term);
-      successes.push({ studentId, message: result });
-    } catch (err) {
-      logger.error({ err, studentId }, `Failed to generate report card for ${studentId}`);
-      failures.push({ studentId, error: err.message || 'Unknown error' });
+  // One Chromium launch for the whole batch — each student renders in its
+  // own page. Launching per student was the dominant bulk-generation cost.
+  let browser = null;
+  try {
+    browser = await launchPDFBrowser();
+  } catch (err) {
+    logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
+  }
+
+  try {
+    for (const studentId of studentIds) {
+      try {
+        const result = await generateSingleReportCard(studentId, term, { browser });
+        successes.push({ studentId, message: result });
+      } catch (err) {
+        logger.error({ err, studentId }, `Failed to generate report card for ${studentId}`);
+        failures.push({ studentId, error: err.message || 'Unknown error' });
+      }
+    }
+  } finally {
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (err) {
+        logger.warn({ err }, 'Failed to close shared PDF browser');
+      }
     }
   }
 
@@ -339,187 +501,32 @@ const generateReportCardsBulk = async (req, res) => {
 /**
  * POST /report-cards/generate
  * Body: {
- *   studentId: string
+ *   studentId: string,
+ *   term: string
  * }
+ *
+ * Delegates to generateSingleReportCard — the same path the bulk endpoint
+ * uses — so JK/SK routing and the Al Haadi T2 variant apply here too.
  */
 const generateReportCard = async (req, res) => {
   const { studentId, term } = req.body;
-    if (!studentId || !term) {
-        return res.status(400).json({ status: 'failed', message: 'Missing studentId or term' });
-    }
+  if (!studentId || !term) {
+    return res.status(400).json({ status: 'failed', message: 'Missing studentId or term' });
+  }
 
   try {
-    // Fetch student info
-    const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
-    if (studentRows.length === 0) {
+    const message = await generateSingleReportCard(studentId, term);
+    return res.status(200).json({ status: 'success', message });
+  } catch (err) {
+    if (err.message === 'Student not found') {
       return res.status(404).json({ status: 'failed', message: 'Student not found' });
     }
-    const student = studentRows[0];
-
-    const { rows: teacherRows } = await db.query(`
-        SELECT username
-        FROM users
-        WHERE user_id = $1
-    `, [student.homeroom_teacher_id]);
-    const teacherName = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
-
-    // Calculate days of absence from general_attendance
-    let daysOfAbsence = 0;
-    try {
-      const { rows: attendanceRows } = await db.query(`
-        SELECT COUNT(*) as days_absent
-        FROM general_attendance
-        WHERE student_id = $1 AND status = 'ABSENT'
-      `, [studentId]);
-      daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
-    } catch (err) {
-      logger.warn({ err }, "Could not fetch attendance data");
-    }
-
-    // Fetch school info (gracefully fallback if table doesn't exist)
-    let schoolInfo = {
-      name: student.school,
-      address: '',
-      phone: '',
-      email: ''
-    };
-    try {
-      const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
-      const { rows: schoolRows } = await db.query(`
-        SELECT name, address, phone, email
-        FROM schools WHERE school_code = $1
-      `, [schoolCode]);
-      if (schoolRows.length > 0) {
-        schoolInfo = schoolRows[0];
-      }
-    } catch (err) {
-      // Table may not exist yet, use fallback
-      logger.debug('Schools table not available, using student.school as name');
-    }
-
-    // Fetch school assets and generate signed URLs (gracefully fallback)
-    let schoolAssets = { logoUrl: null, principalSignatureUrl: null, schoolStampUrl: null };
-    try {
-      const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
-      const { rows: assetRows } = await db.query(`
-        SELECT logo_path, principal_signature_path, school_stamp_path
-        FROM school_assets
-        WHERE school_code = $1
-      `, [schoolCode]);
-
-      if (assetRows.length > 0) {
-        const assets = assetRows[0];
-        if (assets.logo_path) {
-          const { data: logoData } = await supabase.storage
-            .from('school-assets')
-            .createSignedUrl(assets.logo_path, 3600);
-          schoolAssets.logoUrl = logoData?.signedUrl || null;
-        }
-        if (assets.principal_signature_path) {
-          const { data: sigData } = await supabase.storage
-            .from('school-assets')
-            .createSignedUrl(assets.principal_signature_path, 3600);
-          schoolAssets.principalSignatureUrl = sigData?.signedUrl || null;
-        }
-        if (assets.school_stamp_path) {
-          const { data: stampData } = await supabase.storage
-            .from('school-assets')
-            .createSignedUrl(assets.school_stamp_path, 3600);
-          schoolAssets.schoolStampUrl = stampData?.signedUrl || null;
-        }
-      }
-    } catch (err) {
-      // Table may not exist yet, use empty assets
-      logger.debug('School assets not available');
-    }
-
-    // Fetch student assessments and compute average per subject using JavaScript calculation
-    // This handles exclusions, parent/child hierarchy, and weight scaling consistently
-    const assessments = await calculateSubjectGradesForStudent(studentId);
-    const subjects = assessments.map(a => ({ subject: a.subject_name, grade: Number(a.final_grade).toFixed(1) }));
-
-    // Fetch all class_ids for the student
-    const { rows: classRows } = await db.query(`
-    SELECT c.class_id, c.subject
-    FROM class_students cs
-    JOIN classes c ON cs.class_id = c.class_id
-    WHERE cs.student_id = $1
-    `, [studentId]);
-
-    if (classRows.length === 0) {
-    return res.status(404).json({ status: 'failed', message: 'Student not enrolled in any class' });
-    }
-
-    // Fetch all feedbacks for these classes for the given term
-    const feedbackRows = [];
-    for (const cls of classRows) {
-      const { rows: fbRows } = await db.query(reportCardQueries.selectFeedback, [
-          studentId,
-          cls.class_id,
-          term
-      ]);
-      if (fbRows.length > 0) {
-          feedbackRows.push({
-          subject: cls.subject,
-          ...fbRows[0]
-          });
-      }
-    }
-
-    // Render HTML → PDF
-    const html = getReportCardHTML({
-        schoolInfo,
-        schoolAssets,
-        term,
-        student: {
-            name: student.name,
-            grade: student.grade,
-            oen: student.oen,
-            homeroomTeacher: teacherName,
-            daysOfAbsence,
-            school: student.school
-        },
-        subjects,
-        feedbacks: feedbackRows,
-        generatedDate: new Date().toLocaleDateString('en-CA')
-    });
-
-    const pdfBuffer = await createPDFBuffer(html);
-
-    // Upload to Supabase bucket
-    const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase(); // e.g., "Al Haadi Academy" → "ALHAADIACADEMY"
-    const fileName = `${schoolFolder}/${student.name}_${term}_report_card.pdf`;
-
-    const { error } = await supabase
-      .storage
-      .from('report-cards')
-      .upload(fileName, pdfBuffer, {
-        contentType: 'application/pdf',
-        upsert: true
-      });
-
-      await db.query(reportCardQueries.upsertGeneratedReportCard, [
-        studentId,
-        term,
-        student.name,
-        fileName,
-        student.grade,
-        student.school
-      ]);
-
-    if (error) {
-      logger.error({ err: error }, "Upload to storage failed");
-      return res.status(500).json({ status: 'failed', message: 'Upload to storage failed' });
-    }
-
-    return res.status(200).json({ status: 'success', message: 'Report card generated and uploaded' });
-  } catch (err) {
     logger.error({ err }, "Report card generation failed");
     return res.status(500).json({ status: 'failed', message: 'Internal server error' });
   }
 };
 
-const generateSingleReportCard = async (studentId, term) => {
+const generateSingleReportCard = async (studentId, term, opts = {}) => {
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];
@@ -527,11 +534,20 @@ const generateSingleReportCard = async (studentId, term) => {
   // Route JK/SK students to their dedicated report card generators
   if (student.grade === 'JK') {
     const { generateSingleJKReportCard } = require('./jk.controller');
-    return generateSingleJKReportCard(studentId, term);
+    return generateSingleJKReportCard(studentId, term, opts);
   }
   if (student.grade === 'SK') {
     const { generateSingleSKReportCard } = require('./sk.controller');
-    return generateSingleSKReportCard(studentId, term);
+    return generateSingleSKReportCard(studentId, term, opts);
+  }
+
+  // ── Al Haadi Academy Term-2 three-row variant (grades 1-8) ──
+  const schoolCode = (student.school || '').replace(/\s+/g, '').toUpperCase();
+  const isAlHaadiT2 =
+    schoolCode === 'ALHAADIACADEMY' &&
+    (term || '').toLowerCase().includes('term 2');
+  if (isAlHaadiT2) {
+    return generateAlHaadiT2ReportCard(studentId, term, student, opts);
   }
 
   const { rows: teacherRows } = await db.query(`
@@ -653,7 +669,7 @@ const generateSingleReportCard = async (studentId, term) => {
     generatedDate: new Date().toLocaleDateString('en-CA')
   });
 
-  const pdfBuffer = await createPDFBuffer(html);
+  const pdfBuffer = await createPDFBuffer(html, { browser: opts.browser });
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
   const fileName = `${schoolFolder}/${student.name}_${term}_report_card.pdf`;
 
@@ -673,6 +689,171 @@ const generateSingleReportCard = async (studentId, term) => {
       student.grade,
       student.school
     ]);
+
+  if (error) throw new Error('Upload to storage failed');
+
+  return 'Report card generated and uploaded';
+};
+
+/**
+ * Al Haadi Academy Term-2 report card (grades 1-8): three grade rows per
+ * subject — First Term, Second Term, and Final Term = (T1 + T2) / 2.
+ * Selected by generateSingleReportCard when school = ALHAADIACADEMY and the
+ * term string contains "term 2". Same upload + record bookkeeping as the
+ * standard path; only the subject computation and template differ.
+ */
+const generateAlHaadiT2ReportCard = async (studentId, term, student, opts = {}) => {
+  const { rows: teacherRows } = await db.query(`
+    SELECT username FROM users WHERE user_id = $1
+  `, [student.homeroom_teacher_id]);
+  const teacherName = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
+
+  // Calculate days of absence from general_attendance
+  let daysOfAbsence = 0;
+  try {
+    const { rows: attendanceRows } = await db.query(`
+      SELECT COUNT(*) as days_absent
+      FROM general_attendance
+      WHERE student_id = $1 AND status = 'ABSENT'
+    `, [studentId]);
+    daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
+  } catch (err) {
+    // Silently fallback to 0
+  }
+
+  // Fetch school info (gracefully fallback if table doesn't exist)
+  let schoolInfo = {
+    name: student.school,
+    address: '',
+    phone: '',
+    email: ''
+  };
+  try {
+    const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+    const { rows: schoolRows } = await db.query(`
+      SELECT name, address, phone, email
+      FROM schools WHERE school_code = $1
+    `, [schoolCode]);
+    if (schoolRows.length > 0) {
+      schoolInfo = schoolRows[0];
+    }
+  } catch (err) {
+    // Table may not exist yet, use fallback
+  }
+
+  // Fetch school assets and generate signed URLs (gracefully fallback)
+  let schoolAssets = { logoUrl: null, principalSignatureUrl: null, schoolStampUrl: null };
+  try {
+    const schoolCode = student.school.replace(/\s+/g, '').toUpperCase();
+    const { rows: assetRows } = await db.query(`
+      SELECT logo_path, principal_signature_path, school_stamp_path
+      FROM school_assets
+      WHERE school_code = $1
+    `, [schoolCode]);
+
+    if (assetRows.length > 0) {
+      const assets = assetRows[0];
+      if (assets.logo_path) {
+        const { data: logoData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.logo_path, 3600);
+        schoolAssets.logoUrl = logoData?.signedUrl || null;
+      }
+      if (assets.principal_signature_path) {
+        const { data: sigData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.principal_signature_path, 3600);
+        schoolAssets.principalSignatureUrl = sigData?.signedUrl || null;
+      }
+      if (assets.school_stamp_path) {
+        const { data: stampData } = await supabase.storage
+          .from('school-assets')
+          .createSignedUrl(assets.school_stamp_path, 3600);
+        schoolAssets.schoolStampUrl = stampData?.signedUrl || null;
+      }
+    }
+  } catch (err) {
+    // Table may not exist yet, use empty assets
+  }
+
+  // Per-term subject grades via the student-view engine, merged into
+  // { subject, t1, t2, final } rows (rules A/B/E live in mergeTermSubjects).
+  const { t1, t2 } = await resolveAlHaadiTermPair(student.school, term);
+  const [t1Map, t2Map] = await Promise.all([
+    computeTermSubjectGrades(studentId, t1?.term_id || null),
+    computeTermSubjectGrades(studentId, t2?.term_id || null),
+  ]);
+  const subjects = mergeTermSubjects(t1Map, t2Map);
+
+  // Work Habits / Behaviour carry forward per term: the First Term row shows
+  // the Term 1 feedback, the Second Term row Term 2's. Feedback rows are
+  // keyed by the term name they were saved under, so T1 feedback is looked
+  // up with t1.name (not the generation term string).
+  const fetchTermFeedback = async (termRow, termName) => {
+    const rows = [];
+    if (!termRow) return rows;
+    const { rows: termClasses } = await db.query(
+      alHaadiT2Queries.selectStudentClassesForTerm, [studentId, termRow.term_id]
+    );
+    for (const cls of termClasses) {
+      const { rows: fbRows } = await db.query(reportCardQueries.selectFeedback, [
+        studentId,
+        cls.class_id,
+        termName
+      ]);
+      if (fbRows.length > 0) {
+        rows.push({
+          subject: cls.subject,
+          ...fbRows[0]
+        });
+      }
+    }
+    return rows;
+  };
+
+  const [feedbacksT1, feedbacksT2] = await Promise.all([
+    fetchTermFeedback(t1, t1?.name),
+    fetchTermFeedback(t2, term),
+  ]);
+
+  const html = getAlHaadiT2ReportCardHTML({
+    schoolInfo,
+    schoolAssets,
+    term,
+    student: {
+      name: student.name,
+      grade: student.grade,
+      oen: student.oen,
+      homeroomTeacher: teacherName,
+      daysOfAbsence,
+      school: student.school
+    },
+    subjects,
+    feedbacksT1,
+    feedbacksT2,
+    generatedDate: new Date().toLocaleDateString('en-CA')
+  });
+
+  const pdfBuffer = await createPDFBuffer(html, { browser: opts.browser });
+  const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
+  const fileName = `${schoolFolder}/${student.name}_${term}_report_card.pdf`;
+
+  const { error } = await supabase
+    .storage
+    .from('report-cards')
+    .upload(fileName, pdfBuffer, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+
+  await db.query(reportCardQueries.upsertGeneratedReportCard, [
+    studentId,
+    term,
+    student.name,
+    fileName,
+    student.grade,
+    student.school
+  ]);
 
   if (error) throw new Error('Upload to storage failed');
 
@@ -772,5 +953,9 @@ module.exports = {
   generateReportCardsBulk,
   getGeneratedReportCards,
   deleteReportCard,
-  getGeneratedReportCardsByStudentId
+  getGeneratedReportCardsByStudentId,
+  // exported for unit testing (Al Haadi T2 variant)
+  mergeTermSubjects,
+  computeTermSubjectGrades,
+  resolveAlHaadiTermPair
 };

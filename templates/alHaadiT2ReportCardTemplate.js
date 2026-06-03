@@ -1,42 +1,37 @@
 /**
- * Report Card HTML Template
- * Generates a professional, print-ready report card with blue color scheme
+ * Al Haadi Academy — Term 2 Report Card HTML Template (grades 1-8)
+ *
+ * Variant of the standard report card (reportCardTemplate.js) selected when
+ * school = ALHAADIACADEMY and the generation term is Term 2. Each subject
+ * card shows three grade rows instead of one:
+ *
+ *   First Term  — the student's Term 1 grade in the subject
+ *   Second Term — the student's Term 2 grade
+ *   Final Term  — (T1 + T2) / 2, only when both terms have a grade
+ *
+ * Missing values (T1-only courses, mid-year joiners, ungraded terms) render
+ * as an em-dash. Work Habits / Behaviour carry forward per term — the First
+ * Term row shows the Term 1 feedback, the Second Term row shows Term 2's;
+ * teacher comments come from Term 2 feedback only. Display follows the
+ * standard convention: grades 1-3 show letter grades, grades 4-8 show
+ * percentages (1 decimal).
+ *
+ * Self-contained per-variant template (same pattern as
+ * alHaadiReportCardJKTemplate.js) — layout CSS is copied, not imported, so
+ * changes to the standard template can never shift this card.
  */
 
 const { formatCommentHTML } = require('../utils/commentFormatter')
+const { percentToLetterGrade } = require('./reportCardTemplate')
 
-/**
- * Convert a numeric percentage to a letter grade based on school rubric.
- * Used for grades 1-3 report cards where letters are shown instead of percentages.
- *
- * @param {number} percent - The grade percentage (0-100)
- * @returns {string} Letter grade (A+, A, A-, B+, B, B-, C+, C, C-, D+, D, D-, or F)
- */
-function percentToLetterGrade(percent) {
-  if (percent == null || isNaN(percent)) return '-';
-  const rounded = Math.round(percent);
-  if (rounded >= 90) return 'A+';
-  if (rounded >= 85) return 'A';
-  if (rounded >= 80) return 'A-';
-  if (rounded >= 77) return 'B+';
-  if (rounded >= 73) return 'B';
-  if (rounded >= 70) return 'B-';
-  if (rounded >= 67) return 'C+';
-  if (rounded >= 63) return 'C';
-  if (rounded >= 60) return 'C-';
-  if (rounded >= 57) return 'D+';
-  if (rounded >= 53) return 'D';
-  if (rounded >= 50) return 'D-';
-  return 'D-';
-}
-
-function getReportCardHTML({
+function getAlHaadiT2ReportCardHTML({
   schoolInfo,
   schoolAssets,
   student,
   term,
-  subjects,
-  feedbacks,
+  subjects, // Array<{ subject, t1: number|null, t2: number|null, final: number|null }>
+  feedbacksT1, // Term 1 feedback rows: [{ subject, work_habits, behavior, comment, ... }]
+  feedbacksT2, // Term 2 feedback rows (same shape; also the source of comments)
   generatedDate
 }) {
   const { name, grade, oen, homeroomTeacher, daysOfAbsence, school } = student;
@@ -48,12 +43,20 @@ function getReportCardHTML({
     email: schoolEmail = ''
   } = schoolInfo || {};
 
+  // Grades 1-3 show letters, 4-8 show percentages — same rule as the
+  // standard template's grade cell.
+  const isLetterGrade = Number(grade) <= 3;
+  const formatGrade = (pct) => {
+    if (pct == null) return '—';
+    return isLetterGrade ? percentToLetterGrade(pct) : `${pct.toFixed(1)}%`;
+  };
+
   // Generate subject cards grouped into pages (2 per page max, vertically centered)
   const generateSubjectCard = (sub) => {
-    const feedback = feedbacks.find(fb => fb.subject === sub.subject);
-    const workHabits = feedback?.work_habits || '-';
-    const behavior = feedback?.behavior || '-';
-    const comment = feedback?.comment ? formatCommentHTML(feedback.comment) : '';
+    const fbT1 = (feedbacksT1 || []).find(fb => fb.subject === sub.subject);
+    const fbT2 = (feedbacksT2 || []).find(fb => fb.subject === sub.subject);
+    // Comments come from Term 2 feedback only.
+    const comment = fbT2?.comment ? formatCommentHTML(fbT2.comment) : '';
 
     return `
       <div class="subject-card">
@@ -61,6 +64,7 @@ function getReportCardHTML({
         <table class="grades-table">
           <thead>
             <tr>
+              <th class="term-col">Term</th>
               <th>Grade</th>
               <th>Work Habits</th>
               <th>Behaviour</th>
@@ -68,9 +72,22 @@ function getReportCardHTML({
           </thead>
           <tbody>
             <tr>
-              <td class="grade-cell">${Number(grade) <= 3 ? percentToLetterGrade(parseFloat(sub.grade)) : sub.grade + '%'}</td>
-              <td class="habit-cell">${workHabits}</td>
-              <td class="habit-cell">${behavior}</td>
+              <td class="term-cell">First Term</td>
+              <td class="grade-cell">${formatGrade(sub.t1)}</td>
+              <td class="habit-cell">${fbT1?.work_habits || '-'}</td>
+              <td class="habit-cell">${fbT1?.behavior || '-'}</td>
+            </tr>
+            <tr>
+              <td class="term-cell">Second Term</td>
+              <td class="grade-cell">${formatGrade(sub.t2)}</td>
+              <td class="habit-cell">${fbT2?.work_habits || '-'}</td>
+              <td class="habit-cell">${fbT2?.behavior || '-'}</td>
+            </tr>
+            <tr class="final-term-row">
+              <td class="term-cell">Final Term</td>
+              <td class="grade-cell">${formatGrade(sub.final)}</td>
+              <td class="habit-cell"></td>
+              <td class="habit-cell"></td>
             </tr>
           </tbody>
         </table>
@@ -97,8 +114,6 @@ function getReportCardHTML({
   }
   const subjectCards = subjectPages.join('');
 
-  // Format term for display (e.g., "Term 1" -> "FIRST TERM")
-  const termDisplay = formatTermDisplay(term);
   const academicYear = getAcademicYear();
 
   // Build school contact line
@@ -364,7 +379,7 @@ function getReportCardHTML({
 
         .grades-table th {
           background: var(--light-gray);
-          padding: 10px 15px;
+          padding: 8px 15px;
           font-weight: bold;
           font-size: 10pt;
           border: 1px solid var(--border-color);
@@ -372,16 +387,32 @@ function getReportCardHTML({
         }
 
         .grades-table td {
-          padding: 12px 15px;
+          padding: 8px 15px;
           border: 1px solid var(--border-color);
           text-align: center;
           background: var(--white);
         }
 
+        .term-col {
+          width: 130px;
+        }
+
+        .term-cell {
+          font-weight: bold;
+          font-size: 10pt;
+          text-align: left;
+          background: var(--light-gray);
+        }
+
         .grade-cell {
           font-weight: bold;
-          font-size: 14pt;
+          font-size: 13pt;
           color: var(--primary-blue);
+        }
+
+        .final-term-row .term-cell,
+        .final-term-row .grade-cell {
+          background: var(--lighter-blue);
         }
 
         .habit-cell {
@@ -522,7 +553,7 @@ function getReportCardHTML({
         <div class="header">
           <div class="school-name">${schoolName}</div>
           ${contactLine ? `<div class="school-contact">${contactLine}</div>` : ''}
-          <div class="report-title">${termDisplay} REPORT CARD ${academicYear}</div>
+          <div class="report-title">SECOND TERM REPORT CARD ${academicYear}</div>
         </div>
 
         <!-- Student Information Grid -->
@@ -679,26 +710,6 @@ function getReportCardHTML({
 }
 
 /**
- * Format term string for display
- * e.g., "Term 1" -> "FIRST TERM", "Term 2" -> "SECOND TERM"
- */
-function formatTermDisplay(term) {
-  const termMap = {
-    'term 1': 'FIRST TERM',
-    'term 2': 'SECOND TERM',
-    'term 3': 'THIRD TERM',
-    'term 4': 'FOURTH TERM',
-    '1': 'FIRST TERM',
-    '2': 'SECOND TERM',
-    '3': 'THIRD TERM',
-    '4': 'FOURTH TERM'
-  };
-
-  const normalized = (term || '').toLowerCase().trim();
-  return termMap[normalized] || term?.toUpperCase() || 'TERM';
-}
-
-/**
  * Get academic year string (e.g., "2025-2026")
  */
 function getAcademicYear() {
@@ -714,4 +725,4 @@ function getAcademicYear() {
   }
 }
 
-module.exports = { getReportCardHTML, percentToLetterGrade };
+module.exports = { getAlHaadiT2ReportCardHTML };

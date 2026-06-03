@@ -4,7 +4,7 @@ const studentQueries = require("../queries/student.queries");
 const reportCardQueries = require("../queries/reportCard.queries");
 const progressReportsQueries = require("../queries/progressReports.queries");
 const schoolAssetsQueries = require("../queries/schoolAssets.queries");
-const { createPDFBuffer } = require('../utils/pdfGenerator');
+const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const logger = require("../logger");
 const { getAlHaadiProgressReportSKHTML } = require('../templates/alHaadiProgressReportSKTemplate');
@@ -556,7 +556,7 @@ const generateSingleSKProgressReport = async (studentId, term) => {
 // ============================================================
 // SK Report Card Generation
 // ============================================================
-const generateSingleSKReportCard = async (studentId, term) => {
+const generateSingleSKReportCard = async (studentId, term, opts = {}) => {
   // 1. Get student
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
@@ -640,7 +640,7 @@ const generateSingleSKReportCard = async (studentId, term) => {
   });
 
   // 10. Generate PDF
-  const pdfBuffer = await createPDFBuffer(htmlContent);
+  const pdfBuffer = await createPDFBuffer(htmlContent, { browser: opts.browser });
 
   // 11. Upload to Supabase
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
@@ -745,12 +745,30 @@ const generateReportCardsBulk = async (req, res) => {
     const generated = [];
     const failed = [];
 
-    for (const studentId of studentIds) {
-      try {
-        await generateSingleSKReportCard(studentId, term);
-        generated.push({ studentId, message: 'Generated successfully' });
-      } catch (err) {
-        failed.push({ studentId, error: err.message });
+    // One Chromium launch for the whole batch (see utils/pdfGenerator.js).
+    let browser = null;
+    try {
+      browser = await launchPDFBrowser();
+    } catch (err) {
+      logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
+    }
+
+    try {
+      for (const studentId of studentIds) {
+        try {
+          await generateSingleSKReportCard(studentId, term, { browser });
+          generated.push({ studentId, message: 'Generated successfully' });
+        } catch (err) {
+          failed.push({ studentId, error: err.message });
+        }
+      }
+    } finally {
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (err) {
+          logger.warn({ err }, 'Failed to close shared PDF browser');
+        }
       }
     }
 
