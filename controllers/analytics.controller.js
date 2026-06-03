@@ -49,6 +49,12 @@ function classAvgPct(cls) {
   return pcts.length ? stats.round1(stats.mean(pcts)) : null;
 }
 
+/** Per-class median of student finalPcts (null-skip aware). */
+function classMedianPct(cls) {
+  const pcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
+  return pcts.length ? stats.round1(stats.median(pcts)) : null;
+}
+
 /** Shape the byGrade section of the overview response. */
 function buildByGrade(matrix) {
   const byGrade = groupStudentsByGrade(matrix);
@@ -80,6 +86,7 @@ function buildBySubject(matrix) {
       teacherName: cls.teacherName,
       studentCount: cls.students.size,
       classAvg: avg,
+      classMedian: classMedianPct(cls),
     });
     for (const stu of cls.students.values()) {
       if (stu.finalPct != null) entry.studentPcts.push(stu.finalPct);
