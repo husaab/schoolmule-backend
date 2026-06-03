@@ -136,7 +136,7 @@ const studentViewQueries = {
   selectAttendancePctForTerm: `
     SELECT
       ga.student_id,
-      COUNT(*) FILTER (WHERE ga.status IN ('present', 'late')) * 100.0
+      COUNT(*) FILTER (WHERE ga.status IN ('PRESENT', 'LATE')) * 100.0
         / NULLIF(COUNT(*), 0) AS attendance_pct
     FROM general_attendance ga
     JOIN terms t
