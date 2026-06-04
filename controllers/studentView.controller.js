@@ -22,6 +22,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const VALID_TERM_SCOPES = new Set(['active', 'specific', 'all', 'every_listed', 'any_listed']);
 const VALID_AGG_MODES = new Set(['overall_avg', 'every_class', 'any_class']);
+const VALID_CROSS_TERM = new Set(['each_term_separately', 'cumulative_avg']);
 
 const mapViewRow = (row) => ({
   viewId: row.view_id,
@@ -54,6 +55,9 @@ function validateCriteria(c) {
       return 'attendanceMinPercent must be 0..100';
     }
   }
+  if (c.crossTermAggregation != null && !VALID_CROSS_TERM.has(c.crossTermAggregation)) {
+    return 'invalid crossTermAggregation';
+  }
   return null;
 }
 
@@ -69,11 +73,12 @@ function canEdit(view, userId, role) {
   return !view.is_system && view.owner_user_id === userId;
 }
 
-// Delete rule (intentionally stricter):
-//   - System views are never deletable, even by admins — they're the
-//     baseline awards every school relies on. Edit, don't delete.
-//   - Otherwise, only the owner can delete.
-function canDelete(view, userId) {
+// Delete rule:
+//   - Admins can delete ANY view in their school, including system views.
+//     System view deletion still requires a double-confirm in the UI.
+//   - Non-admins can only delete views they personally own.
+function canDelete(view, userId, role) {
+  if (role === 'ADMIN') return true;
   return !view.is_system && view.owner_user_id === userId;
 }
 
@@ -223,17 +228,17 @@ const updateView = async (req, res) => {
 };
 
 const deleteView = async (req, res) => {
-  const { userId } = req.user;
+  const { userId, role } = req.user;
   const { viewId } = req.params;
   try {
     const existing = await db.query(q.selectViewById, [viewId]);
     const view = existing.rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canDelete(view, userId)) {
+    if (!canDelete(view, userId, role)) {
       return res.status(403).json({
         status: 'failed',
         message: view.is_system
-          ? 'System views cannot be deleted'
+          ? 'Only admins can delete system views'
           : 'Only the owner can delete this view',
       });
     }

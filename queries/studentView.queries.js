@@ -64,10 +64,11 @@ const studentViewQueries = {
               is_shared, is_system, criteria, created_at, updated_at
   `,
 
+  // System-view deletion guard is enforced in the controller (admin-only),
+  // not in SQL — so we can grant admins the ability to delete any view.
   deleteView: `
     DELETE FROM public.student_views
      WHERE view_id = $1
-       AND is_system = FALSE
     RETURNING view_id
   `,
 

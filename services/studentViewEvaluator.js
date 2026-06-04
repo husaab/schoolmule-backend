@@ -258,12 +258,19 @@ async function evaluateTerm(school, termId, criteria) {
 // Combine per-term sets per termScope
 // ────────────────────────────────────────────────────────────────────
 
-function combinePerTerm(termResults, termIds, termScope) {
+function combinePerTerm(termResults, termIds, termScope, criteria = {}) {
   // termResults: Map<termId, Map<studentId, perTermEntry>>
   const allStudentIds = new Set();
   for (const map of termResults.values()) {
     for (const sid of map.keys()) allStudentIds.add(sid);
   }
+
+  // Multi-term scopes can use cumulative_avg: instead of per-term qualification,
+  // we average the student's metric across terms and check that single number.
+  const isMultiTerm = ['every_listed', 'any_listed', 'all'].includes(termScope);
+  const crossTermMode = criteria.crossTermAggregation || 'each_term_separately';
+  const useCumulative = isMultiTerm && crossTermMode === 'cumulative_avg';
+  const threshold = typeof criteria.thresholdPercent === 'number' ? criteria.thresholdPercent : 0;
 
   const out = [];
   for (const sid of allStudentIds) {
@@ -292,21 +299,30 @@ function combinePerTerm(termResults, termIds, termScope) {
     }
     if (!baseInfo) continue;
 
+    const cumulativeMean = metricCount > 0 ? metricSum / metricCount : 0;
+
     let qualified;
-    switch (termScope) {
-      case 'active':
-      case 'specific':
-        qualified = perTerm[termIds[0]]?.qualified === true;
-        break;
-      case 'every_listed':
-      case 'all':
-        qualified = qualifiedTerms === termIds.length;
-        break;
-      case 'any_listed':
-        qualified = qualifiedTerms > 0;
-        break;
-      default:
-        qualified = false;
+    if (useCumulative) {
+      // Single threshold check against the cross-term mean. The student must
+      // have had graded work in at least one term — students with zero data
+      // never qualify cumulatively either.
+      qualified = metricCount > 0 && cumulativeMean >= threshold;
+    } else {
+      switch (termScope) {
+        case 'active':
+        case 'specific':
+          qualified = perTerm[termIds[0]]?.qualified === true;
+          break;
+        case 'every_listed':
+        case 'all':
+          qualified = qualifiedTerms === termIds.length;
+          break;
+        case 'any_listed':
+          qualified = qualifiedTerms > 0;
+          break;
+        default:
+          qualified = false;
+      }
     }
 
     out.push({
@@ -365,7 +381,7 @@ async function evaluateView(viewRow) {
     termResults.set(termId, await evaluateTerm(school, termId, criteria));
   }
 
-  let combined = combinePerTerm(termResults, termIds, criteria.termScope);
+  let combined = combinePerTerm(termResults, termIds, criteria.termScope, criteria);
   combined = await applyAttendanceFilter(combined, school, termIds, criteria);
   return combined.filter((s) => s.qualified);
 }
