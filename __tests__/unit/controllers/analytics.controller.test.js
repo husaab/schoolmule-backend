@@ -283,6 +283,49 @@ describe('GET /api/analytics/snapshot', () => {
   });
 });
 
+// ─── GET /api/analytics/term-comparison ─────────────────────────
+describe('GET /api/analytics/term-comparison', () => {
+  const url = '/api/analytics/term-comparison'
+
+  it('aligns a student across two terms with a delta', async () => {
+    // Same student (s1) in Math Grade 5 across t1 (80) and t2 (90).
+    mockQueryResponse([
+      matrixRow({ class_id: 'c1', term_id: 't1', subject: 'Math', class_grade: '5', student_id: 's1', student_name: 'Alice', score: 80 }),
+      matrixRow({ class_id: 'c2', term_id: 't2', subject: 'Math', class_grade: '5', student_id: 's1', student_name: 'Alice', score: 90 }),
+    ]) // all-terms matrix
+    mockQueryResponse([
+      { term_id: 't1', name: 'Term 1' },
+      { term_id: 't2', name: 'Term 2' },
+    ]) // terms
+
+    const res = await request(app)
+      .get(url)
+      .set(authHeader())
+      .query({ subject: 'Math', grade: '5' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.terms).toHaveLength(2)
+    expect(res.body.data.terms[0].termName).toBe('Term 1')
+    expect(res.body.data.combined.avg).toBe(85)
+    const alice = res.body.data.students.find((s) => s.studentName === 'Alice')
+    expect(alice.byTerm.t1).toBe(80)
+    expect(alice.byTerm.t2).toBe(90)
+    expect(alice.delta).toBe(10)
+  })
+
+  it('returns 400 when subject or grade is missing', async () => {
+    const res = await request(app).get(url).set(authHeader()).query({ subject: 'Math' })
+    expect(res.status).toBe(400)
+  })
+
+  it('404s when no classes match', async () => {
+    mockQueryResponse([matrixRow({ subject: 'Math', class_grade: '5' })])
+    mockQueryResponse([{ term_id: 't1', name: 'Term 1' }])
+    const res = await request(app).get(url).set(authHeader()).query({ subject: 'Science', grade: '9' })
+    expect(res.status).toBe(404)
+  })
+})
+
 // ─── POST /api/analytics/invalidate-cache ───────────────────────
 describe('POST /api/analytics/invalidate-cache', () => {
   it('invalidates and returns success', async () => {

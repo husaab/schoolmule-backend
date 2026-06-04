@@ -87,6 +87,7 @@ function buildBySubject(matrix) {
       studentCount: cls.students.size,
       classAvg: avg,
       classMedian: classMedianPct(cls),
+      termId: cls.termId,
     });
     for (const stu of cls.students.values()) {
       if (stu.finalPct != null) entry.studentPcts.push(stu.finalPct);
@@ -517,10 +518,117 @@ const invalidateCache = async (req, res) => {
   }
 };
 
+// ────────────────────────────────────────────────────────────────────
+// GET /api/analytics/term-comparison?subject=&grade=&engine=
+// Cross-term comparison for one subject+grade: per-term class stats plus
+// every student's grade in each term (aligned by student), so a teacher can
+// see how the same course moved Term 1 → Term 2. Always computed over the
+// all-terms matrix.
+// ────────────────────────────────────────────────────────────────────
+const getTermComparison = async (req, res) => {
+  const { school } = req.user;
+  const { subject, grade } = req.query;
+  if (!subject || !grade) {
+    return res
+      .status(400)
+      .json({ status: 'failed', message: 'Missing required query parameters: subject, grade' });
+  }
+
+  try {
+    const eng = engine.normalizeEngine(req.query.engine);
+    const [matrix, termsRes] = await Promise.all([
+      engine.buildAnalyticsMatrix(school, engine.ALL_TERMS, eng),
+      db.query(q.selectTermsBySchool, [school]),
+    ]);
+
+    // term_id -> { name, startDate } and chronological order.
+    const termMeta = new Map();
+    termsRes.rows.forEach((t, i) => termMeta.set(t.term_id, { name: t.name, order: i }));
+
+    // Classes of this subject+grade, grouped by term.
+    const matching = [...matrix.classes.values()].filter(
+      (c) => c.subject === subject && c.grade === grade
+    );
+    if (matching.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'No classes for this subject and grade' });
+    }
+
+    const byTerm = new Map(); // termId -> { classIds[], teacherName, pcts[] }
+    const studentMap = new Map(); // studentId -> { studentName, byTerm: {termId: pct} }
+
+    for (const cls of matching) {
+      let term = byTerm.get(cls.termId);
+      if (!term) {
+        term = { termId: cls.termId, classIds: [], teacherName: cls.teacherName, pcts: [] };
+        byTerm.set(cls.termId, term);
+      }
+      term.classIds.push(cls.classId);
+      for (const stu of cls.students.values()) {
+        if (stu.finalPct != null) term.pcts.push(stu.finalPct);
+        let rec = studentMap.get(stu.studentId);
+        if (!rec) {
+          rec = { studentId: stu.studentId, studentName: stu.studentName, byTerm: {} };
+          studentMap.set(stu.studentId, rec);
+        }
+        // If a student somehow has two classes in the same term, keep the first.
+        if (rec.byTerm[cls.termId] == null) rec.byTerm[cls.termId] = stats.round1(stu.finalPct);
+      }
+    }
+
+    // Ordered term summaries.
+    const terms = [...byTerm.values()]
+      .map((t) => ({
+        termId: t.termId,
+        termName: termMeta.get(t.termId)?.name ?? 'Term',
+        order: termMeta.get(t.termId)?.order ?? 999,
+        teacherName: t.teacherName,
+        studentCount: t.pcts.length,
+        stats: stats.summarize(t.pcts),
+      }))
+      .sort((a, b) => a.order - b.order);
+    const orderedTermIds = terms.map((t) => t.termId);
+
+    // Per-student rows with delta = last graded term − first graded term.
+    const students = [...studentMap.values()]
+      .map((rec) => {
+        const present = orderedTermIds
+          .map((tid) => ({ tid, pct: rec.byTerm[tid] }))
+          .filter((x) => x.pct != null);
+        const delta =
+          present.length >= 2
+            ? stats.round1(present[present.length - 1].pct - present[0].pct)
+            : null;
+        return { studentId: rec.studentId, studentName: rec.studentName, byTerm: rec.byTerm, delta };
+      })
+      .sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+    // Pooled (enrollment-weighted) average across every term's class.
+    const allPcts = [...byTerm.values()].flatMap((t) => t.pcts);
+    const combined = {
+      avg: stats.round1(stats.mean(allPcts)),
+      median: stats.round1(stats.median(allPcts)),
+      classCount: matching.length,
+      studentCount: studentMap.size,
+    };
+
+    return res.status(200).json({
+      status: 'success',
+      data: { subject, grade, engine: eng, terms, students, combined },
+    });
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return res.status(400).json({ status: 'failed', message: error.message });
+    }
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching term comparison' });
+  }
+};
+
 module.exports = {
   getOverview,
   getClassDetail,
   getStudentDetail,
   getAiSnapshot,
+  getTermComparison,
   invalidateCache,
 };
