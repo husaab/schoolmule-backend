@@ -225,44 +225,6 @@ function buildProgressReportRow(overrides = {}) {
   };
 }
 
-function buildMessageRow(overrides = {}) {
-  return {
-    message_id: uuidv4(),
-    sender_id: TEST_ADMIN_USER_ID,
-    recipient_id: TEST_PARENT_USER_ID,
-    school: TEST_SCHOOL,
-    subject: 'Test Message',
-    body: 'This is a test message.',
-    sender_name: 'Admin User',
-    recipient_name: 'Parent User',
-    created_at: new Date().toISOString(),
-    last_modified_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function buildFeedbackRow(overrides = {}) {
-  return {
-    feedback_id: uuidv4(),
-    sender_id: TEST_TEACHER_USER_ID,
-    sender_name: 'Teacher User',
-    recipient_id: TEST_PARENT_USER_ID,
-    recipient_name: 'Parent User',
-    school: TEST_SCHOOL,
-    subject: 'Student Progress',
-    body: 'Your child is doing well.',
-    assessment_name: 'Midterm',
-    score: '85',
-    weight_percentage: '25',
-    course_name: 'Mathematics',
-    student_id: uuidv4(),
-    student_name: 'John Smith',
-    created_at: new Date().toISOString(),
-    last_modified_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
 function buildStaffRow(overrides = {}) {
   return {
     staff_id: uuidv4(),
@@ -281,25 +243,6 @@ function buildStaffRow(overrides = {}) {
   };
 }
 
-function buildScheduleRow(overrides = {}) {
-  return {
-    schedule_id: uuidv4(),
-    school: TEST_SCHOOL,
-    grade: 5,
-    day_of_week: 'Monday',
-    start_time: '09:00',
-    end_time: '09:45',
-    subject: 'Mathematics',
-    teacher_name: 'Teacher User',
-    is_lunch: false,
-    lunch_supervisor: null,
-    week_start_date: '2025-10-13',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
 function buildParentStudentRow(overrides = {}) {
   return {
     parent_student_link_id: uuidv4(),
@@ -311,60 +254,6 @@ function buildParentStudentRow(overrides = {}) {
     relation: 'MOTHER',
     school: TEST_SCHOOL,
     created_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function buildTuitionPlanRow(overrides = {}) {
-  return {
-    plan_id: uuidv4(),
-    school: TEST_SCHOOL,
-    grade: 5,
-    amount: 500.00,
-    frequency: 'monthly',
-    effective_from: '2025-09-01',
-    effective_to: '2026-06-30',
-    created_at: new Date().toISOString(),
-    last_modified_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function buildTuitionInvoiceRow(overrides = {}) {
-  return {
-    invoice_id: uuidv4(),
-    plan_id: uuidv4(),
-    student_id: uuidv4(),
-    student_name: 'John Smith',
-    student_grade: 5,
-    parent_id: TEST_PARENT_USER_ID,
-    parent_name: 'Parent User',
-    parent_email: 'parent@test.com',
-    parent_number: '555-0300',
-    period_start: '2025-10-01',
-    period_end: '2025-10-31',
-    amount_due: 500.00,
-    date_due: '2025-10-15',
-    amount_paid: 0,
-    date_paid: null,
-    issued_at: new Date().toISOString(),
-    status: 'pending',
-    school: TEST_SCHOOL,
-    created_at: new Date().toISOString(),
-    last_modified_at: new Date().toISOString(),
-    ...overrides,
-  };
-}
-
-function buildTuitionInvoiceCommentRow(overrides = {}) {
-  return {
-    comment_id: uuidv4(),
-    invoice_id: uuidv4(),
-    commenter_id: TEST_ADMIN_USER_ID,
-    commenter_name: 'Admin User',
-    comment: 'Payment received via e-transfer.',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -635,14 +524,8 @@ module.exports = {
   buildReportCardRow,
   buildProgressReportFeedbackRow,
   buildProgressReportRow,
-  buildMessageRow,
-  buildFeedbackRow,
   buildStaffRow,
-  buildScheduleRow,
   buildParentStudentRow,
-  buildTuitionPlanRow,
-  buildTuitionInvoiceRow,
-  buildTuitionInvoiceCommentRow,
   buildExcludedAssessmentRow,
   buildPatchNoteRow,
   buildPatchNoteDismissalRow,

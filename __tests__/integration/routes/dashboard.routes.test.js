@@ -183,26 +183,6 @@ describe('Integration: Dashboard Routes', () => {
     });
   });
 
-  describe('GET /api/dashboard/financial', () => {
-    it('returns financial overview', async () => {
-      await seedDashboardData();
-
-      const res = await authenticatedRequest('get', '/api/dashboard/financial?school=ALHAADIACADEMY');
-
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('success');
-      expect(res.body.data).toHaveProperty('totalRevenue');
-      expect(res.body.data).toHaveProperty('totalOutstanding');
-      expect(res.body.data).toHaveProperty('statusCounts');
-    });
-
-    it('returns 400 when school is missing', async () => {
-      const res = await authenticatedRequest('get', '/api/dashboard/financial');
-
-      expect(res.status).toBe(400);
-    });
-  });
-
   describe('POST /api/dashboard/refresh-grade-cache', () => {
     it('refreshes grade cache for a school', async () => {
       await seedDashboardData();

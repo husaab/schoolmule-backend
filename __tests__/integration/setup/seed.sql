@@ -107,18 +107,6 @@ CREATE TABLE school_assets (
   updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE tuition_plans (
-  plan_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  school                 school NOT NULL,
-  grade                  TEXT NOT NULL,
-  amount                 NUMERIC(10, 2) NOT NULL,
-  frequency              TEXT NOT NULL,
-  effective_from         DATE NOT NULL,
-  effective_to           DATE,
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  last_modified_at       TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE TABLE staff (
   staff_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school                 school NOT NULL,
@@ -145,22 +133,6 @@ CREATE TABLE patch_notes (
   published_at           TIMESTAMPTZ NOT NULL,
   auto_dismiss_at        TIMESTAMPTZ,
   created_by             UUID REFERENCES users(user_id),
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  updated_at             TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE schedules (
-  schedule_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  school                 school NOT NULL,
-  grade                  TEXT NOT NULL,
-  day_of_week            TEXT NOT NULL,
-  start_time             TIME NOT NULL,
-  end_time               TIME NOT NULL,
-  subject                TEXT,
-  teacher_name           TEXT,
-  is_lunch               BOOLEAN DEFAULT FALSE,
-  lunch_supervisor       TEXT,
-  week_start_date        DATE NOT NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
@@ -244,38 +216,6 @@ CREATE TABLE teacher_attendance (
   PRIMARY KEY (teacher_id, attendance_date)
 );
 
-CREATE TABLE messages (
-  message_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sender_id              UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-  recipient_id           UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-  school                 school NOT NULL,
-  subject                TEXT NOT NULL,
-  body                   TEXT,
-  sender_name            TEXT,
-  recipient_name         TEXT,
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  last_modified_at       TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE feedback (
-  feedback_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sender_id              UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-  sender_name            TEXT,
-  recipient_id           UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-  recipient_name         TEXT,
-  school                 school NOT NULL,
-  subject                TEXT,
-  body                   TEXT,
-  assessment_name        TEXT,
-  score                  NUMERIC,
-  weight_percentage      NUMERIC,
-  course_name            TEXT,
-  student_id             UUID REFERENCES students(student_id) ON DELETE CASCADE,
-  student_name           TEXT,
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  last_modified_at       TIMESTAMPTZ DEFAULT NOW()
-);
-
 CREATE TABLE parent_students (
   parent_student_link_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
@@ -286,39 +226,6 @@ CREATE TABLE parent_students (
   relation               TEXT,
   school                 school NOT NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE tuition_invoices (
-  invoice_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  plan_id                UUID REFERENCES tuition_plans(plan_id),
-  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
-  student_name           TEXT,
-  student_grade          TEXT,
-  parent_id              UUID REFERENCES users(user_id),
-  parent_name            TEXT,
-  parent_email           TEXT,
-  parent_number          TEXT,
-  period_start           DATE,
-  period_end             DATE,
-  amount_due             NUMERIC(10, 2),
-  date_due               DATE,
-  amount_paid            NUMERIC(10, 2) DEFAULT 0,
-  date_paid              DATE,
-  issued_at              TIMESTAMPTZ,
-  status                 TEXT DEFAULT 'draft',
-  school                 school NOT NULL,
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  last_modified_at       TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE tuition_invoice_comments (
-  comment_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  invoice_id             UUID NOT NULL REFERENCES tuition_invoices(invoice_id) ON DELETE CASCADE,
-  commenter_id           UUID REFERENCES users(user_id),
-  commenter_name         TEXT,
-  comment                TEXT,
-  created_at             TIMESTAMPTZ DEFAULT NOW(),
-  updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE report_cards (
@@ -551,15 +458,9 @@ CREATE INDEX idx_classes_teacher_id ON classes(teacher_id);
 CREATE INDEX idx_students_school ON students(school);
 CREATE INDEX idx_assessments_class_id ON assessments(class_id);
 CREATE INDEX idx_student_assessments_student ON student_assessments(student_id);
-CREATE INDEX idx_tuition_invoices_student ON tuition_invoices(student_id);
-CREATE INDEX idx_tuition_invoices_school ON tuition_invoices(school);
 CREATE INDEX idx_parent_students_student ON parent_students(student_id);
 CREATE INDEX idx_parent_students_parent ON parent_students(parent_id);
 CREATE INDEX idx_terms_school ON terms(school);
-CREATE INDEX idx_messages_sender ON messages(sender_id);
-CREATE INDEX idx_messages_recipient ON messages(recipient_id);
-CREATE INDEX idx_feedback_sender ON feedback(sender_id);
-CREATE INDEX idx_feedback_recipient ON feedback(recipient_id);
 CREATE INDEX idx_jk_skill_assessments_student_term ON jk_skill_assessments(student_id, term);
 CREATE INDEX idx_jk_learning_skills_student_term ON jk_learning_skills(student_id, term);
 CREATE INDEX idx_jk_domain_comments_student_term ON jk_domain_comments(student_id, term);

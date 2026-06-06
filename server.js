@@ -12,17 +12,11 @@ const teacherRoutes = require("./routes/teacher.routes")
 const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
 const attendanceRoutes = require("./routes/attendance.routes")
 const reportCardRoutes = require('./routes/reportCard.routes');
-const scheduleRoutes = require("./routes/schedule.routes");
 const dashboardRoutes = require("./routes/dashboard.routes")
 const emailRoutes = require("./routes/email.routes")
 const parentStudentRoutes = require("./routes/parentStudent.routes")
 const parentRoutes = require("./routes/parent.routes")
-const messageRoutes = require("./routes/message.routes")
-const feedbackRoutes = require("./routes/feedback.routes")
 const staffRoutes = require("./routes/staff.routes")
-const tuitionPlanRoutes = require("./routes/tuitionPlan.routes")
-const tuitionInvoiceRoutes = require("./routes/tuitionInvoice.routes")
-const tuitionInvoiceCommentRoutes = require("./routes/tuitionInvoiceComment.routes")
 const schoolRoutes = require("./routes/school.routes")
 const termRoutes = require("./routes/term.routes")
 const reportsRoutes = require("./routes/reports.routes")
@@ -79,16 +73,10 @@ app.use("/api/teachers", teacherRoutes);
 app.use('/api/studentAssessments', studentAssessmentRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/report-cards", reportCardRoutes);
-app.use("/api/schedules", scheduleRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/parent-students", parentStudentRoutes);
 app.use("/api/parents", parentRoutes);
-app.use("/api/messages", messageRoutes);
-app.use("/api/feedback", feedbackRoutes);
 app.use("/api/staff", staffRoutes);
-app.use("/api/tuition-plans", tuitionPlanRoutes);
-app.use("/api/tuition-invoices", tuitionInvoiceRoutes);
-app.use("/api/tuition-invoice-comments", tuitionInvoiceCommentRoutes);
 app.use("/api/schools", schoolRoutes);
 app.use("/api/terms", termRoutes);
 app.use("/api/reports", reportsRoutes);

@@ -14,8 +14,6 @@ router.get('/attendance/monthly', dashboardController.getMonthlyAttendanceRate)
 
 router.get('/attendance/trend', dashboardController.getAttendanceTrend);
 
-router.get('/financial', dashboardController.getFinancialOverview);
-
 router.post('/refresh-grade-cache', dashboardController.refreshGradeCache);
 
 module.exports = router
