@@ -82,7 +82,13 @@ describe('GET /api/studentAssessments/classes/:classId/scores', () => {
 
 // ─── POST /api/studentAssessments/classes/:classId/scores ───────
 describe('POST /api/studentAssessments/classes/:classId/scores', () => {
+  // First db.query call is the assessment max_score lookup, second is the upsert
+  const mockAssessmentLookup = (assessments) => {
+    mockQueryResponse(assessments);
+  };
+
   it('upserts scores successfully', async () => {
+    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
     const upsertedRows = [
       { student_id: 's1', assessment_id: 'a1', score: 85 },
       { student_id: 's2', assessment_id: 'a1', score: 90 },
@@ -105,6 +111,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('allows null scores for deletion', async () => {
+    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
     const upsertedRows = [
       { student_id: 's1', assessment_id: 'a1', score: null },
     ];
@@ -122,6 +129,58 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('success');
     expect(res.body.data[0].score).toBeNull();
+  });
+
+  it('returns 400 when a score exceeds the assessment max score', async () => {
+    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '33.5' }]);
+
+    const res = await request(app)
+      .post('/api/studentAssessments/classes/class-123/scores')
+      .set(authHeader())
+      .send({
+        scores: [
+          { studentId: 's1', assessmentId: 'a1', score: 95 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.invalid).toHaveLength(1);
+    expect(res.body.invalid[0].reason).toContain('between 0 and 33.5');
+  });
+
+  it('returns 400 when a score is negative', async () => {
+    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+
+    const res = await request(app)
+      .post('/api/studentAssessments/classes/class-123/scores')
+      .set(authHeader())
+      .send({
+        scores: [
+          { studentId: 's1', assessmentId: 'a1', score: -5 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.invalid).toHaveLength(1);
+  });
+
+  it('returns 400 when an assessment does not belong to the class', async () => {
+    mockAssessmentLookup([]); // lookup finds nothing for this class
+
+    const res = await request(app)
+      .post('/api/studentAssessments/classes/class-123/scores')
+      .set(authHeader())
+      .send({
+        scores: [
+          { studentId: 's1', assessmentId: 'a-other-class', score: 50 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.invalid[0].reason).toContain('not found in this class');
   });
 
   it('returns 400 when scores array is empty', async () => {

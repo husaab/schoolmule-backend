@@ -61,34 +61,77 @@ const upsertScoresByClass = async (req, res) => {
     return res.status(400).json({ status: 'failed', message: 'Must supply a non-empty `scores` array' });
   }
 
-  // Build a single INSERT … VALUES ($1,$2,$3),($4,$5,$6), … ON CONFLICT … DO UPDATE …
-  // We’ll flatten out all parameters into paramsArray = [ sId1, aId1, score1, sId2, aId2, score2, … ]
-  let valuePlaceholders = [];
-  let paramsArray = [];
-
-  scores.forEach((entry, idx) => {
-    const { studentId, assessmentId, score } = entry;
-    // Validate required fields - allow null scores for deletion
-    if (!studentId || !assessmentId) {
-      // If any row is missing required IDs, we can abort
-      throw new Error('Every entry must include studentId and assessmentId');
-    }
-    // Generate e.g. `($1,$2,$3)` for idx=0, then `($4,$5,$6)` for idx=1, etc.
-    const base = idx * 3; // because each row uses 3 parameters
-    valuePlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
-    paramsArray.push(studentId, assessmentId, score); // score can now be null
-  });
-
-  // Now plug those placeholders into our query string:
-  const upsQuery = `
-    INSERT INTO student_assessments (student_id, assessment_id, score)
-    VALUES ${valuePlaceholders.join(', ')}
-    ON CONFLICT (student_id, assessment_id)
-    DO UPDATE SET score = EXCLUDED.score
-    RETURNING student_id, assessment_id, score;
-  `;
+  // Validate required fields - allow null scores for deletion
+  if (scores.some((entry) => !entry.studentId || !entry.assessmentId)) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'Every entry must include studentId and assessmentId',
+    });
+  }
 
   try {
+    // Reject scores outside [0, max_score] so bad data can't enter regardless
+    // of which client posted it. Looking up the assessments by class also
+    // rejects scores aimed at assessments belonging to a different class.
+    const assessmentIds = [...new Set(scores.map((e) => e.assessmentId))];
+    const { rows: assessmentRows } = await db.query(
+      `SELECT assessment_id, name, max_score
+       FROM assessments
+       WHERE class_id = $1 AND assessment_id = ANY($2::uuid[])`,
+      [classId, assessmentIds]
+    );
+    const assessmentById = new Map(assessmentRows.map((a) => [a.assessment_id, a]));
+
+    const invalid = [];
+    for (const { studentId, assessmentId, score } of scores) {
+      const assessment = assessmentById.get(assessmentId);
+      if (!assessment) {
+        invalid.push({ studentId, assessmentId, score, reason: 'Assessment not found in this class' });
+        continue;
+      }
+      if (score == null) continue; // null clears the score
+      const numScore = Number(score);
+      const maxScore = parseFloat(assessment.max_score) || 100;
+      if (isNaN(numScore) || numScore < 0 || numScore > maxScore) {
+        invalid.push({
+          studentId,
+          assessmentId,
+          score,
+          reason: `Score must be between 0 and ${maxScore} for "${assessment.name}"`,
+        });
+      }
+    }
+
+    if (invalid.length > 0) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `${invalid.length} score(s) are invalid`,
+        invalid,
+      });
+    }
+
+    // Build a single INSERT … VALUES ($1,$2,$3),($4,$5,$6), … ON CONFLICT … DO UPDATE …
+    // We’ll flatten out all parameters into paramsArray = [ sId1, aId1, score1, sId2, aId2, score2, … ]
+    const valuePlaceholders = [];
+    const paramsArray = [];
+
+    scores.forEach((entry, idx) => {
+      const { studentId, assessmentId, score } = entry;
+      // Generate e.g. `($1,$2,$3)` for idx=0, then `($4,$5,$6)` for idx=1, etc.
+      const base = idx * 3; // because each row uses 3 parameters
+      valuePlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
+      paramsArray.push(studentId, assessmentId, score); // score can now be null
+    });
+
+    // Now plug those placeholders into our query string:
+    const upsQuery = `
+      INSERT INTO student_assessments (student_id, assessment_id, score)
+      VALUES ${valuePlaceholders.join(', ')}
+      ON CONFLICT (student_id, assessment_id)
+      DO UPDATE SET score = EXCLUDED.score
+      RETURNING student_id, assessment_id, score;
+    `;
+
     const { rows: upsertedRows } = await db.query(upsQuery, paramsArray);
     // upsertedRows is an array of { student_id, assessment_id, score }
     return res.status(200).json({
