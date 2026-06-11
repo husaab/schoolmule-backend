@@ -915,6 +915,43 @@ const getGeneratedReportCardsByStudentId = async (req, res) => {
   }
 };
 
+const deleteReportCardsBulk = async (req, res) => {
+  const { filePaths } = req.body;
+
+  if (!Array.isArray(filePaths) || filePaths.length === 0 ||
+      !filePaths.every((p) => typeof p === 'string' && p.length > 0)) {
+    return res.status(400).json({ status: 'failed', message: 'filePaths must be a non-empty array of strings' });
+  }
+
+  try {
+    // Delete from Supabase Storage (remove accepts an array of paths)
+    const { data: removed, error } = await supabase.storage
+      .from('report-cards')
+      .remove(filePaths);
+
+    if (error) {
+      logger.error({ err: error }, "Supabase bulk delete error");
+      return res.status(500).json({ status: 'failed', message: 'Failed to delete files from storage' });
+    }
+
+    // remove() silently skips paths it couldn't delete; still clear the DB rows
+    // so the UI isn't left pointing at unreachable files, but record the mismatch
+    if (!removed || removed.length !== filePaths.length) {
+      logger.warn(
+        { expected: filePaths.length, actual: removed ? removed.length : 0 },
+        "Supabase bulk remove count mismatch"
+      );
+    }
+
+    await db.query('DELETE FROM report_cards WHERE file_path = ANY($1::text[])', [filePaths]);
+
+    return res.status(200).json({ status: 'success', deleted: filePaths, message: 'Report cards deleted' });
+  } catch (err) {
+    logger.error({ err }, "Bulk delete report cards error");
+    return res.status(500).json({ status: 'failed', message: 'Server error' });
+  }
+};
+
 const deleteReportCard = async (req, res) => {
   const filePath = req.query.filePath;
 
@@ -953,6 +990,7 @@ module.exports = {
   generateReportCardsBulk,
   getGeneratedReportCards,
   deleteReportCard,
+  deleteReportCardsBulk,
   getGeneratedReportCardsByStudentId,
   // exported for unit testing (Al Haadi T2 variant)
   mergeTermSubjects,
