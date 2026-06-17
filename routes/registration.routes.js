@@ -22,6 +22,7 @@ router.get('/forms/:formId/submissions/export', controller.exportSubmissions);
 router.get('/forms/:formId/submissions', controller.getSubmissions);
 router.get('/forms/:formId/submissions/:submissionId', controller.getSubmission);
 router.patch('/submissions/:submissionId/status', controller.updateSubmission);
+router.patch('/submissions/:submissionId/answers', controller.updateSubmissionAnswers);
 router.delete('/submissions/:submissionId', controller.deleteSubmission);
 
 // ─── Badge Count ────────────────────────────────────────────────────

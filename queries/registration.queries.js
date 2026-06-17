@@ -147,6 +147,18 @@ const registrationQueries = {
     RETURNING *
   `,
 
+  // School-scoped via the parent form so a user can only edit submissions
+  // belonging to their own school.
+  updateSubmissionAnswers: `
+    UPDATE registration_form_submissions s
+    SET answers = $1
+    FROM registration_forms f
+    WHERE s.submission_id = $2
+      AND s.form_id = f.form_id
+      AND f.school = $3
+    RETURNING s.*
+  `,
+
   // selectSubmissionsForExport is also built dynamically in the controller
   // for the same reason as selectSubmissionsFiltered.
 

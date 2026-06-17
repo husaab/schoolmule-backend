@@ -596,6 +596,84 @@ const updateSubmission = async (req, res) => {
   }
 };
 
+const updateSubmissionAnswers = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    const { answers } = req.body;
+    const school = req.user.school;
+
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return res.status(400).json({ status: 'failed', message: 'Answers must be an object' });
+    }
+
+    // Look up the submission (and confirm it exists) to get its form_id.
+    const { rows: subRows } = await db.query(registrationQueries.selectSubmissionById, [submissionId]);
+    if (subRows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Submission not found' });
+    }
+
+    // Fetch the form's fields to validate against.
+    const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [subRows[0].form_id]);
+    const fieldMap = new Map(fields.map(f => [f.field_id, f]));
+
+    // Validate required fields, allowed options, and strip unknown keys —
+    // mirrors the public submit handler in registrationPublic.controller.js.
+    const missingFields = [];
+    for (const field of fields) {
+      if (field.is_required) {
+        const answer = answers[field.field_id];
+        if (answer === undefined || answer === null || String(answer).trim() === '') {
+          missingFields.push(field.label);
+        }
+      }
+    }
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `Missing required fields: ${missingFields.join(', ')}`,
+      });
+    }
+
+    const sanitizedAnswers = {};
+    for (const [key, value] of Object.entries(answers)) {
+      const field = fieldMap.get(key);
+      if (!field) continue; // ignore unknown field IDs
+
+      const cleaned = String(value)
+        .replace(/<[^>]*>/g, '') // strip HTML tags
+        .trim()
+        .slice(0, 5000); // max 5000 chars per answer
+
+      // For select/radio fields, only accept values within the field's options
+      // (empty string allowed for optional fields that were cleared).
+      if ((field.field_type === 'select' || field.field_type === 'radio') && cleaned !== '') {
+        const options = Array.isArray(field.options) ? field.options : [];
+        if (!options.includes(cleaned)) {
+          return res.status(400).json({
+            status: 'failed',
+            message: `Invalid value for "${field.label}"`,
+          });
+        }
+      }
+
+      sanitizedAnswers[key] = cleaned;
+    }
+
+    const { rows } = await db.query(registrationQueries.updateSubmissionAnswers, [
+      JSON.stringify(sanitizedAnswers),
+      submissionId,
+      school,
+    ]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Submission not found' });
+    }
+    return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0]) });
+  } catch (error) {
+    logger.error({ err: error }, 'Error updating submission answers');
+    return res.status(500).json({ status: 'failed', message: 'Error updating submission answers' });
+  }
+};
+
 const deleteSubmission = async (req, res) => {
   try {
     const { submissionId } = req.params;
@@ -731,6 +809,7 @@ module.exports = {
   getSubmissions,
   getSubmission,
   updateSubmission,
+  updateSubmissionAnswers,
   deleteSubmission,
   exportSubmissions,
   getNewCount,
