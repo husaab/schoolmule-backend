@@ -127,13 +127,9 @@ const registrationQueries = {
   // (specifically for radio fields that need array_position-based natural sort).
   // See buildSubmissionsQuery() in registration.controller.js
 
-  countSubmissionsFiltered: `
-    SELECT COUNT(*) FROM registration_form_submissions
-    WHERE form_id = $1
-      AND ($2::varchar IS NULL OR status = $2)
-      AND ($3::timestamptz IS NULL OR submitted_at >= $3)
-      AND ($4::timestamptz IS NULL OR submitted_at <= $4)
-  `,
+  // Filtered submission counts are built dynamically in the controller (see
+  // buildSubmissionsWhere in registration.controller.js) so the count matches
+  // the field-value filters applied to the list query.
 
   selectSubmissionById: `
     SELECT * FROM registration_form_submissions
