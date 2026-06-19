@@ -128,6 +128,30 @@ describe('Integration: Report Card Routes (Feedback CRUD)', () => {
       expect(dbResult.rows[0].comment).toBe('Updated comment');
     });
 
+    it('stores feedback under the class term, ignoring a wrong body term', async () => {
+      const classId = await seedClass();        // class is Term 1 2025-2026
+      const studentId = await seedStudent();
+
+      const res = await authenticatedRequest('post', '/api/report-cards/feedback')
+        .send({
+          studentId,
+          classId,
+          term: 'Term 2 2025-2026',             // wrong on purpose — must be ignored
+          workHabits: 'Excellent',
+          behavior: 'Good',
+          comment: 'Saved under the right term',
+        });
+
+      expect(res.status).toBe(200);
+
+      const dbResult = await pool.query(
+        'SELECT term FROM report_card_feedback WHERE student_id = $1 AND class_id = $2',
+        [studentId, classId]
+      );
+      expect(dbResult.rows).toHaveLength(1);
+      expect(dbResult.rows[0].term).toBe('Term 1 2025-2026'); // class term, not body term
+    });
+
     it('returns 400 when required fields are missing', async () => {
       const res = await authenticatedRequest('post', '/api/report-cards/feedback')
         .send({ studentId: '00000000-0000-0000-0000-000000000000' });
@@ -200,12 +224,21 @@ describe('Integration: Report Card Routes (Feedback CRUD)', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('returns 400 when term is missing', async () => {
+    it('returns the class feedback without a term param (term derived from class)', async () => {
       const classId = await seedClass();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+      await pool.query(
+        `INSERT INTO report_card_feedback (student_id, class_id, term, work_habits, behavior, comment)
+         VALUES ($1, $2, 'Term 1 2025-2026', 'Good', 'Good', 'Nice')`,
+        [studentId, classId]
+      );
 
       const res = await authenticatedRequest('get', `/api/report-cards/feedback/class/${classId}`);
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].workHabits).toBe('Good');
     });
   });
 

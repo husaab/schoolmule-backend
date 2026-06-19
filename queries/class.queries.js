@@ -23,6 +23,18 @@ const classQueries = {
   `,
 
   //
+  // Canonical term name for a class, resolved through the terms FK so it
+  // always equals what report-card generation queries with. Used to anchor
+  // feedback rows to the class's own term (never a teacher-selected term).
+  //
+  selectClassTerm: `
+    SELECT t.name AS term
+    FROM public.classes c
+    JOIN public.terms t ON t.term_id = c.term_id
+    WHERE c.class_id = $1
+  `,
+
+  //
   // 2) GET /classes/:id
   //    → Fetch one class by its UUID
   //

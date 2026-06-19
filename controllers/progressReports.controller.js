@@ -2,10 +2,22 @@ const db = require("../config/database");
 const progressReportsQueries = require("../queries/progressReports.queries");
 const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const studentQueries = require("../queries/student.queries");
+const classQueries = require("../queries/class.queries");
 const logger = require("../logger");
 const { createPDFBuffer } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const { getProgressReportHTML } = require('../templates/progressReportTemplate');
+
+/**
+ * Resolve a class's own term name (canonical, via the terms FK). Progress-report
+ * feedback is anchored to the class's term, never a teacher-selected term, so it
+ * can't be mis-tagged into the wrong term.
+ * @returns {Promise<string|null>}
+ */
+async function resolveClassTerm(classId) {
+  const { rows } = await db.query(classQueries.selectClassTerm, [classId]);
+  return rows[0]?.term || null;
+}
 
 const toCamel = row => ({
   id: row.id,
@@ -29,13 +41,18 @@ const toCamel = row => ({
 const getProgressReportFeedback = async (req, res) => {
   try {
     const { studentId, classId } = req.params;
-    const { term = 'General' } = req.query;
 
     if (!studentId || !classId) {
       return res.status(400).json({
         status: 'error',
         message: 'Student ID and Class ID are required'
       });
+    }
+
+    // Read under the class's own term, matching how feedback is written.
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(404).json({ status: 'error', message: 'Class not found or has no assigned term' });
     }
 
     const result = await db.query(progressReportsQueries.getProgressReportFeedback, [studentId, classId, term]);
@@ -58,13 +75,19 @@ const getProgressReportFeedback = async (req, res) => {
 const upsertProgressReportFeedback = async (req, res) => {
   try {
     const { studentId, classId } = req.params;
-    const { term = 'General', coreStandards, workHabit, behavior, comment } = req.body;
+    // term is ignored if sent — it's derived from the class below.
+    const { coreStandards, workHabit, behavior, comment } = req.body;
 
     if (!studentId || !classId) {
       return res.status(400).json({
         status: 'error',
         message: 'Student ID and Class ID are required'
       });
+    }
+
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({ status: 'error', message: 'Class not found or has no assigned term' });
     }
 
     const result = await db.query(progressReportsQueries.upsertProgressReportFeedback, [
@@ -124,13 +147,18 @@ const getStudentProgressReportFeedback = async (req, res) => {
 const getClassProgressReportFeedback = async (req, res) => {
   try {
     const { classId } = req.params;
-    const { term = 'General' } = req.query;
 
     if (!classId) {
       return res.status(400).json({
         status: 'error',
         message: 'Class ID is required'
       });
+    }
+
+    // The class has exactly one term — read feedback under it, ignoring any term param.
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({ status: 'error', message: 'Class not found or has no assigned term' });
     }
 
     const result = await db.query(progressReportsQueries.getClassProgressReportFeedback, [classId, term]);
@@ -561,11 +589,11 @@ const upsertBulkProgressReportFeedback = async (req, res) => {
     });
   }
 
-  // Validate all entries first
+  // Validate all entries first. term is ignored if sent — derived from the class.
   const validationErrors = [];
   for (let i = 0; i < feedbackEntries.length; i++) {
     const entry = feedbackEntries[i];
-    if (!entry.studentId || !entry.classId || !entry.term) {
+    if (!entry.studentId || !entry.classId) {
       validationErrors.push({ index: i, studentId: entry.studentId, error: 'Missing required fields' });
     }
   }
@@ -578,12 +606,27 @@ const upsertBulkProgressReportFeedback = async (req, res) => {
     });
   }
 
+  // Resolve each distinct class's term once; a class with no term fails the batch.
+  const classTermById = new Map();
+  for (const classId of new Set(feedbackEntries.map(e => e.classId))) {
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `Class ${classId} not found or has no assigned term`,
+        data: { updated: 0, failed: feedbackEntries.length }
+      });
+    }
+    classTermById.set(classId, term);
+  }
+
   try {
     await db.query('BEGIN');
     let successCount = 0;
 
     for (const entry of feedbackEntries) {
-      const { studentId, classId, term, coreStandards, workHabit, behavior, comment } = entry;
+      const { studentId, classId, coreStandards, workHabit, behavior, comment } = entry;
+      const term = classTermById.get(classId); // class-derived, never client-sent
 
       const coreStandardsValue = coreStandards === '' ? null : (coreStandards || null);
       const workHabitValue = workHabit === '' ? null : (workHabit || null);

@@ -27,12 +27,12 @@ describe('Progress Reports Controller', () => {
     it('should return feedback for a student in a class', async () => {
       const token = mockAdminUser();
       const row = buildProgressReportFeedbackRow();
-      mockQueryResponse([row]);
+      mockQueryResponse([{ term: row.term }]); // resolveClassTerm
+      mockQueryResponse([row]);                // getProgressReportFeedback
 
       const res = await request(app)
         .get(`/api/progress-reports/feedback/student/${row.student_id}/class/${row.class_id}`)
-        .set('Authorization', `Bearer ${token}`)
-        .query({ term: row.term });
+        .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
@@ -43,21 +43,22 @@ describe('Progress Reports Controller', () => {
 
     it('should return null data when feedback not found', async () => {
       const token = mockAdminUser();
-      mockQueryResponse([]);
+      mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm
+      mockQueryResponse([]);                    // no feedback
 
       const res = await request(app)
         .get('/api/progress-reports/feedback/student/sid/class/cid')
-        .set('Authorization', `Bearer ${token}`)
-        .query({ term: 'Term 1' });
+        .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
       expect(res.body.data).toBeNull();
     });
 
-    it('should use default term "General" when not provided', async () => {
+    it('derives the term from the class (no term param needed)', async () => {
       const token = mockAdminUser();
-      const row = buildProgressReportFeedbackRow({ term: 'General' });
-      mockQueryResponse([row]);
+      const row = buildProgressReportFeedbackRow();
+      mockQueryResponse([{ term: row.term }]); // resolveClassTerm
+      mockQueryResponse([row]);                // getProgressReportFeedback
 
       const res = await request(app)
         .get(`/api/progress-reports/feedback/student/${row.student_id}/class/${row.class_id}`)
@@ -82,16 +83,17 @@ describe('Progress Reports Controller', () => {
 
   // ─── POST /api/progress-reports/feedback/student/:studentId/class/:classId ─
   describe('POST /feedback/student/:studentId/class/:classId', () => {
-    it('should upsert feedback successfully', async () => {
+    it('should upsert feedback successfully (term derived from class)', async () => {
       const token = mockAdminUser();
       const row = buildProgressReportFeedbackRow();
-      mockQueryResponse([row]);
+      mockQueryResponse([{ term: row.term }]); // resolveClassTerm
+      mockQueryResponse([row]);                // upsert
 
       const res = await request(app)
         .post(`/api/progress-reports/feedback/student/${row.student_id}/class/${row.class_id}`)
         .set('Authorization', `Bearer ${token}`)
         .send({
-          term: 'Term 1 2025-2026',
+          term: 'Term 2 2025-2026', // ignored — class term wins
           coreStandards: 'Meeting expectations',
           workHabit: 'Good',
           behavior: 'Excellent',
@@ -149,15 +151,15 @@ describe('Progress Reports Controller', () => {
 
   // ─── GET /api/progress-reports/feedback/class/:classId ─────────
   describe('GET /feedback/class/:classId', () => {
-    it('should return all feedback for a class', async () => {
+    it('should return all feedback for a class (term derived from class)', async () => {
       const token = mockAdminUser();
       const rows = [buildProgressReportFeedbackRow()];
-      mockQueryResponse(rows);
+      mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm
+      mockQueryResponse(rows);                  // getClassProgressReportFeedback
 
       const res = await request(app)
         .get('/api/progress-reports/feedback/class/some-class-id')
-        .set('Authorization', `Bearer ${token}`)
-        .query({ term: 'Term 1' });
+        .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
@@ -222,10 +224,12 @@ describe('Progress Reports Controller', () => {
   describe('POST /feedback/bulk', () => {
     const url = '/api/progress-reports/feedback/bulk';
 
-    it('should bulk upsert feedback in a transaction', async () => {
+    it('should bulk upsert feedback in a transaction (term derived from class)', async () => {
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
+      // resolveClassTerm (once per distinct class: c1)
+      db.query.mockResolvedValueOnce({ rows: [{ term: 'Term 1' }] });
       // BEGIN
       db.query.mockResolvedValueOnce({});
       // Two upsert queries
@@ -239,8 +243,8 @@ describe('Progress Reports Controller', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({
           feedbackEntries: [
-            { studentId: 's1', classId: 'c1', term: 'Term 1', coreStandards: 'Good' },
-            { studentId: 's2', classId: 'c1', term: 'Term 1', workHabit: 'Excellent' },
+            { studentId: 's1', classId: 'c1', term: 'Term 2', coreStandards: 'Good' },
+            { studentId: 's2', classId: 'c1', workHabit: 'Excellent' },
           ],
         });
 
@@ -278,6 +282,7 @@ describe('Progress Reports Controller', () => {
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
+      db.query.mockResolvedValueOnce({ rows: [{ term: 'Term 1' }] }); // resolveClassTerm
       db.query.mockResolvedValueOnce({}); // BEGIN
       db.query.mockRejectedValueOnce(new Error('DB failure'));
       db.query.mockResolvedValueOnce({}); // ROLLBACK
@@ -286,7 +291,7 @@ describe('Progress Reports Controller', () => {
         .post(url)
         .set('Authorization', `Bearer ${token}`)
         .send({
-          feedbackEntries: [{ studentId: 's1', classId: 'c1', term: 'Term 1' }],
+          feedbackEntries: [{ studentId: 's1', classId: 'c1' }],
         });
 
       expect(res.status).toBe(500);

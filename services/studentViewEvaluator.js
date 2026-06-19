@@ -392,7 +392,8 @@ module.exports = {
   applyAggregation,
   combinePerTerm,
   resolveTermIds,
-  // shared with the Al Haadi T2 report card so its T1/T2 rows can never
-  // disagree with the student view numbers
+  // null-skip per-class grade: used by Student Views and the analytics
+  // null_skip engine. (The Al Haadi T2 report card uses the gradebook
+  // missing-zero engine instead, so it agrees with the gradebook.)
   computeClassPctForStudent,
 };

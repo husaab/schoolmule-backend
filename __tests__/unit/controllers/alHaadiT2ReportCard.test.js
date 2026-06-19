@@ -21,7 +21,7 @@ const { buildStudentRow } = require('../../helpers/factories');
 const db = require('../../__mocks__/config/database');
 const supabase = require('../../__mocks__/config/supabaseClient');
 
-const { mergeTermSubjects } = require('../../../controllers/reportCard.controller');
+const { mergeTermSubjects, computeTermSubjectGrades } = require('../../../controllers/reportCard.controller');
 const { getAlHaadiT2ReportCardHTML } = require('../../../templates/alHaadiT2ReportCardTemplate');
 const { percentToLetterGrade } = require('../../../templates/reportCardTemplate');
 const { computeClassPctForStudent } = require('../../../services/studentViewEvaluator');
@@ -99,6 +99,60 @@ describe('shared exports', () => {
       { assessment_id: 'a2', score: null, is_excluded: false }, // ungraded → skipped, not zero
     ];
     expect(computeClassPctForStudent(assessments, scores)).toBe(80);
+  });
+});
+
+// ─── computeTermSubjectGrades (gradebook missing-zero engine) ───
+describe('computeTermSubjectGrades', () => {
+  const STUDENT = 'stu-1';
+  const TERM = 'term-1';
+
+  // Build the (student, assessment) rows selectScoresForClass returns.
+  const scoreRow = (over) => ({
+    student_id: STUDENT,
+    student_name: 'Test',
+    student_grade: '4',
+    homeroom_teacher_id: 'tid',
+    weight_percent: null,
+    is_excluded: false,
+    ...over,
+  });
+
+  // Route the two queries computeTermSubjectGrades issues by SQL shape:
+  // selectStudentClassesForTerm (c.term_id = $2) then selectScoresForClass.
+  const mockClass = (subject, scoreRows) => {
+    db.query.mockImplementation(async (sql) => {
+      const q = sql.replace(/\s+/g, ' ');
+      if (q.includes('c.term_id = $2')) return { rows: [{ class_id: 'c1', subject }] };
+      if (q.includes('WHERE cs.class_id = $1')) return { rows: scoreRows };
+      return { rows: [] };
+    });
+  };
+
+  it('counts an ungraded child as zero (missing-zero, not null-skip)', async () => {
+    // Parent worth 10 pts with two children (5 pts each, max 10):
+    // one scored 8/10, one ungraded. Missing-zero → 40%; null-skip would be 80%.
+    mockClass('Arabic', [
+      scoreRow({ assessment_id: 'P', assessment_name: 'Quizzes', weight_points: '10', max_score: null, is_parent: true, parent_assessment_id: null, score: null }),
+      scoreRow({ assessment_id: 'C1', assessment_name: 'Quiz 1', weight_points: '5', max_score: '10', is_parent: false, parent_assessment_id: 'P', score: '8' }),
+      scoreRow({ assessment_id: 'C2', assessment_name: 'Quiz 2', weight_points: '5', max_score: '10', is_parent: false, parent_assessment_id: 'P', score: null }),
+    ]);
+
+    const result = await computeTermSubjectGrades(STUDENT, TERM);
+    expect(result.get('Arabic')).toBeCloseTo(40, 5);
+  });
+
+  it('returns null ("—") when the student has no entered scores in the class', async () => {
+    mockClass('French', [
+      scoreRow({ assessment_id: 'A1', assessment_name: 'Test', weight_points: '100', max_score: '100', is_parent: false, parent_assessment_id: null, score: null }),
+    ]);
+
+    const result = await computeTermSubjectGrades(STUDENT, TERM);
+    expect(result.get('French')).toBeNull();
+  });
+
+  it('returns an empty map when termId is null', async () => {
+    expect((await computeTermSubjectGrades(STUDENT, null)).size).toBe(0);
   });
 });
 

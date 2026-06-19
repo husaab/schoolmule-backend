@@ -9,9 +9,20 @@ const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient'); // configure this file if not already
 const logger = require('../logger');
 const { calculateStudentGrade } = require('../utils/gradeCalculator');
-const { computeClassPctForStudent } = require('../services/studentViewEvaluator');
 const studentViewQueries = require('../queries/studentView.queries');
 const alHaadiT2Queries = require('../queries/alHaadiT2ReportCard.queries');
+const classQueries = require('../queries/class.queries');
+
+/**
+ * Resolve a class's own term name (canonical, via the terms FK). Report-card
+ * feedback is always anchored to the class's term — never a teacher-selected
+ * or globally-active term — so a row can't be mis-tagged into the wrong term.
+ * @returns {Promise<string|null>} the term name, or null if the class/term is missing
+ */
+async function resolveClassTerm(classId) {
+  const { rows } = await db.query(classQueries.selectClassTerm, [classId]);
+  return rows[0]?.term || null;
+}
 
 /**
  * Calculate final grades per subject for a student using JavaScript-based calculation
@@ -108,9 +119,9 @@ async function calculateSubjectGradesForStudent(studentId) {
 // ────────────────────────────────────────────────────────────────────
 //
 // The T2 variant shows First Term / Second Term / Final Term rows per
-// subject. T1 and T2 percentages reuse computeClassPctForStudent (the
-// student-view engine: null scores skipped, exclusions and parent/child
-// hierarchies handled) so the card never disagrees with the student view.
+// subject. T1 and T2 percentages use calculateStudentGrade (the gradebook
+// engine: unentered scores count as 0, exclusions and parent/child
+// hierarchies handled) so the card never disagrees with the gradebook.
 
 /**
  * Resolve the school's Term 1 and Term 2 term rows for the academic year
@@ -158,8 +169,10 @@ async function resolveAlHaadiTermPair(school, termString) {
 }
 
 /**
- * Compute a student's per-subject percentage for ONE term using
- * computeClassPctForStudent semantics (null = zero graded work).
+ * Compute a student's per-subject percentage for ONE term using the gradebook
+ * engine (calculateStudentGrade: unentered scores count as 0, matching the
+ * gradebook and the standard report card). A class the student is enrolled in
+ * but has NO entered scores for stays null → renders as "—" rather than 0%.
  * Multiple classes sharing a subject average their non-null pcts,
  * mirroring calculateSubjectGradesForStudent's grouping; all-null → null.
  *
@@ -199,7 +212,10 @@ async function computeTermSubjectGrades(studentId, termId) {
     }
 
     const studentRows = scoreRows.filter((r) => r.student_id === studentId);
-    const pct = computeClassPctForStudent(assessments, studentRows);
+    // Enrolled but nothing entered → null ("—"); otherwise the gradebook-matching
+    // grade (blanks among entered work count as 0).
+    const hasEnteredScore = studentRows.some((r) => !r.is_excluded && r.score != null);
+    const pct = hasEnteredScore ? calculateStudentGrade(assessments, studentRows) : null;
 
     if (!subjectPcts.has(cls.subject)) subjectPcts.set(cls.subject, []);
     subjectPcts.get(cls.subject).push(pct);
@@ -253,16 +269,25 @@ function mergeTermSubjects(t1Map, t2Map) {
  *   comment?: string
  */
 const upsertFeedback = async (req, res) => {
-  const { studentId, classId, term, workHabits, behavior, comment } = req.body;
+  // term is intentionally ignored if sent — it's derived from the class below.
+  const { studentId, classId, workHabits, behavior, comment } = req.body;
 
-  if (!studentId || !classId || !term) {
+  if (!studentId || !classId) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing required fields: studentId, classId, or term'
+      message: 'Missing required fields: studentId or classId'
     });
   }
 
   try {
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({
+        status: 'failed',
+        message: 'Class not found or has no assigned term'
+      });
+    }
+
     await db.query(reportCardQueries.upsertFeedback, [
       studentId,
       classId,
@@ -286,16 +311,22 @@ const upsertFeedback = async (req, res) => {
  * GET /report-cards/feedback?studentId=...&classId=...&term=...
  */
 const getFeedback = async (req, res) => {
-  const { studentId, classId, term } = req.query;
+  const { studentId, classId } = req.query;
 
-  if (!studentId || !classId || !term) {
+  if (!studentId || !classId) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing query parameters: studentId, classId, or term'
+      message: 'Missing query parameters: studentId or classId'
     });
   }
 
   try {
+    // Read under the class's own term, matching how feedback is written.
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(404).json({ status: 'failed', message: 'Class not found or has no assigned term' });
+    }
+
     const { rows } = await db.query(reportCardQueries.selectFeedback, [
       studentId,
       classId,
@@ -329,16 +360,22 @@ const getFeedback = async (req, res) => {
  */
 const getClassFeedback = async (req, res) => {
   const { classId } = req.params;
-  const { term } = req.query;
 
-  if (!classId || !term) {
+  if (!classId) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing required parameters: classId or term'
+      message: 'Missing required parameter: classId'
     });
   }
 
   try {
+    // The class has exactly one term — read feedback under it, ignoring any
+    // term query param so reads always line up with how feedback is written.
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({ status: 'failed', message: 'Class not found or has no assigned term' });
+    }
+
     const { rows } = await db.query(reportCardQueries.selectFeedbackByClass, [classId, term]);
 
     const data = rows.map(row => ({
@@ -376,11 +413,12 @@ const upsertBulkFeedback = async (req, res) => {
     });
   }
 
-  // Validate all entries first before starting transaction
+  // Validate all entries first before starting transaction.
+  // term is ignored if sent — it's derived from each entry's class below.
   const validationErrors = [];
   for (let i = 0; i < feedbackEntries.length; i++) {
     const entry = feedbackEntries[i];
-    if (!entry.studentId || !entry.classId || !entry.term) {
+    if (!entry.studentId || !entry.classId) {
       validationErrors.push({ index: i, studentId: entry.studentId, error: 'Missing required fields' });
     }
   }
@@ -397,6 +435,21 @@ const upsertBulkFeedback = async (req, res) => {
     });
   }
 
+  // Resolve each distinct class's term once (the page posts a single class,
+  // but stay robust). A class that can't resolve a term fails the whole batch.
+  const classTermById = new Map();
+  for (const classId of new Set(feedbackEntries.map(e => e.classId))) {
+    const term = await resolveClassTerm(classId);
+    if (!term) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `Class ${classId} not found or has no assigned term`,
+        data: { updated: 0, failed: feedbackEntries.length }
+      });
+    }
+    classTermById.set(classId, term);
+  }
+
   // Use a transaction for atomicity
   try {
     await db.query('BEGIN');
@@ -404,7 +457,8 @@ const upsertBulkFeedback = async (req, res) => {
     let successCount = 0;
 
     for (const entry of feedbackEntries) {
-      const { studentId, classId, term, workHabits, behavior, comment } = entry;
+      const { studentId, classId, workHabits, behavior, comment } = entry;
+      const term = classTermById.get(classId); // class-derived, never client-sent
 
       // Handle empty strings explicitly - convert empty string to null for DB
       const workHabitsValue = workHabits === '' ? null : (workHabits || null);
