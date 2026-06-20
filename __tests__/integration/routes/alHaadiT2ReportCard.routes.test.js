@@ -145,7 +145,7 @@ describe('Integration: Al Haadi T2 report card generation', () => {
     // The rendered HTML is the T2 variant…
     expect(capturedHTML).toHaveLength(1);
     const html = capturedHTML[0];
-    expect(html).toContain('SECOND TERM REPORT CARD');
+    expect(html).toContain('FINAL TERM REPORT CARD');
     expect(html).toContain('First Term');
     expect(html).toContain('Second Term');
     expect(html).toContain('Final Term');
@@ -197,7 +197,7 @@ describe('Integration: Al Haadi T2 report card generation', () => {
 
     expect(capturedHTML).toHaveLength(1);
     const html = capturedHTML[0];
-    expect(html).not.toContain('SECOND TERM REPORT CARD');
+    expect(html).not.toContain('FINAL TERM REPORT CARD');
     expect(html).not.toContain('Final Term');
   });
 

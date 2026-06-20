@@ -183,7 +183,7 @@ describe('getAlHaadiT2ReportCardHTML', () => {
     expect(html).toContain('80.3%');
     expect(html).toContain('90.8%');
     expect(html).toContain('85.5%');
-    expect(html).toContain('SECOND TERM REPORT CARD');
+    expect(html).toContain('FINAL TERM REPORT CARD');
   });
 
   it('renders letter grades for grades 1-3', () => {

@@ -553,7 +553,7 @@ function getAlHaadiT2ReportCardHTML({
         <div class="header">
           <div class="school-name">${schoolName}</div>
           ${contactLine ? `<div class="school-contact">${contactLine}</div>` : ''}
-          <div class="report-title">SECOND TERM REPORT CARD ${academicYear}</div>
+          <div class="report-title">FINAL TERM REPORT CARD ${academicYear}</div>
         </div>
 
         <!-- Student Information Grid -->
