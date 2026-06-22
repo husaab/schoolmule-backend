@@ -578,6 +578,44 @@ const deleteProgressReport = async (req, res) => {
   }
 };
 
+// Bulk delete progress reports (storage files + database records)
+const deleteProgressReportsBulk = async (req, res) => {
+  const { filePaths } = req.body;
+
+  if (!Array.isArray(filePaths) || filePaths.length === 0 ||
+      !filePaths.every((p) => typeof p === 'string' && p.length > 0)) {
+    return res.status(400).json({ status: 'failed', message: 'filePaths must be a non-empty array of strings' });
+  }
+
+  try {
+    // Delete from Supabase Storage (remove accepts an array of paths)
+    const { data: removed, error } = await supabase.storage
+      .from('progress-reports')
+      .remove(filePaths);
+
+    if (error) {
+      logger.error({ err: error }, 'Supabase bulk delete error');
+      return res.status(500).json({ status: 'failed', message: 'Failed to delete files from storage' });
+    }
+
+    // remove() silently skips paths it couldn't delete; still clear the DB rows
+    // so the UI isn't left pointing at unreachable files, but record the mismatch
+    if (!removed || removed.length !== filePaths.length) {
+      logger.warn(
+        { expected: filePaths.length, actual: removed ? removed.length : 0 },
+        'Supabase bulk remove count mismatch'
+      );
+    }
+
+    await db.query('DELETE FROM progress_reports WHERE file_path = ANY($1::text[])', [filePaths]);
+
+    return res.status(200).json({ status: 'success', deleted: filePaths, message: 'Progress reports deleted' });
+  } catch (err) {
+    logger.error({ err }, 'Bulk delete progress reports error');
+    return res.status(500).json({ status: 'failed', message: 'Server error' });
+  }
+};
+
 // Bulk upsert progress report feedback for multiple students
 const upsertBulkProgressReportFeedback = async (req, res) => {
   const { feedbackEntries } = req.body;
@@ -670,5 +708,6 @@ module.exports = {
   getProgressReportsByTermAndSchool,
   generateProgressReport,
   generateProgressReportsBulk,
-  deleteProgressReport
+  deleteProgressReport,
+  deleteProgressReportsBulk
 };

@@ -27,6 +27,7 @@ router.get('/reports/term/:term/school/:school', progressReportsController.getPr
 router.post('/generate', progressReportsController.generateProgressReport);
 router.post('/generate/bulk', progressReportsController.generateProgressReportsBulk);
 router.delete('/delete', progressReportsController.deleteProgressReport);
+router.post('/delete/bulk', progressReportsController.deleteProgressReportsBulk);
 
 router.get('/signed-url', async (req, res) => {
   const { path } = req.query;
