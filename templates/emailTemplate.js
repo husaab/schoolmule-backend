@@ -156,6 +156,43 @@ function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
   `;
 }
 
+// Escape user-authored text before it is interpolated into report-email HTML.
+// Kept local to this template module (same shape as certificateTemplate.js).
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Canonical default body for each report type. Used when the teacher leaves the
+// message empty, so an empty message reproduces the previous email wording.
+// Uses [Student Name] / [Term] merge tags resolved per recipient.
+function getDefaultEmailBody(reportType) {
+  if (reportType === 'progress_report') {
+    return "Dear Parent/Guardian,\n\nPlease find attached the progress report for [Student Name] for [Term]. If you have any questions or concerns about your child's progress, please don't hesitate to contact us.";
+  }
+  return "Dear Parent/Guardian,\n\nPlease find attached the report card for [Student Name] for [Term]. If you have any questions about your child's academic performance, please feel free to reach out.";
+}
+
+// Resolve the teacher-editable email body into safe HTML.
+// Order matters: escape the raw text first (neutralizing any HTML the teacher
+// typed), THEN substitute the known merge tags with escaped values — the tag
+// brackets survive escaping, and unknown tags pass through untouched. Finally
+// convert newlines to <br>.
+function resolveEmailBody({ customMessage, reportType, studentName, term }) {
+  const raw = (customMessage && customMessage.trim())
+    ? customMessage
+    : getDefaultEmailBody(reportType);
+
+  return escapeHtml(raw)
+    .split('[Student Name]').join(escapeHtml(studentName))
+    .split('[Term]').join(escapeHtml(term))
+    .replace(/\n/g, '<br>');
+}
+
 function getProgressReportEmailHTML({ studentName, term, customMessage, schoolName, customHeader, schoolInfo }) {
   const subject = customHeader || `${studentName} - Progress Report (Term ${term})`;
   
@@ -197,15 +234,7 @@ function getProgressReportEmailHTML({ studentName, term, customMessage, schoolNa
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
                 background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
       <h2 style="color: #00ACC1;">${subject}</h2>
-      <p>Dear Parent/Guardian,</p>
-      <p>Please find attached the progress report for <strong>${studentName}</strong> for <strong>${term}</strong>.</p>
-      ${customMessage ? `
-        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
-          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Teacher's Message:</h3>
-          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
-        </div>
-      ` : ''}
-      <p>If you have any questions or concerns about your child's progress, please don't hesitate to contact us.</p>
+      <div style="line-height: 1.5;">${resolveEmailBody({ customMessage, reportType: 'progress_report', studentName, term })}</div>
       <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
       ${createSchoolFooter(schoolInfo)}
     </div>
@@ -219,15 +248,7 @@ function getReportCardEmailHTML({ studentName, term, customMessage, schoolName, 
     <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
                 background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
       <h2 style="color: #00ACC1;">${subject} 🎓</h2>
-      <p>Dear Parent/Guardian,</p>
-      <p>Please find attached the report card for <strong>${studentName}</strong> for <strong>${term}</strong>.</p>
-      ${customMessage ? `
-        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
-          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Teacher's Message:</h3>
-          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
-        </div>
-      ` : ''}
-      <p>If you have any questions about your child's academic performance, please feel free to reach out.</p>
+      <div style="line-height: 1.5;">${resolveEmailBody({ customMessage, reportType: 'report_card', studentName, term })}</div>
       <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
     </div>
   `;
@@ -305,5 +326,7 @@ module.exports = {
   getFeedbackEmailHTML,
   getProgressReportEmailHTML,
   getReportCardEmailHTML,
-  getCertificateEmailHTML
+  getCertificateEmailHTML,
+  getDefaultEmailBody,
+  resolveEmailBody
 };

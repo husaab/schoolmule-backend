@@ -1,7 +1,8 @@
+const mockResendSend = jest.fn().mockResolvedValue({ data: { id: 'email-123' }, error: null });
 jest.mock('resend', () => ({
   Resend: jest.fn(() => ({
     emails: {
-      send: jest.fn().mockResolvedValue({ data: { id: 'email-123' }, error: null }),
+      send: mockResendSend,
     },
   })),
 }));
@@ -13,6 +14,7 @@ global.fetch = jest.fn().mockResolvedValue({
 });
 
 const request = require('supertest');
+const db = require('../../__mocks__/config/database');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, TEST_SCHOOL, TEST_ADMIN_USER_ID } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
@@ -146,6 +148,49 @@ describe('Report Emails Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data.id).toBeDefined();
+    });
+
+    it('resolves merge tags in the rendered email and persists the raw body', async () => {
+      const token = mockAdminUser();
+      const student = buildStudentRow({ name: 'Aisha Khan', school: TEST_SCHOOL });
+      const report = buildReportCardRow({ student_id: student.student_id });
+      const emailRecord = buildReportEmailRow();
+      const school = buildSchoolRow();
+
+      mockQueryResponse([student]);       // selectStudentById
+      mockQueryResponse([report]);        // report query
+      mockQueryResponse([school]);        // school info
+      mockQueryResponse([emailRecord]);   // createReportEmail
+      mockQueryResponse([], 1);           // updateReportCardEmailStatus
+
+      mockResendSend.mockClear();
+
+      const rawBody = 'Dear Parent, [Student Name]\'s report for [Term] is attached.';
+      const res = await request(app)
+        .post(url)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          reportType: 'report_card',
+          studentId: student.student_id,
+          term: 'Final Term',
+          emailAddresses: ['parent@test.com'],
+          customMessage: rawBody,
+        });
+
+      expect(res.status).toBe(200);
+
+      // Rendered email has the tags resolved for this recipient.
+      const sentHtml = mockResendSend.mock.calls[0][0].html;
+      expect(sentHtml).toContain('Aisha Khan');
+      expect(sentHtml).toContain('Final Term');
+      expect(sentHtml).not.toContain('[Student Name]');
+      expect(sentHtml).not.toContain('[Term]');
+
+      // The raw body (with tags) is persisted to report_emails.custom_message.
+      const createCall = db.query.mock.calls.find(
+        ([, params]) => Array.isArray(params) && params.includes(rawBody)
+      );
+      expect(createCall).toBeDefined();
     });
 
     it('should return 401 without auth token', async () => {
