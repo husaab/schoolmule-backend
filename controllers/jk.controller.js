@@ -511,7 +511,7 @@ const bulkUpsertProgressReportComments = async (req, res) => {
 // ============================================================
 // JK Progress Report Generation
 // ============================================================
-const generateSingleJKProgressReport = async (studentId, term) => {
+const generateSingleJKProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
@@ -576,8 +576,8 @@ const generateSingleJKProgressReport = async (studentId, term) => {
     generatedDate: new Date().toLocaleDateString('en-CA')
   });
 
-  // 9. Generate PDF
-  const pdfBuffer = await createPDFBuffer(htmlContent);
+  // 9. Generate PDF (reuse the batch's browser when provided)
+  const pdfBuffer = await createPDFBuffer(htmlContent, { browser: opts.browser });
 
   // 10. Upload to Supabase
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
@@ -754,12 +754,30 @@ const generateProgressReportsBulk = async (req, res) => {
     const generated = [];
     const failed = [];
 
-    for (const studentId of studentIds) {
-      try {
-        const result = await generateSingleJKProgressReport(studentId, term);
-        generated.push({ studentId, message: 'Generated successfully' });
-      } catch (err) {
-        failed.push({ studentId, error: err.message });
+    // One Chromium launch for the whole batch (see utils/pdfGenerator.js).
+    let browser = null;
+    try {
+      browser = await launchPDFBrowser();
+    } catch (err) {
+      logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
+    }
+
+    try {
+      for (const studentId of studentIds) {
+        try {
+          await generateSingleJKProgressReport(studentId, term, { browser });
+          generated.push({ studentId, message: 'Generated successfully' });
+        } catch (err) {
+          failed.push({ studentId, error: err.message });
+        }
+      }
+    } finally {
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (err) {
+          logger.error({ err }, 'Failed to close shared PDF browser');
+        }
       }
     }
 

@@ -3,8 +3,9 @@ const progressReportsQueries = require("../queries/progressReports.queries");
 const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const studentQueries = require("../queries/student.queries");
 const classQueries = require("../queries/class.queries");
+const termQueries = require("../queries/term.queries");
 const logger = require("../logger");
-const { createPDFBuffer } = require('../utils/pdfGenerator');
+const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const { getProgressReportHTML } = require('../templates/progressReportTemplate');
 
@@ -349,14 +350,23 @@ const generateProgressReportsBulk = async (req, res) => {
     const successes = [];
     const failures = [];
 
-    for (const studentId of studentIds) {
-      try {
-        const result = await generateSingleProgressReport(studentId, term);
-        successes.push({ studentId, message: 'Progress report generated successfully', data: result });
-      } catch (error) {
-        logger.error(`Failed to generate progress report for ${studentId}:`, error);
-        failures.push({ studentId, error: error.message || 'Unknown error' });
+    // One Chromium launch for the whole batch instead of one per student —
+    // launching Puppeteer per report is the dominant cost in bulk generation.
+    let browser = null;
+    try {
+      browser = await launchPDFBrowser();
+
+      for (const studentId of studentIds) {
+        try {
+          const result = await generateSingleProgressReport(studentId, term, { browser });
+          successes.push({ studentId, message: 'Progress report generated successfully', data: result });
+        } catch (error) {
+          logger.error({ err: error, studentId, term }, 'Failed to generate progress report');
+          failures.push({ studentId, error: error.message || 'Unknown error' });
+        }
       }
+    } finally {
+      if (browser) await browser.close();
     }
 
     res.json({
@@ -375,8 +385,10 @@ const generateProgressReportsBulk = async (req, res) => {
   }
 };
 
-// Helper function to generate a single progress report
-const generateSingleProgressReport = async (studentId, term) => {
+// Helper function to generate a single progress report.
+// opts.browser — a shared Puppeteer browser to reuse (bulk flows pass one so
+// the whole batch pays a single Chromium launch); omit it for a one-off report.
+const generateSingleProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student information
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) {
@@ -387,11 +399,11 @@ const generateSingleProgressReport = async (studentId, term) => {
   // Route JK/SK students to their dedicated progress report generators
   if (student.grade === 'JK') {
     const { generateSingleJKProgressReport } = require('./jk.controller');
-    return generateSingleJKProgressReport(studentId, term);
+    return generateSingleJKProgressReport(studentId, term, opts);
   }
   if (student.grade === 'SK') {
     const { generateSingleSKProgressReport } = require('./sk.controller');
-    return generateSingleSKProgressReport(studentId, term);
+    return generateSingleSKProgressReport(studentId, term, opts);
   }
 
   // 2. Get homeroom teacher name
@@ -402,20 +414,30 @@ const generateSingleProgressReport = async (studentId, term) => {
   `, [student.homeroom_teacher_id]);
   const homeroomTeacher = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
 
-  // 3. Get all classes the student is enrolled in
+  // 3. Resolve the selected term to its term_id so classes can be scoped to it.
+  // A progress report must contain only the classes (and their feedback/work
+  // habits) that belong to the term being generated — never a mix of terms.
+  const { rows: termRows } = await db.query(termQueries.selectTermByNameAndSchool, [term, student.school]);
+  if (termRows.length === 0) {
+    throw new Error(`Term "${term}" not found for school`);
+  }
+  const termId = termRows[0].term_id;
+
+  // 4. Get the classes the student is enrolled in for this term only
   const { rows: classRows } = await db.query(`
     SELECT c.class_id, c.subject, c.teacher_name, c.grade as class_grade
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1
+      AND c.term_id = $2
     ORDER BY c.subject
-  `, [studentId]);
+  `, [studentId, termId]);
 
   if (classRows.length === 0) {
-    throw new Error('Student not enrolled in any classes');
+    throw new Error(`Student not enrolled in any classes for ${term}`);
   }
 
-  // 4. Get progress report feedback for each class
+  // 5. Get progress report feedback for each class
   const progressData = [];
   for (const classInfo of classRows) {
     const { rows: feedbackRows } = await db.query(
@@ -436,7 +458,7 @@ const generateSingleProgressReport = async (studentId, term) => {
     });
   }
 
-  // 5. Get school information (if available)
+  // 6. Get school information (if available)
   const { rows: schoolRows } = await db.query(`
     SELECT school_id, name, address, phone, email
     FROM schools
@@ -450,7 +472,7 @@ const generateSingleProgressReport = async (studentId, term) => {
     email: ''
   };
 
-  // 6. Get school assets if school exists
+  // 7. Get school assets if school exists
   let schoolAssets = null;
   if (schoolRows.length > 0) {
     const { rows: assetRows } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolRows[0].school_id]);
@@ -483,7 +505,7 @@ const generateSingleProgressReport = async (studentId, term) => {
     }
   }
 
-  // 7. Generate HTML template
+  // 8. Generate HTML template
   const htmlContent = getProgressReportHTML({
     schoolInfo,
     student: {
@@ -498,10 +520,10 @@ const generateSingleProgressReport = async (studentId, term) => {
     schoolAssets
   });
 
-  // 8. Generate PDF buffer
-  const pdfBuffer = await createPDFBuffer(htmlContent);
+  // 9. Generate PDF buffer (reuse the batch's browser when provided)
+  const pdfBuffer = await createPDFBuffer(htmlContent, { browser: opts.browser });
 
-  // 9. Upload to Supabase storage
+  // 10. Upload to Supabase storage
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
   const fileName = `${schoolFolder}/${student.name.replace(/\s+/g, '_')}_${term.replace(/\s+/g, '_')}_progress_report.pdf`;
 
@@ -518,7 +540,7 @@ const generateSingleProgressReport = async (studentId, term) => {
     throw new Error('Upload to storage failed');
   }
 
-  // 10. Save record to database
+  // 11. Save record to database
   const { rows: recordRows } = await db.query(progressReportsQueries.createProgressReport, [
     studentId,
     term,
