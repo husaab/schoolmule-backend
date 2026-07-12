@@ -15,6 +15,7 @@ async function launchPDFBrowser() {
 
 async function createPDFBuffer(html, options = {}) {
   const {
+    format = 'A4',
     landscape = false,
     margin = { top: '40px', bottom: '40px', left: '40px', right: '40px' },
     preferCSSPageSize = false,
@@ -32,7 +33,7 @@ async function createPDFBuffer(html, options = {}) {
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
     return await page.pdf({
-      format: 'A4',
+      format,
       landscape,
       printBackground: true,
       margin,
