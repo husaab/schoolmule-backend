@@ -60,3 +60,22 @@ CREATE INDEX IF NOT EXISTS idx_agenda_custom_pages_agenda
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS fit_mode VARCHAR(10) NOT NULL DEFAULT 'contain'
   CHECK (fit_mode IN ('contain', 'cover'));
+
+-- Manual image placement, composed on top of the fit_mode baseline:
+-- zoom multiplies the base scale (1 = exact fit); offsets shift the image
+-- from center as fractions of the page size (+x right, +y down).
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS zoom NUMERIC(5,3) NOT NULL DEFAULT 1
+  CHECK (zoom >= 0.2 AND zoom <= 4);
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS offset_x NUMERIC(6,4) NOT NULL DEFAULT 0
+  CHECK (offset_x >= -1 AND offset_x <= 1);
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS offset_y NUMERIC(6,4) NOT NULL DEFAULT 0
+  CHECK (offset_y >= -1 AND offset_y <= 1);
+
+-- Independent vertical scale for stretch-resizing (side handles).
+-- NULL = uniform (follows zoom), preserving aspect ratio.
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS zoom_y NUMERIC(5,3)
+  CHECK (zoom_y IS NULL OR (zoom_y >= 0.2 AND zoom_y <= 4));

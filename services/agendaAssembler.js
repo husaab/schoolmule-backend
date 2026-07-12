@@ -24,14 +24,26 @@ const AGENDA_BUCKET = 'agendas';
 const LETTER_WIDTH = 612;
 const LETTER_HEIGHT = 792;
 
-/** Cover-fit placement of an embedded image on a Letter page (centered crop). */
-function coverFit(image) {
-  const scale = Math.max(LETTER_WIDTH / image.width, LETTER_HEIGHT / image.height);
-  const width = image.width * scale;
-  const height = image.height * scale;
+/**
+ * Placement of an embedded image on a Letter page.
+ * Baseline: 'cover' fills the page edge-to-edge (crops overflow);
+ * 'contain' fits the whole image (white margins if aspect differs).
+ * On top of that: zoom multiplies the base scale, and offsets shift the
+ * image from center as fractions of the page size (+x right, +y down).
+ * The preview's ImagePageView mirrors this math exactly.
+ */
+function placeImage(image, { fitMode, zoom = 1, zoomY = null, offsetX = 0, offsetY = 0 } = {}) {
+  const baseScale = fitMode === 'cover'
+    ? Math.max(LETTER_WIDTH / image.width, LETTER_HEIGHT / image.height)
+    : Math.min(LETTER_WIDTH / image.width, LETTER_HEIGHT / image.height);
+  // zoomY = null means uniform scaling; a number stretches the vertical
+  // axis independently (side-handle resize in the editor)
+  const width = image.width * baseScale * zoom;
+  const height = image.height * baseScale * (zoomY ?? zoom);
   return {
-    x: (LETTER_WIDTH - width) / 2,
-    y: (LETTER_HEIGHT - height) / 2,
+    x: (LETTER_WIDTH - width) / 2 + offsetX * LETTER_WIDTH,
+    // PDF y-axis points up; +offsetY means "down the page"
+    y: (LETTER_HEIGHT - height) / 2 - offsetY * LETTER_HEIGHT,
     width,
     height,
   };
@@ -117,7 +129,7 @@ async function assembleAgenda(agendaId) {
           (item.mimeType || '').includes('png');
         const image = isPng ? await output.embedPng(buffer) : await output.embedJpg(buffer);
         const page = output.addPage([LETTER_WIDTH, LETTER_HEIGHT]);
-        page.drawImage(image, coverFit(image));
+        page.drawImage(image, placeImage(image, item));
       }
     } else {
       const chunk = chunkByMonth.get(item.month);

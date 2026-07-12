@@ -69,8 +69,31 @@ const toCamelCustomPage = (row) => ({
   fileType: row.file_type,
   mimeType: row.mime_type,
   pageCount: row.page_count,
+  fitMode: row.fit_mode,
+  zoom: row.zoom !== undefined ? Number(row.zoom) : 1,
+  zoomY: row.zoom_y !== undefined && row.zoom_y !== null ? Number(row.zoom_y) : null,
+  offsetX: row.offset_x !== undefined ? Number(row.offset_x) : 0,
+  offsetY: row.offset_y !== undefined ? Number(row.offset_y) : 0,
   createdAt: row.created_at
 });
+
+/** Validate placement numbers; returns an error message or null. */
+const validatePlacement = ({ zoom, zoomY, offsetX, offsetY }) => {
+  if (zoom !== undefined && (typeof zoom !== 'number' || zoom < 0.2 || zoom > 4)) {
+    return 'zoom must be a number between 0.2 and 4';
+  }
+  if (zoomY !== undefined && zoomY !== null &&
+      (typeof zoomY !== 'number' || zoomY < 0.2 || zoomY > 4)) {
+    return 'zoomY must be null or a number between 0.2 and 4';
+  }
+  if (offsetX !== undefined && (typeof offsetX !== 'number' || offsetX < -1 || offsetX > 1)) {
+    return 'offsetX must be a number between -1 and 1';
+  }
+  if (offsetY !== undefined && (typeof offsetY !== 'number' || offsetY < -1 || offsetY > 1)) {
+    return 'offsetY must be a number between -1 and 1';
+  }
+  return null;
+};
 
 const schoolFolder = (school) => String(school).replace(/\s+/g, '').toUpperCase();
 
@@ -283,7 +306,7 @@ const updateAgendaMonth = async (req, res) => {
  */
 const uploadCustomPage = async (req, res) => {
   const { agendaId } = req.params;
-  const { anchor, anchorMonth, title } = req.body;
+  const { anchor, anchorMonth, title, fitMode } = req.body;
   const file = req.file;
 
   if (!file || !anchor) {
@@ -294,6 +317,9 @@ const uploadCustomPage = async (req, res) => {
   }
   if (anchor === 'month' && !anchorMonth) {
     return res.status(400).json({ status: 'failed', message: 'anchorMonth is required for month anchors' });
+  }
+  if (fitMode !== undefined && !['contain', 'cover'].includes(fitMode)) {
+    return res.status(400).json({ status: 'failed', message: 'fitMode must be contain or cover' });
   }
 
   try {
@@ -344,7 +370,12 @@ const uploadCustomPage = async (req, res) => {
       'pending', // placeholder, updated below
       isPdf ? 'pdf' : 'image',
       file.mimetype,
-      pageCount
+      pageCount,
+      fitMode || 'contain',
+      1,    // zoom
+      null, // zoom_y (uniform)
+      0,    // offset_x
+      0     // offset_y
     ]);
     const page = rows[0];
 
@@ -416,28 +447,55 @@ const reorderCustomPages = async (req, res) => {
 
 /**
  * PATCH /api/agendas/:agendaId/pages/:pageId
- * Body: { title }
+ * Body: { title?, fitMode?, zoom?, offsetX?, offsetY? } — at least one required.
+ * Setting fitMode alone resets zoom/offsets (presets return to a clean state).
  */
 const updateCustomPage = async (req, res) => {
   const { agendaId, pageId } = req.params;
-  const { title } = req.body;
+  const { title, fitMode, zoom, zoomY, offsetX, offsetY } = req.body;
 
-  if (typeof title !== 'string' || title.trim().length === 0) {
-    return res.status(400).json({ status: 'failed', message: 'title is required' });
+  if (title !== undefined && (typeof title !== 'string' || title.trim().length === 0)) {
+    return res.status(400).json({ status: 'failed', message: 'title cannot be empty' });
+  }
+  if (fitMode !== undefined && !['contain', 'cover'].includes(fitMode)) {
+    return res.status(400).json({ status: 'failed', message: 'fitMode must be contain or cover' });
+  }
+  const placementError = validatePlacement({ zoom, zoomY, offsetX, offsetY });
+  if (placementError) {
+    return res.status(400).json({ status: 'failed', message: placementError });
+  }
+  if ([title, fitMode, zoom, zoomY, offsetX, offsetY].every((v) => v === undefined)) {
+    return res.status(400).json({ status: 'failed', message: 'Nothing to update' });
   }
 
   try {
-    const { rows } = await db.query(agendaQueries.updateCustomPageTitle, [title.trim(), pageId]);
-    if (rows.length === 0) {
+    const { rows: existingRows } = await db.query(agendaQueries.selectCustomPageById, [pageId]);
+    if (existingRows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Page not found' });
     }
+    const existing = existingRows[0];
+
+    // A bare fitMode change is a preset click — clear manual placement
+    const presetReset = fitMode !== undefined &&
+      zoom === undefined && zoomY === undefined &&
+      offsetX === undefined && offsetY === undefined;
+
+    const { rows } = await db.query(agendaQueries.updateCustomPageSettings, [
+      title !== undefined ? title.trim() : existing.title,
+      fitMode !== undefined ? fitMode : existing.fit_mode,
+      zoom !== undefined ? zoom : (presetReset ? 1 : Number(existing.zoom)),
+      zoomY !== undefined ? zoomY : (presetReset ? null : existing.zoom_y),
+      offsetX !== undefined ? offsetX : (presetReset ? 0 : Number(existing.offset_x)),
+      offsetY !== undefined ? offsetY : (presetReset ? 0 : Number(existing.offset_y)),
+      pageId
+    ]);
 
     await db.query(agendaQueries.touchAgenda, [agendaId]);
 
     return res.status(200).json({ status: 'success', data: toCamelCustomPage(rows[0]) });
   } catch (error) {
-    logger.error('Error renaming custom page:', error);
-    return res.status(500).json({ status: 'failed', message: 'Error renaming custom page' });
+    logger.error('Error updating custom page:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error updating custom page' });
   }
 };
 
@@ -525,6 +583,11 @@ const getAgendaManifest = async (req, res) => {
           pageId: item.pageId,
           title: item.title,
           fileType: item.fileType,
+          fitMode: item.fitMode,
+          zoom: item.zoom,
+          zoomY: item.zoomY,
+          offsetX: item.offsetX,
+          offsetY: item.offsetY,
           sourcePageIndex: item.sourcePageIndex,
           sourcePageCount: item.sourcePageCount,
           anchor: item.anchor,
@@ -673,7 +736,12 @@ const cloneAgenda = async (req, res) => {
         'pending',
         page.file_type,
         page.mime_type,
-        page.page_count
+        page.page_count,
+        page.fit_mode,
+        page.zoom,
+        page.zoom_y,
+        page.offset_x,
+        page.offset_y
       ]);
       const newPage = insertedRows[0];
       const newPath = `${schoolFolder(source.school)}/${academicYear}/custom-pages/${newPage.page_id}${extension}`;

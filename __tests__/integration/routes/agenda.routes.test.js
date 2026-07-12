@@ -240,6 +240,83 @@ describe('Integration: Agenda Routes', () => {
     expect(manifest.body.data.items[0].title).toBe('Welcome Letter');
   });
 
+  it('toggles an image page between contain and cover fit modes', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    // 1x1 PNG (valid minimal image)
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro')
+      .field('title', 'Poster')
+      .attach('file', png, { filename: 'poster.png', contentType: 'image/png' });
+    expect(upload.status).toBe(201);
+    expect(upload.body.data.fitMode).toBe('contain'); // safe default: never crop
+
+    const toCover = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ fitMode: 'cover' });
+    expect(toCover.status).toBe(200);
+    expect(toCover.body.data.fitMode).toBe('cover');
+    expect(toCover.body.data.title).toBe('Poster'); // untouched
+
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.items[0].fitMode).toBe('cover');
+
+    const bad = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ fitMode: 'stretch' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('saves manual placement (zoom + offsets) and resets it on a preset click', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro')
+      .attach('file', png, { filename: 'art.png', contentType: 'image/png' });
+    expect(upload.body.data.zoom).toBe(1);
+    expect(upload.body.data.offsetX).toBe(0);
+
+    // Manual placement
+    const adjust = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ fitMode: 'contain', zoom: 1.35, offsetX: -0.05, offsetY: 0.12 });
+    expect(adjust.status).toBe(200);
+    expect(adjust.body.data.zoom).toBe(1.35);
+    expect(adjust.body.data.offsetX).toBe(-0.05);
+    expect(adjust.body.data.offsetY).toBe(0.12);
+
+    // Placement flows into the manifest (used by preview AND assembler)
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.items[0]).toMatchObject({ zoom: 1.35, offsetX: -0.05, offsetY: 0.12 });
+
+    // Out-of-range values rejected
+    const badZoom = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ zoom: 9 });
+    expect(badZoom.status).toBe(400);
+
+    // Non-uniform stretch (side-handle resize): zoomY differs from zoom
+    const stretch = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ zoom: 1.0, zoomY: 1.4 });
+    expect(stretch.status).toBe(200);
+    expect(stretch.body.data.zoom).toBe(1);
+    expect(stretch.body.data.zoomY).toBe(1.4);
+
+    const stretchedManifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(stretchedManifest.body.data.items[0].zoomY).toBe(1.4);
+
+    const badZoomY = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ zoomY: 7 });
+    expect(badZoomY.status).toBe(400);
+
+    // A bare preset click clears manual placement (including the stretch)
+    const preset = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ fitMode: 'cover' });
+    expect(preset.body.data).toMatchObject({ fitMode: 'cover', zoom: 1, zoomY: null, offsetX: 0, offsetY: 0 });
+  });
+
   it('deletes a custom page and its storage object', async () => {
     const { body: { data: agenda } } = await createAgenda();
     const pdf = await buildTestPdf(1);
