@@ -79,3 +79,8 @@ ALTER TABLE agenda_custom_pages
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS zoom_y NUMERIC(5,3)
   CHECK (zoom_y IS NULL OR (zoom_y >= 0.2 AND zoom_y <= 4));
+
+-- Per-agenda template theme, e.g. {"background": "#f5ecd9"}.
+-- Shading tones on generated pages are derived from the background.
+ALTER TABLE agendas
+  ADD COLUMN IF NOT EXISTS theme JSONB NOT NULL DEFAULT '{}'::jsonb;

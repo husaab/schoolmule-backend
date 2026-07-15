@@ -38,7 +38,7 @@ const MONTH_OVERVIEW_CSS = `
     padding: 3px 6px 0 3px;
     font-size: 10.5pt;
   }
-  .mo-grid td.weekend { background: #e8e8e8; }
+  .mo-grid td.weekend { background: var(--shade, #e8e8e8); }
   .mo-grid td .event-dot {
     display: block;
     text-align: left;

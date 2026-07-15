@@ -317,6 +317,36 @@ describe('Integration: Agenda Routes', () => {
     expect(preset.body.data).toMatchObject({ fitMode: 'cover', zoom: 1, zoomY: null, offsetX: 0, offsetY: 0 });
   });
 
+  it('themes the generated pages via a background color', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    expect(agenda.theme).toEqual({});
+
+    const themed = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}`)
+      .send({ theme: { background: '#f5ecd9' } });
+    expect(themed.status).toBe(200);
+    expect(themed.body.data.theme).toEqual({ background: '#f5ecd9' });
+
+    // Rendered pages carry the background + derived shading variables
+    const render = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/render/month/9`);
+    expect(render.body.data[0].html).toContain('--page-bg: #f5ecd9');
+    expect(render.body.data[0].html).toContain('--shade: #dfd7c5'); // auto-derived
+
+    // Manifest exposes resolved colors for the preview
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.theme).toMatchObject({ background: '#f5ecd9' });
+
+    // Invalid colors rejected
+    const bad = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}`)
+      .send({ theme: { background: 'beige' } });
+    expect(bad.status).toBe(400);
+
+    // Theme carries over on clone
+    const clone = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/clone`)
+      .send({ academicYear: '2026-2027' });
+    const cloneDetail = await authenticatedRequest('get', `/api/agendas/${clone.body.data.agendaId}`);
+    expect(cloneDetail.body.data.theme).toEqual({ background: '#f5ecd9' });
+  });
+
   it('deletes a custom page and its storage object', async () => {
     const { body: { data: agenda } } = await createAgenda();
     const pdf = await buildTestPdf(1);

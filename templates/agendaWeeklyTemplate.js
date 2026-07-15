@@ -51,7 +51,7 @@ const WEEKLY_CSS = `
     width: 0.42in;
     height: 0.42in;
     margin-top: 5px;
-    background: #e8e8e8;
+    background: var(--shade, #e8e8e8);
     border-radius: 4px;
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 17pt;
@@ -63,7 +63,7 @@ const WEEKLY_CSS = `
     top: 0.06in;
     left: 0.1in;
     right: 0.1in;
-    background: #ececec;
+    background: var(--shade, #ececec);
     border: 1px solid #cfcfcf;
     border-radius: 4px;
     text-align: center;

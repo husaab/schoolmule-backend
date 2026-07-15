@@ -17,6 +17,7 @@ const agendaQueries = {
       a.footer_text,
       a.include_notes_page,
       a.evaluation_subjects,
+      a.theme,
       a.status,
       a.generated_file_path,
       a.generated_page_count,
@@ -45,6 +46,7 @@ const agendaQueries = {
       a.footer_text,
       a.include_notes_page,
       a.evaluation_subjects,
+      a.theme,
       a.status,
       a.generated_file_path,
       a.generated_page_count,
@@ -75,7 +77,7 @@ const agendaQueries = {
 
   /**
    * Update agenda settings
-   * Params: title, footer_text, include_notes_page, evaluation_subjects (jsonb), agenda_id
+   * Params: title, footer_text, include_notes_page, evaluation_subjects (jsonb), theme (jsonb), agenda_id
    */
   updateAgenda: `
     UPDATE agendas
@@ -84,8 +86,9 @@ const agendaQueries = {
       footer_text = $2,
       include_notes_page = $3,
       evaluation_subjects = $4,
+      theme = $5,
       updated_at = NOW()
-    WHERE agenda_id = $5
+    WHERE agenda_id = $6
     RETURNING *
   `,
 

@@ -18,7 +18,7 @@ const NOTES_CSS = `
   .nt-note-line {
     height: 0.44in;
     border-bottom: 1px dotted #b0b0b0;
-    background: #f4f4f4;
+    background: var(--soft-shade, #f4f4f4);
     background-clip: content-box;
     padding-top: 0.14in;
   }

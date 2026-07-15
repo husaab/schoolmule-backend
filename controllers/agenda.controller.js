@@ -9,6 +9,7 @@ const path = require('path');
 const { PDFDocument } = require('pdf-lib');
 const agendaComposer = require('../services/agendaComposer');
 const { assembleAgenda } = require('../services/agendaAssembler');
+const { resolveTheme, HEX_COLOR } = require('../templates/agendaBaseTemplate');
 const { parseAcademicYear, academicMonthSequence } = require('../utils/agendaCalendar');
 
 const AGENDA_BUCKET = 'agendas';
@@ -41,6 +42,7 @@ const toCamelAgenda = (row) => ({
   footerText: row.footer_text,
   includeNotesPage: row.include_notes_page,
   evaluationSubjects: row.evaluation_subjects,
+  theme: row.theme || {},
   status: row.status,
   generatedFilePath: row.generated_file_path,
   generatedPageCount: row.generated_page_count,
@@ -215,7 +217,19 @@ const getAgendaById = async (req, res) => {
  */
 const updateAgenda = async (req, res) => {
   const { agendaId } = req.params;
-  const { title, footerText, includeNotesPage, evaluationSubjects } = req.body;
+  const { title, footerText, includeNotesPage, evaluationSubjects, theme } = req.body;
+
+  if (theme !== undefined) {
+    if (typeof theme !== 'object' || theme === null || Array.isArray(theme)) {
+      return res.status(400).json({ status: 'failed', message: 'theme must be an object' });
+    }
+    if (theme.background !== undefined && !HEX_COLOR.test(theme.background)) {
+      return res.status(400).json({
+        status: 'failed',
+        message: 'theme.background must be a hex color like #f5ecd9'
+      });
+    }
+  }
 
   try {
     const existing = await findAgendaOr404(agendaId, res);
@@ -228,6 +242,7 @@ const updateAgenda = async (req, res) => {
       JSON.stringify(
         evaluationSubjects !== undefined ? evaluationSubjects : existing.evaluation_subjects
       ),
+      JSON.stringify(theme !== undefined ? theme : (existing.theme || {})),
       agendaId
     ]);
 
@@ -571,6 +586,7 @@ const getAgendaManifest = async (req, res) => {
       status: 'success',
       data: {
         totalPages: manifest.totalPages,
+        theme: resolveTheme(bundle.agenda.theme),
         items: manifest.items.map((item) => ({
           seq: item.seq,
           kind: item.kind,
@@ -713,6 +729,7 @@ const cloneAgenda = async (req, res) => {
       source.footer_text,
       source.include_notes_page,
       JSON.stringify(source.evaluation_subjects),
+      JSON.stringify(source.theme || {}),
       target.agenda_id
     ]);
 

@@ -213,7 +213,7 @@ function renderGeneratedPage(bundle, item) {
  * (used by the live preview's iframe srcdoc).
  */
 function renderGeneratedPageDocument(bundle, item) {
-  return wrapAgendaDocument(renderGeneratedPage(bundle, item), ALL_AGENDA_CSS);
+  return wrapAgendaDocument(renderGeneratedPage(bundle, item), ALL_AGENDA_CSS, bundle.agenda.theme);
 }
 
 /**
@@ -227,7 +227,7 @@ function renderMonthDocument(bundle, manifest, month) {
   );
   const pages = monthItems.map((item) => renderGeneratedPage(bundle, item));
   return {
-    html: wrapAgendaDocument(pages, ALL_AGENDA_CSS),
+    html: wrapAgendaDocument(pages, ALL_AGENDA_CSS, bundle.agenda.theme),
     expectedPageCount: monthItems.length,
     items: monthItems,
   };

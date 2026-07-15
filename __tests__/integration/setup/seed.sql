@@ -565,3 +565,6 @@ ALTER TABLE agenda_custom_pages
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS zoom_y NUMERIC(5,3)
   CHECK (zoom_y IS NULL OR (zoom_y >= 0.2 AND zoom_y <= 4));
+
+ALTER TABLE agendas
+  ADD COLUMN IF NOT EXISTS theme JSONB NOT NULL DEFAULT '{}'::jsonb;

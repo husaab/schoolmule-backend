@@ -12,8 +12,9 @@
 // overflowing onto an extra page would shift all printed page numbers, so
 // we fail loudly instead of shipping a misnumbered book.
 
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, rgb } = require('pdf-lib');
 const supabase = require('../config/supabaseClient');
+const { resolveTheme } = require('../templates/agendaBaseTemplate');
 const logger = require('../logger');
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const agendaComposer = require('./agendaComposer');
@@ -47,6 +48,17 @@ function placeImage(image, { fitMode, zoom = 1, zoomY = null, offsetX = 0, offse
     width,
     height,
   };
+}
+
+/** '#f5ecd9' -> pdf-lib rgb() color. */
+function hexToRgb(hex) {
+  let value = hex.slice(1);
+  if (value.length === 3) value = value.split('').map((c) => c + c).join('');
+  return rgb(
+    parseInt(value.slice(0, 2), 16) / 255,
+    parseInt(value.slice(2, 4), 16) / 255,
+    parseInt(value.slice(4, 6), 16) / 255
+  );
 }
 
 async function downloadFromStorage(filePath) {
@@ -129,6 +141,12 @@ async function assembleAgenda(agendaId) {
           (item.mimeType || '').includes('png');
         const image = isPng ? await output.embedPng(buffer) : await output.embedJpg(buffer);
         const page = output.addPage([LETTER_WIDTH, LETTER_HEIGHT]);
+        // Theme background behind the image so Fit-mode margins match
+        // the generated pages (preview mirrors this)
+        page.drawRectangle({
+          x: 0, y: 0, width: LETTER_WIDTH, height: LETTER_HEIGHT,
+          color: hexToRgb(resolveTheme(agenda.theme).background),
+        });
         page.drawImage(image, placeImage(image, item));
       }
     } else {
