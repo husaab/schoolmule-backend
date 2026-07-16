@@ -30,10 +30,12 @@ const jkRoutes = require("./routes/jk.routes")
 const skRoutes = require("./routes/sk.routes")
 const registrationRoutes = require("./routes/registration.routes")
 const registrationPublicRoutes = require("./routes/registrationPublic.routes")
+const schedulePublicRoutes = require("./routes/schedulePublic.routes")
 const studentViewRoutes = require("./routes/studentView.routes")
 const analyticsRoutes = require("./routes/analytics.routes")
 const schoolCalendarRoutes = require("./routes/schoolCalendar.routes")
 const agendaRoutes = require("./routes/agenda.routes")
+const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -64,6 +66,7 @@ app.use(httpLogger);
 app.use("/api/auth", authRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/registration/public", registrationPublicRoutes);
+app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
 
@@ -95,6 +98,7 @@ app.use("/api/student-views", studentViewRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/calendar-events", schoolCalendarRoutes);
 app.use("/api/agendas", agendaRoutes);
+app.use("/api/schedule-planner", schedulePlannerRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);

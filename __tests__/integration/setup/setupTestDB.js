@@ -2,6 +2,15 @@ const { Pool } = require('pg');
 
 // All tables in the test schema — order doesn't matter with CASCADE
 const ALL_TABLES = [
+  'planner_schedule_sessions',
+  'planner_schedules',
+  'planner_courses',
+  'planner_fixed_blocks',
+  'planner_day_templates',
+  'planner_class_groups',
+  'planner_rooms',
+  'planner_teachers',
+  'planner_settings',
   'agenda_custom_pages',
   'agenda_months',
   'agendas',

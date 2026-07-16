@@ -1,0 +1,27 @@
+// Shared diagnostic codes and formatting helpers for feasibility checks
+// and search-time failure reporting.
+
+const CODES = {
+  TEACHER_OVER_MAX_HOURS: 'TEACHER_OVER_MAX_HOURS',
+  TEACHER_INSUFFICIENT_AVAILABILITY: 'TEACHER_INSUFFICIENT_AVAILABILITY',
+  CLASS_GROUP_OVERFLOW: 'CLASS_GROUP_OVERFLOW',
+  ROOM_OVERBOOKED: 'ROOM_OVERBOOKED',
+  SESSION_DOES_NOT_FIT: 'SESSION_DOES_NOT_FIT',
+  NO_TEACHER_AVAILABLE: 'NO_TEACHER_AVAILABLE',
+  SESSIONS_EXCEED_DAYS: 'SESSIONS_EXCEED_DAYS',
+  PIN_CONFLICT: 'PIN_CONFLICT',
+  POOL_CAPACITY_SHORT: 'POOL_CAPACITY_SHORT',
+  TOTAL_TEACHER_CAPACITY: 'TOTAL_TEACHER_CAPACITY',
+  UNPLACEABLE_SESSION: 'UNPLACEABLE_SESSION',
+  SCHEDULE_SPACE_TIGHT: 'SCHEDULE_SPACE_TIGHT',
+};
+
+function hours(minutes) {
+  return `${(minutes / 60).toFixed(1)}h`;
+}
+
+function diag(code, message, details = null) {
+  return details ? { code, message, details } : { code, message };
+}
+
+module.exports = { CODES, hours, diag };

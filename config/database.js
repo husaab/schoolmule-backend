@@ -9,9 +9,8 @@ const pool = new Pool({
   port: process.env.PG_PORT,
   password: process.env.PG_PASSWORD,
   database: process.env.PG_DATABASE,
-  ssl: {
-    rejectUnauthorized: false, // Supabase requires SSL
-  },
+  // Supabase requires SSL; set PG_SSL_DISABLE=true for local Postgres (e.g. the docker test db)
+  ssl: process.env.PG_SSL_DISABLE === 'true' ? false : { rejectUnauthorized: false },
   max: 10, // optional: connection pool size
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
