@@ -79,12 +79,10 @@ const activateSchoolYear = async (req, res, next) => {
   try {
     const existing = await client.query(schoolYearQueries.selectYearById, [req.params.id]);
     if (existing.rows.length === 0 || existing.rows[0].school !== req.user.school) {
-      client.release();
       return res.status(404).json({ status: 'failed', message: 'School year not found' });
     }
     const terms = await client.query(schoolYearQueries.countTermsForYear, [req.params.id]);
     if (terms.rows[0].count === 0) {
-      client.release();
       return res.status(409).json({ status: 'failed', message: 'Add at least one term to this year before activating it' });
     }
     await client.query('BEGIN');
