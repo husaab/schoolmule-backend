@@ -109,4 +109,45 @@ describe('classes and bulk enrollment are year-scoped', () => {
     );
     expect(Number(rows[0].count)).toBe(1);
   });
+
+  it('POST /api/classes/:sourceClassId/duplicate inherits the source class\'s school year', async () => {
+    // Seed a class in the active (year25) year, plus a term to satisfy
+    // duplicateClass's required-fields validation.
+    const source = await pool.query(
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+       VALUES ('ALHAADIACADEMY', '3', 'History', 'Teacher One', $1, $2)
+       RETURNING class_id`,
+      [TEACHER_USER_ID, year25]
+    );
+    const sourceClassId = source.rows[0].class_id;
+
+    const term = await pool.query(
+      `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active)
+       VALUES ('ALHAADIACADEMY', 'Term 1 2025-2026', '2025-09-01', '2025-12-20', '2025-2026', true)
+       RETURNING term_id`
+    );
+
+    // Caller is viewing year26, but the duplicate must still inherit year25
+    // (the source class's year), not the caller's selected year.
+    const res = await authenticatedRequest('post', `/api/classes/${sourceClassId}/duplicate`)
+      .set('X-School-Year', year26)
+      .send({
+        grade: '3',
+        subject: 'History',
+        teacherName: 'Teacher One',
+        teacherId: TEACHER_USER_ID,
+        termId: term.rows[0].term_id,
+        termName: 'Term 1 2025-2026',
+      });
+
+    expect([200, 201]).toContain(res.status);
+
+    // The newly created (duplicate) class row's school_year_id must match the source's.
+    const dup = await pool.query(
+      `SELECT school_year_id FROM classes WHERE subject = 'History' AND class_id != $1`,
+      [sourceClassId]
+    );
+    expect(dup.rows).toHaveLength(1);
+    expect(dup.rows[0].school_year_id).toBe(year25);
+  });
 });

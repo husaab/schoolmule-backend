@@ -49,6 +49,7 @@ const classQueries = {
       teacher_id,
       term_id,
       term_name,
+      school_year_id,
       created_at,
       last_modified_at
     FROM public.classes

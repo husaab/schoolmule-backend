@@ -715,7 +715,9 @@ const duplicateClass = async (req, res) => {
     }
     const sourceClass = sourceRows[0];
 
-    // 2) Insert new class using source's school
+    // 2) Insert new class using source's school and school year
+    //    (the duplicate belongs to the same year as the source class,
+    //    not necessarily the caller's currently-selected year)
     const { rows: newClassRows } = await client.query(classQueries.createClass, [
       sourceClass.school,
       grade,
@@ -724,6 +726,7 @@ const duplicateClass = async (req, res) => {
       teacherId,
       termId,
       termName,
+      sourceClass.school_year_id,
     ]);
     const newClass = newClassRows[0];
 
