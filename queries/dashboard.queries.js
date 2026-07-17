@@ -8,7 +8,7 @@ const dashboardQueries = {
   selectTotalStudents: `
     SELECT COUNT(*)::int AS count
     FROM students
-    WHERE school = $1 AND school_year_id = $2 AND is_archived = false
+    WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2) AND is_archived = false
   `,
 
   /**
@@ -31,7 +31,7 @@ const dashboardQueries = {
   selectTotalClasses: `
     SELECT COUNT(*)::int AS count
     FROM classes
-    WHERE school = $1 AND school_year_id = $2
+    WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
   `,
 
   /**
@@ -46,7 +46,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1 AND school_year_id = $3 AND is_archived = false
+      WHERE school = $1 AND ($3::uuid IS NULL OR school_year_id = $3) AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(*)::int AS present_count
@@ -55,7 +55,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date = $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
-        AND s.school_year_id = $3
+        AND ($3::uuid IS NULL OR s.school_year_id = $3)
         AND s.is_archived = false
     ) AS p
   `,
@@ -67,7 +67,7 @@ const dashboardQueries = {
         FROM class_students cs
         JOIN classes c
         ON cs.class_id = c.class_id
-        WHERE c.school = $1 AND c.school_year_id = $2
+        WHERE c.school = $1 AND ($2::uuid IS NULL OR c.school_year_id = $2)
         GROUP BY cs.class_id
     ) AS sub
     `,
@@ -84,7 +84,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1 AND school_year_id = $3 AND is_archived = false
+      WHERE school = $1 AND ($3::uuid IS NULL OR school_year_id = $3) AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(DISTINCT ga.student_id)::int AS present_count
@@ -93,7 +93,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date BETWEEN ($2::date - INTERVAL '6 days') AND $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
-        AND s.school_year_id = $3
+        AND ($3::uuid IS NULL OR s.school_year_id = $3)
         AND s.is_archived = false
     ) AS p
   `,
@@ -110,7 +110,7 @@ const dashboardQueries = {
     FROM (
       SELECT COUNT(*)::int AS total_count
       FROM students
-      WHERE school = $1 AND school_year_id = $3 AND is_archived = false
+      WHERE school = $1 AND ($3::uuid IS NULL OR school_year_id = $3) AND is_archived = false
     ) AS t,
     (
       SELECT COUNT(DISTINCT ga.student_id)::int AS present_count
@@ -119,7 +119,7 @@ const dashboardQueries = {
       WHERE ga.attendance_date BETWEEN date_trunc('month', $2::date) AND $2::date
         AND ga.status IN ('PRESENT','LATE')
         AND s.school = $1
-        AND s.school_year_id = $3
+        AND ($3::uuid IS NULL OR s.school_year_id = $3)
         AND s.is_archived = false
     ) AS p
   `,
@@ -134,7 +134,7 @@ const dashboardQueries = {
     JOIN students s ON rc.student_id = s.student_id
     WHERE rc.term = $2
       AND s.school = $1
-      AND s.school_year_id = $3
+      AND ($3::uuid IS NULL OR s.school_year_id = $3)
       AND s.is_archived = false
   `,
 
@@ -151,7 +151,7 @@ const dashboardQueries = {
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     JOIN students s ON cs.student_id = s.student_id
-    WHERE c.school = $1 AND c.school_year_id = $2 AND s.is_archived = false
+    WHERE c.school = $1 AND ($2::uuid IS NULL OR c.school_year_id = $2) AND s.is_archived = false
   `,
 
   /**
@@ -169,7 +169,7 @@ const dashboardQueries = {
       a.parent_assessment_id
     FROM assessments a
     JOIN classes c ON a.class_id = c.class_id
-    WHERE c.school = $1 AND c.school_year_id = $2
+    WHERE c.school = $1 AND ($2::uuid IS NULL OR c.school_year_id = $2)
   `,
 
   /**
@@ -195,7 +195,7 @@ const dashboardQueries = {
       ON sea.student_id = cs.student_id
       AND sea.class_id = c.class_id
       AND sea.assessment_id = a.assessment_id
-    WHERE c.school = $1 AND c.school_year_id = $2 AND s.is_archived = false
+    WHERE c.school = $1 AND ($2::uuid IS NULL OR c.school_year_id = $2) AND s.is_archived = false
   `,
 };
 

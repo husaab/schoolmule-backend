@@ -247,7 +247,7 @@ const getAttendanceTrend = async (req, res) => {
       SELECT COUNT(*) AS cnt
       FROM students s
       JOIN params p ON p.school = s.school
-      WHERE s.school_year_id = (SELECT school_year_id FROM params)
+      WHERE ((SELECT school_year_id FROM params) IS NULL OR s.school_year_id = (SELECT school_year_id FROM params))
         AND s.is_archived = false
     ),
     dates AS (
@@ -269,7 +269,7 @@ const getAttendanceTrend = async (req, res) => {
       WHERE ga.attendance_date
         BETWEEN (SELECT end_dt FROM params) - ((SELECT days FROM params) - 1)
             AND (SELECT end_dt FROM params)
-        AND s.school_year_id = (SELECT school_year_id FROM params)
+        AND ((SELECT school_year_id FROM params) IS NULL OR s.school_year_id = (SELECT school_year_id FROM params))
         AND s.is_archived = false
       GROUP BY ga.attendance_date
     )

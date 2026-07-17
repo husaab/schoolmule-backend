@@ -84,3 +84,80 @@ describe('dashboard metrics are year-scoped', () => {
     expect(parseInt(res26.body.data.reportCardsCount)).toBe(1);
   });
 });
+
+describe('dashboard metrics for a tenant with no school_years rows', () => {
+  let pool, schoolId, studentId, classId;
+
+  beforeAll(async () => {
+    getApp();
+    pool = getTestPool();
+  });
+
+  beforeEach(async () => {
+    const { rows } = await pool.query(
+      `SELECT school_id FROM schools WHERE school_code = 'ALHAADIACADEMY'`);
+    schoolId = rows[0].school_id;
+
+    // Simulate a tenant that has never been migrated onto school years:
+    // no school_years rows at all, and all year-scoped columns NULL.
+    // This is different from the "existing years but none active" case —
+    // here resolveSchoolYear finds nothing at all and sets req.schoolYear
+    // to null (GET requests proceed with no year filter).
+    await pool.query(`DELETE FROM school_years WHERE school = 'ALHAADIACADEMY'`);
+
+    const teacher = await pool.query(
+      `INSERT INTO users (username, email, password, first_name, last_name, role, school, is_verified, is_verified_school)
+       VALUES ('Teacher One', 'teacher-noyear@test.com', 'hashed', 'Teacher', 'One', 'TEACHER', 'ALHAADIACADEMY', true, true)
+       RETURNING user_id`
+    );
+    const teacherId = teacher.rows[0].user_id;
+
+    const s = await pool.query(
+      `INSERT INTO students (name, grade, school, school_year_id) VALUES
+       ('Yearless Kid', '5', 'ALHAADIACADEMY', NULL)
+       RETURNING student_id`
+    );
+    studentId = s.rows[0].student_id;
+
+    const c = await pool.query(
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id) VALUES
+       ('ALHAADIACADEMY', '5', 'Math', 'Teacher One', $1, NULL)
+       RETURNING class_id`,
+      [teacherId]
+    );
+    classId = c.rows[0].class_id;
+
+    await pool.query(
+      `INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`,
+      [classId, studentId]
+    );
+
+    await pool.query(
+      `INSERT INTO general_attendance (student_id, attendance_date, status, school) VALUES
+       ($1, '2025-10-15', 'PRESENT', 'ALHAADIACADEMY')`,
+      [studentId]
+    );
+
+    await pool.query(
+      `INSERT INTO report_cards (student_id, term, school) VALUES
+       ($1, 'Term 1', 'ALHAADIACADEMY')`,
+      [studentId]
+    );
+  });
+
+  it('GET /api/dashboard/summary returns the school\'s aggregate data, not zeros, with no X-School-Year header', async () => {
+    const res = await authenticatedRequest('get', '/api/dashboard/summary?term=Term 1&date=2025-10-15');
+    expect(res.status).toBe(200);
+    expect(parseInt(res.body.data.totalStudents)).toBe(1);
+    expect(parseInt(res.body.data.totalClasses)).toBe(1);
+    expect(parseInt(res.body.data.reportCardsCount)).toBe(1);
+    expect(res.body.data.todaysAttendance).toBe(1);
+  });
+
+  it('GET /api/dashboard/attendance/trend includes the yearless student in the denominator', async () => {
+    const res = await authenticatedRequest('get', '/api/dashboard/attendance/trend?days=1&endDate=2025-10-15');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].rate).toBe(1);
+  });
+});
