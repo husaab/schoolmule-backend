@@ -61,18 +61,13 @@ const mapClassRow = (c, additionalTeachers = []) => ({
 //    → List all classes for a given school
 //
 const getAllClasses = async (req, res) => {
-  const requestedSchool = req.query.school;
-  if (!requestedSchool) {
-    return res.status(400).json({
-      status: "failed",
-      message: "Missing required query parameter: school",
-    });
-  }
+  const requestedSchool = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
   try {
     const { rows } = await db.query(
       classQueries.selectClassesBySchool,
-      [requestedSchool]
+      [requestedSchool, schoolYearId]
     );
 
     const classIds = rows.map((c) => c.class_id);
@@ -132,14 +127,9 @@ const getClassById = async (req, res) => {
 //
 const getClassesByGrade = async (req, res) => {
   const { grade } = req.params;
-  const requestedSchool = req.query.school;
+  const requestedSchool = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
-  if (!requestedSchool) {
-    return res.status(400).json({
-      status: "failed",
-      message: "Missing required query parameter: school",
-    });
-  }
   if (!grade) {
     return res.status(400).json({
       status: "failed",
@@ -151,7 +141,7 @@ const getClassesByGrade = async (req, res) => {
     const gradeInt = parseInt(grade, 10);
     const { rows } = await db.query(
       classQueries.selectClassesByGrade,
-      [requestedSchool, gradeInt]
+      [requestedSchool, gradeInt, schoolYearId]
     );
 
     const classIds = rows.map((c) => c.class_id);
@@ -185,10 +175,12 @@ const getClassesByTeacher = async (req, res) => {
     });
   }
 
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
+
   try {
     const { rows } = await db.query(
       classQueries.selectClassesByTeacher,
-      [teacherName]
+      [teacherName, schoolYearId]
     );
 
     const classIds = rows.map((c) => c.class_id);
@@ -212,7 +204,9 @@ const getClassesByTeacher = async (req, res) => {
 //    → Create a new class
 //
 const createClass = async (req, res) => {
-  const { school, grade, subject, teacherName, teacherId, termId, termName } = req.body;
+  const { grade, subject, teacherName, teacherId, termId, termName } = req.body;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
   // Default true: enrollment is additive and idempotent, so callers that omit
   // the flag get the class ready-to-use
   const autoEnroll = req.body.autoEnroll !== false;
@@ -231,18 +225,19 @@ const createClass = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const vals = [school, grade, subject, teacherName, teacherId, termId, termName];
+    const vals = [school, grade, subject, teacherName, teacherId, termId, termName, schoolYearId];
     const { rows } = await client.query(classQueries.createClass, vals);
     const newClass = rows[0];
 
-    // Enroll every active student of the class's grade/school. The class is
-    // brand-new, so no conflicts are possible and rowCount is the exact count.
+    // Enroll every active student of the class's grade/school/year. The class
+    // is brand-new, so no conflicts are possible and rowCount is the exact count.
     let enrolledCount = 0;
     if (autoEnroll) {
       const enrollResult = await client.query(bulkQueries.enrollAllInGrade, [
         newClass.class_id,
         newClass.grade,
         newClass.school,
+        schoolYearId,
       ]);
       enrolledCount = enrollResult.rowCount;
     }
@@ -531,6 +526,7 @@ const removeStudentFromClass = async (req, res) => {
 const bulkEnrollStudentsToClass = async (req, res) => {
   const { classId } = req.params;
   const { enrollAllInGrade, studentIds } = req.body;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
   if (!classId) {
     return res
@@ -556,10 +552,9 @@ const bulkEnrollStudentsToClass = async (req, res) => {
       const classSchool = classRows[0].school;
 
       // 2) Insert all students in that grade
-      await db.query(bulkQueries.enrollAllInGrade, [classId, classGrade, classSchool]);
+      await db.query(bulkQueries.enrollAllInGrade, [classId, classGrade, classSchool, schoolYearId]);
 
       // 3) To figure out exactly which IDs were inserted, fetch all student_ids in that grade
-      const schoolYearId = req.schoolYear?.schoolYearId || null;
       const { rows: studentRows } = await db.query(
         studentQueries.selectStudentsByGrade,
         [classSchool, schoolYearId, classGrade]
@@ -653,11 +648,13 @@ const getClassesByTeacherId = async (req, res) => {
     })
   }
 
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
+
   try {
     // Run the new query
     const { rows } = await db.query(
       classQueries.selectClassesByTeacherId,
-      [teacherId]
+      [teacherId, schoolYearId]
     )
 
     const classIds = rows.map((c) => c.class_id);

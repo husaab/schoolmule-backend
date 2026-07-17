@@ -15,10 +15,11 @@ const classQueries = {
       teacher_id,
       term_id,
       term_name,
+      school_year_id,
       created_at,
       last_modified_at
     FROM public.classes
-    WHERE school = $1
+    WHERE school = $1 AND school_year_id = $2
     ORDER BY grade, subject
   `,
 
@@ -57,6 +58,7 @@ const classQueries = {
   //
   // 3) GET /classes/grade/:grade?school={school}
   //    → List all classes for a given school AND grade
+  //    $1 = school, $2 = grade, $3 = school_year_id
   //
   selectClassesByGrade: `
     SELECT
@@ -68,17 +70,20 @@ const classQueries = {
       teacher_id,
       term_id,
       term_name,
+      school_year_id,
       created_at,
       last_modified_at
     FROM public.classes
     WHERE school = $1
       AND grade  = $2
+      AND school_year_id = $3
     ORDER BY subject
   `,
 
   //
   // 4) GET /classes/teacher/:teacherName
   //    → List all classes for a given teacher name
+  //    $1 = teacher_name, $2 = school_year_id
   //
   selectClassesByTeacher: `
     SELECT
@@ -90,10 +95,12 @@ const classQueries = {
       teacher_id,
       term_id,
       term_name,
+      school_year_id,
       created_at,
       last_modified_at
     FROM public.classes
     WHERE teacher_name = $1
+      AND school_year_id = $2
     ORDER BY grade, subject
   `,
 
@@ -103,8 +110,8 @@ const classQueries = {
   //
   createClass: `
     INSERT INTO public.classes
-      (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+      (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING
       class_id,
       school,
@@ -114,6 +121,7 @@ const classQueries = {
       teacher_id,
       term_id,
       term_name,
+      school_year_id,
       created_at,
       last_modified_at
   `,
@@ -225,6 +233,7 @@ const classQueries = {
         AND student_id = $2
     `,
 
+    // $1 = teacher_id, $2 = school_year_id
     selectClassesByTeacherId: `
       SELECT
         c.class_id,
@@ -235,10 +244,12 @@ const classQueries = {
         c.teacher_id,
         c.term_id,
         c.term_name,
+        c.school_year_id,
         c.created_at,
         c.last_modified_at
       FROM classes c
       WHERE c.teacher_id = $1
+        AND c.school_year_id = $2
 
       UNION
 
@@ -251,11 +262,13 @@ const classQueries = {
         c.teacher_id,
         c.term_id,
         c.term_name,
+        c.school_year_id,
         c.created_at,
         c.last_modified_at
       FROM classes c
       INNER JOIN class_teachers ct ON ct.class_id = c.class_id
       WHERE ct.teacher_id = $1
+        AND c.school_year_id = $2
 
       ORDER BY grade, subject
     `,
