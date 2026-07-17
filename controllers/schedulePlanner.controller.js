@@ -125,12 +125,24 @@ const updateSettings = async (req, res) => {
     const { rows: existing } = await db.query(q.selectSettings, [req.user.school]);
     const current = existing.length ? mapSettings(existing[0]) : DEFAULT_SETTINGS;
     const schoolId = await resolveSchoolId(req.user.school);
+    // NULL never matches an ON CONFLICT (school, school_year_id) target in
+    // Postgres, so passing null here would insert a duplicate row on every
+    // PATCH instead of updating. Resolve the school's active year explicitly.
+    // TODO(Task 7): replace this lookup with request-scoped req.schoolYear
+    // once school-year-scoping middleware resolves it for every request.
+    const { rows: yearRows } = await db.query(
+      'SELECT school_year_id FROM school_years WHERE school = $1 AND is_active = TRUE',
+      [req.user.school]
+    );
+    if (yearRows.length === 0) {
+      return fail(res, 400, 'No school year configured for your school');
+    }
     const { rows } = await db.query(q.upsertSettings, [
       req.user.school,
       schoolId,
       defaultDurationMinutes ?? current.defaultDurationMinutes,
       snapMinutes ?? current.snapMinutes,
-      null, // school_year_id: NULL for now (applies to all years until explicitly scoped)
+      yearRows[0].school_year_id,
     ]);
     return ok(res, mapSettings(rows[0]));
   } catch (error) {
