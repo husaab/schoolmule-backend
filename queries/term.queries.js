@@ -226,6 +226,23 @@ const termQueries = {
   `,
 
   /**
+   * Activate the earliest term (by start_date) belonging to a school year.
+   * Used when activating a school year, so the year always comes up with
+   * a current term instead of leaving every term inactive.
+   * Params: school_year_id (UUID)
+   */
+  activateEarliestTermForYear: `
+    UPDATE terms
+    SET
+      is_active = TRUE,
+      updated_at = NOW()
+    WHERE term_id = (
+      SELECT term_id FROM terms WHERE school_year_id = $1 ORDER BY start_date ASC LIMIT 1
+    )
+    RETURNING term_id, name
+  `,
+
+  /**
    * Get terms for academic year
    * Params: school (public.school enum), academic_year
    */

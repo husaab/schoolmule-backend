@@ -23,7 +23,7 @@ const schoolYearQueries = {
 
   insertYear: `
     INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active, created_from_year_id)
-    VALUES ($1, $2, $3, $4, $5, FALSE, $6)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING *
   `,
 

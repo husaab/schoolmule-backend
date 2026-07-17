@@ -1,5 +1,6 @@
 const db = require('../config/database');
 const schoolYearQueries = require('../queries/schoolYear.queries');
+const termQueries = require('../queries/term.queries');
 const logger = require('../logger');
 
 const LABEL_RE = /^\d{4}-\d{4}$/;
@@ -41,9 +42,14 @@ const createSchoolYear = async (req, res, next) => {
       return res.status(400).json({ status: 'failed', message: 'School is not registered' });
     }
     const active = await db.query(schoolYearQueries.selectActiveYearBySchool, [req.user.school]);
-    const createdFrom = active.rows[0]?.school_year_id || null;
+    // Bootstrap case: a brand-new school has no active year yet (first year
+    // ever created for it). That year must be usable immediately, so make
+    // it active on creation instead of leaving it a draft with nothing to
+    // activate it from. Every subsequent year still starts as a draft.
+    const isBootstrap = !active.rows[0];
+    const createdFrom = isBootstrap ? null : active.rows[0].school_year_id;
     const { rows } = await db.query(schoolYearQueries.insertYear,
-      [req.user.school, schoolId, label, startDate, endDate, createdFrom]);
+      [req.user.school, schoolId, label, startDate, endDate, isBootstrap, createdFrom]);
     return res.status(201).json({ status: 'success', data: mapYear(rows[0]) });
   } catch (error) {
     if (error.code === '23505') {
@@ -88,8 +94,15 @@ const activateSchoolYear = async (req, res, next) => {
     await client.query('BEGIN');
     await client.query(schoolYearQueries.deactivateAllYearsForSchool, [req.user.school]);
     const { rows } = await client.query(schoolYearQueries.setYearActive, [req.params.id]);
+    // A year without a current term is unusable (nothing for report cards,
+    // attendance, etc. to hang off of) — bring its earliest term along.
+    await client.query(termQueries.deactivateAllTermsForSchool, [req.user.school]);
+    const termResult = await client.query(termQueries.activateEarliestTermForYear, [req.params.id]);
     await client.query('COMMIT');
-    return res.status(200).json({ status: 'success', data: mapYear(rows[0]) });
+    const activatedTerm = termResult.rows[0]
+      ? { termId: termResult.rows[0].term_id, name: termResult.rows[0].name }
+      : null;
+    return res.status(200).json({ status: 'success', data: { ...mapYear(rows[0]), activatedTerm } });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     next(error);

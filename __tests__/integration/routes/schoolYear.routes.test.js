@@ -83,6 +83,54 @@ describe('/api/school-years', () => {
     expect(rows[0].n).toBe(1); // old year deactivated
   });
 
+  it('activating a year with terms activates its earliest term and deactivates other years\' terms', async () => {
+    const { rows: baseYearRows } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = 'ALHAADIACADEMY' AND label = '2025-2026'`);
+    const baseYearId = baseYearRows[0].school_year_id;
+    await pool.query(
+      `INSERT INTO terms (school, school_id, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ('ALHAADIACADEMY', $1, 'Base Term', '2025-09-01', '2026-06-30', '2025-2026', TRUE, $2)`,
+      [schoolId, baseYearId]);
+
+    const create = await authenticatedRequest('post', '/api/school-years')
+      .send({ label: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30' });
+    const newYearId = create.body.data.schoolYearId;
+
+    // Insert out of chronological order to make sure "earliest" is computed
+    // from start_date, not insertion order.
+    await pool.query(
+      `INSERT INTO terms (school, school_id, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ('ALHAADIACADEMY', $1, 'Term 2', '2027-02-01', '2027-06-30', '2026-2027', FALSE, $2)`,
+      [schoolId, newYearId]);
+    await pool.query(
+      `INSERT INTO terms (school, school_id, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ('ALHAADIACADEMY', $1, 'Term 1', '2026-09-01', '2027-01-31', '2026-2027', FALSE, $2)`,
+      [schoolId, newYearId]);
+
+    const res = await authenticatedRequest('put', `/api/school-years/${newYearId}/activate`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.activatedTerm).toMatchObject({ name: 'Term 1' });
+    expect(res.body.data.activatedTerm.termId).toBeDefined();
+
+    const { rows: termRows } = await pool.query(
+      `SELECT name, is_active FROM terms WHERE school = 'ALHAADIACADEMY' ORDER BY start_date ASC`);
+    const activeByName = Object.fromEntries(termRows.map((r) => [r.name, r.is_active]));
+    expect(activeByName['Base Term']).toBe(false); // other year's term deactivated
+    expect(activeByName['Term 1']).toBe(true); // earliest term of the newly activated year
+    expect(activeByName['Term 2']).toBe(false);
+  });
+
+  it('creates the first year for a school with no years as active', async () => {
+    await pool.query(`DELETE FROM school_years WHERE school = 'ALHAADIACADEMY'`);
+
+    const res = await authenticatedRequest('post', '/api/school-years')
+      .send({ label: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.isActive).toBe(true);
+    expect(res.body.data.createdFromYearId).toBeNull();
+  });
+
   it('refuses to delete the active year', async () => {
     const list = await authenticatedRequest('get', '/api/school-years');
     const activeId = list.body.data[0].schoolYearId;
