@@ -650,7 +650,7 @@ CREATE TABLE IF NOT EXISTS planner_teachers (
   school_year_id     UUID REFERENCES school_years(school_year_id),
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, display_name)
+  UNIQUE(school, school_year_id, display_name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_teachers_school ON planner_teachers(school);
 CREATE INDEX IF NOT EXISTS idx_planner_teachers_user ON planner_teachers(user_id);
@@ -665,7 +665,7 @@ CREATE TABLE IF NOT EXISTS planner_rooms (
   school_year_id UUID REFERENCES school_years(school_year_id),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, name)
+  UNIQUE(school, school_year_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_rooms_school ON planner_rooms(school);
 
@@ -680,7 +680,7 @@ CREATE TABLE IF NOT EXISTS planner_class_groups (
   school_year_id UUID REFERENCES school_years(school_year_id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, name)
+  UNIQUE(school, school_year_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_class_groups_school ON planner_class_groups(school);
 
@@ -713,7 +713,7 @@ CREATE TABLE IF NOT EXISTS planner_day_templates (
   fillable_ranges JSONB NOT NULL DEFAULT '[]'::jsonb,
   school_year_id  UUID REFERENCES school_years(school_year_id),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, day_of_week)
+  UNIQUE(school, school_year_id, day_of_week)
 );
 
 -- Fixed blocks (lunch, prayer, recess); empty class_group_ids = school-wide,

@@ -94,13 +94,6 @@ ALTER TABLE planner_schedule_sessions ALTER COLUMN school_year_id SET NOT NULL;
 ALTER TABLE planner_settings DROP CONSTRAINT IF EXISTS planner_settings_school_key;
 ALTER TABLE planner_settings ADD CONSTRAINT planner_settings_school_year_key UNIQUE (school, school_year_id);
 
--- one published schedule per (school, year) instead of per school, so
--- publishing a schedule in a new year doesn't collide with (or force-demote)
--- a still-published schedule from an older year.
-DROP INDEX IF EXISTS uniq_planner_published_per_school;
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_published_per_school_year
-  ON planner_schedules(school, school_year_id) WHERE status = 'published';
-
 -- ============ school_calendar_events ============
 ALTER TABLE school_calendar_events
   ADD COLUMN IF NOT EXISTS school_year_id uuid REFERENCES school_years(school_year_id);
