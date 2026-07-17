@@ -36,6 +36,8 @@ const analyticsRoutes = require("./routes/analytics.routes")
 const schoolCalendarRoutes = require("./routes/schoolCalendar.routes")
 const agendaRoutes = require("./routes/agenda.routes")
 const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
+// const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
+// const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -69,6 +71,9 @@ app.use("/api/registration/public", registrationPublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
+
+// app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no year context
+// app.use(resolveSchoolYear);
 
 app.use("/api/users", userRoutes);
 app.use("/api/students", studentRoutes);
