@@ -559,9 +559,10 @@ const bulkEnrollStudentsToClass = async (req, res) => {
       await db.query(bulkQueries.enrollAllInGrade, [classId, classGrade, classSchool]);
 
       // 3) To figure out exactly which IDs were inserted, fetch all student_ids in that grade
+      const schoolYearId = req.schoolYear?.schoolYearId || null;
       const { rows: studentRows } = await db.query(
         studentQueries.selectStudentsByGrade,
-        [classGrade]
+        [classSchool, schoolYearId, classGrade]
       );
       const gradeStudentIds = studentRows.map((r) => r.student_id);
 

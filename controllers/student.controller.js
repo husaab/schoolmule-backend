@@ -30,14 +30,9 @@ const toCamel = (s) => ({
 
 const getAllStudents = async (req, res) => {
   try {
-    const requestedSchool = req.query.school;
-    if (!requestedSchool) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Missing required query parameter: school",
-      });
-    }
-    const { rows } = await db.query(studentQueries.selectStudentsBySchool, [requestedSchool]);
+    const requestedSchool = req.user.school;
+    const schoolYearId = req.schoolYear?.schoolYearId || null;
+    const { rows } = await db.query(studentQueries.selectStudentsBySchool, [requestedSchool, schoolYearId]);
 
     logger.info("All students fetched successfully");
     return res.status(200).json({
@@ -75,11 +70,12 @@ const createStudent = async (req, res) => {
     homeroomTeacherId,
     grade,
     oen,
-    school,                // ← new
-    mother,
-    father,
+    mother = {},
+    father = {},
     emergencyContact
     } = req.body;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
   // Basic required-field check
   if (!name || grade == null || !school) {
@@ -102,7 +98,8 @@ const createStudent = async (req, res) => {
       father.name || null,
       father.email || null,
       father.phone || null,
-      emergencyContact
+      emergencyContact,
+      schoolYearId
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
@@ -184,15 +181,10 @@ const deleteStudent = async (req, res) => {
 // Get archived students
 const getArchivedStudents = async (req, res) => {
   try {
-    const requestedSchool = req.query.school;
-    if (!requestedSchool) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Missing required query parameter: school",
-      });
-    }
-    
-    const { rows } = await db.query(studentQueries.selectArchivedStudentsBySchool, [requestedSchool]);
+    const requestedSchool = req.user.school;
+    const schoolYearId = req.schoolYear?.schoolYearId || null;
+
+    const { rows } = await db.query(studentQueries.selectArchivedStudentsBySchool, [requestedSchool, schoolYearId]);
     
     logger.info("Archived students fetched successfully");
     return res.status(200).json({
@@ -281,15 +273,10 @@ const unarchiveStudent = async (req, res) => {
 // Get all students including archived (with filter)
 const getAllStudentsWithArchived = async (req, res) => {
   try {
-    const requestedSchool = req.query.school;
-    if (!requestedSchool) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Missing required query parameter: school",
-      });
-    }
-    
-    const { rows } = await db.query(studentQueries.selectAllStudentsWithArchived, [requestedSchool]);
+    const requestedSchool = req.user.school;
+    const schoolYearId = req.schoolYear?.schoolYearId || null;
+
+    const { rows } = await db.query(studentQueries.selectAllStudentsWithArchived, [requestedSchool, schoolYearId]);
     
     logger.info("All students (including archived) fetched successfully");
     return res.status(200).json({
