@@ -126,7 +126,7 @@ const getSummary = async (req, res) => {
       db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date, schoolYearId]),
       db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, date, schoolYearId]),
       db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, date, schoolYearId]),
-      db.query(dashboardQueries.selectReportCardsCount, [school, term]),
+      db.query(dashboardQueries.selectReportCardsCount, [school, term, schoolYearId]),
       db.query(dashboardQueries.selectAverageClassSize, [school, schoolYearId]),
       getSchoolAverageGrade(school, schoolYearId)
     ]);
@@ -231,6 +231,7 @@ const getMonthlyAttendanceRate = async (req, res) => {
 const getAttendanceTrend = async (req, res) => {
   const { days = 7, endDate } = req.query;
   const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
   // We'll treat `refDate` as a date string or fallback to CURRENT_DATE
   // Passing it in as text, so cast to date in SQL
@@ -239,12 +240,15 @@ const getAttendanceTrend = async (req, res) => {
       SELECT
         $1::public.school   AS school,
         $2::int             AS days,
-        COALESCE($3::date, CURRENT_DATE) AS end_dt
+        COALESCE($3::date, CURRENT_DATE) AS end_dt,
+        $4::uuid            AS school_year_id
     ),
     total_students AS (
       SELECT COUNT(*) AS cnt
       FROM students s
       JOIN params p ON p.school = s.school
+      WHERE s.school_year_id = (SELECT school_year_id FROM params)
+        AND s.is_archived = false
     ),
     dates AS (
       SELECT generate_series(
@@ -265,6 +269,8 @@ const getAttendanceTrend = async (req, res) => {
       WHERE ga.attendance_date
         BETWEEN (SELECT end_dt FROM params) - ((SELECT days FROM params) - 1)
             AND (SELECT end_dt FROM params)
+        AND s.school_year_id = (SELECT school_year_id FROM params)
+        AND s.is_archived = false
       GROUP BY ga.attendance_date
     )
     SELECT
@@ -279,7 +285,7 @@ const getAttendanceTrend = async (req, res) => {
   `;
 
   try {
-    const { rows } = await db.query(sql, [school, days, endDate || null]);
+    const { rows } = await db.query(sql, [school, days, endDate || null, schoolYearId]);
     return res.status(200).json({ status: 'success', data: rows });
   } catch (err) {
     logger.error(err);

@@ -126,7 +126,7 @@ const dashboardQueries = {
 
   /**
    * Report Cards Generated: count in a term for given school
-   * Params: school (public.school enum), term (varchar)
+   * Params: school (public.school enum), term (varchar), school_year_id (uuid)
    */
   selectReportCardsCount: `
     SELECT COUNT(*)::int AS count
@@ -134,6 +134,7 @@ const dashboardQueries = {
     JOIN students s ON rc.student_id = s.student_id
     WHERE rc.term = $2
       AND s.school = $1
+      AND s.school_year_id = $3
       AND s.is_archived = false
   `,
 
