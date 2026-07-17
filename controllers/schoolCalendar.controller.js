@@ -38,14 +38,15 @@ const getEventsBySchool = async (req, res) => {
   }
 
   try {
+    const yearId = req.schoolYear?.schoolYearId || null;
     let rows;
     if (academicYear) {
       const range = academicYearToRange(academicYear);
-      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchoolAndRange, [school, range.from, range.to]));
+      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchoolAndRange, [school, range.from, range.to, yearId]));
     } else if (from && to) {
-      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchoolAndRange, [school, from, to]));
+      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchoolAndRange, [school, from, to, yearId]));
     } else {
-      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchool, [school]));
+      ({ rows } = await db.query(schoolCalendarQueries.selectEventsBySchool, [school, yearId]));
     }
 
     return res.status(200).json({
@@ -91,7 +92,8 @@ const createEvent = async (req, res) => {
       startDate,
       endDate || null,
       isSchoolClosed === true,
-      notes || null
+      notes || null,
+      req.schoolYear?.schoolYearId || null
     ]);
 
     return res.status(201).json({

@@ -14,8 +14,13 @@ const asTeacher = (method, url) =>
 
 async function seedSchoolAndUser() {
   const pool = getTestPool();
+  // setupTestDB's global beforeEach already seeds a baseline ALHAADIACADEMY
+  // row (+ active school_year via trigger) so resolveSchoolYear doesn't 400
+  // pre-existing write-path tests; upsert here instead of a plain INSERT so
+  // this doesn't collide with it.
   await pool.query(
-    `INSERT INTO schools (school_code, name, slug) VALUES ($1, 'Al Haadi Academy', 'al-haadi-academy')`,
+    `INSERT INTO schools (school_code, name, slug) VALUES ($1, 'Al Haadi Academy', 'al-haadi-academy')
+     ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug`,
     [SCHOOL]
   );
   await pool.query(

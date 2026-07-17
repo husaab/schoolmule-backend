@@ -41,6 +41,50 @@ CREATE TABLE users (
   CONSTRAINT users_duplicate_email_key UNIQUE(email)
 );
 
+-- School years (school-year scoping; from school_years_migration.sql)
+CREATE TABLE school_years (
+  school_year_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school               public.school NOT NULL,
+  school_id            UUID NOT NULL REFERENCES schools(school_id) ON DELETE CASCADE,
+  label                VARCHAR(9) NOT NULL,
+  start_date           DATE NOT NULL,
+  end_date             DATE NOT NULL,
+  is_active            BOOLEAN NOT NULL DEFAULT false,
+  created_from_year_id UUID REFERENCES school_years(school_year_id),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (school_id, label)
+);
+
+CREATE UNIQUE INDEX school_years_one_active_per_school
+  ON school_years (school_id) WHERE is_active;
+
+-- Mirrors the production backfill in school_years_migration.sql: every
+-- registered school gets an active "2025-2026" year automatically. The
+-- resolveSchoolYear middleware (mounted globally) 400s writes for a school
+-- with no active year, and integration tests insert schools directly via
+-- SQL (bypassing any signup flow), so without this trigger every existing
+-- write-path integration test would need its own school_years seeding.
+CREATE OR REPLACE FUNCTION seed_default_school_year() RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+  VALUES (
+    NEW.school_code,
+    NEW.school_id,
+    '2025-2026',
+    COALESCE(NEW.academic_year_start_date, DATE '2025-09-01'),
+    COALESCE(NEW.academic_year_end_date, DATE '2026-06-30'),
+    TRUE
+  )
+  ON CONFLICT (school_id, label) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_seed_default_school_year
+  AFTER INSERT ON schools
+  FOR EACH ROW EXECUTE FUNCTION seed_default_school_year();
+
 CREATE TABLE terms (
   term_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school                 school NOT NULL,
@@ -50,6 +94,7 @@ CREATE TABLE terms (
   end_date               DATE NOT NULL,
   academic_year          TEXT,
   is_active              BOOLEAN DEFAULT FALSE,
+  school_year_id         UUID REFERENCES school_years(school_year_id),
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
@@ -74,7 +119,9 @@ CREATE TABLE students (
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   is_archived            BOOLEAN DEFAULT FALSE,
   archived_at            TIMESTAMPTZ,
-  archived_by            UUID REFERENCES users(user_id)
+  archived_by            UUID REFERENCES users(user_id),
+  school_year_id         UUID REFERENCES school_years(school_year_id),
+  previous_student_id    UUID REFERENCES students(student_id)
 );
 
 CREATE TABLE password_reset_tokens (
@@ -93,6 +140,7 @@ CREATE TABLE classes (
   teacher_id             UUID NOT NULL REFERENCES users(user_id),
   term_id                UUID REFERENCES terms(term_id),
   term_name              TEXT,
+  school_year_id         UUID REFERENCES school_years(school_year_id),
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW()
 );
@@ -485,6 +533,7 @@ CREATE TABLE IF NOT EXISTS school_calendar_events (
   end_date         DATE,
   is_school_closed BOOLEAN NOT NULL DEFAULT false,
   notes            TEXT,
+  school_year_id   UUID REFERENCES school_years(school_year_id),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT end_date_after_start CHECK (end_date IS NULL OR end_date >= start_date)
@@ -574,12 +623,14 @@ ALTER TABLE agendas
 -- Per-school planner defaults (one row per school)
 CREATE TABLE IF NOT EXISTS planner_settings (
   planner_settings_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  school                   school NOT NULL UNIQUE,
+  school                   school NOT NULL,
   school_id                UUID REFERENCES schools(school_id),
   default_duration_minutes SMALLINT NOT NULL DEFAULT 40 CHECK (default_duration_minutes BETWEEN 5 AND 480),
   snap_minutes             SMALLINT NOT NULL DEFAULT 5 CHECK (snap_minutes IN (1, 5, 10, 15)),
+  school_year_id           UUID REFERENCES school_years(school_year_id),
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT planner_settings_school_year_key UNIQUE (school, school_year_id)
 );
 
 -- Teacher profiles for the planner (user/staff links optional)
@@ -596,9 +647,10 @@ CREATE TABLE IF NOT EXISTS planner_teachers (
   allowed_days       JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
   excluded_windows   JSONB NOT NULL DEFAULT '[]'::jsonb,
   notes              TEXT,
+  school_year_id     UUID REFERENCES school_years(school_year_id),
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, display_name)
+  UNIQUE(school, school_year_id, display_name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_teachers_school ON planner_teachers(school);
 CREATE INDEX IF NOT EXISTS idx_planner_teachers_user ON planner_teachers(user_id);
@@ -610,9 +662,10 @@ CREATE TABLE IF NOT EXISTS planner_rooms (
   school_id     UUID REFERENCES schools(school_id),
   name          VARCHAR(255) NOT NULL,
   capacity_note VARCHAR(255),
+  school_year_id UUID REFERENCES school_years(school_year_id),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, name)
+  UNIQUE(school, school_year_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_rooms_school ON planner_rooms(school);
 
@@ -624,9 +677,10 @@ CREATE TABLE IF NOT EXISTS planner_class_groups (
   name           VARCHAR(255) NOT NULL,
   grade          VARCHAR(20),
   sort_order     INTEGER NOT NULL DEFAULT 0,
+  school_year_id UUID REFERENCES school_years(school_year_id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, name)
+  UNIQUE(school, school_year_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_planner_class_groups_school ON planner_class_groups(school);
 
@@ -643,6 +697,7 @@ CREATE TABLE IF NOT EXISTS planner_courses (
   assigned_teacher_id   UUID REFERENCES planner_teachers(planner_teacher_id) ON DELETE SET NULL,
   candidate_teacher_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   required_room_id      UUID REFERENCES planner_rooms(room_id) ON DELETE SET NULL,
+  school_year_id        UUID REFERENCES school_years(school_year_id),
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -656,8 +711,9 @@ CREATE TABLE IF NOT EXISTS planner_day_templates (
   school_id       UUID REFERENCES schools(school_id),
   day_of_week     SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
   fillable_ranges JSONB NOT NULL DEFAULT '[]'::jsonb,
+  school_year_id  UUID REFERENCES school_years(school_year_id),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(school, day_of_week)
+  UNIQUE(school, school_year_id, day_of_week)
 );
 
 -- Fixed blocks (lunch, prayer, recess); empty class_group_ids = school-wide,
@@ -671,6 +727,7 @@ CREATE TABLE IF NOT EXISTS planner_fixed_blocks (
   day_of_week    SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
   start_min      SMALLINT NOT NULL CHECK (start_min BETWEEN 0 AND 1439),
   end_min        SMALLINT NOT NULL CHECK (end_min > start_min AND end_min <= 1440),
+  school_year_id UUID REFERENCES school_years(school_year_id),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -690,12 +747,15 @@ CREATE TABLE IF NOT EXISTS planner_schedules (
   config_snapshot JSONB,
   share_token     UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   published_at    TIMESTAMPTZ,
+  school_year_id  UUID REFERENCES school_years(school_year_id),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_planner_schedules_school ON planner_schedules(school);
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_published_per_school
-  ON planner_schedules(school) WHERE status = 'published';
+-- One published schedule per (school, year), not per school, so publishing
+-- in a new year doesn't collide with an older year's published schedule.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_published_per_school_year
+  ON planner_schedules(school, school_year_id) WHERE status = 'published';
 
 -- Materialized on publish so the teacher widget and public page hit
 -- indexed rows instead of scanning JSONB
@@ -713,7 +773,8 @@ CREATE TABLE IF NOT EXISTS planner_schedule_sessions (
   room_name          VARCHAR(255),
   day_of_week        SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
   start_min          SMALLINT NOT NULL CHECK (start_min BETWEEN 0 AND 1439),
-  end_min            SMALLINT NOT NULL CHECK (end_min > start_min AND end_min <= 1440)
+  end_min            SMALLINT NOT NULL CHECK (end_min > start_min AND end_min <= 1440),
+  school_year_id     UUID REFERENCES school_years(school_year_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pss_schedule ON planner_schedule_sessions(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_pss_teacher ON planner_schedule_sessions(teacher_user_id, day_of_week);

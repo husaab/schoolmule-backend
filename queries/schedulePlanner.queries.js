@@ -4,13 +4,13 @@
 // ─── Settings ────────────────────────────────────────────────────────────
 
 const selectSettings = `
-  SELECT * FROM planner_settings WHERE school = $1
+  SELECT * FROM planner_settings WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
 `;
 
 const upsertSettings = `
-  INSERT INTO planner_settings (school, school_id, default_duration_minutes, snap_minutes)
-  VALUES ($1, $2, $3, $4)
-  ON CONFLICT (school) DO UPDATE
+  INSERT INTO planner_settings (school, school_id, default_duration_minutes, snap_minutes, school_year_id)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT (school, school_year_id) DO UPDATE
     SET default_duration_minutes = EXCLUDED.default_duration_minutes,
         snap_minutes = EXCLUDED.snap_minutes,
         updated_at = NOW()
@@ -20,7 +20,9 @@ const upsertSettings = `
 // ─── Teachers ────────────────────────────────────────────────────────────
 
 const selectTeachersBySchool = `
-  SELECT * FROM planner_teachers WHERE school = $1 ORDER BY display_name
+  SELECT * FROM planner_teachers
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY display_name
 `;
 
 const selectTeacherById = `
@@ -30,8 +32,8 @@ const selectTeacherById = `
 const insertTeacher = `
   INSERT INTO planner_teachers
     (school, school_id, user_id, staff_id, display_name, is_full_time,
-     max_weekly_minutes, daily_spare_minutes, allowed_days, excluded_windows, notes)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
+     max_weekly_minutes, daily_spare_minutes, allowed_days, excluded_windows, notes, school_year_id)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12)
   RETURNING *
 `;
 
@@ -51,7 +53,9 @@ const deleteTeacher = `
 // ─── Rooms ───────────────────────────────────────────────────────────────
 
 const selectRoomsBySchool = `
-  SELECT * FROM planner_rooms WHERE school = $1 ORDER BY name
+  SELECT * FROM planner_rooms
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY name
 `;
 
 const selectRoomById = `
@@ -59,8 +63,8 @@ const selectRoomById = `
 `;
 
 const insertRoom = `
-  INSERT INTO planner_rooms (school, school_id, name, capacity_note)
-  VALUES ($1, $2, $3, $4)
+  INSERT INTO planner_rooms (school, school_id, name, capacity_note, school_year_id)
+  VALUES ($1, $2, $3, $4, $5)
   RETURNING *
 `;
 
@@ -78,7 +82,9 @@ const deleteRoom = `
 // ─── Class groups ────────────────────────────────────────────────────────
 
 const selectClassGroupsBySchool = `
-  SELECT * FROM planner_class_groups WHERE school = $1 ORDER BY sort_order, name
+  SELECT * FROM planner_class_groups
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY sort_order, name
 `;
 
 const selectClassGroupById = `
@@ -86,8 +92,8 @@ const selectClassGroupById = `
 `;
 
 const insertClassGroup = `
-  INSERT INTO planner_class_groups (school, school_id, name, grade, sort_order)
-  VALUES ($1, $2, $3, $4, $5)
+  INSERT INTO planner_class_groups (school, school_id, name, grade, sort_order, school_year_id)
+  VALUES ($1, $2, $3, $4, $5, $6)
   RETURNING *
 `;
 
@@ -105,7 +111,9 @@ const deleteClassGroup = `
 // ─── Courses ─────────────────────────────────────────────────────────────
 
 const selectCoursesBySchool = `
-  SELECT * FROM planner_courses WHERE school = $1 ORDER BY name
+  SELECT * FROM planner_courses
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY name
 `;
 
 const selectCourseById = `
@@ -115,8 +123,8 @@ const selectCourseById = `
 const insertCourse = `
   INSERT INTO planner_courses
     (school, school_id, class_group_id, name, sessions_per_week, duration_minutes,
-     max_per_day, assigned_teacher_id, candidate_teacher_ids, required_room_id)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+     max_per_day, assigned_teacher_id, candidate_teacher_ids, required_room_id, school_year_id)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
   RETURNING *
 `;
 
@@ -136,29 +144,33 @@ const deleteCourse = `
 // ─── Day templates ───────────────────────────────────────────────────────
 
 const selectDayTemplatesBySchool = `
-  SELECT * FROM planner_day_templates WHERE school = $1 ORDER BY day_of_week
+  SELECT * FROM planner_day_templates
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY day_of_week
 `;
 
 const deleteDayTemplatesBySchool = `
-  DELETE FROM planner_day_templates WHERE school = $1
+  DELETE FROM planner_day_templates WHERE school = $1 AND school_year_id = $2
 `;
 
 const insertDayTemplate = `
-  INSERT INTO planner_day_templates (school, school_id, day_of_week, fillable_ranges)
-  VALUES ($1, $2, $3, $4::jsonb)
+  INSERT INTO planner_day_templates (school, school_id, day_of_week, fillable_ranges, school_year_id)
+  VALUES ($1, $2, $3, $4::jsonb, $5)
   RETURNING *
 `;
 
 // ─── Fixed blocks ────────────────────────────────────────────────────────
 
 const selectFixedBlocksBySchool = `
-  SELECT * FROM planner_fixed_blocks WHERE school = $1 ORDER BY day_of_week, start_min
+  SELECT * FROM planner_fixed_blocks
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY day_of_week, start_min
 `;
 
 const insertFixedBlock = `
   INSERT INTO planner_fixed_blocks
-    (school, school_id, class_group_ids, label, day_of_week, start_min, end_min)
-  VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+    (school, school_id, class_group_ids, label, day_of_week, start_min, end_min, school_year_id)
+  VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
   RETURNING *
 `;
 
@@ -183,7 +195,7 @@ const selectFixedBlockById = `
 const selectSchedulesBySchool = `
   SELECT schedule_id, school, name, status, share_token, published_at, created_at, updated_at
   FROM planner_schedules
-  WHERE school = $1
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
   ORDER BY updated_at DESC
 `;
 
@@ -192,8 +204,8 @@ const selectScheduleById = `
 `;
 
 const insertSchedule = `
-  INSERT INTO planner_schedules (school, school_id, name, sessions, diagnostics, config_snapshot)
-  VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+  INSERT INTO planner_schedules (school, school_id, name, sessions, diagnostics, config_snapshot, school_year_id)
+  VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
   RETURNING *
 `;
 
@@ -213,7 +225,7 @@ const deleteSchedule = `
 const demotePublishedSchedules = `
   UPDATE planner_schedules
   SET status = 'draft', updated_at = NOW()
-  WHERE school = $1 AND status = 'published'
+  WHERE school = $1 AND school_year_id = $2 AND status = 'published'
   RETURNING schedule_id
 `;
 
@@ -232,8 +244,8 @@ const insertScheduleSession = `
   INSERT INTO planner_schedule_sessions
     (schedule_id, school, school_id, class_group_id, class_group_name, course_name,
      planner_teacher_id, teacher_user_id, teacher_name, room_name,
-     day_of_week, start_min, end_min)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     day_of_week, start_min, end_min, school_year_id)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 `;
 
 const selectMySessions = `
@@ -241,6 +253,7 @@ const selectMySessions = `
   FROM planner_schedule_sessions pss
   JOIN planner_schedules ps ON ps.schedule_id = pss.schedule_id
   WHERE pss.teacher_user_id = $1 AND ps.school = $2 AND ps.status = 'published'
+    AND ($3::uuid IS NULL OR pss.school_year_id = $3)
   ORDER BY pss.day_of_week, pss.start_min
 `;
 

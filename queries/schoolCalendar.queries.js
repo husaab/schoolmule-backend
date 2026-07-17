@@ -23,6 +23,7 @@ const schoolCalendarQueries = {
     WHERE e.school = $1
       AND e.start_date <= $3
       AND COALESCE(e.end_date, e.start_date) >= $2
+      AND ($4::uuid IS NULL OR e.school_year_id = $4)
     ORDER BY e.start_date ASC, e.title ASC
   `,
 
@@ -45,6 +46,7 @@ const schoolCalendarQueries = {
       e.updated_at
     FROM school_calendar_events e
     WHERE e.school = $1
+      AND ($2::uuid IS NULL OR e.school_year_id = $2)
     ORDER BY e.start_date ASC, e.title ASC
   `,
 
@@ -83,9 +85,10 @@ const schoolCalendarQueries = {
       end_date,
       is_school_closed,
       notes,
+      school_year_id,
       updated_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
     RETURNING *
   `,
 

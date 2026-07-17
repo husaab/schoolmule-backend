@@ -13,7 +13,7 @@ const TEACHER_USER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const TEACHER2_USER_ID = '550e8400-e29b-41d4-a716-446655440002';
 
 describe('Integration: Class Routes', () => {
-  let app, pool;
+  let app, pool, activeYearId;
 
   beforeAll(() => {
     app = getApp();
@@ -39,6 +39,14 @@ describe('Integration: Class Routes', () => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true)`,
       [TEACHER2_USER_ID, 'teacher2@test.com', 'Teacher Two', 'hashed', 'Teacher', 'Two', 'ALHAADIACADEMY', 'TEACHER']
     );
+    // setupTestDB's global beforeEach seeds a baseline ALHAADIACADEMY school,
+    // which fires a trigger creating an active '2025-2026' school_years row.
+    // Class list queries now filter by that active year, so seeds below
+    // need to attach it.
+    const { rows } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = 'ALHAADIACADEMY' AND is_active = true`
+    );
+    activeYearId = rows[0].school_year_id;
   });
 
   // Helper to seed a term and return its ID
@@ -59,12 +67,13 @@ describe('Integration: Class Routes', () => {
       teacherName: 'Teacher One',
       teacherId: TEACHER_USER_ID,
       termName: 'Term 1 2025-2026',
+      schoolYearId: activeYearId,
     };
     const data = { ...defaults, ...overrides };
     const { rows } = await pool.query(
-      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [data.school, data.grade, data.subject, data.teacherName, data.teacherId, termId, data.termName]
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [data.school, data.grade, data.subject, data.teacherName, data.teacherId, termId, data.termName, data.schoolYearId]
     );
     return rows[0];
   };
@@ -123,10 +132,14 @@ describe('Integration: Class Routes', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('returns 400 when school param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const termId = await seedTerm();
+      await seedClass(termId, { subject: 'Math' });
+
       const res = await authenticatedRequest('get', '/api/classes');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
     });
   });
 

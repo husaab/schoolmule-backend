@@ -5,13 +5,7 @@ const logger = require("../logger");
 // GET /parent-students?school=X - Get all parent-student relations by school
 const getAllParentStudents = async (req, res) => {
   try {
-    const requestedSchool = req.query.school;
-    if (!requestedSchool) {
-      return res.status(400).json({
-        status: "failed",
-        message: "Missing required query parameter: school",
-      });
-    }
+    const requestedSchool = req.user.school;
 
     const { rows } = await db.query(parentStudentQueries.selectParentStudentsBySchool, [requestedSchool]);
 
@@ -179,15 +173,15 @@ const createParentStudent = async (req, res) => {
       parentName,
       parentEmail,
       parentNumber,
-      relation,
-      school
+      relation
     } = req.body;
+    const school = req.user.school;
 
     // Validate required fields
-    if (!studentId || !school || !relation) {
+    if (!studentId || !relation) {
       return res.status(400).json({
         status: "failed",
-        message: "Missing required fields: studentId, school, and relation are required",
+        message: "Missing required fields: studentId and relation are required",
       });
     }
 

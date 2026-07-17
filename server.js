@@ -36,6 +36,8 @@ const analyticsRoutes = require("./routes/analytics.routes")
 const schoolCalendarRoutes = require("./routes/schoolCalendar.routes")
 const agendaRoutes = require("./routes/agenda.routes")
 const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
+const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
+const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -47,7 +49,7 @@ const app = express();
 const corsOptions = {
   origin: process.env.CROSS_ORIGIN_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year']
 };
 
 // core modules
@@ -70,6 +72,14 @@ app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
 
+app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no year context
+// School entities themselves are also exempt: creating a school is a
+// bootstrapping operation (the new school by definition has no years yet),
+// and school.controller.js is not school-year-scoped (no req.schoolYear
+// usage) — same rationale as /api/school-years above.
+app.use("/api/schools", schoolRoutes);
+app.use(resolveSchoolYear);
+
 app.use("/api/users", userRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/classes", classRoutes);
@@ -82,7 +92,6 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/parent-students", parentStudentRoutes);
 app.use("/api/parents", parentRoutes);
 app.use("/api/staff", staffRoutes);
-app.use("/api/schools", schoolRoutes);
 app.use("/api/terms", termRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/progress-reports", progressReportsRoutes);

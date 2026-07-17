@@ -112,7 +112,7 @@ const isValidWindow = (w) =>
 
 const getSettings = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectSettings, [req.user.school]);
+    const { rows } = await db.query(q.selectSettings, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.length ? mapSettings(rows[0]) : DEFAULT_SETTINGS);
   } catch (error) {
     return handleError(res, error, 'fetching planner settings');
@@ -121,8 +121,11 @@ const getSettings = async (req, res) => {
 
 const updateSettings = async (req, res) => {
   const { defaultDurationMinutes, snapMinutes } = req.body;
+  if (!req.schoolYear?.schoolYearId) {
+    return fail(res, 400, 'No school year configured for your school');
+  }
   try {
-    const { rows: existing } = await db.query(q.selectSettings, [req.user.school]);
+    const { rows: existing } = await db.query(q.selectSettings, [req.user.school, req.schoolYear.schoolYearId]);
     const current = existing.length ? mapSettings(existing[0]) : DEFAULT_SETTINGS;
     const schoolId = await resolveSchoolId(req.user.school);
     const { rows } = await db.query(q.upsertSettings, [
@@ -130,6 +133,7 @@ const updateSettings = async (req, res) => {
       schoolId,
       defaultDurationMinutes ?? current.defaultDurationMinutes,
       snapMinutes ?? current.snapMinutes,
+      req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapSettings(rows[0]));
   } catch (error) {
@@ -141,7 +145,7 @@ const updateSettings = async (req, res) => {
 
 const listTeachers = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectTeachersBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectTeachersBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapTeacher));
   } catch (error) {
     return handleError(res, error, 'fetching planner teachers');
@@ -173,6 +177,7 @@ const createTeacher = async (req, res) => {
       JSON.stringify(allowedDays ?? [1, 2, 3, 4, 5]),
       JSON.stringify(excludedWindows ?? []),
       notes || null,
+      req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapTeacher(rows[0]), 201);
   } catch (error) {
@@ -223,7 +228,7 @@ const deleteTeacher = async (req, res) => {
 
 const listRooms = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectRoomsBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectRoomsBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapRoom));
   } catch (error) {
     return handleError(res, error, 'fetching planner rooms');
@@ -235,7 +240,9 @@ const createRoom = async (req, res) => {
   if (!name || typeof name !== 'string') return fail(res, 400, 'name is required');
   try {
     const schoolId = await resolveSchoolId(req.user.school);
-    const { rows } = await db.query(q.insertRoom, [req.user.school, schoolId, name, capacityNote || null]);
+    const { rows } = await db.query(q.insertRoom, [
+      req.user.school, schoolId, name, capacityNote || null, req.schoolYear.schoolYearId,
+    ]);
     return ok(res, mapRoom(rows[0]), 201);
   } catch (error) {
     return handleError(res, error, 'creating planner room');
@@ -274,7 +281,7 @@ const deleteRoom = async (req, res) => {
 
 const listClassGroups = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectClassGroupsBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectClassGroupsBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapClassGroup));
   } catch (error) {
     return handleError(res, error, 'fetching class groups');
@@ -287,7 +294,7 @@ const createClassGroup = async (req, res) => {
   try {
     const schoolId = await resolveSchoolId(req.user.school);
     const { rows } = await db.query(q.insertClassGroup, [
-      req.user.school, schoolId, name, grade || null, sortOrder ?? 0,
+      req.user.school, schoolId, name, grade || null, sortOrder ?? 0, req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapClassGroup(rows[0]), 201);
   } catch (error) {
@@ -360,6 +367,7 @@ const createCourse = async (req, res) => {
       assignedTeacherId || null,
       JSON.stringify(candidateTeacherIds ?? []),
       requiredRoomId || null,
+      req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapCourse(rows[0]), 201);
   } catch (error) {
@@ -411,7 +419,7 @@ const deleteCourse = async (req, res) => {
 
 const listDayTemplates = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectDayTemplatesBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectDayTemplatesBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapDayTemplate));
   } catch (error) {
     return handleError(res, error, 'fetching day templates');
@@ -433,7 +441,7 @@ const replaceDayTemplates = async (req, res) => {
   try {
     const schoolId = await resolveSchoolId(req.user.school);
     await client.query('BEGIN');
-    await client.query(q.deleteDayTemplatesBySchool, [req.user.school]);
+    await client.query(q.deleteDayTemplatesBySchool, [req.user.school, req.schoolYear.schoolYearId]);
     const rows = [];
     for (const day of days) {
       const { rows: inserted } = await client.query(q.insertDayTemplate, [
@@ -441,6 +449,7 @@ const replaceDayTemplates = async (req, res) => {
         schoolId,
         day.dayOfWeek,
         JSON.stringify(day.fillableRanges),
+        req.schoolYear.schoolYearId,
       ]);
       rows.push(inserted[0]);
     }
@@ -458,7 +467,7 @@ const replaceDayTemplates = async (req, res) => {
 
 const listFixedBlocks = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectFixedBlocksBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectFixedBlocksBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapFixedBlock));
   } catch (error) {
     return handleError(res, error, 'fetching fixed blocks');
@@ -477,6 +486,7 @@ const createFixedBlock = async (req, res) => {
     const schoolId = await resolveSchoolId(req.user.school);
     const { rows } = await db.query(q.insertFixedBlock, [
       req.user.school, schoolId, JSON.stringify(classGroupIds ?? []), label, dayOfWeek, startMin, endMin,
+      req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapFixedBlock(rows[0]), 201);
   } catch (error) {
@@ -529,15 +539,16 @@ const deleteFixedBlock = async (req, res) => {
 const getConfig = async (req, res) => {
   try {
     const school = req.user.school;
+    const yearId = req.schoolYear?.schoolYearId || null;
     const [settings, teachers, rooms, groups, courses, dayTemplates, fixedBlocks] =
       await Promise.all([
-        db.query(q.selectSettings, [school]),
-        db.query(q.selectTeachersBySchool, [school]),
-        db.query(q.selectRoomsBySchool, [school]),
-        db.query(q.selectClassGroupsBySchool, [school]),
-        db.query(q.selectCoursesBySchool, [school]),
-        db.query(q.selectDayTemplatesBySchool, [school]),
-        db.query(q.selectFixedBlocksBySchool, [school]),
+        db.query(q.selectSettings, [school, yearId]),
+        db.query(q.selectTeachersBySchool, [school, yearId]),
+        db.query(q.selectRoomsBySchool, [school, yearId]),
+        db.query(q.selectClassGroupsBySchool, [school, yearId]),
+        db.query(q.selectCoursesBySchool, [school, yearId]),
+        db.query(q.selectDayTemplatesBySchool, [school, yearId]),
+        db.query(q.selectFixedBlocksBySchool, [school, yearId]),
       ]);
     const coursesByGroup = new Map();
     for (const row of courses.rows) {
@@ -581,15 +592,15 @@ const mapSchedule = (row) => ({
 });
 
 // Loads the school's planner config and builds the solver input JSON.
-async function assembleSolverInput(school, body = {}) {
+async function assembleSolverInput(school, body = {}, yearId = null) {
   const [settingsQ, teachersQ, roomsQ, groupsQ, coursesQ, daysQ, blocksQ] = await Promise.all([
-    db.query(q.selectSettings, [school]),
-    db.query(q.selectTeachersBySchool, [school]),
-    db.query(q.selectRoomsBySchool, [school]),
-    db.query(q.selectClassGroupsBySchool, [school]),
-    db.query(q.selectCoursesBySchool, [school]),
-    db.query(q.selectDayTemplatesBySchool, [school]),
-    db.query(q.selectFixedBlocksBySchool, [school]),
+    db.query(q.selectSettings, [school, yearId]),
+    db.query(q.selectTeachersBySchool, [school, yearId]),
+    db.query(q.selectRoomsBySchool, [school, yearId]),
+    db.query(q.selectClassGroupsBySchool, [school, yearId]),
+    db.query(q.selectCoursesBySchool, [school, yearId]),
+    db.query(q.selectDayTemplatesBySchool, [school, yearId]),
+    db.query(q.selectFixedBlocksBySchool, [school, yearId]),
   ]);
   const settings = settingsQ.rows.length ? mapSettings(settingsQ.rows[0]) : DEFAULT_SETTINGS;
   // JSONB id arrays are not FK-enforced — drop references to deleted rows
@@ -653,7 +664,7 @@ async function assembleSolverInput(school, body = {}) {
 
 const generateSchedule = async (req, res) => {
   try {
-    const input = await assembleSolverInput(req.user.school, req.body || {});
+    const input = await assembleSolverInput(req.user.school, req.body || {}, req.schoolYear?.schoolYearId || null);
     if (input.days.length === 0) {
       return fail(res, 400, 'Set up day templates (school hours) before generating');
     }
@@ -691,7 +702,7 @@ const generateSchedule = async (req, res) => {
 
 const listSchedules = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectSchedulesBySchool, [req.user.school]);
+    const { rows } = await db.query(q.selectSchedulesBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
     return ok(res, rows.map(mapScheduleSummary));
   } catch (error) {
     return handleError(res, error, 'fetching schedules');
@@ -722,6 +733,7 @@ const createSchedule = async (req, res) => {
       JSON.stringify(sessions),
       diagnostics ? JSON.stringify(diagnostics) : null,
       configSnapshot ? JSON.stringify(configSnapshot) : null,
+      req.schoolYear.schoolYearId,
     ]);
     return ok(res, mapSchedule(rows[0]), 201);
   } catch (error) {
@@ -789,10 +801,11 @@ const publishSchedule = async (req, res) => {
       return fail(res, 400, 'Cannot publish an empty schedule');
     }
 
+    const yearId = req.schoolYear.schoolYearId;
     const [teachersQ, groupsQ, roomsQ] = await Promise.all([
-      client.query(q.selectTeachersBySchool, [school]),
-      client.query(q.selectClassGroupsBySchool, [school]),
-      client.query(q.selectRoomsBySchool, [school]),
+      client.query(q.selectTeachersBySchool, [school, yearId]),
+      client.query(q.selectClassGroupsBySchool, [school, yearId]),
+      client.query(q.selectRoomsBySchool, [school, yearId]),
     ]);
     const teacherById = new Map(teachersQ.rows.map((r) => [r.planner_teacher_id, r]));
     const groupById = new Map(groupsQ.rows.map((r) => [r.class_group_id, r]));
@@ -800,7 +813,7 @@ const publishSchedule = async (req, res) => {
     const schoolId = await resolveSchoolId(school);
 
     await client.query('BEGIN');
-    const { rows: demoted } = await client.query(q.demotePublishedSchedules, [school]);
+    const { rows: demoted } = await client.query(q.demotePublishedSchedules, [school, yearId]);
     for (const row of demoted) {
       await client.query(q.deleteSessionsForSchedule, [row.schedule_id]);
     }
@@ -824,6 +837,7 @@ const publishSchedule = async (req, res) => {
         s.day,
         s.startMin,
         s.endMin,
+        yearId,
       ]);
     }
     await client.query('COMMIT');
@@ -848,11 +862,12 @@ const getSchedulePdf = async (req, res) => {
     const sessions = schedule.sessions || [];
     if (sessions.length === 0) return fail(res, 400, 'Schedule has no sessions');
 
+    const yearId = req.schoolYear?.schoolYearId || null;
     const [teachersQ, groupsQ, roomsQ, daysQ, schoolQ] = await Promise.all([
-      db.query(q.selectTeachersBySchool, [school]),
-      db.query(q.selectClassGroupsBySchool, [school]),
-      db.query(q.selectRoomsBySchool, [school]),
-      db.query(q.selectDayTemplatesBySchool, [school]),
+      db.query(q.selectTeachersBySchool, [school, yearId]),
+      db.query(q.selectClassGroupsBySchool, [school, yearId]),
+      db.query(q.selectRoomsBySchool, [school, yearId]),
+      db.query(q.selectDayTemplatesBySchool, [school, yearId]),
       db.query('SELECT name FROM schools WHERE school_code = $1', [school]),
     ]);
     const teacherById = new Map(teachersQ.rows.map((r) => [r.planner_teacher_id, r]));
@@ -943,7 +958,9 @@ const getSchedulePdf = async (req, res) => {
 // GET /my-schedule — any verified user; published sessions linked to them.
 const getMySchedule = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectMySessions, [req.user.userId, req.user.school]);
+    const { rows } = await db.query(q.selectMySessions, [
+      req.user.userId, req.user.school, req.schoolYear?.schoolYearId || null,
+    ]);
     return ok(res, { sessions: rows.map(mapMaterializedSession) });
   } catch (error) {
     return handleError(res, error, 'fetching my schedule');

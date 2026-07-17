@@ -41,9 +41,13 @@ async function loadAgendaBundle(agendaId) {
   ]);
 
   const range = academicYearToRange(agenda.academic_year);
+  // Agendas are keyed by their own academic_year label, independent of
+  // whatever school year the requesting session currently has selected, so
+  // this intentionally passes no school_year_id (null is year-agnostic —
+  // matched purely by date range, same as before school-year scoping).
   const { rows: events } = await db.query(
     schoolCalendarQueries.selectEventsBySchoolAndRange,
-    [agenda.school, range.from, range.to]
+    [agenda.school, range.from, range.to, null]
   );
 
   return { agenda, months, customPages, events };

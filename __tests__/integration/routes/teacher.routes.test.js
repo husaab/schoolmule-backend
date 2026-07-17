@@ -53,18 +53,21 @@ describe('Integration: Teacher Routes', () => {
       expect(res.body.data[0]).toHaveProperty('email');
     });
 
-    it('returns 400 when school param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
       const res = await authenticatedRequest('get', '/api/teachers');
 
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data.length).toBeGreaterThanOrEqual(2);
     });
 
-    it('returns empty array when no teachers exist for a school', async () => {
+    it('ignores a mismatched ?school= query param and uses the JWT school', async () => {
+      // The two seeded teachers are ALHAADIACADEMY; the JWT's school always
+      // wins now, so a different ?school= value in the query string has no effect.
       const res = await authenticatedRequest('get', '/api/teachers?school=PLAYGROUND');
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toHaveLength(0);
+      expect(res.body.data.length).toBeGreaterThanOrEqual(2);
     });
   });
 

@@ -4,6 +4,11 @@ const db = require('../config/database');
 const termQueries = require('../queries/term.queries');
 const logger = require('../logger');
 
+async function resolveSchoolId(school) {
+  const { rows } = await db.query('SELECT school_id FROM schools WHERE school_code = $1', [school]);
+  return rows[0]?.school_id || null;
+}
+
 /**
  * Helper function to convert term row to camelCase
  */
@@ -26,17 +31,11 @@ const mapTermToResponse = (term) => ({
  * Get all terms for a school
  */
 const getTermsBySchool = async (req, res) => {
-  const { school } = req.query;
-  
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School parameter is required'
-    });
-  }
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
 
   try {
-    const { rows } = await db.query(termQueries.selectTermsBySchool, [school]);
+    const { rows } = await db.query(termQueries.selectTermsBySchool, [school, schoolYearId]);
     return res.status(200).json({
       status: 'success',
       data: rows.map(mapTermToResponse)
@@ -84,12 +83,13 @@ const getTermsBySchoolId = async (req, res) => {
  * Get a single term by name and school
  */
 const getTermByNameAndSchool = async (req, res) => {
-  const { termName, school } = req.query;
-  
-  if (!termName || !school) {
+  const { termName } = req.query;
+  const school = req.user.school;
+
+  if (!termName) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Term name and school are required'
+      message: 'Term name is required'
     });
   }
 
@@ -121,14 +121,7 @@ const getTermByNameAndSchool = async (req, res) => {
  * Get active term for a school
  */
 const getActiveTermBySchool = async (req, res) => {
-  const { school } = req.query;
-  
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School parameter is required'
-    });
-  }
+  const school = req.user.school;
 
   try {
     const { rows } = await db.query(termQueries.selectActiveTermBySchool, [school]);
@@ -158,14 +151,8 @@ const getActiveTermBySchool = async (req, res) => {
  * Get current term by date for a school
  */
 const getCurrentTermBySchool = async (req, res) => {
-  const { school, date } = req.query;
-  
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School parameter is required'
-    });
-  }
+  const { date } = req.query;
+  const school = req.user.school;
 
   const currentDate = date || new Date().toISOString().split('T')[0];
 
@@ -235,7 +222,6 @@ const getTermById = async (req, res) => {
  */
 const createTerm = async (req, res) => {
   const {
-    school,
     schoolId,
     name,
     startDate,
@@ -243,15 +229,9 @@ const createTerm = async (req, res) => {
     academicYear,
     isActive
   } = req.body;
+  const school = req.user.school;
 
   // Validation
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School is required'
-    });
-  }
-
   if (!name) {
     return res.status(400).json({
       status: 'failed',
@@ -273,20 +253,30 @@ const createTerm = async (req, res) => {
     });
   }
 
+  if (!req.schoolYear) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'No school year context for this request'
+    });
+  }
+
   try {
     // If setting this term as active, deactivate all other terms for this school first
     if (isActive) {
       await db.query(termQueries.deactivateAllTermsForSchool, [school]);
     }
 
+    const resolvedSchoolId = schoolId || await resolveSchoolId(school);
+
     const { rows } = await db.query(termQueries.insertTerm, [
       school,
-      schoolId || null,
+      resolvedSchoolId || null,
       name,
       startDate,
       endDate,
       academicYear,
-      isActive || false
+      isActive || false,
+      req.schoolYear.schoolYearId
     ]);
 
     return res.status(201).json({
@@ -532,14 +522,8 @@ const deleteTerm = async (req, res) => {
  * Get terms for a specific academic year
  */
 const getTermsByAcademicYear = async (req, res) => {
-  const { school, year } = req.query;
-  
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School parameter is required'
-    });
-  }
+  const { year } = req.query;
+  const school = req.user.school;
 
   if (!year) {
     return res.status(400).json({

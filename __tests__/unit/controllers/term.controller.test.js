@@ -41,10 +41,13 @@ describe('Term Controller', () => {
       expect(res.body.data[0].termId).toBe(row.term_id);
     });
 
-    it('should return 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildTermRow();
+      mockQueryResponse([row]);
       const res = await authGet('/api/terms');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('should return 500 on database error', async () => {
@@ -118,10 +121,12 @@ describe('Term Controller', () => {
       expect(res.body.data.isActive).toBe(true);
     });
 
-    it('should return 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildTermRow({ is_active: true });
+      mockQueryResponse([row]);
       const res = await authGet('/api/terms/active');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
     });
 
     it('should return 404 when no active term', async () => {
@@ -149,10 +154,12 @@ describe('Term Controller', () => {
       expect(res.body.status).toBe('success');
     });
 
-    it('should return 400 when school is missing', async () => {
-      const res = await authGet('/api/terms/current');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildTermRow();
+      mockQueryResponse([row]);
+      const res = await authGet('/api/terms/current?date=2025-10-15');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
     });
 
     it('should return 404 when no current term found', async () => {
@@ -180,10 +187,12 @@ describe('Term Controller', () => {
       expect(res.body.status).toBe('success');
     });
 
-    it('should return 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildTermRow({ academic_year: '2025-2026' });
+      mockQueryResponse([row]);
       const res = await authGet('/api/terms/academic-year?year=2025-2026');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
     });
 
     it('should return 400 when year is missing', async () => {
@@ -232,7 +241,7 @@ describe('Term Controller', () => {
       const row = buildTermRow();
       mockQueryResponse([row]);
       const res = await authPost('/api/terms').send({
-        school: TEST_SCHOOL,
+        schoolId: row.school_id,
         name: 'Term 1 2025-2026',
         startDate: '2025-09-01',
         endDate: '2025-12-20',
@@ -250,7 +259,7 @@ describe('Term Controller', () => {
       // insertTerm
       mockQueryResponse([row]);
       const res = await authPost('/api/terms').send({
-        school: TEST_SCHOOL,
+        schoolId: row.school_id,
         name: 'Term 1 2025-2026',
         startDate: '2025-09-01',
         endDate: '2025-12-20',
@@ -261,15 +270,18 @@ describe('Term Controller', () => {
       expect(res.body.status).toBe('success');
     });
 
-    it('should return 400 when school is missing', async () => {
+    it('uses the JWT school even without a school field in the body', async () => {
+      const row = buildTermRow();
+      mockQueryResponse([row]);
       const res = await authPost('/api/terms').send({
-        name: 'Term 1',
+        schoolId: row.school_id,
+        name: 'Term 1 2025-2026',
         startDate: '2025-09-01',
         endDate: '2025-12-20',
         academicYear: '2025-2026',
       });
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(201);
+      expect(res.body.status).toBe('success');
     });
 
     it('should return 400 when name is missing', async () => {

@@ -78,15 +78,27 @@ describe('GET /api/dashboard/summary', () => {
     expect(res.body.data).toHaveProperty('avgClassSize');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    // Same 11-query sequence as above (8 dashboard queries + 3 for getSchoolAverageGrade)
+    mockQueryResponse([{ count: 120 }]);
+    mockQueryResponse([{ count: 15 }]);
+    mockQueryResponse([{ count: 30 }]);
+    mockQueryResponse([{ rate: 0.92 }]);
+    mockQueryResponse([{ rate: 0.89 }]);
+    mockQueryResponse([{ rate: 0.91 }]);
+    mockQueryResponse([{ count: 100 }]);
+    mockQueryResponse([{ avg_class_size: 25.5 }]);
+    mockQueryResponse([]);
+    mockQueryResponse([]);
+    mockQueryResponse([]);
+
     const res = await request(app)
       .get(url)
       .set(authHeader())
       .query({ term: 'Term 1', date: '2025-10-15' });
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
-    expect(res.body.message).toContain('school');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
   });
 
   it('returns 400 when term is missing', async () => {
@@ -150,14 +162,16 @@ describe('GET /api/dashboard/attendance/today', () => {
     expect(typeof res.body.data.rate).toBe('number');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    mockQueryResponse([{ rate: 0.95 }]);
+
     const res = await request(app)
       .get(url)
       .set(authHeader())
       .query({ date: '2025-10-15' });
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
   });
 
   it('returns 400 when date is missing', async () => {
@@ -200,13 +214,15 @@ describe('GET /api/dashboard/attendance/weekly', () => {
     expect(res.body.data).toHaveProperty('rate');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    mockQueryResponse([{ rate: 0.88 }]);
+
     const res = await request(app)
       .get(url)
       .set(authHeader())
       .query({ endDate: '2025-10-15' });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
   });
 
   it('returns 400 when endDate is missing', async () => {
@@ -236,13 +252,15 @@ describe('GET /api/dashboard/attendance/monthly', () => {
     expect(res.body.data).toHaveProperty('rate');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    mockQueryResponse([{ rate: 0.90 }]);
+
     const res = await request(app)
       .get(url)
       .set(authHeader())
       .query({ referenceDate: '2025-10-15' });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
   });
 
   it('returns 400 when referenceDate is missing', async () => {
@@ -279,13 +297,15 @@ describe('GET /api/dashboard/attendance/trend', () => {
     expect(res.body.data[0]).toHaveProperty('rate');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    mockQueryResponse([{ date: '2025-10-15', rate: 0.9 }]);
+
     const res = await request(app)
       .get(url)
       .set(authHeader());
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
   });
 
   it('returns 500 on database error', async () => {
@@ -339,13 +359,17 @@ describe('POST /api/dashboard/refresh-grade-cache', () => {
     expect(res.body.data).toHaveProperty('averageStudentGrade');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    mockQueryResponse([]);
+    mockQueryResponse([]);
+    mockQueryResponse([]);
+
     const res = await request(app)
       .post(url)
       .set(authHeader());
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
   });
 
   it('returns null average when no enrollments', async () => {

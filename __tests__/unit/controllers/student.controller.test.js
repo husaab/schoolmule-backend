@@ -47,11 +47,13 @@ describe('Student Controller', () => {
       expect(res.body.data).toEqual([]);
     });
 
-    it('should return 400 when school query param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildStudentRow();
+      mockQueryResponse([row]);
       const res = await authGet('/api/students');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
-      expect(res.body.message).toMatch(/school/i);
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('should return 500 on database error', async () => {
@@ -194,10 +196,13 @@ describe('Student Controller', () => {
       expect(res.body.data[0].isArchived).toBe(true);
     });
 
-    it('should return 400 when school query param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const row = buildStudentRow({ is_archived: true, archived_at: new Date().toISOString() });
+      mockQueryResponse([row]);
       const res = await authGet('/api/students/archived');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('should return 500 on database error', async () => {
@@ -306,10 +311,13 @@ describe('Student Controller', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('should return 400 when school query param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const active = buildStudentRow({ is_archived: false });
+      mockQueryResponse([active]);
       const res = await authGet('/api/students/all');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('success');
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('should return 500 on database error', async () => {

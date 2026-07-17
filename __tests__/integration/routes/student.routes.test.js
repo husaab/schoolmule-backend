@@ -11,7 +11,7 @@ const { getTestPool } = require('../setup/setupTestDB');
 const TEST_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 
 describe('Integration: Student Routes', () => {
-  let app, pool;
+  let app, pool, activeYearId;
 
   beforeAll(() => {
     app = getApp();
@@ -24,6 +24,14 @@ describe('Integration: Student Routes', () => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true)`,
       [TEST_USER_ID, 'admin@test.com', 'Admin', 'hashed', 'Admin', 'User', 'ALHAADIACADEMY', 'ADMIN']
     );
+    // setupTestDB's global beforeEach seeds a baseline ALHAADIACADEMY school,
+    // which fires a trigger creating an active '2025-2026' school_years row.
+    // Student list queries now filter by that active year, so seeds below
+    // need to attach it.
+    const { rows } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = 'ALHAADIACADEMY' AND is_active = true`
+    );
+    activeYearId = rows[0].school_year_id;
   });
 
   describe('POST /api/students', () => {
@@ -65,7 +73,8 @@ describe('Integration: Student Routes', () => {
   describe('GET /api/students', () => {
     it('returns all students for a school', async () => {
       await pool.query(
-        `INSERT INTO students (name, school, grade) VALUES ('Alice', 'ALHAADIACADEMY', '3'), ('Bob', 'ALHAADIACADEMY', '5')`
+        `INSERT INTO students (name, school, grade, school_year_id) VALUES ('Alice', 'ALHAADIACADEMY', '3', $1), ('Bob', 'ALHAADIACADEMY', '5', $1)`,
+        [activeYearId]
       );
 
       const res = await authenticatedRequest('get', '/api/students?school=ALHAADIACADEMY');
@@ -75,16 +84,22 @@ describe('Integration: Student Routes', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('returns 400 when school param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      await pool.query(
+        `INSERT INTO students (name, school, grade, school_year_id) VALUES ('Alice', 'ALHAADIACADEMY', '3', $1)`,
+        [activeYearId]
+      );
+
       const res = await authenticatedRequest('get', '/api/students');
 
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('does not return archived students', async () => {
       await pool.query(
-        `INSERT INTO students (name, school, grade, is_archived) VALUES ('Active', 'ALHAADIACADEMY', '3', false), ('Archived', 'ALHAADIACADEMY', '5', true)`
+        `INSERT INTO students (name, school, grade, is_archived, school_year_id) VALUES ('Active', 'ALHAADIACADEMY', '3', false, $1), ('Archived', 'ALHAADIACADEMY', '5', true, $1)`,
+        [activeYearId]
       );
 
       const res = await authenticatedRequest('get', '/api/students?school=ALHAADIACADEMY');
@@ -199,7 +214,8 @@ describe('Integration: Student Routes', () => {
   describe('GET /api/students/archived', () => {
     it('returns only archived students', async () => {
       await pool.query(
-        `INSERT INTO students (name, school, grade, is_archived) VALUES ('Active', 'ALHAADIACADEMY', '3', false), ('Archived', 'ALHAADIACADEMY', '5', true)`
+        `INSERT INTO students (name, school, grade, is_archived, school_year_id) VALUES ('Active', 'ALHAADIACADEMY', '3', false, $1), ('Archived', 'ALHAADIACADEMY', '5', true, $1)`,
+        [activeYearId]
       );
 
       const res = await authenticatedRequest('get', '/api/students/archived?school=ALHAADIACADEMY');
@@ -213,7 +229,8 @@ describe('Integration: Student Routes', () => {
   describe('GET /api/students/all', () => {
     it('returns all students including archived', async () => {
       await pool.query(
-        `INSERT INTO students (name, school, grade, is_archived) VALUES ('Active', 'ALHAADIACADEMY', '3', false), ('Archived', 'ALHAADIACADEMY', '5', true)`
+        `INSERT INTO students (name, school, grade, is_archived, school_year_id) VALUES ('Active', 'ALHAADIACADEMY', '3', false, $1), ('Archived', 'ALHAADIACADEMY', '5', true, $1)`,
+        [activeYearId]
       );
 
       const res = await authenticatedRequest('get', '/api/students/all?school=ALHAADIACADEMY');

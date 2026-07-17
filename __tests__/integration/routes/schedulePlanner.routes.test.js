@@ -2,12 +2,38 @@
 // class groups, courses, day templates, fixed blocks) + admin gating.
 
 const { authenticatedRequest } = require('../setup/integrationApp');
+const { getTestPool } = require('../setup/setupTestDB');
 
 const SCHOOL = 'ALHAADIACADEMY';
 
 const asAdmin = (method, url) => authenticatedRequest(method, url);
 const asTeacher = (method, url) =>
   authenticatedRequest(method, url, { role: 'TEACHER', userId: '550e8400-e29b-41d4-a716-446655440001' });
+
+// Settings upsert now resolves the school's active school_years row (a
+// NULL school_year_id would never match ON CONFLICT), so seed a school +
+// an active year before exercising the settings endpoints.
+//
+// setupTestDB's global beforeEach already seeds a baseline ALHAADIACADEMY
+// row (+ active school_year via trigger) so resolveSchoolYear doesn't 400
+// pre-existing write-path tests; both inserts below upsert instead of
+// plain-inserting so this doesn't collide with that baseline.
+async function seedActiveSchoolYear() {
+  const pool = getTestPool();
+  const { rows } = await pool.query(
+    `INSERT INTO schools (school_code, name, slug) VALUES ($1, 'Al Haadi Academy', 'al-haadi-academy')
+     ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug
+     RETURNING school_id`,
+    [SCHOOL]
+  );
+  const schoolId = rows[0].school_id;
+  await pool.query(
+    `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+     VALUES ($1, $2, '2025-2026', '2025-09-01', '2026-06-30', TRUE)
+     ON CONFLICT (school_id, label) DO UPDATE SET is_active = TRUE, start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date`,
+    [SCHOOL, schoolId]
+  );
+}
 
 async function createTeacher(overrides = {}) {
   const res = await asAdmin('post', '/api/schedule-planner/teachers').send({
@@ -41,6 +67,10 @@ describe('Integration: Schedule Planner admin gating', () => {
 });
 
 describe('Integration: Planner settings', () => {
+  beforeEach(async () => {
+    await seedActiveSchoolYear();
+  });
+
   it('returns defaults when no settings row exists, and upserts on PATCH', async () => {
     const getRes = await asAdmin('get', '/api/schedule-planner/settings');
     expect(getRes.status).toBe(200);
@@ -57,6 +87,47 @@ describe('Integration: Planner settings', () => {
     const getRes2 = await asAdmin('get', '/api/schedule-planner/settings');
     expect(getRes2.body.data.defaultDurationMinutes).toBe(60);
     expect(getRes2.body.data.snapMinutes).toBe(10);
+  });
+
+  it('PATCHes settings twice without creating a duplicate row (ON CONFLICT requires a non-null school_year_id)', async () => {
+    const firstPatch = await asAdmin('patch', '/api/schedule-planner/settings').send({
+      defaultDurationMinutes: 60,
+      snapMinutes: 10,
+    });
+    expect(firstPatch.status).toBe(200);
+    expect(firstPatch.body.data.defaultDurationMinutes).toBe(60);
+    expect(firstPatch.body.data.snapMinutes).toBe(10);
+
+    const secondPatch = await asAdmin('patch', '/api/schedule-planner/settings').send({
+      defaultDurationMinutes: 45,
+      snapMinutes: 15,
+    });
+    expect(secondPatch.status).toBe(200);
+    expect(secondPatch.body.data.defaultDurationMinutes).toBe(45);
+    expect(secondPatch.body.data.snapMinutes).toBe(15);
+
+    const pool = getTestPool();
+    const { rows } = await pool.query(
+      'SELECT count(*) FROM planner_settings WHERE school = $1',
+      [SCHOOL]
+    );
+    expect(Number(rows[0].count)).toBe(1);
+  });
+
+  it('rejects settings PATCH with 400 when no active school year is configured', async () => {
+    // Deactivate the seeded year so the lookup finds nothing.
+    const pool = getTestPool();
+    await pool.query('UPDATE school_years SET is_active = FALSE WHERE school = $1', [SCHOOL]);
+
+    const res = await asAdmin('patch', '/api/schedule-planner/settings').send({
+      defaultDurationMinutes: 60,
+      snapMinutes: 10,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      status: 'failed',
+      message: 'No school year configured for your school',
+    });
   });
 });
 

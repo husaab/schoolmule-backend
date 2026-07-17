@@ -59,8 +59,11 @@ describe('Report Card Controller', () => {
         .send({ studentId: 'sid', classId: 'cid', term: 'Term 2', workHabits: 'G' });
 
       expect(res.status).toBe(200);
-      // the upsert (2nd db.query) must have been called with the CLASS term, not 'Term 2'
-      const upsertCall = db.query.mock.calls[1];
+      // the upsert (2nd controller db.query call) must have been called with the CLASS
+      // term, not 'Term 2'. Filter out the resolveSchoolYear middleware's own
+      // (globally-mounted) lookup so this stays robust to that extra call.
+      const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years'));
+      const upsertCall = controllerCalls[1];
       expect(upsertCall[1]).toEqual(['sid', 'cid', 'Term 1', 'G', null, null]);
     });
 

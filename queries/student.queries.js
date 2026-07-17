@@ -43,9 +43,11 @@ const studentQueries = {
       last_modified_at,
       is_archived,
       archived_at,
-      archived_by
+      archived_by,
+      school_year_id,
+      previous_student_id
     FROM students
-    WHERE school = $1 AND is_archived = false
+    WHERE school = $1 AND school_year_id = $2 AND is_archived = false
   `,
 
   // GET    /students/:id
@@ -80,16 +82,17 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
-      school,                        
+      school,
       mother_name,
       mother_email,
       mother_number,
       father_name,
       father_email,
       father_number,
-      emergency_contact
+      emergency_contact,
+      school_year_id
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
     )
     RETURNING *
   `,
@@ -124,7 +127,7 @@ const studentQueries = {
   selectStudentsByGrade: `
     SELECT student_id
     FROM students
-    WHERE grade = $1 AND is_archived = false
+    WHERE school = $1 AND school_year_id = $2 AND grade = $3 AND is_archived = false
   `,
 
   // Archive-related queries
@@ -147,9 +150,11 @@ const studentQueries = {
       last_modified_at,
       is_archived,
       archived_at,
-      archived_by
+      archived_by,
+      school_year_id,
+      previous_student_id
     FROM students
-    WHERE school = $1 AND is_archived = true
+    WHERE school = $1 AND school_year_id = $2 AND is_archived = true
     ORDER BY archived_at DESC
   `,
 
@@ -195,9 +200,11 @@ const studentQueries = {
       last_modified_at,
       is_archived,
       archived_at,
-      archived_by
+      archived_by,
+      school_year_id,
+      previous_student_id
     FROM students
-    WHERE school = $1
+    WHERE school = $1 AND school_year_id = $2
     ORDER BY is_archived ASC, name ASC
   `
 };

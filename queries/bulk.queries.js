@@ -5,6 +5,8 @@ const bulkQueries = {
    * 1) Enroll every student in a given grade into a class.
    *    $1 = class_id (UUID)
    *    $2 = grade    (integer)
+   *    $3 = school
+   *    $4 = school_year_id
    */
   enrollAllInGrade: `
     INSERT INTO class_students (class_id, student_id)
@@ -14,6 +16,7 @@ const bulkQueries = {
     FROM students
     WHERE grade = $2
         AND school = $3
+        AND school_year_id = $4
         AND is_archived = false
     ON CONFLICT DO NOTHING
   `,
