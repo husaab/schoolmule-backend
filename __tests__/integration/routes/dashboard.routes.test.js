@@ -32,28 +32,39 @@ describe('Integration: Dashboard Routes', () => {
     );
   });
 
-  // Helper to seed data for dashboard
+  // Helper to seed data for dashboard. Attaches the school's currently-active
+  // school_year_id to students/classes so they're visible through the
+  // (now year-scoped) dashboard queries without an X-School-Year header.
   const seedDashboardData = async () => {
+    const { rows: yearRows } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = 'ALHAADIACADEMY' AND is_active = true`
+    );
+    const activeYearId = yearRows[0].school_year_id;
+
     // Seed students
     await pool.query(
-      `INSERT INTO students (name, school, grade) VALUES
-       ('Alice', 'ALHAADIACADEMY', '5'),
-       ('Bob', 'ALHAADIACADEMY', '5'),
-       ('Charlie', 'ALHAADIACADEMY', '3')`
+      `INSERT INTO students (name, school, grade, school_year_id) VALUES
+       ('Alice', 'ALHAADIACADEMY', '5', $1),
+       ('Bob', 'ALHAADIACADEMY', '5', $1),
+       ('Charlie', 'ALHAADIACADEMY', '3', $1)`,
+      [activeYearId]
     );
 
     // Seed a term
     const { rows: termRows } = await pool.query(
-      `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active)
-       VALUES ('ALHAADIACADEMY', 'Term 1 2025-2026', '2025-09-01', '2025-12-20', '2025-2026', true) RETURNING term_id`
+      `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ('ALHAADIACADEMY', 'Term 1 2025-2026', '2025-09-01', '2025-12-20', '2025-2026', true, $1) RETURNING term_id`,
+      [activeYearId]
     );
 
     // Seed a class
     await pool.query(
-      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-       VALUES ('ALHAADIACADEMY', 5, 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026')`,
-      [TEACHER_USER_ID, termRows[0].term_id]
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
+       VALUES ('ALHAADIACADEMY', 5, 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026', $3)`,
+      [TEACHER_USER_ID, termRows[0].term_id, activeYearId]
     );
+
+    return activeYearId;
   };
 
   describe('GET /api/dashboard/summary', () => {
@@ -84,10 +95,13 @@ describe('Integration: Dashboard Routes', () => {
       expect(parseInt(res.body.data.totalStudents)).toBe(3);
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      await seedDashboardData();
+
       const res = await authenticatedRequest('get', '/api/dashboard/summary?term=Term 1&date=2025-10-15');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(parseInt(res.body.data.totalStudents)).toBe(3);
     });
 
     it('returns 400 when term is missing', async () => {
@@ -115,10 +129,12 @@ describe('Integration: Dashboard Routes', () => {
       expect(typeof res.body.data.rate).toBe('number');
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      await seedDashboardData();
+
       const res = await authenticatedRequest('get', '/api/dashboard/attendance/today?date=2025-10-15');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
     });
 
     it('returns 400 when date is missing', async () => {
@@ -176,10 +192,12 @@ describe('Integration: Dashboard Routes', () => {
       expect(res.body.data[0]).toHaveProperty('rate');
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      await seedDashboardData();
+
       const res = await authenticatedRequest('get', '/api/dashboard/attendance/trend');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
     });
   });
 
@@ -194,10 +212,10 @@ describe('Integration: Dashboard Routes', () => {
       expect(res.body).toHaveProperty('data');
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
       const res = await authenticatedRequest('post', '/api/dashboard/refresh-grade-cache');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
     });
   });
 

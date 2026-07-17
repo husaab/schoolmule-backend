@@ -39,7 +39,9 @@ describe('Integration: Term Routes', () => {
     return rows[0].school_id;
   };
 
-  // Helper to create a term
+  // Helper to create a term. Attaches the school's currently-active
+  // school_year_id so it's visible through the (now year-scoped)
+  // selectTermsBySchool query without callers needing an X-School-Year header.
   const seedTerm = async (schoolId, overrides = {}) => {
     const defaults = {
       school: 'ALHAADIACADEMY',
@@ -50,10 +52,15 @@ describe('Integration: Term Routes', () => {
       isActive: false,
     };
     const data = { ...defaults, ...overrides };
+    const { rows: yearRows } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = $1 AND is_active = true`,
+      [data.school]
+    );
+    const schoolYearId = yearRows[0]?.school_year_id || null;
     const { rows } = await pool.query(
-      `INSERT INTO terms (school, school_id, name, start_date, end_date, academic_year, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [data.school, schoolId, data.name, data.startDate, data.endDate, data.academicYear, data.isActive]
+      `INSERT INTO terms (school, school_id, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [data.school, schoolId, data.name, data.startDate, data.endDate, data.academicYear, data.isActive, schoolYearId]
     );
     return rows[0];
   };
@@ -82,11 +89,12 @@ describe('Integration: Term Routes', () => {
       expect(dbResult.rows).toHaveLength(1);
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a school field in the body', async () => {
       const res = await authenticatedRequest('post', '/api/terms')
         .send({ name: 'Term 1', startDate: '2025-09-01', endDate: '2025-12-20', academicYear: '2025-2026' });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(201);
+      expect(res.body.data.school).toBe('ALHAADIACADEMY');
     });
 
     it('returns 400 when name is missing', async () => {
@@ -143,10 +151,14 @@ describe('Integration: Term Routes', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('returns 400 when school param is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const schoolId = await seedSchool();
+      await seedTerm(schoolId, { name: 'Term 1' });
+
       const res = await authenticatedRequest('get', '/api/terms');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
     });
   });
 
@@ -203,8 +215,8 @@ describe('Integration: Term Routes', () => {
       expect(res.body.data.name).toBe('Term 1 2025-2026');
     });
 
-    it('returns 400 when parameters are missing', async () => {
-      const res = await authenticatedRequest('get', '/api/terms/by-name?termName=Term 1');
+    it('returns 400 when termName is missing', async () => {
+      const res = await authenticatedRequest('get', '/api/terms/by-name');
 
       expect(res.status).toBe(400);
     });
@@ -228,10 +240,14 @@ describe('Integration: Term Routes', () => {
       expect(res.body.data).toHaveLength(2);
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the JWT school even without a query param', async () => {
+      const schoolId = await seedSchool();
+      await seedTerm(schoolId, { name: 'Term 1', academicYear: '2025-2026' });
+
       const res = await authenticatedRequest('get', '/api/terms/academic-year?year=2025-2026');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
     });
 
     it('returns 400 when year is missing', async () => {

@@ -15,14 +15,15 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
  * Handles exclusions, parent/child hierarchy, max_score conversion, and weight scaling
  *
  * @param {string} school - The school enum value
+ * @param {string|null} schoolYearId - The selected school year's id
  * @returns {Promise<number|null>} Average grade percentage or null if no data
  */
-async function calculateSchoolAverageGrade(school) {
+async function calculateSchoolAverageGrade(school, schoolYearId) {
   // 1. Fetch all data in parallel for efficiency
   const [enrollmentsRes, assessmentsRes, scoresRes] = await Promise.all([
-    db.query(dashboardQueries.selectStudentClassEnrollments, [school]),
-    db.query(dashboardQueries.selectAssessmentsBySchool, [school]),
-    db.query(dashboardQueries.selectStudentScoresBySchool, [school])
+    db.query(dashboardQueries.selectStudentClassEnrollments, [school, schoolYearId]),
+    db.query(dashboardQueries.selectAssessmentsBySchool, [school, schoolYearId]),
+    db.query(dashboardQueries.selectStudentScoresBySchool, [school, schoolYearId])
   ]);
 
   const enrollments = enrollmentsRes.rows;
@@ -72,10 +73,12 @@ async function calculateSchoolAverageGrade(school) {
  * Get school average grade with 24-hour caching
  *
  * @param {string} school - The school enum value
+ * @param {string|null} schoolYearId - The selected school year's id
  * @returns {Promise<number|null>} Cached or freshly calculated average
  */
-async function getSchoolAverageGrade(school) {
-  const cached = gradeCache.get(school);
+async function getSchoolAverageGrade(school, schoolYearId) {
+  const cacheKey = `${school}:${schoolYearId || ''}`;
+  const cached = gradeCache.get(cacheKey);
   const now = Date.now();
 
   if (cached && (now - cached.timestamp) < CACHE_TTL) {
@@ -83,8 +86,8 @@ async function getSchoolAverageGrade(school) {
   }
 
   // Calculate fresh and cache the result
-  const average = await calculateSchoolAverageGrade(school);
-  gradeCache.set(school, { average, timestamp: now });
+  const average = await calculateSchoolAverageGrade(school, schoolYearId);
+  gradeCache.set(cacheKey, { average, timestamp: now });
   return average;
 }
 
@@ -93,10 +96,9 @@ async function getSchoolAverageGrade(school) {
  * Query params: school, term, date (YYYY-MM-DD)
  */
 const getSummary = async (req, res) => {
-  const { school, term, date } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
-  }
+  const { term, date } = req.query;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
   if (!term) {
     return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: term' });
   }
@@ -118,15 +120,15 @@ const getSummary = async (req, res) => {
       avgClassSizeRes,
       averageGrade
     ] = await Promise.all([
-      db.query(dashboardQueries.selectTotalStudents, [school]),
+      db.query(dashboardQueries.selectTotalStudents, [school, schoolYearId]),
       db.query(dashboardQueries.selectTotalTeachers, [school]),
-      db.query(dashboardQueries.selectTotalClasses, [school]),
-      db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date]),
-      db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, date]),
-      db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, date]),
+      db.query(dashboardQueries.selectTotalClasses, [school, schoolYearId]),
+      db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date, schoolYearId]),
+      db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, date, schoolYearId]),
+      db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, date, schoolYearId]),
       db.query(dashboardQueries.selectReportCardsCount, [school, term]),
-      db.query(dashboardQueries.selectAverageClassSize, [school]),
-      getSchoolAverageGrade(school)
+      db.query(dashboardQueries.selectAverageClassSize, [school, schoolYearId]),
+      getSchoolAverageGrade(school, schoolYearId)
     ]);
 
     const totalStudents       = totalStudentsRes.rows[0].count;
@@ -164,15 +166,14 @@ const getSummary = async (req, res) => {
  * Query params: school, date
  */
 const getTodaysAttendanceRate = async (req, res) => {
-  const { school, date } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
-  }
+  const { date } = req.query;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
   if (!date) {
     return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: date' });
   }
   try {
-    const { rows } = await db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date]);
+    const { rows } = await db.query(dashboardQueries.selectTodaysAttendanceRate, [school, date, schoolYearId]);
     return res.status(200).json({ status: 'success', data: { rate: parseFloat(rows[0].rate) } });
   } catch (error) {
     logger.error(error);
@@ -185,15 +186,14 @@ const getTodaysAttendanceRate = async (req, res) => {
  * Query params: school, endDate
  */
 const getWeeklyAttendanceRate = async (req, res) => {
-  const { school, endDate } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
-  }
+  const { endDate } = req.query;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
   if (!endDate) {
     return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: endDate' });
   }
   try {
-    const { rows } = await db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, endDate]);
+    const { rows } = await db.query(dashboardQueries.selectWeeklyAttendanceRate, [school, endDate, schoolYearId]);
     return res.status(200).json({ status: 'success', data: { rate: parseFloat(rows[0].rate) } });
   } catch (error) {
     logger.error(error);
@@ -206,15 +206,14 @@ const getWeeklyAttendanceRate = async (req, res) => {
  * Query params: school, referenceDate
  */
 const getMonthlyAttendanceRate = async (req, res) => {
-  const { school, referenceDate } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
-  }
+  const { referenceDate } = req.query;
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
   if (!referenceDate) {
     return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: referenceDate' });
   }
   try {
-    const { rows } = await db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, referenceDate]);
+    const { rows } = await db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, referenceDate, schoolYearId]);
     return res.status(200).json({ status: 'success', data: { rate: parseFloat(rows[0].rate) } });
   } catch (error) {
     logger.error(error);
@@ -230,10 +229,8 @@ const getMonthlyAttendanceRate = async (req, res) => {
  *   - endDate    (optional, YYYY-MM-DD; default = CURRENT_DATE)
  */
 const getAttendanceTrend = async (req, res) => {
-  const { school, days = 7, endDate } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing school' });
-  }
+  const { days = 7, endDate } = req.query;
+  const school = req.user.school;
 
   // We'll treat `refDate` as a date string or fallback to CURRENT_DATE
   // Passing it in as text, so cast to date in SQL
@@ -298,18 +295,17 @@ const getAttendanceTrend = async (req, res) => {
  * Manually invalidates the grade cache for a school (useful after bulk grade uploads)
  */
 const refreshGradeCache = async (req, res) => {
-  const { school } = req.query;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: school' });
-  }
+  const school = req.user.school;
+  const schoolYearId = req.schoolYear?.schoolYearId || null;
+  const cacheKey = `${school}:${schoolYearId || ''}`;
 
   try {
     // Invalidate cached value by deleting it
-    gradeCache.delete(school);
+    gradeCache.delete(cacheKey);
 
     // Recalculate immediately so the next request is fast
-    const average = await calculateSchoolAverageGrade(school);
-    gradeCache.set(school, { average, timestamp: Date.now() });
+    const average = await calculateSchoolAverageGrade(school, schoolYearId);
+    gradeCache.set(cacheKey, { average, timestamp: Date.now() });
 
     return res.status(200).json({
       status: 'success',

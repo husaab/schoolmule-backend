@@ -6,7 +6,7 @@ const termQueries = {
    * Params: school (public.school enum)
    */
   selectTermsBySchool: `
-    SELECT 
+    SELECT
       t.term_id,
       t.school,
       t.school_id,
@@ -14,13 +14,14 @@ const termQueries = {
       t.start_date,
       t.end_date,
       t.academic_year,
+      t.school_year_id,
       t.is_active,
       t.created_at,
       t.updated_at,
       s.name as school_name
     FROM terms t
     LEFT JOIN schools s ON t.school_id = s.school_id
-    WHERE t.school = $1
+    WHERE t.school = $1 AND ($2::uuid IS NULL OR t.school_year_id = $2)
     ORDER BY t.start_date ASC
   `,
 
@@ -140,20 +141,21 @@ const termQueries = {
 
   /**
    * Create new term
-   * Params: school, school_id, name, start_date, end_date, academic_year, is_active
+   * Params: school, school_id, name, start_date, end_date, academic_year, is_active, school_year_id
    */
   insertTerm: `
     INSERT INTO terms (
-      school, 
-      school_id, 
-      name, 
-      start_date, 
-      end_date, 
-      academic_year, 
+      school,
+      school_id,
+      name,
+      start_date,
+      end_date,
+      academic_year,
       is_active,
+      school_year_id,
       updated_at
-    ) 
-    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
     RETURNING *
   `,
 
