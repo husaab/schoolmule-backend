@@ -113,6 +113,23 @@ describe('school year rollover', () => {
     expect(rows).toEqual([{ name: 'Grad Kid', grade: '8' }]); // override kept the grade-8 kid, exclusion dropped the other
   });
 
+  // Regression: the wizard's grade <select> used to write '' into gradeOverrides
+  // when "—" was re-selected for a graduating student. An empty-string override
+  // must be treated the same as no override at all — otherwise it gets inserted
+  // as a real grade value and blows up the GRADE enum, rolling back the whole
+  // transaction.
+  it('treats an empty-string grade override as absent and still counts the student as graduated', async () => {
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: { [gradKid]: '' } },
+      classes: { mode: 'skip' }, terms: [], copyPlanner: false, copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ studentsRolled: 1, studentsGraduated: 1 });
+
+    const { rows } = await pool.query(`SELECT name, grade::text FROM students WHERE school_year_id = $1`, [year26]);
+    expect(rows).toEqual([{ name: 'Moving Kid', grade: 'SK' }]); // Grad Kid graduated, not inserted with grade ''
+  });
+
   // Added during review: copyPlanner/copyCalendar execute paths had zero coverage
   // (both existing execute tests pass copyPlanner:false, copyCalendar:false), yet
   // they hit the per-year planner unique constraints and the fixed-block

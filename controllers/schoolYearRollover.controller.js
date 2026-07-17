@@ -103,7 +103,8 @@ const executeRollover = async (req, res, next) => {
 
       for (const s of source.rows) {
         if (exclude.has(s.student_id) || alreadyRolled.has(s.student_id)) continue;
-        const newGrade = overrides[s.student_id] ?? GRADE_PROGRESSION[s.grade] ?? null;
+        const override = overrides[s.student_id];
+        const newGrade = (override || GRADE_PROGRESSION[s.grade]) ?? null;
         if (newGrade === null) { summary.studentsGraduated += 1; continue; }
         const inserted = await client.query(rolloverQueries.insertRolledStudent, [
           s.name, s.homeroom_teacher_id, newGrade, s.oen, req.user.school,
