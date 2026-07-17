@@ -68,13 +68,11 @@ const executeRollover = async (req, res, next) => {
 
     const target = await client.query(schoolYearQueries.selectYearById, [targetYearId]);
     if (target.rows.length === 0 || target.rows[0].school !== req.user.school) {
-      client.release();
       return res.status(404).json({ status: 'failed', message: 'Target year not found' });
     }
     const targetYear = target.rows[0];
     const sourceYearId = targetYear.created_from_year_id;
     if (!sourceYearId && (students.mode === 'rollover' || classes.mode === 'duplicate' || copyPlanner || copyCalendar)) {
-      client.release();
       return res.status(400).json({ status: 'failed', message: 'This year has no source year to copy from' });
     }
 
