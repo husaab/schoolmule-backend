@@ -752,8 +752,10 @@ CREATE TABLE IF NOT EXISTS planner_schedules (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_planner_schedules_school ON planner_schedules(school);
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_published_per_school
-  ON planner_schedules(school) WHERE status = 'published';
+-- One published schedule per (school, year), not per school, so publishing
+-- in a new year doesn't collide with an older year's published schedule.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_published_per_school_year
+  ON planner_schedules(school, school_year_id) WHERE status = 'published';
 
 -- Materialized on publish so the teacher widget and public page hit
 -- indexed rows instead of scanning JSONB
