@@ -104,7 +104,7 @@ describe('preSolveCheck', () => {
       fixedBlocks: [
         // Grade 1's entire day 2 is blocked, so Math can only run day 1 —
         // but the teacher only works day 2.
-        { label: 'Trip', day: 2, startMin: 480, endMin: 600, scope: 'classGroup', classGroupId: 'cg-1' },
+        { label: 'Trip', day: 2, startMin: 480, endMin: 600, classGroupIds: ['cg-1'] },
       ],
       courses: [course({ sessionsPerWeek: 1 })],
     });
@@ -141,7 +141,7 @@ describe('preSolveCheck', () => {
 
   it('detects PIN_CONFLICT for a pin on a blocked slot', () => {
     const input = baseInput({
-      fixedBlocks: [{ label: 'Lunch', day: 1, startMin: 480, endMin: 520, scope: 'school' }],
+      fixedBlocks: [{ label: 'Lunch', day: 1, startMin: 480, endMin: 520, classGroupIds: [] }],
       courses: [course({ sessionsPerWeek: 1 })],
       pins: [{ courseId: 'c-1', sessionIndex: 0, day: 1, startMin: 490, teacherId: 't-1', roomId: null }],
     });
@@ -179,6 +179,29 @@ describe('preSolveCheck', () => {
     });
     const result = check(input);
     expect(codes(result)).toContain('TOTAL_TEACHER_CAPACITY');
+  });
+
+  it('detects TEACHER_SPARE_IMPOSSIBLE when no day has a window big enough', () => {
+    const input = baseInput({
+      // Day is 480-600 with 480-520 blocked school-wide: max possible free
+      // run for anyone is 80 min; teacher needs a 90-min spare.
+      fixedBlocks: [{ label: 'Assembly', day: 1, startMin: 480, endMin: 520, classGroupIds: [] }],
+      teachers: [teacher({ dailySpareMinutes: 90 })],
+      courses: [course({ sessionsPerWeek: 1 })],
+    });
+    const result = check(input);
+    expect(codes(result)).toContain('TEACHER_SPARE_IMPOSSIBLE');
+    const err = result.errors.find((e) => e.code === 'TEACHER_SPARE_IMPOSSIBLE');
+    expect(err.message).toContain('Ms. X');
+  });
+
+  it('passes when the spare fits alongside the teaching load', () => {
+    const input = baseInput({
+      teachers: [teacher({ dailySpareMinutes: 45 })],
+      courses: [course({ sessionsPerWeek: 1 })], // 40 min class in a 120-min day
+    });
+    const result = check(input);
+    expect(result.feasible).toBe(true);
   });
 
   it('emits a tightness warning above 90% utilization while staying feasible', () => {

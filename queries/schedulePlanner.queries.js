@@ -30,17 +30,17 @@ const selectTeacherById = `
 const insertTeacher = `
   INSERT INTO planner_teachers
     (school, school_id, user_id, staff_id, display_name, is_full_time,
-     max_weekly_minutes, allowed_days, excluded_windows, notes)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+     max_weekly_minutes, daily_spare_minutes, allowed_days, excluded_windows, notes)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11)
   RETURNING *
 `;
 
 const updateTeacher = `
   UPDATE planner_teachers
   SET user_id = $1, staff_id = $2, display_name = $3, is_full_time = $4,
-      max_weekly_minutes = $5, allowed_days = $6::jsonb,
-      excluded_windows = $7::jsonb, notes = $8, updated_at = NOW()
-  WHERE planner_teacher_id = $9 AND school = $10
+      max_weekly_minutes = $5, daily_spare_minutes = $6, allowed_days = $7::jsonb,
+      excluded_windows = $8::jsonb, notes = $9, updated_at = NOW()
+  WHERE planner_teacher_id = $10 AND school = $11
   RETURNING *
 `;
 
@@ -157,14 +157,14 @@ const selectFixedBlocksBySchool = `
 
 const insertFixedBlock = `
   INSERT INTO planner_fixed_blocks
-    (school, school_id, class_group_id, label, day_of_week, start_min, end_min)
-  VALUES ($1, $2, $3, $4, $5, $6, $7)
+    (school, school_id, class_group_ids, label, day_of_week, start_min, end_min)
+  VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
   RETURNING *
 `;
 
 const updateFixedBlock = `
   UPDATE planner_fixed_blocks
-  SET class_group_id = $1, label = $2, day_of_week = $3, start_min = $4,
+  SET class_group_ids = $1::jsonb, label = $2, day_of_week = $3, start_min = $4,
       end_min = $5, updated_at = NOW()
   WHERE fixed_block_id = $6 AND school = $7
   RETURNING *

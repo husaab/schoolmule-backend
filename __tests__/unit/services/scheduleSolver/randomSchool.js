@@ -47,8 +47,25 @@ function randomSchool(seed) {
     day: d.day,
     startMin: LUNCH.startMin,
     endMin: LUNCH.endMin,
-    scope: 'school',
+    classGroupIds: [],
   }));
+
+  // Half the schools also get a group-scoped snack for the first half of the
+  // class groups (staggered-break scenario) — the witness respects it below.
+  const snackGroups = [];
+  if (rng() < 0.5 && numGroups >= 2) {
+    for (let g = 0; g < Math.ceil(numGroups / 2); g++) snackGroups.push(`cg-${g}`);
+    const snackStart = 555 + 5 * randInt(rng, 0, 6); // between 9:15 and 9:45
+    for (const d of days) {
+      fixedBlocks.push({
+        label: 'Snack',
+        day: d.day,
+        startMin: snackStart,
+        endMin: snackStart + 15,
+        classGroupIds: [...snackGroups],
+      });
+    }
+  }
 
   const teachers = [];
   for (let t = 0; t < numTeachers; t++) {
@@ -77,11 +94,18 @@ function randomSchool(seed) {
   const witness = []; // {group, day, startMin, endMin, teacherIdx, roomIdx}
 
   for (let g = 0; g < numGroups; g++) {
+    // Windows this group can never occupy: lunch plus any scoped block on it.
+    const groupBlocks = (day) =>
+      fixedBlocks.filter(
+        (b) => b.day === day && (b.classGroupIds.length === 0 || b.classGroupIds.includes(`cg-${g}`))
+      );
     for (const d of days) {
+      const blocks = groupBlocks(d.day);
       let cursor = DAY_START;
       while (cursor < DAY_END - 30) {
-        if (cursor < LUNCH.endMin && cursor + 30 > LUNCH.startMin) {
-          cursor = LUNCH.endMin; // skip over lunch
+        const inBlock = blocks.find((b) => cursor < b.endMin && cursor + 30 > b.startMin);
+        if (inBlock) {
+          cursor = inBlock.endMin; // skip over the break
           continue;
         }
         if (rng() < 0.25) {
@@ -90,7 +114,7 @@ function randomSchool(seed) {
         }
         const dur = pick(rng, DURATIONS);
         const endMin = cursor + dur;
-        if (endMin > DAY_END || (cursor < LUNCH.endMin && endMin > LUNCH.startMin)) {
+        if (endMin > DAY_END || blocks.some((b) => cursor < b.endMin && endMin > b.startMin)) {
           cursor += SNAP;
           continue;
         }
@@ -173,6 +197,29 @@ function randomSchool(seed) {
       if (!overlapsInterval(teacherBusy[idx], d, winStart, winEnd)) {
         t.excludedWindows.push({ day: d, startMin: winStart, endMin: Math.min(winEnd, DAY_END) });
       }
+    }
+    // Daily spare rule, sized so the witness itself satisfies it: the spare
+    // is at most the teacher's smallest max-free-run across teaching days.
+    if (rng() < 0.4 && teacherUsed[idx] > 0) {
+      const teachingDays = [...new Set(teacherBusy[idx].map((b) => b.day))];
+      let minMaxRun = Infinity;
+      for (const day of teachingDays) {
+        const busy = [
+          ...teacherBusy[idx].filter((b) => b.day === day).map((b) => [b.startMin, b.endMin]),
+          ...t.excludedWindows.filter((w) => w.day === day).map((w) => [w.startMin, w.endMin]),
+          [LUNCH.startMin, LUNCH.endMin], // the only school-wide block
+        ].sort((a, b) => a[0] - b[0]);
+        let cursor = DAY_START;
+        let maxRun = 0;
+        for (const [from, to] of busy) {
+          if (from > cursor) maxRun = Math.max(maxRun, from - cursor);
+          cursor = Math.max(cursor, to);
+        }
+        maxRun = Math.max(maxRun, DAY_END - cursor);
+        minMaxRun = Math.min(minMaxRun, maxRun);
+      }
+      const spare = Math.floor(minMaxRun / SNAP) * SNAP;
+      if (spare >= 15) t.dailySpareMinutes = Math.min(spare, 60);
     }
   });
 

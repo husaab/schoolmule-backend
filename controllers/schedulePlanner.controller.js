@@ -19,6 +19,7 @@ const mapTeacher = (row) => ({
   displayName: row.display_name,
   isFullTime: row.is_full_time,
   maxWeeklyMinutes: row.max_weekly_minutes,
+  dailySpareMinutes: row.daily_spare_minutes,
   allowedDays: row.allowed_days,
   excludedWindows: row.excluded_windows,
   notes: row.notes,
@@ -67,7 +68,7 @@ const mapDayTemplate = (row) => ({
 
 const mapFixedBlock = (row) => ({
   fixedBlockId: row.fixed_block_id,
-  classGroupId: row.class_group_id,
+  classGroupIds: row.class_group_ids,
   label: row.label,
   dayOfWeek: row.day_of_week,
   startMin: row.start_min,
@@ -150,7 +151,7 @@ const listTeachers = async (req, res) => {
 const createTeacher = async (req, res) => {
   const {
     userId, staffId, displayName, isFullTime, maxWeeklyMinutes,
-    allowedDays, excludedWindows, notes,
+    dailySpareMinutes, allowedDays, excludedWindows, notes,
   } = req.body;
   if (!displayName || typeof displayName !== 'string') {
     return fail(res, 400, 'displayName is required');
@@ -168,6 +169,7 @@ const createTeacher = async (req, res) => {
       displayName,
       isFullTime !== false,
       maxWeeklyMinutes ?? null,
+      dailySpareMinutes ?? null,
       JSON.stringify(allowedDays ?? [1, 2, 3, 4, 5]),
       JSON.stringify(excludedWindows ?? []),
       notes || null,
@@ -194,6 +196,7 @@ const updateTeacher = async (req, res) => {
       body.displayName ?? existing.display_name,
       body.isFullTime !== undefined ? body.isFullTime === true : existing.is_full_time,
       body.maxWeeklyMinutes !== undefined ? body.maxWeeklyMinutes : existing.max_weekly_minutes,
+      body.dailySpareMinutes !== undefined ? body.dailySpareMinutes : existing.daily_spare_minutes,
       JSON.stringify(body.allowedDays ?? existing.allowed_days),
       JSON.stringify(body.excludedWindows ?? existing.excluded_windows),
       body.notes !== undefined ? body.notes : existing.notes,
@@ -463,14 +466,17 @@ const listFixedBlocks = async (req, res) => {
 };
 
 const createFixedBlock = async (req, res) => {
-  const { classGroupId, label, dayOfWeek, startMin, endMin } = req.body;
+  const { classGroupIds, label, dayOfWeek, startMin, endMin } = req.body;
   if (!label || !isValidWindow({ day: dayOfWeek, startMin, endMin })) {
     return fail(res, 400, 'label, dayOfWeek (1-7), startMin and endMin (endMin > startMin) are required');
+  }
+  if (classGroupIds !== undefined && !Array.isArray(classGroupIds)) {
+    return fail(res, 400, 'classGroupIds must be an array (empty = whole school)');
   }
   try {
     const schoolId = await resolveSchoolId(req.user.school);
     const { rows } = await db.query(q.insertFixedBlock, [
-      req.user.school, schoolId, classGroupId || null, label, dayOfWeek, startMin, endMin,
+      req.user.school, schoolId, JSON.stringify(classGroupIds ?? []), label, dayOfWeek, startMin, endMin,
     ]);
     return ok(res, mapFixedBlock(rows[0]), 201);
   } catch (error) {
@@ -486,7 +492,7 @@ const updateFixedBlock = async (req, res) => {
     if (existingRows.length === 0) return fail(res, 404, 'Fixed block not found');
     const existing = existingRows[0];
     const next = {
-      classGroupId: body.classGroupId !== undefined ? body.classGroupId : existing.class_group_id,
+      classGroupIds: body.classGroupIds !== undefined ? body.classGroupIds : existing.class_group_ids,
       label: body.label ?? existing.label,
       dayOfWeek: body.dayOfWeek ?? existing.day_of_week,
       startMin: body.startMin ?? existing.start_min,
@@ -495,8 +501,11 @@ const updateFixedBlock = async (req, res) => {
     if (!isValidWindow({ day: next.dayOfWeek, startMin: next.startMin, endMin: next.endMin })) {
       return fail(res, 400, 'dayOfWeek (1-7), startMin and endMin (endMin > startMin) must be valid');
     }
+    if (!Array.isArray(next.classGroupIds)) {
+      return fail(res, 400, 'classGroupIds must be an array (empty = whole school)');
+    }
     const { rows } = await db.query(q.updateFixedBlock, [
-      next.classGroupId || null, next.label, next.dayOfWeek, next.startMin, next.endMin,
+      JSON.stringify(next.classGroupIds), next.label, next.dayOfWeek, next.startMin, next.endMin,
       fixedBlockId, req.user.school,
     ]);
     return ok(res, mapFixedBlock(rows[0]));
@@ -583,6 +592,10 @@ async function assembleSolverInput(school, body = {}) {
     db.query(q.selectFixedBlocksBySchool, [school]),
   ]);
   const settings = settingsQ.rows.length ? mapSettings(settingsQ.rows[0]) : DEFAULT_SETTINGS;
+  // JSONB id arrays are not FK-enforced — drop references to deleted rows
+  // so a stale pool/block entry can't fail the whole generate call.
+  const knownGroupIds = new Set(groupsQ.rows.map((r) => r.class_group_id));
+  const knownTeacherIds = new Set(teachersQ.rows.map((r) => r.planner_teacher_id));
   return {
     config: {
       snapMinutes: settings.snapMinutes,
@@ -594,19 +607,25 @@ async function assembleSolverInput(school, body = {}) {
     days: daysQ.rows
       .filter((r) => Array.isArray(r.fillable_ranges) && r.fillable_ranges.length > 0)
       .map((r) => ({ day: r.day_of_week, fillableRanges: r.fillable_ranges })),
-    fixedBlocks: blocksQ.rows.map((r) => ({
-      label: r.label,
-      day: r.day_of_week,
-      startMin: r.start_min,
-      endMin: r.end_min,
-      scope: r.class_group_id ? 'classGroup' : 'school',
-      classGroupId: r.class_group_id || undefined,
-    })),
+    fixedBlocks: blocksQ.rows
+      .map((r) => ({
+        label: r.label,
+        day: r.day_of_week,
+        startMin: r.start_min,
+        endMin: r.end_min,
+        classGroupIds: (r.class_group_ids || []).filter((id) => knownGroupIds.has(id)),
+        wasScoped: (r.class_group_ids || []).length > 0,
+      }))
+      // A scoped block whose groups were all deleted must not silently
+      // become school-wide — drop it instead.
+      .filter((b) => !b.wasScoped || b.classGroupIds.length > 0)
+      .map(({ wasScoped, ...block }) => block), // eslint-disable-line no-unused-vars
     teachers: teachersQ.rows.map((r) => ({
       teacherId: r.planner_teacher_id,
       name: r.display_name,
       fullTime: r.is_full_time,
       maxMinutesPerWeek: r.max_weekly_minutes,
+      dailySpareMinutes: r.daily_spare_minutes,
       allowedDays: r.allowed_days,
       excludedWindows: r.excluded_windows,
     })),
@@ -619,10 +638,12 @@ async function assembleSolverInput(school, body = {}) {
       sessionsPerWeek: r.sessions_per_week,
       durationMinutes: r.duration_minutes,
       teacherId: r.assigned_teacher_id,
-      teacherCandidateIds:
-        Array.isArray(r.candidate_teacher_ids) && r.candidate_teacher_ids.length > 0
-          ? r.candidate_teacher_ids
-          : null,
+      teacherCandidateIds: (() => {
+        const pool = (Array.isArray(r.candidate_teacher_ids) ? r.candidate_teacher_ids : []).filter(
+          (id) => knownTeacherIds.has(id)
+        );
+        return pool.length > 0 ? pool : null;
+      })(),
       roomId: r.required_room_id,
       maxPerDay: r.max_per_day,
     })),

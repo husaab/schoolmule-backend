@@ -89,7 +89,8 @@ function validateCandidate(rawInput, candidate) {
     }
 
     for (const block of rawInput.fixedBlocks || []) {
-      const applies = block.scope !== 'classGroup' || block.classGroupId === s.classGroupId;
+      const groupIds = Array.isArray(block.classGroupIds) ? block.classGroupIds : [];
+      const applies = groupIds.length === 0 || groupIds.includes(s.classGroupId);
       if (applies && overlaps(s, { day: block.day, startMin: block.startMin, endMin: block.endMin })) {
         violations.push(
           violation(
@@ -161,6 +162,57 @@ function validateCandidate(rawInput, candidate) {
           `${teacher.name} is scheduled ${total} min/week, over their ${teacher.maxMinutesPerWeek} min maximum.`
         )
       );
+    }
+  }
+
+  // Daily spare: on every day a teacher teaches, one contiguous free window
+  // of >= dailySpareMinutes must remain within SCHEDULABLE time (fillable
+  // ranges minus school-wide blocks, their exclusions, and their sessions —
+  // group-scoped blocks still count as spare time since the teacher could
+  // have been teaching another group then).
+  for (const teacher of rawInput.teachers) {
+    const spare = teacher.dailySpareMinutes;
+    if (!Number.isFinite(spare) || spare <= 0) continue;
+    const own = sessions.filter((s) => s.teacherId === teacher.teacherId);
+    const teachingDays = [...new Set(own.map((s) => s.day))];
+    for (const dayIso of teachingDays) {
+      const day = daysByIso.get(dayIso);
+      if (!day) continue;
+      const busy = [
+        ...own.filter((s) => s.day === dayIso).map((s) => [s.startMin, s.endMin]),
+        ...(teacher.excludedWindows || [])
+          .filter((w) => w.day === dayIso)
+          .map((w) => [w.startMin, w.endMin]),
+        ...(rawInput.fixedBlocks || [])
+          .filter(
+            (b) =>
+              b.day === dayIso &&
+              (!Array.isArray(b.classGroupIds) || b.classGroupIds.length === 0)
+          )
+          .map((b) => [b.startMin, b.endMin]),
+      ];
+      let maxRun = 0;
+      for (const range of day.fillableRanges) {
+        // Walk the range and measure the longest stretch not covered by busy.
+        let cursor = range.startMin;
+        const inRange = busy
+          .map(([from, to]) => [Math.max(from, range.startMin), Math.min(to, range.endMin)])
+          .filter(([from, to]) => to > from)
+          .sort((a, b) => a[0] - b[0]);
+        for (const [from, to] of inRange) {
+          if (from > cursor) maxRun = Math.max(maxRun, from - cursor);
+          cursor = Math.max(cursor, to);
+        }
+        if (range.endMin > cursor) maxRun = Math.max(maxRun, range.endMin - cursor);
+      }
+      if (maxRun < spare) {
+        violations.push(
+          violation(
+            'SPARE_VIOLATION',
+            `${teacher.name} has no free ${spare}-minute spare on day ${dayIso} (largest free window: ${maxRun} min).`
+          )
+        );
+      }
     }
   }
 

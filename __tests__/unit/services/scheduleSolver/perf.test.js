@@ -16,7 +16,7 @@ function maxScaleSchool() {
     day: d,
     startMin: 720,
     endMin: 760,
-    scope: 'school',
+    classGroupIds: [],
   }));
 
   const teachers = [];

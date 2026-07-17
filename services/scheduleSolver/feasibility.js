@@ -230,6 +230,39 @@ function preSolveCheck(model) {
     }
   }
 
+  // Teachers with a daily spare rule and pre-assigned classes must have at
+  // least one day whose free schedulable time contains a window that large.
+  model.teachers.forEach((teacher, t) => {
+    if (!teacher.spareSlots || assignedMin[t] === 0) return;
+    let possibleSomewhere = false;
+    for (let d = 0; d < model.numDays && !possibleSomewhere; d++) {
+      const off = d * model.W;
+      const n = model.slotsPerDay[d];
+      let run = 0;
+      for (let s = 0; s < n; s++) {
+        if (grid.rangeIsFree(model.teacherBase[t], off, s, 1)) {
+          run++;
+          if (run >= teacher.spareSlots) {
+            possibleSomewhere = true;
+            break;
+          }
+        } else {
+          run = 0;
+        }
+      }
+    }
+    if (!possibleSomewhere) {
+      const spareMin = teacher.spareSlots * model.config.snap;
+      errors.push(
+        diag(
+          CODES.TEACHER_SPARE_IMPOSSIBLE,
+          `${teacher.name} needs a ${spareMin}-minute daily spare, but no school day has a free window that large for them.`,
+          { teacherId: teacher.id, spareMin }
+        )
+      );
+    }
+  });
+
   // Hall-style lower bound on candidate pools that actually occur (size > 1).
   const pools = new Map();
   for (const course of model.courses) {

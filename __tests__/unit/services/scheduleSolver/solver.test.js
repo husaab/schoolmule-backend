@@ -121,6 +121,67 @@ describe('generateSchedules — constraints', () => {
   });
 });
 
+describe('generateSchedules — multi-group fixed blocks and teacher spares', () => {
+  it('keeps each group out of its own staggered lunch block only', () => {
+    // Grade 1 lunch 520-560, Grade 2 lunch 480-520 — every candidate must
+    // respect the split (validated by the independent oracle).
+    const input = smallSchool({
+      fixedBlocks: [
+        { label: 'Lunch 1', day: 1, startMin: 520, endMin: 560, classGroupIds: ['cg-1'] },
+        { label: 'Lunch 1', day: 2, startMin: 520, endMin: 560, classGroupIds: ['cg-1'] },
+        { label: 'Lunch 2', day: 1, startMin: 480, endMin: 520, classGroupIds: ['cg-2'] },
+        { label: 'Lunch 2', day: 2, startMin: 480, endMin: 520, classGroupIds: ['cg-2'] },
+      ],
+    });
+    const result = generateSchedules(input);
+    expect(result.ok).toBe(true);
+    for (const cand of result.candidates) {
+      expect(validateCandidate(input, cand)).toEqual([]);
+    }
+  });
+
+  it('leaves every teacher their contiguous daily spare', () => {
+    // One day, 120 fillable minutes, 2 x 40-min classes for Ms. X with a
+    // 40-min spare: only placements keeping a 40-min unbroken window survive.
+    const input = baseInput({
+      config: cfg({ candidateCount: 5, timeBudgetMs: 2000 }),
+      teachers: [teacher({ dailySpareMinutes: 40 })],
+      classGroups: [
+        { classGroupId: 'cg-1', name: 'Grade 1' },
+        { classGroupId: 'cg-2', name: 'Grade 2' },
+      ],
+      courses: [
+        course({ sessionsPerWeek: 1 }),
+        course({ courseId: 'c-2', classGroupId: 'cg-2', name: 'Science', sessionsPerWeek: 1 }),
+      ],
+    });
+    const result = generateSchedules(input);
+    expect(result.ok).toBe(true);
+    for (const cand of result.candidates) {
+      expect(validateCandidate(input, cand)).toEqual([]);
+    }
+  });
+
+  it('reports failure instead of violating an unsatisfiable spare', () => {
+    // 80 min of teaching in a 120-min day leaves at most a 40-min window,
+    // but the teacher requires 60 — no valid schedule exists.
+    const input = baseInput({
+      config: cfg({ candidateCount: 2, timeBudgetMs: 800 }),
+      teachers: [teacher({ dailySpareMinutes: 60 })],
+      classGroups: [
+        { classGroupId: 'cg-1', name: 'Grade 1' },
+        { classGroupId: 'cg-2', name: 'Grade 2' },
+      ],
+      courses: [
+        course({ sessionsPerWeek: 1 }),
+        course({ courseId: 'c-2', classGroupId: 'cg-2', name: 'Science', sessionsPerWeek: 1 }),
+      ],
+    });
+    const result = generateSchedules(input);
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe('generateSchedules — tight and infeasible instances', () => {
   it('returns a single candidate plus a tight warning when only one schedule exists', () => {
     const input = baseInput({

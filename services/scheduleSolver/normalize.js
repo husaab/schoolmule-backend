@@ -139,14 +139,20 @@ function validateAndNormalize(rawInput) {
     if (range) grid.setRange(occ, d * W, range.start, range.len);
   };
 
-  // Fixed blocks: school-wide ones block every resource; group-scoped only that class.
-  const fixedBlocks = rawInput.fixedBlocks || [];
+  // Fixed blocks: an empty/missing classGroupIds list means school-wide
+  // (blocks every resource); otherwise only the listed class groups.
+  const fixedBlocks = (rawInput.fixedBlocks || []).map((block) => ({
+    ...block,
+    classGroupIds: Array.isArray(block.classGroupIds) ? block.classGroupIds : [],
+  }));
   for (const block of fixedBlocks) {
-    if (block.scope === 'classGroup' && !classGroupIndex.has(block.classGroupId)) {
-      fail(
-        'UNKNOWN_CLASS_GROUP',
-        `Fixed block "${block.label}" references unknown class group "${block.classGroupId}".`
-      );
+    for (const groupId of block.classGroupIds) {
+      if (!classGroupIndex.has(groupId)) {
+        fail(
+          'UNKNOWN_CLASS_GROUP',
+          `Fixed block "${block.label}" references unknown class group "${groupId}".`
+        );
+      }
     }
     if (!Number.isInteger(block.startMin) || !Number.isInteger(block.endMin) || block.endMin <= block.startMin) {
       fail('INVALID_RANGE', `Fixed block "${block.label}" has an invalid time range.`);
@@ -154,7 +160,7 @@ function validateAndNormalize(rawInput) {
   }
   const schoolWideBase = new Uint32Array(fillableBase);
   for (const block of fixedBlocks) {
-    if (block.scope !== 'classGroup') {
+    if (block.classGroupIds.length === 0) {
       applyWindow(schoolWideBase, block.day, block.startMin, block.endMin);
     }
   }
@@ -176,7 +182,7 @@ function validateAndNormalize(rawInput) {
   const classBase = classGroups.map((g) => {
     const occ = new Uint32Array(schoolWideBase);
     for (const block of fixedBlocks) {
-      if (block.scope === 'classGroup' && block.classGroupId === g.classGroupId) {
+      if (block.classGroupIds.includes(g.classGroupId)) {
         applyWindow(occ, block.day, block.startMin, block.endMin);
       }
     }
@@ -190,6 +196,11 @@ function validateAndNormalize(rawInput) {
     name: t.name,
     fullTime: t.fullTime !== false,
     maxMin: Number.isFinite(t.maxMinutesPerWeek) ? t.maxMinutesPerWeek : Infinity,
+    // Contiguous free slots required on any day this teacher teaches
+    spareSlots:
+      Number.isFinite(t.dailySpareMinutes) && t.dailySpareMinutes > 0
+        ? Math.ceil(t.dailySpareMinutes / snap)
+        : 0,
   }));
 
   const normCourses = courses.map((c) => {

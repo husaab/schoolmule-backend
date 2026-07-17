@@ -592,6 +592,7 @@ CREATE TABLE IF NOT EXISTS planner_teachers (
   display_name       VARCHAR(255) NOT NULL,
   is_full_time       BOOLEAN NOT NULL DEFAULT true,
   max_weekly_minutes INTEGER CHECK (max_weekly_minutes IS NULL OR max_weekly_minutes > 0),
+  daily_spare_minutes SMALLINT CHECK (daily_spare_minutes IS NULL OR daily_spare_minutes > 0),
   allowed_days       JSONB NOT NULL DEFAULT '[1,2,3,4,5]'::jsonb,
   excluded_windows   JSONB NOT NULL DEFAULT '[]'::jsonb,
   notes              TEXT,
@@ -659,12 +660,13 @@ CREATE TABLE IF NOT EXISTS planner_day_templates (
   UNIQUE(school, day_of_week)
 );
 
--- Fixed blocks (lunch, prayer, recess); NULL class_group_id = school-wide
+-- Fixed blocks (lunch, prayer, recess); empty class_group_ids = school-wide,
+-- otherwise a JSONB array of the class_group_ids it applies to
 CREATE TABLE IF NOT EXISTS planner_fixed_blocks (
-  fixed_block_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  school         school NOT NULL,
-  school_id      UUID REFERENCES schools(school_id),
-  class_group_id UUID REFERENCES planner_class_groups(class_group_id) ON DELETE CASCADE,
+  fixed_block_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school          school NOT NULL,
+  school_id       UUID REFERENCES schools(school_id),
+  class_group_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   label          VARCHAR(255) NOT NULL,
   day_of_week    SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
   start_min      SMALLINT NOT NULL CHECK (start_min BETWEEN 0 AND 1439),

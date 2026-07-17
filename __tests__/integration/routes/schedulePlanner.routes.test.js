@@ -14,6 +14,7 @@ async function createTeacher(overrides = {}) {
     displayName: 'Ms. X',
     isFullTime: true,
     maxWeeklyMinutes: 1200,
+    dailySpareMinutes: 45,
     allowedDays: [1, 2, 3, 4, 5],
     excludedWindows: [{ day: 5, startMin: 720, endMin: 930 }],
     ...overrides,
@@ -65,6 +66,7 @@ describe('Integration: Planner teachers CRUD', () => {
     expect(createRes.status).toBe(201);
     const teacher = createRes.body.data;
     expect(teacher.displayName).toBe('Ms. X');
+    expect(teacher.dailySpareMinutes).toBe(45);
     expect(teacher.allowedDays).toEqual([1, 2, 3, 4, 5]);
     expect(teacher.excludedWindows).toEqual([{ day: 5, startMin: 720, endMin: 930 }]);
 
@@ -204,9 +206,11 @@ describe('Integration: Day templates and fixed blocks', () => {
     expect(getRes.body.data[0].fillableRanges).toEqual([{ startMin: 480, endMin: 900 }]);
   });
 
-  it('manages fixed blocks, school-wide and class-scoped', async () => {
+  it('manages fixed blocks, school-wide and multi-group scoped', async () => {
     const groupRes = await createClassGroup();
     const groupId = groupRes.body.data.classGroupId;
+    const group2Res = await createClassGroup({ name: 'Grade 2' });
+    const group2Id = group2Res.body.data.classGroupId;
 
     const schoolWide = await asAdmin('post', '/api/schedule-planner/fixed-blocks').send({
       label: 'Lunch',
@@ -215,17 +219,17 @@ describe('Integration: Day templates and fixed blocks', () => {
       endMin: 760,
     });
     expect(schoolWide.status).toBe(201);
-    expect(schoolWide.body.data.classGroupId).toBeNull();
+    expect(schoolWide.body.data.classGroupIds).toEqual([]);
 
     const scoped = await asAdmin('post', '/api/schedule-planner/fixed-blocks').send({
-      label: 'Recess',
+      label: 'Snack 2',
       dayOfWeek: 1,
       startMin: 600,
       endMin: 615,
-      classGroupId: groupId,
+      classGroupIds: [groupId, group2Id],
     });
     expect(scoped.status).toBe(201);
-    expect(scoped.body.data.classGroupId).toBe(groupId);
+    expect(scoped.body.data.classGroupIds).toEqual([groupId, group2Id]);
 
     const badRes = await asAdmin('post', '/api/schedule-planner/fixed-blocks').send({
       label: 'Broken',

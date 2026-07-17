@@ -179,13 +179,13 @@ describe('teacher base occupancy', () => {
 });
 
 describe('class group base occupancy and fixed blocks', () => {
-  it('applies school-wide fixed blocks to every class group', () => {
+  it('applies school-wide fixed blocks (empty classGroupIds) to every class group', () => {
     const input = baseInput({
       classGroups: [
         { classGroupId: 'cg-1', name: 'Grade 1' },
         { classGroupId: 'cg-2', name: 'Grade 2' },
       ],
-      fixedBlocks: [{ label: 'Lunch', day: 1, startMin: 520, endMin: 540, scope: 'school' }],
+      fixedBlocks: [{ label: 'Lunch', day: 1, startMin: 520, endMin: 540, classGroupIds: [] }],
     });
     const model = validateAndNormalize(input);
     // 520-540 = slots 8..11
@@ -195,26 +195,49 @@ describe('class group base occupancy and fixed blocks', () => {
     expect(grid.rangeIsFree(model.teacherBase[0], 0, 8, 4)).toBe(false);
   });
 
-  it('applies classGroup-scoped fixed blocks only to that group', () => {
+  it('applies group-scoped fixed blocks only to the listed groups', () => {
     const input = baseInput({
       classGroups: [
         { classGroupId: 'cg-1', name: 'Grade 1' },
         { classGroupId: 'cg-2', name: 'Grade 2' },
+        { classGroupId: 'cg-3', name: 'Grade 3' },
       ],
       fixedBlocks: [
         {
-          label: 'Recess',
+          label: 'Snack 2',
           day: 1,
           startMin: 520,
           endMin: 540,
-          scope: 'classGroup',
-          classGroupId: 'cg-2',
+          classGroupIds: ['cg-2', 'cg-3'],
         },
       ],
     });
     const model = validateAndNormalize(input);
     expect(grid.rangeIsFree(model.classBase[0], 0, 8, 4)).toBe(true);
     expect(grid.rangeIsFree(model.classBase[1], 0, 8, 4)).toBe(false);
+    expect(grid.rangeIsFree(model.classBase[2], 0, 8, 4)).toBe(false);
+    // group-scoped blocks do NOT block teachers (they could teach other groups)
+    expect(grid.rangeIsFree(model.teacherBase[0], 0, 8, 4)).toBe(true);
+  });
+
+  it('rejects a fixed block referencing an unknown class group', () => {
+    const input = baseInput({
+      fixedBlocks: [
+        { label: 'Snack', day: 1, startMin: 520, endMin: 540, classGroupIds: ['cg-999'] },
+      ],
+    });
+    expect(() => validateAndNormalize(input)).toThrow(/cg-999/);
+  });
+});
+
+describe('teacher daily spare', () => {
+  it('converts dailySpareMinutes to spare slots, defaulting to 0', () => {
+    const input = baseInput();
+    input.teachers[0].dailySpareMinutes = 45;
+    const model = validateAndNormalize(input);
+    expect(model.teachers[0].spareSlots).toBe(9); // ceil(45 / 5)
+    const modelNoSpare = validateAndNormalize(baseInput());
+    expect(modelNoSpare.teachers[0].spareSlots).toBe(0);
   });
 });
 

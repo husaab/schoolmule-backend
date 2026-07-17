@@ -9,6 +9,23 @@ const VALUE_BEAM = 12;
 const MRV_COUNT_CAP = 8;
 const NODE_CHECK_INTERVAL = 256;
 
+// Longest contiguous run of free slots on one day (used for teacher spares).
+function maxFreeRun(model, occ, dayIdx) {
+  const off = dayIdx * model.W;
+  const n = model.slotsPerDay[dayIdx];
+  let best = 0;
+  let run = 0;
+  for (let s = 0; s < n; s++) {
+    if (grid.rangeIsFree(occ, off, s, 1)) {
+      run++;
+      if (run > best) best = run;
+    } else {
+      run = 0;
+    }
+  }
+  return best;
+}
+
 // Wasted (unusable) free slots on one class-day: free runs shorter than the
 // class's smallest session duration can never be filled.
 function dayWaste(model, occ, dayIdx, minDur) {
@@ -125,6 +142,14 @@ function teacherDeadEnd(state, teacherIdx) {
     state.teacherRemainingSlots[teacherIdx] >
     state.teacherFreeSlots[teacherIdx] - state.teacherWaste[teacherIdx]
   );
+}
+
+// A teacher who teaches on a day must keep one contiguous free window of at
+// least their spareSlots on that day. Checked after each of their placements.
+function spareViolated(model, state, teacherIdx, dayIdx) {
+  const spare = model.teachers[teacherIdx].spareSlots;
+  if (!spare) return false;
+  return maxFreeRun(model, state.occT[teacherIdx], dayIdx) < spare;
 }
 
 function canPlace(model, state, session, dayIdx, slot, teacherIdx) {
@@ -281,6 +306,13 @@ function solveOne(model, rng, prevPlacementSets, failWeight, deadline, warmStart
       };
     }
     apply(model, state, session, fixed.dayIdx, fixed.slot, fixed.teacherIdx);
+    if (spareViolated(model, state, fixed.teacherIdx, fixed.dayIdx)) {
+      return {
+        ok: false,
+        nodes: state.nodes,
+        failInfo: { sIdx: session.sIdx, depth: 0, partial: snapshotPartial(model, state) },
+      };
+    }
   }
 
   // MRV placement counts are cached per session and only recomputed when a
@@ -358,7 +390,11 @@ function solveOne(model, rng, prevPlacementSets, failWeight, deadline, warmStart
       if (!canPlace(model, state, best, d, s, t)) continue; // stale after sibling undo? cheap recheck
       apply(model, state, best, d, s, t);
       markAffected(best, t);
-      if (classDeadEnd(state, best.classIdx) || teacherDeadEnd(state, t)) {
+      if (
+        classDeadEnd(state, best.classIdx) ||
+        teacherDeadEnd(state, t) ||
+        spareViolated(model, state, t, d)
+      ) {
         undo(model, state, best, d, s, t);
         markAffected(best, t);
         continue;

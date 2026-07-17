@@ -148,18 +148,27 @@ describe('validateCandidate', () => {
 
   it('detects an intrusion into a school-wide fixed block', () => {
     const raw = input({
-      fixedBlocks: [{ label: 'Assembly', day: 1, startMin: 500, endMin: 530, scope: 'school' }],
+      fixedBlocks: [{ label: 'Assembly', day: 1, startMin: 500, endMin: 530, classGroupIds: [] }],
     });
     expect(codes(validateCandidate(raw, goodCandidate()))).toContain('FIXED_BLOCK_INTRUSION');
   });
 
-  it('ignores another group\'s class-scoped fixed block', () => {
+  it("ignores a group-scoped fixed block that doesn't list the session's group", () => {
     const raw = input({
       fixedBlocks: [
-        { label: 'Recess', day: 1, startMin: 500, endMin: 530, scope: 'classGroup', classGroupId: 'cg-2' },
+        { label: 'Recess', day: 1, startMin: 500, endMin: 530, classGroupIds: ['cg-2'] },
       ],
     });
     expect(validateCandidate(raw, goodCandidate())).toEqual([]);
+  });
+
+  it('detects an intrusion into a multi-group fixed block listing the session group', () => {
+    const raw = input({
+      fixedBlocks: [
+        { label: 'Snack 2', day: 1, startMin: 500, endMin: 530, classGroupIds: ['cg-1', 'cg-2'] },
+      ],
+    });
+    expect(codes(validateCandidate(raw, goodCandidate()))).toContain('FIXED_BLOCK_INTRUSION');
   });
 
   it('detects a breach of a teacher excluded window', () => {
@@ -218,6 +227,63 @@ describe('validateCandidate', () => {
       sessions: [session(), session({ sessionIndex: 1, startMin: 540, endMin: 580 })], // both Mon
     };
     expect(codes(validateCandidate(input(), cand))).toContain('MAX_PER_DAY_EXCEEDED');
+  });
+
+  it('detects a missing daily spare (no contiguous free window on a teaching day)', () => {
+    const raw = input();
+    raw.teachers[0].dailySpareMinutes = 45;
+    // Day 1 fillable is 480-600 (120 min). Fill 480-520 and 530-600 with
+    // Ms. X's sessions: her largest free window that day is 10 minutes.
+    raw.courses[0].sessionsPerWeek = 2;
+    raw.courses[0].maxPerDay = 2;
+    raw.courses.push({
+      courseId: 'c-2',
+      classGroupId: 'cg-2',
+      name: 'Long Science',
+      sessionsPerWeek: 1,
+      durationMinutes: 70,
+      teacherId: 't-1',
+      teacherCandidateIds: null,
+      roomId: null,
+      maxPerDay: 1,
+    });
+    const cand = {
+      sessions: [
+        session(),
+        session({ sessionIndex: 1, day: 2 }),
+        session({
+          courseId: 'c-2',
+          classGroupId: 'cg-2',
+          courseName: 'Long Science',
+          startMin: 530,
+          endMin: 600,
+        }),
+      ],
+    };
+    const violations = validateCandidate(raw, cand);
+    expect(codes(violations)).toContain('SPARE_VIOLATION');
+    // Day 2 has only one 40-min session -> 80-min window exists, no violation there
+    expect(violations.filter((v) => v.code === 'SPARE_VIOLATION')).toHaveLength(1);
+  });
+
+  it('counts a window bounded by a group-scoped block as spare time', () => {
+    const raw = input();
+    raw.teachers[0].dailySpareMinutes = 45;
+    // Ms. X teaches 480-520; 520-600 is free for her (80 min) -> satisfied.
+    raw.courses[0].sessionsPerWeek = 1;
+    const cand = { sessions: [session()] };
+    expect(validateCandidate(raw, cand)).toEqual([]);
+  });
+
+  it('does NOT count school-wide blocked time toward the spare', () => {
+    const raw = input({
+      // 520-600 blocked school-wide: only 480-520 is schedulable on day 1.
+      fixedBlocks: [{ label: 'Event', day: 1, startMin: 520, endMin: 600, classGroupIds: [] }],
+    });
+    raw.teachers[0].dailySpareMinutes = 45;
+    raw.courses[0].sessionsPerWeek = 1;
+    const cand = { sessions: [session()] }; // teaches 480-520, zero free schedulable time
+    expect(codes(validateCandidate(raw, cand))).toContain('SPARE_VIOLATION');
   });
 
   it('detects a moved pin', () => {
