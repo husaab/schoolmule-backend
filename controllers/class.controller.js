@@ -213,6 +213,9 @@ const getClassesByTeacher = async (req, res) => {
 //
 const createClass = async (req, res) => {
   const { school, grade, subject, teacherName, teacherId, termId, termName } = req.body;
+  // Default true: enrollment is additive and idempotent, so callers that omit
+  // the flag get the class ready-to-use
+  const autoEnroll = req.body.autoEnroll !== false;
 
   // Validate required fields
   if (!school || grade == null || !subject || !teacherName || !teacherId || !termId || !termName) {
@@ -223,34 +226,58 @@ const createClass = async (req, res) => {
     });
   }
 
+  const client = await db.connect();
+
   try {
-    // Optionally: you can verify that `teacherId` actually exists in users with role='teacher'
-    // e.g. await db.query("SELECT 1 FROM users WHERE user_id = $1 AND role='teacher'", [teacherId]);
+    await client.query("BEGIN");
 
     const vals = [school, grade, subject, teacherName, teacherId, termId, termName];
-    const { rows } = await db.query(classQueries.createClass, vals);
-    
-    logger.info(`Class created with id ${rows[0].class_id}`);
+    const { rows } = await client.query(classQueries.createClass, vals);
+    const newClass = rows[0];
+
+    // Enroll every active student of the class's grade/school. The class is
+    // brand-new, so no conflicts are possible and rowCount is the exact count.
+    let enrolledCount = 0;
+    if (autoEnroll) {
+      const enrollResult = await client.query(bulkQueries.enrollAllInGrade, [
+        newClass.class_id,
+        newClass.grade,
+        newClass.school,
+      ]);
+      enrolledCount = enrollResult.rowCount;
+    }
+
+    await client.query("COMMIT");
+
+    logger.info(
+      `Class created with id ${newClass.class_id}` +
+      (autoEnroll ? ` (auto-enrolled ${enrolledCount} students)` : "")
+    );
     return res.status(201).json({
       status: "success",
       data: {
-        classId:      rows[0].class_id,
-        school:       rows[0].school,
-        grade:        rows[0].grade,
-        subject:      rows[0].subject,
-        teacherName:  rows[0].teacher_name,
-        teacherId:    rows[0].teacher_id,
-        termId:       rows[0].term_id,
-        termName:     rows[0].term_name,
-        createdAt:    rows[0].created_at,
-        lastModifiedAt: rows[0].last_modified_at
+        classId:      newClass.class_id,
+        school:       newClass.school,
+        grade:        newClass.grade,
+        subject:      newClass.subject,
+        teacherName:  newClass.teacher_name,
+        teacherId:    newClass.teacher_id,
+        termId:       newClass.term_id,
+        termName:     newClass.term_name,
+        createdAt:    newClass.created_at,
+        lastModifiedAt: newClass.last_modified_at,
+        autoEnrolled: autoEnroll,
+        enrolledCount
       }
     });
   } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     logger.error(error);
     return res
       .status(500)
       .json({ status: "failed", message: "Error creating class" });
+  } finally {
+    client.release();
   }
 };
 

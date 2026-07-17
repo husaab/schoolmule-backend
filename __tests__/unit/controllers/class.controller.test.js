@@ -166,14 +166,43 @@ describe('Class Controller', () => {
 
   // ── createClass ──────────────────────────────────────────────
   describe('POST /api/classes', () => {
-    it('should return 201 on successful creation', async () => {
+    it('should return 201 and auto-enroll the grade by default', async () => {
       const row = buildClassRow();
-      mockQueryResponse([row]);
+      // Transaction: BEGIN, createClass, enrollAllInGrade, COMMIT
+      mockTransactionSequence([
+        { rows: [row] },
+        { rows: [], rowCount: 24 }, // enrollAllInGrade inserted 24 students
+      ]);
       const body = buildCreateClassBody();
       const res = await authPost('/api/classes').send(body);
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('success');
       expect(res.body.data.classId).toBe(row.class_id);
+      expect(res.body.data.autoEnrolled).toBe(true);
+      expect(res.body.data.enrolledCount).toBe(24);
+    });
+
+    it('should skip enrollment when autoEnroll is false', async () => {
+      const row = buildClassRow();
+      // Transaction: BEGIN, createClass, COMMIT
+      mockTransactionSequence([{ rows: [row] }]);
+      const body = { ...buildCreateClassBody(), autoEnroll: false };
+      const res = await authPost('/api/classes').send(body);
+      expect(res.status).toBe(201);
+      expect(res.body.data.autoEnrolled).toBe(false);
+      expect(res.body.data.enrolledCount).toBe(0);
+    });
+
+    it('should report zero enrolled when the grade has no students', async () => {
+      const row = buildClassRow();
+      mockTransactionSequence([
+        { rows: [row] },
+        { rows: [], rowCount: 0 },
+      ]);
+      const body = buildCreateClassBody();
+      const res = await authPost('/api/classes').send(body);
+      expect(res.status).toBe(201);
+      expect(res.body.data.enrolledCount).toBe(0);
     });
 
     it('should return 400 when required fields are missing', async () => {
@@ -182,8 +211,8 @@ describe('Class Controller', () => {
       expect(res.body.status).toBe('failed');
     });
 
-    it('should return 500 on database error', async () => {
-      mockQueryError('insert failed');
+    it('should return 500 and roll back on database error', async () => {
+      mockTransactionError(0, 'insert failed');
       const body = buildCreateClassBody();
       const res = await authPost('/api/classes').send(body);
       expect(res.status).toBe(500);

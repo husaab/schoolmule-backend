@@ -90,11 +90,11 @@ const getAssessmentsByClass = async (req, res) => {
 //    → Create a new assessment
 //
 const createAssessment = async (req, res) => {
-  const { 
-    classId, 
-    name, 
-    weightPercent, 
-    isParent = false, 
+  const {
+    classId,
+    name,
+    weightPercent = null,
+    isParent = false,
     childCount = 0,
     parentAssessmentId = null,
     sortOrder = null,
@@ -162,7 +162,7 @@ const createAssessment = async (req, res) => {
 // Helper function to create parent assessment with multiple children
 //
 const createParentWithChildren = async (req, res) => {
-  const { classId, name, weightPercent, childCount, childrenData, weightPoints, maxScore, date } = req.body
+  const { classId, name, weightPercent = null, childCount, childrenData, weightPoints, date } = req.body
 
   if (!childCount || childCount < 1) {
     return res.status(400).json({
@@ -188,7 +188,9 @@ const createParentWithChildren = async (req, res) => {
           message: 'All child assessment names are required',
         })
       }
-      if (typeof child.weightPercent !== 'number' || child.weightPercent < 0 || child.weightPercent > 100) {
+      // weightPercent is deprecated (weightPoints is the real field) — only
+      // validate it when a caller still sends it
+      if (child.weightPercent != null && (typeof child.weightPercent !== 'number' || child.weightPercent < 0 || child.weightPercent > 100)) {
         return res.status(400).json({
           status: 'failed',
           message: 'Child weight percentages must be between 0 and 100',
@@ -197,7 +199,7 @@ const createParentWithChildren = async (req, res) => {
     }
 
     // Check total weight doesn't exceed 100%
-    const totalChildWeight = childrenData.reduce((sum, child) => sum + child.weightPercent, 0)
+    const totalChildWeight = childrenData.reduce((sum, child) => sum + (child.weightPercent || 0), 0)
     if (totalChildWeight > 100) {
       return res.status(400).json({
         status: 'failed',
