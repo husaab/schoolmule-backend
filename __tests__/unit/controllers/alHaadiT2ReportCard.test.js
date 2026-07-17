@@ -258,6 +258,12 @@ describe('POST /api/report-cards/generate/bulk — Al Haadi T2 branch', () => {
   function routeQueries({ student, termsByName }) {
     db.query.mockImplementation(async (sql, params = []) => {
       const q = sql.replace(/\s+/g, ' ');
+      // resolveSchoolYear (mounted globally) queries this before the route
+      // handler ever runs — answer with an active year so the POST isn't
+      // rejected for "no school year configured".
+      if (q.includes('FROM school_years')) {
+        return { rows: [{ school_year_id: 'y1', school: student.school, label: '2025-2026', is_active: true }] };
+      }
       if (q.includes('FROM students')) return { rows: [student] };
       if (q.includes('FROM users WHERE user_id')) return { rows: [{ username: 'Teacher' }] };
       if (q.includes('FROM general_attendance')) return { rows: [{ days_absent: '0' }] };

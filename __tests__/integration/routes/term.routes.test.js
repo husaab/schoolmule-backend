@@ -26,10 +26,15 @@ describe('Integration: Term Routes', () => {
     );
   });
 
-  // Helper to create a school and return its ID
+  // Helper to create a school and return its ID. setupTestDB's global
+  // beforeEach already seeds a baseline ALHAADIACADEMY row (+ active
+  // school_year via trigger), so upsert instead of a plain INSERT to
+  // avoid colliding with it.
   const seedSchool = async () => {
     const { rows } = await pool.query(
-      `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy') RETURNING school_id`
+      `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+       ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name
+       RETURNING school_id`
     );
     return rows[0].school_id;
   };

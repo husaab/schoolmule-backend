@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
 const termQueries = require('../queries/term.queries');
+const schoolYearQueries = require('../queries/schoolYear.queries');
 const logger = require("../logger");
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML
   , getResetEmailHTML
@@ -20,6 +21,30 @@ const getActiveTermForSchool = async (school) => {
   } catch (error) {
     logger.error({ err: error }, 'Error fetching active term');
     return null;
+  }
+};
+
+// Year context for the login/session payload (NOT for the JWT).
+const getSchoolYearContext = async (school) => {
+  try {
+    const years = await db.query(schoolYearQueries.selectYearsBySchool, [school]);
+    const active = years.rows.find((y) => y.is_active) || null;
+    return {
+      activeSchoolYear: active ? { schoolYearId: active.school_year_id, label: active.label } : null,
+      schoolYears: years.rows.map((y) => ({
+        schoolYearId: y.school_year_id,
+        school: y.school,
+        schoolId: y.school_id,
+        label: y.label,
+        startDate: y.start_date,
+        endDate: y.end_date,
+        isActive: y.is_active,
+        createdFromYearId: y.created_from_year_id,
+      })),
+    };
+  } catch (error) {
+    logger.error({ err: error }, 'Error fetching school years');
+    return { activeSchoolYear: null, schoolYears: [] };
   }
 };
 
@@ -78,6 +103,7 @@ const getActiveTermForSchool = async (school) => {
 
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
+      const yearContext = await getSchoolYearContext(user.school);
 
       // Create JWT token with user data
       const tokenPayload = {
@@ -111,6 +137,8 @@ const getActiveTermForSchool = async (school) => {
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
           activeTerm: activeTerm ? activeTerm.name : null,
+          activeSchoolYear: yearContext.activeSchoolYear,
+          schoolYears: yearContext.schoolYears,
           token: token
         }
       };
@@ -160,6 +188,7 @@ const getActiveTermForSchool = async (school) => {
 
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
+      const yearContext = await getSchoolYearContext(user.school);
 
       // Create JWT token with user data
       const tokenPayload = {
@@ -192,6 +221,8 @@ const getActiveTermForSchool = async (school) => {
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
           activeTerm: activeTerm ? activeTerm.name : false,
+          activeSchoolYear: yearContext.activeSchoolYear,
+          schoolYears: yearContext.schoolYears,
           token: token
         }
       };
@@ -566,7 +597,8 @@ const validateSession = async (req, res) => {
     
     // Get active term for the user's school
     const activeTerm = await getActiveTermForSchool(user.school);
-    
+    const yearContext = await getSchoolYearContext(user.school);
+
     return res.status(200).json({
       success: true,
       message: 'Session valid',
@@ -581,7 +613,9 @@ const validateSession = async (req, res) => {
         isVerifiedSchool: user.is_verified_school,
         createdAt: user.created_at,
         lastModifiedAt: user.last_modified_at,
-        activeTerm: activeTerm ? activeTerm.name : false
+        activeTerm: activeTerm ? activeTerm.name : false,
+        activeSchoolYear: yearContext.activeSchoolYear,
+        schoolYears: yearContext.schoolYears
       }
     });
   } catch (error) {

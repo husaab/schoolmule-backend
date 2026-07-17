@@ -90,6 +90,24 @@ beforeEach(async () => {
   // Brief pause to let terminated connections clean up
   await new Promise(resolve => setTimeout(resolve, 200));
   await p.query(`TRUNCATE TABLE ${ALL_TABLES.join(', ')} CASCADE`);
+
+  // Baseline schools for both enum values, present before any individual
+  // test's own setup runs. The resolveSchoolYear middleware (mounted
+  // globally in server.js) 400s writes for a school with no active school
+  // year, and most existing integration tests were written before school
+  // years existed — many never touch the `schools` table at all, and some
+  // that do only create it inside specific `it()` blocks. Seeding it here
+  // (which fires the `trg_seed_default_school_year` trigger — see seed.sql
+  // — creating a matching active "2025-2026" school_year row) keeps every
+  // pre-existing write-path test working without editing each of them.
+  // Tests that need their own `schools` row (for a specific school_id, a
+  // slug, etc.) upsert via ON CONFLICT so this doesn't collide with theirs.
+  // Only ALHAADIACADEMY is seeded — PLAYGROUND is used by a few tests
+  // specifically to represent a school that does NOT exist/isn't configured.
+  await p.query(
+    `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+     ON CONFLICT (school_code) DO NOTHING`
+  );
 });
 
 // Close pool after all tests in a file

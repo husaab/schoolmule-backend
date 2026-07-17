@@ -59,6 +59,32 @@ CREATE TABLE school_years (
 CREATE UNIQUE INDEX school_years_one_active_per_school
   ON school_years (school_id) WHERE is_active;
 
+-- Mirrors the production backfill in school_years_migration.sql: every
+-- registered school gets an active "2025-2026" year automatically. The
+-- resolveSchoolYear middleware (mounted globally) 400s writes for a school
+-- with no active year, and integration tests insert schools directly via
+-- SQL (bypassing any signup flow), so without this trigger every existing
+-- write-path integration test would need its own school_years seeding.
+CREATE OR REPLACE FUNCTION seed_default_school_year() RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+  VALUES (
+    NEW.school_code,
+    NEW.school_id,
+    '2025-2026',
+    COALESCE(NEW.academic_year_start_date, DATE '2025-09-01'),
+    COALESCE(NEW.academic_year_end_date, DATE '2026-06-30'),
+    TRUE
+  )
+  ON CONFLICT (school_id, label) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_seed_default_school_year
+  AFTER INSERT ON schools
+  FOR EACH ROW EXECUTE FUNCTION seed_default_school_year();
+
 CREATE TABLE terms (
   term_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school                 school NOT NULL,

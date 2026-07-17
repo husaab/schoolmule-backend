@@ -13,17 +13,24 @@ const asTeacher = (method, url) =>
 // Settings upsert now resolves the school's active school_years row (a
 // NULL school_year_id would never match ON CONFLICT), so seed a school +
 // an active year before exercising the settings endpoints.
+//
+// setupTestDB's global beforeEach already seeds a baseline ALHAADIACADEMY
+// row (+ active school_year via trigger) so resolveSchoolYear doesn't 400
+// pre-existing write-path tests; both inserts below upsert instead of
+// plain-inserting so this doesn't collide with that baseline.
 async function seedActiveSchoolYear() {
   const pool = getTestPool();
   const { rows } = await pool.query(
     `INSERT INTO schools (school_code, name, slug) VALUES ($1, 'Al Haadi Academy', 'al-haadi-academy')
+     ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug
      RETURNING school_id`,
     [SCHOOL]
   );
   const schoolId = rows[0].school_id;
   await pool.query(
     `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
-     VALUES ($1, $2, '2025-2026', '2025-09-01', '2026-06-30', TRUE)`,
+     VALUES ($1, $2, '2025-2026', '2025-09-01', '2026-06-30', TRUE)
+     ON CONFLICT (school_id, label) DO UPDATE SET is_active = TRUE, start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date`,
     [SCHOOL, schoolId]
   );
 }

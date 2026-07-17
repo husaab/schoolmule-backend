@@ -27,6 +27,15 @@ describe('Integration: School Routes', () => {
   });
 
   describe('POST /api/schools', () => {
+    // These tests exercise creating 'ALHAADIACADEMY' from scratch (and a
+    // 409-on-duplicate case), so undo setupTestDB's global baseline seed
+    // (a schools row + active school_year, added so resolveSchoolYear
+    // doesn't 400 pre-existing write-path tests elsewhere) — this describe
+    // block needs the table genuinely empty first.
+    beforeEach(async () => {
+      await pool.query(`DELETE FROM schools WHERE school_code = 'ALHAADIACADEMY'`);
+    });
+
     it('creates a school and persists it in the database', async () => {
       const res = await authenticatedRequest('post', '/api/schools')
         .send({
@@ -79,7 +88,8 @@ describe('Integration: School Routes', () => {
   describe('GET /api/schools', () => {
     it('returns all schools', async () => {
       await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name`
       );
 
       const res = await authenticatedRequest('get', '/api/schools');
@@ -95,7 +105,8 @@ describe('Integration: School Routes', () => {
   describe('GET /api/schools/:code', () => {
     it('returns a school by code', async () => {
       await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name`
       );
 
       const res = await authenticatedRequest('get', '/api/schools/ALHAADIACADEMY');
@@ -117,7 +128,9 @@ describe('Integration: School Routes', () => {
   describe('GET /api/schools/id/:id', () => {
     it('returns a school by ID', async () => {
       const insertResult = await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy') RETURNING school_id`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name
+         RETURNING school_id`
       );
       const schoolId = insertResult.rows[0].school_id;
 
@@ -137,7 +150,9 @@ describe('Integration: School Routes', () => {
   describe('PUT /api/schools/:id', () => {
     it('updates a school', async () => {
       const insertResult = await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy') RETURNING school_id`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name
+         RETURNING school_id`
       );
       const schoolId = insertResult.rows[0].school_id;
 
@@ -156,7 +171,9 @@ describe('Integration: School Routes', () => {
 
     it('returns 400 when name is missing', async () => {
       const insertResult = await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy') RETURNING school_id`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name
+         RETURNING school_id`
       );
       const schoolId = insertResult.rows[0].school_id;
 
@@ -177,7 +194,9 @@ describe('Integration: School Routes', () => {
   describe('DELETE /api/schools/:id', () => {
     it('deletes a school', async () => {
       const insertResult = await pool.query(
-        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy') RETURNING school_id`
+        `INSERT INTO schools (school_code, name) VALUES ('ALHAADIACADEMY', 'Al Haadi Academy')
+         ON CONFLICT (school_code) DO UPDATE SET name = EXCLUDED.name
+         RETURNING school_id`
       );
       const schoolId = insertResult.rows[0].school_id;
 
