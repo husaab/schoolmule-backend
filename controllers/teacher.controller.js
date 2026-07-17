@@ -9,13 +9,7 @@ const logger = require("../logger");
  * → Returns [{ userId, fullName, email }, … ] for all teachers in that school.
  */
 const getTeachersBySchool = async (req, res) => {
-  const requestedSchool = req.query.school;
-  if (!requestedSchool) {
-    return res.status(400).json({
-      status: "failed",
-      message: "Missing required query parameter: school"
-    });
-  }
+  const requestedSchool = req.user.school;
 
   try {
     const { rows } = await db.query(

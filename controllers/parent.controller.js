@@ -3,10 +3,7 @@ const parentQueries = require('../queries/parent.queries');
 const logger = require('../logger');
 
 async function getAllParents(req, res) {
-  const school = req.query.school;
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'Missing school parameter' });
-  }
+  const school = req.user.school;
   try {
     const { rows } = await db.query(parentQueries.selectParentsBySchool, [school]);
     const data = rows.map(u => ({

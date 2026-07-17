@@ -59,14 +59,26 @@ describe('GET /api/parent-students', () => {
     expect(res.body.data[0]).toHaveProperty('parentUser');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it('uses the JWT school even without a query param', async () => {
+    const rows = [
+      {
+        ...buildParentStudentRow(),
+        student_name: 'John Smith',
+        student_grade: 5,
+        parent_first_name: 'Parent',
+        parent_last_name: 'User',
+        parent_user_email: 'parent@test.com',
+      },
+    ];
+    mockQueryResponse(rows);
+
     const res = await request(app)
       .get(url)
       .set(authHeader());
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
-    expect(res.body.message).toContain('school');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
+    expect(res.body.data).toHaveLength(1);
   });
 
   it('returns 500 on database error', async () => {
