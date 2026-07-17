@@ -49,7 +49,7 @@ const app = express();
 const corsOptions = {
   origin: process.env.CROSS_ORIGIN_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year']
 };
 
 // core modules
