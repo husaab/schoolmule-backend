@@ -8,9 +8,9 @@ const selectSettings = `
 `;
 
 const upsertSettings = `
-  INSERT INTO planner_settings (school, school_id, default_duration_minutes, snap_minutes)
-  VALUES ($1, $2, $3, $4)
-  ON CONFLICT (school) DO UPDATE
+  INSERT INTO planner_settings (school, school_id, default_duration_minutes, snap_minutes, school_year_id)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT (school, school_year_id) DO UPDATE
     SET default_duration_minutes = EXCLUDED.default_duration_minutes,
         snap_minutes = EXCLUDED.snap_minutes,
         updated_at = NOW()

@@ -130,6 +130,7 @@ const updateSettings = async (req, res) => {
       schoolId,
       defaultDurationMinutes ?? current.defaultDurationMinutes,
       snapMinutes ?? current.snapMinutes,
+      null, // school_year_id: NULL for now (applies to all years until explicitly scoped)
     ]);
     return ok(res, mapSettings(rows[0]));
   } catch (error) {

@@ -597,13 +597,14 @@ ALTER TABLE agendas
 -- Per-school planner defaults (one row per school)
 CREATE TABLE IF NOT EXISTS planner_settings (
   planner_settings_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  school                   school NOT NULL UNIQUE,
+  school                   school NOT NULL,
   school_id                UUID REFERENCES schools(school_id),
   default_duration_minutes SMALLINT NOT NULL DEFAULT 40 CHECK (default_duration_minutes BETWEEN 5 AND 480),
   snap_minutes             SMALLINT NOT NULL DEFAULT 5 CHECK (snap_minutes IN (1, 5, 10, 15)),
   school_year_id           UUID REFERENCES school_years(school_year_id),
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT planner_settings_school_year_key UNIQUE (school, school_year_id)
 );
 
 -- Teacher profiles for the planner (user/staff links optional)
