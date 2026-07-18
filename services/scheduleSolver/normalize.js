@@ -201,6 +201,11 @@ function validateAndNormalize(rawInput) {
       Number.isFinite(t.dailySpareMinutes) && t.dailySpareMinutes > 0
         ? Math.ceil(t.dailySpareMinutes / snap)
         : 0,
+    // Cap on distinct working days per week (7 = unlimited)
+    maxDays:
+      Number.isInteger(t.maxDaysPerWeek) && t.maxDaysPerWeek >= 1
+        ? Math.min(t.maxDaysPerWeek, 7)
+        : 7,
   }));
 
   const normCourses = courses.map((c) => {
@@ -343,6 +348,50 @@ function validateAndNormalize(rawInput) {
     session.pin = { dayIdx, slot, teacherIdx, roomIdx };
   }
 
+  // Period rules: teach = "class classIdx's sessions inside [startMin, endMin)
+  // belong to teacherIdx on >= minPerWeek days"; free = "teacherIdx keeps
+  // >= minPerWeek period-slots free inside the window across the week".
+  const periodRules = (rawInput.periodRules || []).map((rule) => {
+    const teacherIdx = teacherIndex.get(rule.teacherId);
+    if (teacherIdx === undefined) {
+      fail('UNKNOWN_TEACHER', `Period rule references unknown teacher "${rule.teacherId}".`);
+    }
+    if (rule.kind !== 'teach' && rule.kind !== 'free') {
+      fail('INVALID_PERIOD_RULE', `Period rule kind must be "teach" or "free", got "${rule.kind}".`);
+    }
+    let classIdx = -1;
+    if (rule.kind === 'teach') {
+      classIdx = classGroupIndex.get(rule.classGroupId);
+      if (classIdx === undefined) {
+        fail('UNKNOWN_CLASS_GROUP', `Period rule references unknown class group "${rule.classGroupId}".`);
+      }
+    }
+    if (
+      !Number.isInteger(rule.startMin) ||
+      !Number.isInteger(rule.endMin) ||
+      rule.endMin <= rule.startMin
+    ) {
+      fail('INVALID_PERIOD_RULE', 'Period rule has an invalid time window.');
+    }
+    if (!Number.isInteger(rule.minPerWeek) || rule.minPerWeek < 1) {
+      fail('INVALID_PERIOD_RULE', 'Period rule minPerWeek must be a positive integer.');
+    }
+    // Window as slot ranges per day (null where the window misses the grid)
+    const windowByDay = [];
+    for (let d = 0; d < numDays; d++) {
+      windowByDay.push(toSlotRange(rule.startMin, rule.endMin, dayStartMin[d], slotsPerDay[d], snap));
+    }
+    return {
+      kind: rule.kind,
+      teacherIdx,
+      classIdx,
+      startMin: rule.startMin,
+      endMin: rule.endMin,
+      minPerWeek: rule.minPerWeek,
+      windowByDay,
+    };
+  });
+
   return {
     config,
     numDays,
@@ -362,6 +411,7 @@ function validateAndNormalize(rawInput) {
     classBase,
     courses: normCourses,
     sessions,
+    periodRules,
     warnings,
   };
 }

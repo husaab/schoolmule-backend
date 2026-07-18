@@ -32,18 +32,51 @@ const selectTeacherById = `
 const insertTeacher = `
   INSERT INTO planner_teachers
     (school, school_id, user_id, staff_id, display_name, is_full_time,
-     max_weekly_minutes, daily_spare_minutes, allowed_days, excluded_windows, notes, school_year_id)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12)
+     max_weekly_minutes, daily_spare_minutes, max_days_per_week,
+     allowed_days, excluded_windows, notes, school_year_id)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
   RETURNING *
 `;
 
 const updateTeacher = `
   UPDATE planner_teachers
   SET user_id = $1, staff_id = $2, display_name = $3, is_full_time = $4,
-      max_weekly_minutes = $5, daily_spare_minutes = $6, allowed_days = $7::jsonb,
-      excluded_windows = $8::jsonb, notes = $9, updated_at = NOW()
-  WHERE planner_teacher_id = $10 AND school = $11
+      max_weekly_minutes = $5, daily_spare_minutes = $6, max_days_per_week = $7,
+      allowed_days = $8::jsonb, excluded_windows = $9::jsonb, notes = $10, updated_at = NOW()
+  WHERE planner_teacher_id = $11 AND school = $12
   RETURNING *
+`;
+
+// ─── Period rules ────────────────────────────────────────────────────────
+
+const selectPeriodRulesBySchool = `
+  SELECT * FROM planner_period_rules
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+  ORDER BY start_min, created_at
+`;
+
+const selectPeriodRuleById = `
+  SELECT * FROM planner_period_rules WHERE rule_id = $1 AND school = $2
+`;
+
+const insertPeriodRule = `
+  INSERT INTO planner_period_rules
+    (school, school_id, school_year_id, teacher_id, class_group_id, kind,
+     start_min, end_min, min_per_week)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  RETURNING *
+`;
+
+const updatePeriodRule = `
+  UPDATE planner_period_rules
+  SET teacher_id = $1, class_group_id = $2, kind = $3, start_min = $4,
+      end_min = $5, min_per_week = $6, updated_at = NOW()
+  WHERE rule_id = $7 AND school = $8
+  RETURNING *
+`;
+
+const deletePeriodRule = `
+  DELETE FROM planner_period_rules WHERE rule_id = $1 AND school = $2 RETURNING *
 `;
 
 const deleteTeacher = `
@@ -301,6 +334,11 @@ module.exports = {
   insertFixedBlock,
   updateFixedBlock,
   deleteFixedBlock,
+  selectPeriodRulesBySchool,
+  selectPeriodRuleById,
+  insertPeriodRule,
+  updatePeriodRule,
+  deletePeriodRule,
   selectSchedulesBySchool,
   selectScheduleById,
   insertSchedule,

@@ -216,6 +216,104 @@ function validateCandidate(rawInput, candidate) {
     }
   }
 
+  // Period rules: teach ("class's window sessions belong to teacher T on
+  // >= N days") and free ("teacher keeps >= N period-slots free in window").
+  const overlapTotal = (intervals, from, to) => {
+    const clipped = intervals
+      .map(([a, b]) => [Math.max(a, from), Math.min(b, to)])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
+    let total = 0;
+    let cursor = from;
+    for (const [a, b] of clipped) {
+      if (b > cursor) {
+        total += b - Math.max(a, cursor);
+        cursor = Math.max(cursor, b);
+      }
+    }
+    return total;
+  };
+
+  for (const rule of rawInput.periodRules || []) {
+    if (rule.kind === 'teach') {
+      let qualifying = 0;
+      for (const dayDef of rawInput.days) {
+        const inWindow = sessions.filter(
+          (s) =>
+            s.classGroupId === rule.classGroupId &&
+            s.day === dayDef.day &&
+            s.startMin < rule.endMin &&
+            rule.startMin < s.endMin
+        );
+        if (inWindow.length > 0 && inWindow.every((s) => s.teacherId === rule.teacherId)) {
+          qualifying++;
+        }
+      }
+      if (qualifying < rule.minPerWeek) {
+        const teacher = teacherById.get(rule.teacherId);
+        violations.push(
+          violation(
+            'PERIOD_RULE_VIOLATION',
+            `${teacher?.name || rule.teacherId} teaches the ${rule.startMin}-${rule.endMin} window of class ${rule.classGroupId} on only ${qualifying} day(s); the rule requires ${rule.minPerWeek}.`
+          )
+        );
+      }
+    } else {
+      const teacher = teacherById.get(rule.teacherId);
+      const allowedDays = teacher?.allowedDays || [1, 2, 3, 4, 5, 6, 7];
+      let freeMin = 0;
+      for (const dayDef of rawInput.days) {
+        if (!allowedDays.includes(dayDef.day)) continue;
+        const busy = [
+          ...sessions
+            .filter((s) => s.teacherId === rule.teacherId && s.day === dayDef.day)
+            .map((s) => [s.startMin, s.endMin]),
+          ...(teacher?.excludedWindows || [])
+            .filter((w) => w.day === dayDef.day)
+            .map((w) => [w.startMin, w.endMin]),
+          ...(rawInput.fixedBlocks || [])
+            .filter(
+              (b) =>
+                b.day === dayDef.day &&
+                (!Array.isArray(b.classGroupIds) || b.classGroupIds.length === 0)
+            )
+            .map((b) => [b.startMin, b.endMin]),
+        ];
+        for (const range of dayDef.fillableRanges) {
+          const from = Math.max(range.startMin, rule.startMin);
+          const to = Math.min(range.endMin, rule.endMin);
+          if (to <= from) continue;
+          freeMin += to - from - overlapTotal(busy, from, to);
+        }
+      }
+      const required = rule.minPerWeek * defaultDur;
+      if (freeMin < required) {
+        violations.push(
+          violation(
+            'PERIOD_RULE_VIOLATION',
+            `${teacher?.name || rule.teacherId} has only ${freeMin} free minutes in the ${rule.startMin}-${rule.endMin} window this week; the rule requires ${required} (${rule.minPerWeek} x ${defaultDur} min).`
+          )
+        );
+      }
+    }
+  }
+
+  // Max distinct working days per week.
+  for (const teacher of rawInput.teachers) {
+    if (!Number.isInteger(teacher.maxDaysPerWeek) || teacher.maxDaysPerWeek < 1) continue;
+    const daysUsed = new Set(
+      sessions.filter((s) => s.teacherId === teacher.teacherId).map((s) => s.day)
+    );
+    if (daysUsed.size > teacher.maxDaysPerWeek) {
+      violations.push(
+        violation(
+          'MAX_DAYS_EXCEEDED',
+          `${teacher.name} teaches on ${daysUsed.size} days but is capped at ${teacher.maxDaysPerWeek}.`
+        )
+      );
+    }
+  }
+
   // Pins must be honored verbatim.
   for (const pin of rawInput.pins || []) {
     const match = sessions.find(

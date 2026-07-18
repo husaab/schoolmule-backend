@@ -20,6 +20,7 @@ const mapTeacher = (row) => ({
   isFullTime: row.is_full_time,
   maxWeeklyMinutes: row.max_weekly_minutes,
   dailySpareMinutes: row.daily_spare_minutes,
+  maxDaysPerWeek: row.max_days_per_week,
   allowedDays: row.allowed_days,
   excludedWindows: row.excluded_windows,
   notes: row.notes,
@@ -155,7 +156,7 @@ const listTeachers = async (req, res) => {
 const createTeacher = async (req, res) => {
   const {
     userId, staffId, displayName, isFullTime, maxWeeklyMinutes,
-    dailySpareMinutes, allowedDays, excludedWindows, notes,
+    dailySpareMinutes, maxDaysPerWeek, allowedDays, excludedWindows, notes,
   } = req.body;
   if (!displayName || typeof displayName !== 'string') {
     return fail(res, 400, 'displayName is required');
@@ -174,6 +175,7 @@ const createTeacher = async (req, res) => {
       isFullTime !== false,
       maxWeeklyMinutes ?? null,
       dailySpareMinutes ?? null,
+      maxDaysPerWeek ?? null,
       JSON.stringify(allowedDays ?? [1, 2, 3, 4, 5]),
       JSON.stringify(excludedWindows ?? []),
       notes || null,
@@ -202,6 +204,7 @@ const updateTeacher = async (req, res) => {
       body.isFullTime !== undefined ? body.isFullTime === true : existing.is_full_time,
       body.maxWeeklyMinutes !== undefined ? body.maxWeeklyMinutes : existing.max_weekly_minutes,
       body.dailySpareMinutes !== undefined ? body.dailySpareMinutes : existing.daily_spare_minutes,
+      body.maxDaysPerWeek !== undefined ? body.maxDaysPerWeek : existing.max_days_per_week,
       JSON.stringify(body.allowedDays ?? existing.allowed_days),
       JSON.stringify(body.excludedWindows ?? existing.excluded_windows),
       body.notes !== undefined ? body.notes : existing.notes,
@@ -540,7 +543,7 @@ const getConfig = async (req, res) => {
   try {
     const school = req.user.school;
     const yearId = req.schoolYear?.schoolYearId || null;
-    const [settings, teachers, rooms, groups, courses, dayTemplates, fixedBlocks] =
+    const [settings, teachers, rooms, groups, courses, dayTemplates, fixedBlocks, periodRules] =
       await Promise.all([
         db.query(q.selectSettings, [school, yearId]),
         db.query(q.selectTeachersBySchool, [school, yearId]),
@@ -549,6 +552,7 @@ const getConfig = async (req, res) => {
         db.query(q.selectCoursesBySchool, [school, yearId]),
         db.query(q.selectDayTemplatesBySchool, [school, yearId]),
         db.query(q.selectFixedBlocksBySchool, [school, yearId]),
+        db.query(q.selectPeriodRulesBySchool, [school, yearId]),
       ]);
     const coursesByGroup = new Map();
     for (const row of courses.rows) {
@@ -565,9 +569,111 @@ const getConfig = async (req, res) => {
       })),
       dayTemplates: dayTemplates.rows.map(mapDayTemplate),
       fixedBlocks: fixedBlocks.rows.map(mapFixedBlock),
+      periodRules: periodRules.rows.map(mapPeriodRule),
     });
   } catch (error) {
     return handleError(res, error, 'fetching planner config');
+  }
+};
+
+
+const mapPeriodRule = (row) => ({
+  ruleId: row.rule_id,
+  teacherId: row.teacher_id,
+  classGroupId: row.class_group_id,
+  kind: row.kind,
+  startMin: row.start_min,
+  endMin: row.end_min,
+  minPerWeek: row.min_per_week,
+});
+
+const listPeriodRules = async (req, res) => {
+  try {
+    const { rows } = await db.query(q.selectPeriodRulesBySchool, [
+      req.user.school,
+      req.schoolYear?.schoolYearId || null,
+    ]);
+    return ok(res, rows.map(mapPeriodRule));
+  } catch (error) {
+    return handleError(res, error, 'fetching period rules');
+  }
+};
+
+const validatePeriodRuleBody = (body) => {
+  if (body.kind !== 'teach' && body.kind !== 'free') {
+    return 'kind must be "teach" or "free"';
+  }
+  if (body.kind === 'teach' && !body.classGroupId) {
+    return 'teach rules need a classGroupId';
+  }
+  if (
+    !Number.isInteger(body.startMin) || !Number.isInteger(body.endMin) ||
+    body.endMin <= body.startMin
+  ) {
+    return 'startMin and endMin (endMin > startMin) are required';
+  }
+  if (!Number.isInteger(body.minPerWeek) || body.minPerWeek < 1 || body.minPerWeek > 7) {
+    return 'minPerWeek must be between 1 and 7';
+  }
+  return null;
+};
+
+const createPeriodRule = async (req, res) => {
+  const { teacherId, classGroupId, kind, startMin, endMin, minPerWeek } = req.body;
+  if (!teacherId) return fail(res, 400, 'teacherId is required');
+  const bodyError = validatePeriodRuleBody(req.body);
+  if (bodyError) return fail(res, 400, bodyError);
+  try {
+    const schoolId = await resolveSchoolId(req.user.school);
+    const { rows } = await db.query(q.insertPeriodRule, [
+      req.user.school,
+      schoolId,
+      req.schoolYear.schoolYearId,
+      teacherId,
+      kind === 'teach' ? classGroupId : null,
+      kind,
+      startMin,
+      endMin,
+      minPerWeek,
+    ]);
+    return ok(res, mapPeriodRule(rows[0]), 201);
+  } catch (error) {
+    return handleError(res, error, 'creating period rule');
+  }
+};
+
+const updatePeriodRule = async (req, res) => {
+  const { ruleId } = req.params;
+  try {
+    const { rows: existingRows } = await db.query(q.selectPeriodRuleById, [ruleId, req.user.school]);
+    if (existingRows.length === 0) return fail(res, 404, 'Rule not found');
+    const existing = mapPeriodRule(existingRows[0]);
+    const next = { ...existing, ...req.body };
+    const bodyError = validatePeriodRuleBody(next);
+    if (bodyError) return fail(res, 400, bodyError);
+    const { rows } = await db.query(q.updatePeriodRule, [
+      next.teacherId,
+      next.kind === 'teach' ? next.classGroupId : null,
+      next.kind,
+      next.startMin,
+      next.endMin,
+      next.minPerWeek,
+      ruleId,
+      req.user.school,
+    ]);
+    return ok(res, mapPeriodRule(rows[0]));
+  } catch (error) {
+    return handleError(res, error, 'updating period rule');
+  }
+};
+
+const deletePeriodRule = async (req, res) => {
+  try {
+    const { rows } = await db.query(q.deletePeriodRule, [req.params.ruleId, req.user.school]);
+    if (rows.length === 0) return fail(res, 404, 'Rule not found');
+    return ok(res, mapPeriodRule(rows[0]));
+  } catch (error) {
+    return handleError(res, error, 'deleting period rule');
   }
 };
 
@@ -593,7 +699,7 @@ const mapSchedule = (row) => ({
 
 // Loads the school's planner config and builds the solver input JSON.
 async function assembleSolverInput(school, body = {}, yearId = null) {
-  const [settingsQ, teachersQ, roomsQ, groupsQ, coursesQ, daysQ, blocksQ] = await Promise.all([
+  const [settingsQ, teachersQ, roomsQ, groupsQ, coursesQ, daysQ, blocksQ, rulesQ] = await Promise.all([
     db.query(q.selectSettings, [school, yearId]),
     db.query(q.selectTeachersBySchool, [school, yearId]),
     db.query(q.selectRoomsBySchool, [school, yearId]),
@@ -601,6 +707,7 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
     db.query(q.selectCoursesBySchool, [school, yearId]),
     db.query(q.selectDayTemplatesBySchool, [school, yearId]),
     db.query(q.selectFixedBlocksBySchool, [school, yearId]),
+    db.query(q.selectPeriodRulesBySchool, [school, yearId]),
   ]);
   const settings = settingsQ.rows.length ? mapSettings(settingsQ.rows[0]) : DEFAULT_SETTINGS;
   // JSONB id arrays are not FK-enforced — drop references to deleted rows
@@ -637,6 +744,7 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
       fullTime: r.is_full_time,
       maxMinutesPerWeek: r.max_weekly_minutes,
       dailySpareMinutes: r.daily_spare_minutes,
+      maxDaysPerWeek: r.max_days_per_week,
       allowedDays: r.allowed_days,
       excludedWindows: r.excluded_windows,
     })),
@@ -659,6 +767,21 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
       maxPerDay: r.max_per_day,
     })),
     pins: Array.isArray(body.pinnedSessions) ? body.pinnedSessions : [],
+    // Drop rules whose teacher/class no longer exists (JSONB-era safety net)
+    periodRules: rulesQ.rows
+      .filter(
+        (r) =>
+          knownTeacherIds.has(r.teacher_id) &&
+          (r.kind !== 'teach' || knownGroupIds.has(r.class_group_id))
+      )
+      .map((r) => ({
+        teacherId: r.teacher_id,
+        classGroupId: r.class_group_id,
+        kind: r.kind,
+        startMin: r.start_min,
+        endMin: r.end_min,
+        minPerWeek: r.min_per_week,
+      })),
   };
 }
 
@@ -1002,6 +1125,10 @@ module.exports = {
   updateFixedBlock,
   deleteFixedBlock,
   getConfig,
+  listPeriodRules,
+  createPeriodRule,
+  updatePeriodRule,
+  deletePeriodRule,
   generateSchedule,
   listSchedules,
   getSchedule,

@@ -263,6 +263,52 @@ function preSolveCheck(model) {
     }
   });
 
+  // Period rules: cheap upper bounds against the base occupancy.
+  model.periodRules.forEach((rule) => {
+    const teacher = model.teachers[rule.teacherIdx];
+    if (rule.kind === 'teach') {
+      // Days on which the rule could possibly qualify: the window exists and
+      // the teacher has any free time that day.
+      let possibleDays = 0;
+      for (let d = 0; d < model.numDays; d++) {
+        if (!rule.windowByDay[d]) continue;
+        if (grid.countFreeSlots(model.teacherBase[rule.teacherIdx], d * model.W, model.slotsPerDay[d]) > 0) {
+          possibleDays++;
+        }
+      }
+      if (possibleDays < rule.minPerWeek) {
+        errors.push(
+          diag(
+            CODES.PERIOD_RULE_IMPOSSIBLE,
+            `${teacher.name} is required in the ${model.classGroups[rule.classIdx].name} ${rule.startMin}-${rule.endMin} window on ${rule.minPerWeek} day(s)/week, but is only available on ${possibleDays}.`,
+            { teacherId: teacher.id, possibleDays, minPerWeek: rule.minPerWeek }
+          )
+        );
+      }
+    } else {
+      // Free minutes available inside the window before any teaching is placed.
+      let baseFree = 0;
+      for (let d = 0; d < model.numDays; d++) {
+        const win = rule.windowByDay[d];
+        if (!win) continue;
+        for (let s = win.start; s < win.start + win.len; s++) {
+          if (grid.rangeIsFree(model.teacherBase[rule.teacherIdx], d * model.W, s, 1)) baseFree++;
+        }
+      }
+      const baseFreeMin = baseFree * model.config.snap;
+      const required = rule.minPerWeek * model.config.defaultDur;
+      if (baseFreeMin < required) {
+        errors.push(
+          diag(
+            CODES.PERIOD_RULE_IMPOSSIBLE,
+            `${teacher.name} must keep ${required} min free in the ${rule.startMin}-${rule.endMin} window each week, but only ${baseFreeMin} min of that window is available to them at all.`,
+            { teacherId: teacher.id, baseFreeMin, requiredMin: required }
+          )
+        );
+      }
+    }
+  });
+
   // Hall-style lower bound on candidate pools that actually occur (size > 1).
   const pools = new Map();
   for (const course of model.courses) {

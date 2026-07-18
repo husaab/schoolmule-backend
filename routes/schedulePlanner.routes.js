@@ -41,6 +41,11 @@ router.post('/fixed-blocks', controller.createFixedBlock);
 router.patch('/fixed-blocks/:fixedBlockId', controller.updateFixedBlock);
 router.delete('/fixed-blocks/:fixedBlockId', controller.deleteFixedBlock);
 
+router.get('/period-rules', controller.listPeriodRules);
+router.post('/period-rules', controller.createPeriodRule);
+router.patch('/period-rules/:ruleId', controller.updatePeriodRule);
+router.delete('/period-rules/:ruleId', controller.deletePeriodRule);
+
 router.post('/generate', controller.generateSchedule);
 
 router.get('/schedules', controller.listSchedules);
