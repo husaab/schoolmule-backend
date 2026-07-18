@@ -245,7 +245,7 @@ function validateCandidate(rawInput, candidate) {
             s.startMin < rule.endMin &&
             rule.startMin < s.endMin
         );
-        if (inWindow.length > 0 && inWindow.every((s) => s.teacherId === rule.teacherId)) {
+        if (inWindow.some((s) => s.teacherId === rule.teacherId)) {
           qualifying++;
         }
       }

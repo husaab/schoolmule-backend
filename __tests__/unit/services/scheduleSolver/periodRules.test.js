@@ -176,6 +176,31 @@ describe('validator — period rules', () => {
   });
 });
 
+describe('validator — multi-period window uses at-least-one semantics', () => {
+  it('qualifies a day when the teacher has ONE session in a two-period window', () => {
+    // Rule: t-1 with cg-1 somewhere in 480-560 (two periods) on both days.
+    // t-1 teaches only ONE of the two window sessions each day — that counts.
+    const raw = school({
+      periodRules: [
+        { teacherId: 't-1', classGroupId: 'cg-1', startMin: 480, endMin: 560, minPerWeek: 2, kind: 'teach' },
+      ],
+    });
+    const cand = {
+      sessions: [
+        { courseId: 'c-1', sessionIndex: 0, classGroupId: 'cg-1', courseName: 'Math', day: 1, startMin: 480, endMin: 520, teacherId: 't-1', roomId: null, pinned: false },
+        { courseId: 'c-2', sessionIndex: 0, classGroupId: 'cg-1', courseName: 'English', day: 1, startMin: 520, endMin: 560, teacherId: 't-2', roomId: null, pinned: false },
+        { courseId: 'c-1', sessionIndex: 1, classGroupId: 'cg-1', courseName: 'Math', day: 2, startMin: 520, endMin: 560, teacherId: 't-1', roomId: null, pinned: false },
+        { courseId: 'c-2', sessionIndex: 1, classGroupId: 'cg-1', courseName: 'English', day: 2, startMin: 480, endMin: 520, teacherId: 't-2', roomId: null, pinned: false },
+        { courseId: 'c-3', sessionIndex: 0, classGroupId: 'cg-2', courseName: 'Science', day: 1, startMin: 480, endMin: 520, teacherId: 't-2', roomId: null, pinned: false },
+        { courseId: 'c-3', sessionIndex: 1, classGroupId: 'cg-2', courseName: 'Science', day: 2, startMin: 560, endMin: 600, teacherId: 't-2', roomId: null, pinned: false },
+        { courseId: 'c-4', sessionIndex: 0, classGroupId: 'cg-2', courseName: 'Art', day: 1, startMin: 560, endMin: 600, teacherId: 't-1', roomId: null, pinned: false },
+        { courseId: 'c-4', sessionIndex: 1, classGroupId: 'cg-2', courseName: 'Art', day: 2, startMin: 480, endMin: 520, teacherId: 't-1', roomId: null, pinned: false },
+      ],
+    };
+    expect(validateCandidate(raw, cand)).toEqual([]);
+  });
+});
+
 describe('solver — period rules enforcement', () => {
   it('honors a teach-rule in every candidate', () => {
     const input = school({

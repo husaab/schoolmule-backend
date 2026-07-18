@@ -28,7 +28,7 @@ function normalizeConfig(raw = {}) {
     snap,
     defaultDur: clamp(raw.defaultCourseDurationMinutes, snap, 480, 40),
     candidateCount: clamp(raw.candidateCount, 1, 50, 20),
-    timeBudgetMs: clamp(raw.timeBudgetMs, 500, 10000, 10000),
+    timeBudgetMs: clamp(raw.timeBudgetMs, 500, 180000, 10000),
     seed: Number.isFinite(raw.seed) ? raw.seed : Date.now(),
   };
 }

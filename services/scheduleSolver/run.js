@@ -11,7 +11,7 @@ const GRACE_MS = 1000;
 
 function runSolverInWorker(input) {
   const requested = input && input.config ? input.config.timeBudgetMs : undefined;
-  const budgetMs = Math.min(Math.max(Number(requested) || DEFAULT_BUDGET_MS, 500), 10000);
+  const budgetMs = Math.min(Math.max(Number(requested) || DEFAULT_BUDGET_MS, 500), 180000);
 
   return new Promise((resolve, reject) => {
     const worker = new Worker(WORKER_PATH, {

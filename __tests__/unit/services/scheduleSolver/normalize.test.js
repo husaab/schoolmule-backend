@@ -58,10 +58,10 @@ describe('config defaults and clamps', () => {
     ).toBe(1);
   });
 
-  it('clamps timeBudgetMs to [500, 10000]', () => {
+  it('clamps timeBudgetMs to [500, 180000]', () => {
     expect(
-      validateAndNormalize(baseInput({ config: { timeBudgetMs: 60000 } })).config.timeBudgetMs
-    ).toBe(10000);
+      validateAndNormalize(baseInput({ config: { timeBudgetMs: 500000 } })).config.timeBudgetMs
+    ).toBe(180000);
     expect(
       validateAndNormalize(baseInput({ config: { timeBudgetMs: 10 } })).config.timeBudgetMs
     ).toBe(500);
