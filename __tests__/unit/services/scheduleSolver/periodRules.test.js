@@ -10,6 +10,7 @@ const { baseInput, teacher, course, day } = require('./fixtures');
 
 function cfg(overrides = {}) {
   return {
+    snapMinutes: 5,
     defaultCourseDurationMinutes: 40,
     seed: 42,
     candidateCount: 4,
