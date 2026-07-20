@@ -10,6 +10,7 @@ jest.mock('resend', () => ({
 // NOTE: puppeteer is deliberately NOT mocked — the generate test runs the
 // real render pipeline to verify page-count determinism end to end.
 
+const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
@@ -404,11 +405,19 @@ describe('Integration: Agenda Routes', () => {
       return { data: { arrayBuffer: async () => buffer }, error: null };
     });
 
-    // Two intro pages (PDF) + calendar events for the overview
+    // Two intro pages (PDF) + one image page (embedded losslessly)
+    // + calendar events for the overview
     const pdf = await buildTestPdf(2);
     await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
       .field('anchor', 'intro').field('title', 'Welcome')
       .attach('file', pdf, { filename: 'welcome.pdf', contentType: 'application/pdf' });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'closing').field('title', 'Poster')
+      .attach('file', png, { filename: 'poster.png', contentType: 'image/png' });
     await authenticatedRequest('post', '/api/calendar-events').send({
       school: SCHOOL,
       title: 'First Day of School',
@@ -438,14 +447,35 @@ describe('Integration: Agenda Routes', () => {
 
     expect(row.generation_error).toBeNull();
     expect(status).toBe('generated');
-    // 116 generated + 2 custom
-    expect(row.generated_page_count).toBe(118);
+    // 116 generated + 2 custom PDF pages + 1 image page
+    expect(row.generated_page_count).toBe(119);
 
-    // The stored final PDF really has 118 Letter pages
-    const finalBuffer = stored.get(row.generated_file_path);
-    expect(finalBuffer).toBeDefined();
+    // The final PDF lands on local disk (NOT Supabase — free plan 50MB cap)
+    const finalBuffer = fs.readFileSync(row.generated_file_path);
     const finalPdf = await PDFDocument.load(finalBuffer);
-    expect(finalPdf.getPageCount()).toBe(118);
+    expect(finalPdf.getPageCount()).toBe(119);
+
+    // Size regression guard: batched copyPages keeps shared resources
+    // deduped — a plain 119-page book must stay well under 10MB
+    expect(finalBuffer.length).toBeLessThan(10 * 1024 * 1024);
+
+    // Download endpoint streams the PDF with a filename
+    const download = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/download`)
+      .buffer(true)
+      .parse((res, cb) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(download.status).toBe(200);
+    expect(download.headers['content-type']).toBe('application/pdf');
+    expect(download.headers['content-disposition']).toContain('agenda-2025-2026.pdf');
+    expect(download.body.slice(0, 4).toString()).toBe('%PDF');
+
+    // After the file disappears (server restart/redeploy), 410 asks for a regenerate
+    fs.unlinkSync(row.generated_file_path);
+    const gone = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/download`);
+    expect(gone.status).toBe(410);
     const { width, height } = finalPdf.getPage(0).getSize();
     expect(Math.round(width)).toBe(612);
     expect(Math.round(height)).toBe(792);

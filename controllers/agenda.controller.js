@@ -7,8 +7,9 @@ const supabase = require('../config/supabaseClient');
 const multer = require('multer');
 const path = require('path');
 const { PDFDocument } = require('pdf-lib');
+const fs = require('fs');
 const agendaComposer = require('../services/agendaComposer');
-const { assembleAgenda } = require('../services/agendaAssembler');
+const { assembleAgenda, generatedPdfPath } = require('../services/agendaAssembler');
 const { resolveTheme, HEX_COLOR } = require('../templates/agendaBaseTemplate');
 const { parseAcademicYear, academicMonthSequence } = require('../utils/agendaCalendar');
 
@@ -268,13 +269,14 @@ const deleteAgenda = async (req, res) => {
 
     await db.query(agendaQueries.deleteAgenda, [agendaId]);
 
-    // Best-effort storage cleanup
+    // Best-effort cleanup: uploaded pages live in storage, the assembled
+    // PDF lives on local disk
     const storagePaths = pages.map((p) => p.file_path);
-    if (agenda.generated_file_path) storagePaths.push(agenda.generated_file_path);
     if (storagePaths.length > 0) {
       const { error } = await supabase.storage.from(AGENDA_BUCKET).remove(storagePaths);
       if (error) logger.error('Agenda storage cleanup error:', error);
     }
+    fs.promises.unlink(generatedPdfPath(agendaId)).catch(() => {});
 
     return res.status(200).json({ status: 'success', data: toCamelAgenda(agenda) });
   } catch (error) {
@@ -678,7 +680,8 @@ const generateAgenda = async (req, res) => {
         logger.info(`Agenda ${agendaId} generated: ${pageCount} pages at ${filePath}`);
       })
       .catch(async (error) => {
-        logger.error(`Agenda ${agendaId} generation failed:`, error);
+        // Pino ignores extra args after msg — pass the error as a field
+        logger.error({ err: error }, `Agenda ${agendaId} generation failed`);
         await db.query(agendaQueries.markAgendaFailed, [String(error.message || error), agendaId])
           .catch((dbError) => logger.error('Failed to record generation error:', dbError));
       });
@@ -687,6 +690,46 @@ const generateAgenda = async (req, res) => {
   } catch (error) {
     logger.error('Error starting agenda generation:', error);
     return res.status(500).json({ status: 'failed', message: 'Error starting agenda generation' });
+  }
+};
+
+/**
+ * GET /api/agendas/:agendaId/download
+ * Streams the assembled PDF from local disk. The file is ephemeral
+ * (lost on server restart/redeploy) — respond 410 so the frontend can
+ * prompt a regenerate instead of failing opaquely.
+ */
+const downloadGeneratedAgenda = async (req, res) => {
+  const { agendaId } = req.params;
+
+  try {
+    const agenda = await findAgendaOr404(agendaId, res);
+    if (!agenda) return;
+
+    if (agenda.status !== 'generated') {
+      return res.status(409).json({
+        status: 'failed',
+        message: 'This agenda has not been generated yet'
+      });
+    }
+
+    const filePath = generatedPdfPath(agendaId);
+    if (!fs.existsSync(filePath)) {
+      return res.status(410).json({
+        status: 'failed',
+        message: 'The generated PDF is no longer available (server restarted). Please regenerate.'
+      });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="agenda-${agenda.academic_year}.pdf"`
+    );
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    logger.error({ err: error }, 'Error downloading generated agenda');
+    return res.status(500).json({ status: 'failed', message: 'Error downloading agenda' });
   }
 };
 
@@ -820,5 +863,6 @@ module.exports = {
   getAgendaManifest,
   renderMonthPages,
   generateAgenda,
+  downloadGeneratedAgenda,
   cloneAgenda
 };

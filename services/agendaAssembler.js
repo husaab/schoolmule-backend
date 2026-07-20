@@ -12,6 +12,9 @@
 // overflowing onto an extra page would shift all printed page numbers, so
 // we fail loudly instead of shipping a misnumbered book.
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { PDFDocument, rgb } = require('pdf-lib');
 const supabase = require('../config/supabaseClient');
 const { resolveTheme } = require('../templates/agendaBaseTemplate');
@@ -21,6 +24,16 @@ const agendaComposer = require('./agendaComposer');
 const { academicMonthSequence } = require('../utils/agendaCalendar');
 
 const AGENDA_BUCKET = 'agendas';
+
+// Assembled PDFs are kept on local disk and streamed to the browser on
+// download — storing them in Supabase would hit the free plan's 50MB
+// object limit. The directory is ephemeral (survives until restart /
+// redeploy); the download endpoint asks for a regenerate if it's gone.
+const OUTPUT_DIR = path.join(os.tmpdir(), 'schoolmule-agendas');
+
+function generatedPdfPath(agendaId) {
+  return path.join(OUTPUT_DIR, `${agendaId}.pdf`);
+}
 
 const LETTER_WIDTH = 612;
 const LETTER_HEIGHT = 792;
@@ -116,46 +129,79 @@ async function assembleAgenda(agendaId) {
   }
 
   // ---- Merge pass: walk the manifest in order ----
+  // CRITICAL: pdf-lib dedupes shared objects (fonts, images) only WITHIN a
+  // single copyPages call — copying pages one at a time duplicates every
+  // shared resource once per page and balloons the output several-fold.
+  // So consecutive pages from the same source document are batched into
+  // one copyPages call.
   const output = await PDFDocument.create();
   const sourceCache = new Map(); // pageId -> PDFDocument (custom PDFs loaded once)
 
+  const sourceKeyOf = (item) => {
+    if (item.kind !== 'custom') return `month:${item.month}`;
+    return item.fileType === 'pdf' ? `pdf:${item.pageId}` : `img:${item.pageId}:${item.sourcePageIndex}`;
+  };
+
+  // Group consecutive manifest items sharing a source document
+  const runs = [];
   for (const item of manifest.items) {
-    if (item.kind === 'custom') {
-      if (item.fileType === 'pdf') {
-        let source = sourceCache.get(item.pageId);
-        if (!source) {
-          const buffer = await downloadFromStorage(item.filePath);
-          source = await PDFDocument.load(buffer, { ignoreEncryption: true });
-          sourceCache.set(item.pageId, source);
-        }
-        if (item.sourcePageIndex >= source.getPageCount()) {
-          throw new Error(
-            `Custom page "${item.title}" expected page ${item.sourcePageIndex + 1} but the PDF has ${source.getPageCount()} pages`
-          );
-        }
-        const [copied] = await output.copyPages(source, [item.sourcePageIndex]);
-        output.addPage(copied);
-      } else {
-        const buffer = await downloadFromStorage(item.filePath);
-        const isPng = item.filePath.toLowerCase().endsWith('.png') ||
-          (item.mimeType || '').includes('png');
-        const image = isPng ? await output.embedPng(buffer) : await output.embedJpg(buffer);
-        const page = output.addPage([LETTER_WIDTH, LETTER_HEIGHT]);
-        // Theme background behind the image so Fit-mode margins match
-        // the generated pages (preview mirrors this)
-        page.drawRectangle({
-          x: 0, y: 0, width: LETTER_WIDTH, height: LETTER_HEIGHT,
-          color: hexToRgb(resolveTheme(agenda.theme).background),
-        });
-        page.drawImage(image, placeImage(image, item));
+    const sourceKey = sourceKeyOf(item);
+    const last = runs[runs.length - 1];
+    if (last && last.sourceKey === sourceKey) {
+      last.items.push(item);
+    } else {
+      runs.push({ sourceKey, items: [item] });
+    }
+  }
+
+  for (const run of runs) {
+    const first = run.items[0];
+
+    if (first.kind === 'custom' && first.fileType === 'image') {
+      // Embed the original upload byte-for-byte — no re-encoding, no
+      // quality loss. Size is a non-issue since the final PDF is streamed
+      // from local disk rather than stored in Supabase.
+      const buffer = await downloadFromStorage(first.filePath);
+      const background = resolveTheme(agenda.theme).background;
+      const isPng = first.filePath.toLowerCase().endsWith('.png') ||
+        (first.mimeType || '').includes('png');
+      const image = isPng ? await output.embedPng(buffer) : await output.embedJpg(buffer);
+      const page = output.addPage([LETTER_WIDTH, LETTER_HEIGHT]);
+      // Theme background behind the image so Fit-mode margins match
+      // the generated pages (preview mirrors this)
+      page.drawRectangle({
+        x: 0, y: 0, width: LETTER_WIDTH, height: LETTER_HEIGHT,
+        color: hexToRgb(background),
+      });
+      page.drawImage(image, placeImage(image, first));
+      continue;
+    }
+
+    let source;
+    let indices;
+    if (first.kind === 'custom') {
+      source = sourceCache.get(first.pageId);
+      if (!source) {
+        const buffer = await downloadFromStorage(first.filePath);
+        source = await PDFDocument.load(buffer, { ignoreEncryption: true });
+        sourceCache.set(first.pageId, source);
+      }
+      indices = run.items.map((item) => item.sourcePageIndex);
+      const maxIndex = Math.max(...indices);
+      if (maxIndex >= source.getPageCount()) {
+        throw new Error(
+          `Custom page "${first.title}" expected page ${maxIndex + 1} but the PDF has ${source.getPageCount()} pages`
+        );
       }
     } else {
-      const chunk = chunkByMonth.get(item.month);
-      if (!chunk) throw new Error(`No rendered chunk for month ${item.month}`);
-      const [copied] = await output.copyPages(chunk.pdf, [chunk.cursor]);
-      output.addPage(copied);
-      chunk.cursor += 1;
+      const chunk = chunkByMonth.get(first.month);
+      if (!chunk) throw new Error(`No rendered chunk for month ${first.month}`);
+      source = chunk.pdf;
+      indices = run.items.map(() => chunk.cursor++);
     }
+
+    const copied = await output.copyPages(source, indices);
+    copied.forEach((page) => output.addPage(page));
   }
 
   const finalPageCount = output.getPageCount();
@@ -165,23 +211,16 @@ async function assembleAgenda(agendaId) {
     );
   }
 
-  // ---- Store pass ----
+  // ---- Store pass: local disk, streamed on download (no Supabase) ----
   const outputBytes = await output.save();
-  const schoolFolder = String(agenda.school).replace(/\s+/g, '').toUpperCase();
-  const filePath = `${schoolFolder}/${agenda.academic_year}/agenda.pdf`;
+  const sizeMb = (outputBytes.length / 1024 / 1024).toFixed(1);
 
-  const { error: uploadError } = await supabase.storage
-    .from(AGENDA_BUCKET)
-    .upload(filePath, Buffer.from(outputBytes), {
-      contentType: 'application/pdf',
-      upsert: true,
-    });
-  if (uploadError) {
-    throw new Error(`Failed to upload assembled agenda: ${uploadError.message}`);
-  }
+  const filePath = generatedPdfPath(agendaId);
+  await fs.promises.mkdir(OUTPUT_DIR, { recursive: true });
+  await fs.promises.writeFile(filePath, Buffer.from(outputBytes));
 
-  logger.info(`Assembled agenda ${agendaId}: ${finalPageCount} pages -> ${filePath}`);
+  logger.info(`Assembled agenda ${agendaId}: ${finalPageCount} pages, ${sizeMb}MB -> ${filePath}`);
   return { filePath, pageCount: finalPageCount };
 }
 
-module.exports = { assembleAgenda };
+module.exports = { assembleAgenda, generatedPdfPath };

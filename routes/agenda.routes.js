@@ -16,6 +16,7 @@ const {
   getAgendaManifest,
   renderMonthPages,
   generateAgenda,
+  downloadGeneratedAgenda,
   cloneAgenda
 } = require('../controllers/agenda.controller');
 
@@ -56,5 +57,6 @@ router.get('/:agendaId/pages/:pageId/signed-url', getCustomPageSignedUrl);
 router.get('/:agendaId/manifest', getAgendaManifest);
 router.get('/:agendaId/render/month/:month', renderMonthPages);
 router.post('/:agendaId/generate', generateAgenda);
+router.get('/:agendaId/download', downloadGeneratedAgenda);
 
 module.exports = router;
