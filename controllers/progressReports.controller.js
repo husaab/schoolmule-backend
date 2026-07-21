@@ -281,16 +281,18 @@ const getStudentProgressReports = async (req, res) => {
 // Get progress reports by term and school
 const getProgressReportsByTermAndSchool = async (req, res) => {
   try {
-    const { term, school } = req.params;
+    const { term } = req.params;
+    const school = req.user.school;
 
-    if (!term || !school) {
+    if (!term) {
       return res.status(400).json({
         status: 'error',
-        message: 'Term and school are required'
+        message: 'Term is required'
       });
     }
 
-    const result = await db.query(progressReportsQueries.getProgressReportsByTermAndSchool, [term, school]);
+    const result = await db.query(progressReportsQueries.getProgressReportsByTermAndSchool,
+      [term, school, req.schoolYear?.schoolYearId || null]);
     
     res.json({
       status: 'success',

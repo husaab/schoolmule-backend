@@ -918,19 +918,20 @@ const generateAlHaadiT2ReportCard = async (studentId, term, student, opts = {}) 
  * GET /report-cards/status?term=Term 1&school=SchoolName
  */
 const getGeneratedReportCards = async (req, res) => {
-  const { term, school } = req.query;
+  const { term } = req.query;
+  const school = req.user.school;
 
-  if (!term || !school) {
+  if (!term) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing query parameters: term and school are required'
+      message: 'Missing query parameter: term is required'
     });
   }
 
   try {
     const { rows } = await db.query(
       reportCardQueries.selectGeneratedReportCards,
-      [term, school]
+      [term, school, req.schoolYear?.schoolYearId || null]
     );
 
     return res.status(200).json({

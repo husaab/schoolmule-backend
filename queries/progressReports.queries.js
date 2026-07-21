@@ -117,19 +117,21 @@ const getStudentProgressReports = `
 // Get progress reports by term and school
 const getProgressReportsByTermAndSchool = `
   SELECT 
-    student_id,
-    term,
-    student_name,
-    grade,
-    file_path,
-    generated_at,
-    school,
-    email_sent,
-    email_sent_at,
-    email_sent_by
-  FROM progress_reports
-  WHERE term = $1 AND school = $2
-  ORDER BY student_name ASC
+    pr.student_id,
+    pr.term,
+    pr.student_name,
+    pr.grade,
+    pr.file_path,
+    pr.generated_at,
+    pr.school,
+    pr.email_sent,
+    pr.email_sent_at,
+    pr.email_sent_by
+  FROM progress_reports pr
+  JOIN students s ON s.student_id = pr.student_id
+  WHERE pr.term = $1 AND pr.school = $2
+    AND ($3::uuid IS NULL OR s.school_year_id = $3)
+  ORDER BY pr.student_name ASC
 `;
 
 // Get progress report by student and term

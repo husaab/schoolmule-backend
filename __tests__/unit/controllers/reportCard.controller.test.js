@@ -377,15 +377,16 @@ describe('Report Card Controller', () => {
       expect(res.status).toBe(400);
     });
 
-    it('should return 400 when school is missing', async () => {
+    it('uses the JWT school when no school param is sent', async () => {
       const token = mockAdminUser();
+      mockQueryResponse({ rows: [] });
 
       const res = await request(app)
         .get(url)
         .set('Authorization', `Bearer ${token}`)
         .query({ term: 'Term 1' });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
     });
 
     it('should return 500 on database error', async () => {

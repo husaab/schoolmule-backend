@@ -35,9 +35,11 @@ const reportCardQueries = {
   `,
 
   selectGeneratedReportCards: `
-    SELECT student_id, term, student_name, file_path, generated_at, grade, email_sent, email_sent_at, email_sent_by
-    FROM report_cards
-    WHERE term = $1 AND school = $2
+    SELECT rc.student_id, rc.term, rc.student_name, rc.file_path, rc.generated_at, rc.grade, rc.email_sent, rc.email_sent_at, rc.email_sent_by
+    FROM report_cards rc
+    JOIN students s ON s.student_id = rc.student_id
+    WHERE rc.term = $1 AND rc.school = $2
+      AND ($3::uuid IS NULL OR s.school_year_id = $3)
   `,
 
   selectGeneratedReportCardsByStudentId: `
