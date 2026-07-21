@@ -365,6 +365,49 @@ describe('PATCH /api/parent-students/:id', () => {
     expect(res.status).toBe(500);
     expect(res.body.status).toBe('failed');
   });
+
+  it('updates with parentId when no duplicate relation exists', async () => {
+    // checkExistingRelationExcludingLink returns no existing
+    mockQueryResponse([]);
+    const updated = buildParentStudentRow({ relation: 'FATHER' });
+    mockQueryResponse([updated], 1);
+
+    const res = await request(app)
+      .patch(`/api/parent-students/${updated.parent_student_link_id}`)
+      .set(authHeader())
+      .send({ parentId: TEST_PARENT_USER_ID, relation: 'FATHER', parentName: 'Updated Parent' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
+    expect(res.body.data).toHaveProperty('parentStudentLinkId');
+  });
+
+  it('returns 409 when another link already relates the parent to the student', async () => {
+    // checkExistingRelationExcludingLink returns existing
+    mockQueryResponse([buildParentStudentRow()]);
+
+    const res = await request(app)
+      .patch('/api/parent-students/some-link-id')
+      .set(authHeader())
+      .send({ parentId: TEST_PARENT_USER_ID, relation: 'MOTHER' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.message).toContain('already exists');
+  });
+
+  it('skips the duplicate check when parentId is null', async () => {
+    const updated = buildParentStudentRow({ parent_id: null });
+    mockQueryResponse([updated], 1);
+
+    const res = await request(app)
+      .patch(`/api/parent-students/${updated.parent_student_link_id}`)
+      .set(authHeader())
+      .send({ parentId: null, relation: 'Guardian', parentName: 'Manual Parent' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('success');
+  });
 });
 
 // ─── DELETE /api/parent-students/:id ────────────────────────────

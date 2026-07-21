@@ -148,6 +148,18 @@ const parentStudentQueries = {
     SELECT parent_student_link_id
     FROM parent_students
     WHERE student_id = $1 AND parent_id = $2
+  `,
+
+  // Check if another link already relates this parent to the same student
+  // (excludes the row being updated; nonexistent link id yields no rows)
+  checkExistingRelationExcludingLink: `
+    SELECT parent_student_link_id
+    FROM parent_students
+    WHERE parent_id = $1
+      AND parent_student_link_id <> $2
+      AND student_id = (
+        SELECT student_id FROM parent_students WHERE parent_student_link_id = $2
+      )
   `
 };
 

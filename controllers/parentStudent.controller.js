@@ -245,6 +245,20 @@ const updateParentStudent = async (req, res) => {
       relation
     } = req.body;
 
+    // Prevent duplicating an existing parent-student link (excluding this row)
+    if (parentId) {
+      const { rows: existingRows } = await db.query(
+        parentStudentQueries.checkExistingRelationExcludingLink,
+        [parentId, id]
+      );
+      if (existingRows.length > 0) {
+        return res.status(409).json({
+          status: "failed",
+          message: "Parent-student relation already exists",
+        });
+      }
+    }
+
     const values = [
       parentId || null,
       parentName || null,
