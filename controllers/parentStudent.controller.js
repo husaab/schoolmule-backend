@@ -128,7 +128,10 @@ const getParentsByStudentId = async (req, res) => {
 const getStudentsByParentId = async (req, res) => {
   try {
     const { parentId } = req.params;
-    const { rows } = await db.query(parentStudentQueries.selectStudentsByParentId, [parentId]);
+    const { rows } = await db.query(parentStudentQueries.selectStudentsByParentId, [
+      parentId,
+      req.schoolYear?.schoolYearId ?? null,
+    ]);
 
     logger.info(`Student relations fetched successfully for parent: ${parentId}`);
     return res.status(200).json({

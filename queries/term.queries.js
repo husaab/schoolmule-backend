@@ -122,10 +122,11 @@ const termQueries = {
    * Params: term_id (UUID)
    */
   selectTermById: `
-    SELECT 
+    SELECT
       t.term_id,
       t.school,
       t.school_id,
+      t.school_year_id,
       t.name,
       t.start_date,
       t.end_date,

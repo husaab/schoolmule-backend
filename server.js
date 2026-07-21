@@ -36,6 +36,7 @@ const analyticsRoutes = require("./routes/analytics.routes")
 const schoolCalendarRoutes = require("./routes/schoolCalendar.routes")
 const agendaRoutes = require("./routes/agenda.routes")
 const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
+const parentPortalRoutes = require("./routes/parentPortal.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 
@@ -108,6 +109,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/calendar-events", schoolCalendarRoutes);
 app.use("/api/agendas", agendaRoutes);
 app.use("/api/schedule-planner", schedulePlannerRoutes);
+app.use("/api/parent-portal", parentPortalRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);

@@ -67,7 +67,9 @@ const parentStudentQueries = {
     ORDER BY ps.relation
   `,
 
-  // GET /parent-students/parent/:parentId - Get all student relations for a parent
+  // GET /parent-students/parent/:parentId - Get all student relations for a parent,
+  // scoped to a school year when one is provided (students are per-year rows after
+  // rollover, so an unscoped query returns one duplicate child per year).
   selectStudentsByParentId: `
     SELECT
       ps.parent_student_link_id,
@@ -89,6 +91,7 @@ const parentStudentQueries = {
     LEFT JOIN students s ON ps.student_id = s.student_id
     LEFT JOIN users ht ON s.homeroom_teacher_id = ht.user_id
     WHERE ps.parent_id = $1
+      AND ($2::uuid IS NULL OR s.school_year_id = $2)
     ORDER BY s.grade, s.name
   `,
 
