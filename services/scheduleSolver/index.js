@@ -103,6 +103,37 @@ function computeMetrics(model, placements) {
   };
 }
 
+// Maps a saved schedule's sessions back onto the current model so generation
+// can LNS-warm-start from it. Entries that no longer match the configuration
+// (deleted course or teacher, changed duration, day removed from templates,
+// off-grid start time) are dropped — the seed is only a heuristic, and
+// solveOne re-verifies every placement it fixes before building on it.
+function mapBaseSessions(model, baseSessions) {
+  const { snap } = model.config;
+  const sessionByKey = new Map();
+  for (const s of model.sessions) {
+    sessionByKey.set(`${model.courses[s.courseIdx].id}#${s.sessionIndex}`, s);
+  }
+  const teacherIdxById = new Map(model.teachers.map((t, i) => [t.id, i]));
+  const placements = [];
+  const seen = new Set();
+  for (const raw of baseSessions) {
+    if (!raw || typeof raw !== 'object') continue;
+    const session = sessionByKey.get(`${raw.courseId}#${raw.sessionIndex}`);
+    if (!session || seen.has(session.sIdx)) continue;
+    if (raw.endMin - raw.startMin !== session.durMin) continue;
+    const dayIdx = model.days.indexOf(raw.day);
+    if (dayIdx < 0) continue;
+    const teacherIdx = teacherIdxById.get(raw.teacherId);
+    if (teacherIdx === undefined || !session.teacherCands.includes(teacherIdx)) continue;
+    const slot = (raw.startMin - model.dayStartMin[dayIdx]) / snap;
+    if (!Number.isInteger(slot) || slot < 0) continue;
+    seen.add(session.sIdx);
+    placements.push({ sIdx: session.sIdx, dayIdx, slot, teacherIdx, roomIdx: session.roomIdx });
+  }
+  return placements;
+}
+
 function unplacedOutput(model, unplacedSIdxs) {
   return unplacedSIdxs.map((sIdx) => {
     const session = model.sessions[sIdx];
@@ -144,11 +175,51 @@ function generateSchedules(rawInput) {
   const prevSigs = [];
   const prevPlacementSets = [];
   const failWeight = new Float64Array(model.sessions.length);
+
+  // Warm-start seed: a saved schedule's sessions become an LNS base so the
+  // first solution is nearly free, and its signature joins prevSigs so every
+  // returned candidate must differ from the base as well as from each other.
+  // The base itself is never emitted as a candidate.
+  const baseSessions = Array.isArray(rawInput.baseSessions) ? rawInput.baseSessions : [];
+  let hasBaseSeed = false;
+  if (baseSessions.length > 0) {
+    const basePlacements = mapBaseSessions(model, baseSessions);
+    if (basePlacements.length > 0) {
+      hasBaseSeed = true;
+      const baseSig = diversity.signatureOf(
+        basePlacements.map((p) => ({
+          courseIdx: model.sessions[p.sIdx].courseIdx,
+          dayIdx: p.dayIdx,
+          slot: p.slot,
+        }))
+      );
+      prevSigs.push(baseSig);
+      prevPlacementSets.push(new Set(baseSig));
+      candidatePlacements.push(basePlacements);
+    }
+    const dropped = baseSessions.length - basePlacements.length;
+    if (dropped > 0) {
+      baseWarnings.push(
+        diag(
+          CODES.BASE_SCHEDULE_PARTIAL,
+          `${dropped} of ${baseSessions.length} base schedule session(s) no longer match the current configuration and were ignored for warm-starting.`
+        )
+      );
+    }
+  }
+
   // Short attempts + persistent fail-weights beat few long attempts: a bad
   // random trajectory gets abandoned quickly and the learned weights redirect
   // the next restart at the troublesome sessions.
-  const maxAttempts = candidateCount * 10 + 20;
-  const dupeLimit = Math.max(5, Math.ceil(candidateCount / 2));
+  // Base-seeded runs need different loop budgets: on dense instances only a
+  // few percent of warm attempts re-solve AND clear the similarity filter
+  // against the base, and near-base duplicates are common early on. Attempts
+  // are node-bounded (~ms each), so the wall-clock deadline stays the real
+  // cutoff. Non-seeded runs keep the original tighter budgets.
+  const maxAttempts = candidateCount * (hasBaseSeed ? 200 : 10) + 20;
+  const dupeLimit = hasBaseSeed
+    ? Math.max(25, candidateCount)
+    : Math.max(5, Math.ceil(candidateCount / 2));
   let worstFail = null;
   let consecutiveDupes = 0;
   let attempts = 0;
@@ -171,8 +242,10 @@ function generateSchedules(rawInput) {
     if (candidatePlacements.length > 0 && rng() > 0.15) {
       const base = candidatePlacements[Math.floor(rng() * candidatePlacements.length)];
       // 0.75-0.85 kept: high re-solve success while still differing enough
-      // from the base to clear the 90% duplicate filter.
-      const keepFraction = 0.75 + rng() * 0.1;
+      // from the base to clear the 90% duplicate filter. Base-seeded runs
+      // relax more (0.65-0.8): every candidate must ALSO differ from the
+      // seed, so hugging it too closely just feeds the duplicate filter.
+      const keepFraction = hasBaseSeed ? 0.65 + rng() * 0.15 : 0.75 + rng() * 0.1;
       warmStart = base.filter(
         (p) => !model.sessions[p.sIdx].pin && rng() < keepFraction
       );
@@ -180,10 +253,13 @@ function generateSchedules(rawInput) {
 
     const baseNodes = model.sessions.length * 8 + 512;
     // Warm (LNS) attempts succeed or fail fast; only fresh solves get the
-    // Luby-scaled budgets.
+    // Luby-scaled budgets. Base-seeded warm attempts re-solve a larger freed
+    // portion, so they get double the node budget.
     // Attempts are bounded by node budget (machine-independent); the global
     // wall-clock deadline is the only time cutoff.
-    const maxNodes = warmStart ? baseNodes : baseNodes * luby(++freshAttempts);
+    const maxNodes = warmStart
+      ? baseNodes * (hasBaseSeed ? 2 : 1)
+      : baseNodes * luby(++freshAttempts);
     const result = solveOne(model, rng, prevPlacementSets, failWeight, deadline, warmStart, maxNodes);
     totalNodes += result.nodes;
 
@@ -221,6 +297,24 @@ function generateSchedules(rawInput) {
   const timedOut = Date.now() >= deadline;
 
   if (candidates.length === 0) {
+    // Exiting on the dupe streak means the last dupeLimit SOLVED attempts
+    // were all near-copies of the base/previous finds — report that honestly
+    // instead of "could not place". worstFail must not gate this: unrelated
+    // fresh-solve failures earlier in the run don't change why we stopped.
+    if (consecutiveDupes >= dupeLimit) {
+      return {
+        ok: false,
+        phase: 'search',
+        diagnostics: [
+          diag(
+            CODES.SCHEDULE_SPACE_TIGHT,
+            'Every schedule found was nearly identical to the base schedule — the constraints leave no sufficiently different variation.'
+          ),
+        ],
+        partial: null,
+        meta: { ...metaBase(), elapsedMs, timedOut, nodes: totalNodes },
+      };
+    }
     const failSession = model.sessions[worstFail ? worstFail.sIdx : 0];
     const course = model.courses[failSession.courseIdx];
     const group = model.classGroups[course.classIdx];

@@ -787,7 +787,18 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
 
 const generateSchedule = async (req, res) => {
   try {
-    const input = await assembleSolverInput(req.user.school, req.body || {}, req.schoolYear?.schoolYearId || null);
+    const body = req.body || {};
+    // "Generate variations": seed the solver's warm start from a saved
+    // schedule so candidates arrive in seconds instead of a fresh deep search.
+    let baseSessions = null;
+    if (body.baseScheduleId) {
+      const { rows } = await db.query(q.selectScheduleById, [body.baseScheduleId, req.user.school]);
+      if (rows.length === 0) return fail(res, 404, 'Base schedule not found');
+      baseSessions = rows[0].sessions;
+    }
+
+    const input = await assembleSolverInput(req.user.school, body, req.schoolYear?.schoolYearId || null);
+    if (baseSessions) input.baseSessions = baseSessions;
     if (input.days.length === 0) {
       return fail(res, 400, 'Set up day templates (school hours) before generating');
     }

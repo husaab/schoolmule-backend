@@ -129,6 +129,60 @@ describe('Integration: POST /api/schedule-planner/generate', () => {
   });
 });
 
+describe('Integration: POST /generate with baseScheduleId (variations)', () => {
+  it('warm-starts from a saved schedule and every candidate differs from it', async () => {
+    const { teacherId, classGroupId } = await setupSmallSchool();
+    // A second course gives the instance real variety: the engine deliberately
+    // treats few-minute slides as duplicates, so distinct schedules must swap
+    // which course occupies which slot.
+    await asAdmin('post', `/api/schedule-planner/class-groups/${classGroupId}/courses`).send({
+      name: 'Science',
+      sessionsPerWeek: 2,
+      durationMinutes: 40,
+      maxPerDay: 1,
+      assignedTeacherId: teacherId,
+    });
+    const genRes = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 1,
+      seed: 5,
+      timeBudgetMs: 3000,
+    });
+    const baseSessions = genRes.body.data.candidates[0].sessions;
+    const saveRes = await asAdmin('post', '/api/schedule-planner/schedules').send({
+      name: 'Variation base',
+      sessions: baseSessions,
+    });
+    const scheduleId = saveRes.body.data.scheduleId;
+
+    const res = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 3,
+      seed: 9,
+      timeBudgetMs: 3000,
+      baseScheduleId: scheduleId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.candidates.length).toBeGreaterThanOrEqual(1);
+
+    const baseKeys = new Set(baseSessions.map((s) => `${s.courseId}:${s.day}:${s.startMin}`));
+    for (const cand of res.body.data.candidates) {
+      const shared = cand.sessions.filter((s) =>
+        baseKeys.has(`${s.courseId}:${s.day}:${s.startMin}`)
+      ).length;
+      expect(shared / cand.sessions.length).toBeLessThanOrEqual(0.9);
+    }
+  });
+
+  it('returns 404 for a baseScheduleId that does not exist', async () => {
+    await setupSmallSchool();
+    const res = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 2,
+      timeBudgetMs: 1000,
+      baseScheduleId: '00000000-0000-0000-0000-000000000000',
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('Integration: schedule draft CRUD', () => {
   it('saves, lists, reads, renames, and deletes a draft', async () => {
     await setupSmallSchool();
