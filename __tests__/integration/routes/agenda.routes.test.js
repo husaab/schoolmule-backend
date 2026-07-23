@@ -318,6 +318,86 @@ describe('Integration: Agenda Routes', () => {
     expect(preset.body.data).toMatchObject({ fitMode: 'cover', zoom: 1, zoomY: null, offsetX: 0, offsetY: 0 });
   });
 
+  it('toggles page-number stamping per uploaded page (default on)', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    const pdf = await buildTestPdf(2);
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro').field('title', 'Cover Pack')
+      .attach('file', pdf, { filename: 'cover.pdf', contentType: 'application/pdf' });
+    expect(upload.body.data.showPageNumber).toBe(true);
+
+    // Manifest marks custom items for stamping
+    let manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.items[0].stampNumber).toBe(true);
+    expect(manifest.body.data.items[1].stampNumber).toBe(true);
+
+    // Turn it off (e.g. for a cover page)
+    const toggled = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ showPageNumber: false });
+    expect(toggled.status).toBe(200);
+    expect(toggled.body.data.showPageNumber).toBe(false);
+
+    manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.items[0].stampNumber).toBe(false);
+
+    // Toggling doesn't clobber placement or title
+    expect(toggled.body.data.title).toBe('Cover Pack');
+    expect(toggled.body.data.zoom).toBe(1);
+
+    const bad = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ showPageNumber: 'yes' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('supports per-source-page number overrides and chip styling', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    const pdf = await buildTestPdf(3);
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro').field('title', 'Booklet')
+      .attach('file', pdf, { filename: 'booklet.pdf', contentType: 'application/pdf' });
+
+    // Disable page 1 only; style page 3 as a dark navy chip at 60%
+    const patch = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({
+        stampConfig: {
+          style: { background: '#ffffff', opacity: 0.9 },
+          pages: {
+            '0': { enabled: false },
+            '2': { background: '#1a2a55', opacity: 0.6 },
+          },
+        },
+      });
+    expect(patch.status).toBe(200);
+
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    const [p1, p2, p3] = manifest.body.data.items;
+    // Page 1: disabled by override
+    expect(p1.stampNumber).toBe(false);
+    // Page 2: document default style
+    expect(p2.stampNumber).toBe(true);
+    expect(p2.stampStyle).toMatchObject({ background: '#ffffff', opacity: 0.9, textColor: '#262626' });
+    // Page 3: dark chip -> auto white text
+    expect(p3.stampNumber).toBe(true);
+    expect(p3.stampStyle).toMatchObject({ background: '#1a2a55', opacity: 0.6, textColor: '#ffffff' });
+
+    // Invalid configs rejected
+    const badColor = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ stampConfig: { style: { background: 'navy' } } });
+    expect(badColor.status).toBe(400);
+    const badOpacity = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ stampConfig: { pages: { '1': { opacity: 3 } } } });
+    expect(badOpacity.status).toBe(400);
+    const badKey = await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/${upload.body.data.pageId}`)
+      .send({ stampConfig: { pages: { abc: { enabled: false } } } });
+    expect(badKey.status).toBe(400);
+
+    // Config survives clone-forward
+    const clone = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/clone`)
+      .send({ academicYear: '2026-2027' });
+    const cloneDetail = await authenticatedRequest('get', `/api/agendas/${clone.body.data.agendaId}`);
+    expect(cloneDetail.body.data.customPages[0].stampConfig.pages['0']).toEqual({ enabled: false });
+  });
+
   it('themes the generated pages via a background color', async () => {
     const { body: { data: agenda } } = await createAgenda();
     expect(agenda.theme).toEqual({});

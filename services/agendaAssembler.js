@@ -15,7 +15,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PDFDocument, rgb } = require('pdf-lib');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const supabase = require('../config/supabaseClient');
 const { resolveTheme } = require('../templates/agendaBaseTemplate');
 const logger = require('../logger');
@@ -72,6 +72,44 @@ function hexToRgb(hex) {
     parseInt(value.slice(2, 4), 16) / 255,
     parseInt(value.slice(4, 6), 16) / 255
   );
+}
+
+// Page-number chip stamped on uploaded custom pages (bottom-right,
+// matching the generated footer's number position). A soft white chip
+// keeps the number readable on dark or busy designs. The live preview
+// overlays the identical chip using these same metrics.
+const STAMP = {
+  fontSize: 9,
+  paddingX: 6,
+  height: 15,
+  marginRight: 30, // from right page edge, pt
+  marginBottom: 18, // from bottom page edge, pt
+};
+
+/** Stamp the global page number on a copied page (any page size). */
+function stampPageNumber(page, font, pageNumber, style = {}) {
+  const { width } = page.getSize();
+  const text = String(pageNumber);
+  const textWidth = font.widthOfTextAtSize(text, STAMP.fontSize);
+  const chipWidth = textWidth + STAMP.paddingX * 2;
+  const x = width - STAMP.marginRight - chipWidth;
+  const y = STAMP.marginBottom;
+
+  page.drawRectangle({
+    x,
+    y,
+    width: chipWidth,
+    height: STAMP.height,
+    color: hexToRgb(style.background || '#ffffff'),
+    opacity: style.opacity !== undefined ? style.opacity : 0.82,
+  });
+  page.drawText(text, {
+    x: x + STAMP.paddingX,
+    y: y + (STAMP.height - STAMP.fontSize) / 2 + 1,
+    size: STAMP.fontSize,
+    font,
+    color: hexToRgb(style.textColor || '#262626'),
+  });
 }
 
 async function downloadFromStorage(filePath) {
@@ -136,6 +174,7 @@ async function assembleAgenda(agendaId) {
   // one copyPages call.
   const output = await PDFDocument.create();
   const sourceCache = new Map(); // pageId -> PDFDocument (custom PDFs loaded once)
+  const stampFont = await output.embedFont(StandardFonts.Helvetica);
 
   const sourceKeyOf = (item) => {
     if (item.kind !== 'custom') return `month:${item.month}`;
@@ -174,6 +213,7 @@ async function assembleAgenda(agendaId) {
         color: hexToRgb(background),
       });
       page.drawImage(image, placeImage(image, first));
+      if (first.stampNumber) stampPageNumber(page, stampFont, first.pageNumber, first.stampStyle);
       continue;
     }
 
@@ -201,7 +241,13 @@ async function assembleAgenda(agendaId) {
     }
 
     const copied = await output.copyPages(source, indices);
-    copied.forEach((page) => output.addPage(page));
+    copied.forEach((page, i) => {
+      output.addPage(page);
+      const item = run.items[i];
+      if (item.kind === 'custom' && item.stampNumber) {
+        stampPageNumber(page, stampFont, item.pageNumber, item.stampStyle);
+      }
+    });
   }
 
   const finalPageCount = output.getPageCount();

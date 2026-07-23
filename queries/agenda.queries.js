@@ -207,6 +207,8 @@ const agendaQueries = {
       p.zoom_y,
       p.offset_x,
       p.offset_y,
+      p.show_page_number,
+      p.stamp_config,
       p.created_at
     FROM agenda_custom_pages p
     WHERE p.agenda_id = $1
@@ -238,6 +240,8 @@ const agendaQueries = {
       p.zoom_y,
       p.offset_x,
       p.offset_y,
+      p.show_page_number,
+      p.stamp_config,
       p.created_at
     FROM agenda_custom_pages p
     WHERE p.page_id = $1
@@ -258,7 +262,8 @@ const agendaQueries = {
   /**
    * Insert custom page
    * Params: agenda_id, anchor, anchor_month, sort_order, title, file_path, file_type,
-   *         mime_type, page_count, fit_mode, zoom, zoom_y, offset_x, offset_y
+   *         mime_type, page_count, fit_mode, zoom, zoom_y, offset_x, offset_y,
+   *         show_page_number, stamp_config (jsonb)
    */
   insertCustomPage: `
     INSERT INTO agenda_custom_pages (
@@ -275,9 +280,11 @@ const agendaQueries = {
       zoom,
       zoom_y,
       offset_x,
-      offset_y
+      offset_y,
+      show_page_number,
+      stamp_config
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
     RETURNING *
   `,
 
@@ -297,7 +304,8 @@ const agendaQueries = {
 
   /**
    * Update a custom page's settings
-   * Params: title, fit_mode, zoom, zoom_y, offset_x, offset_y, page_id
+   * Params: title, fit_mode, zoom, zoom_y, offset_x, offset_y, show_page_number,
+   *         stamp_config (jsonb), page_id
    */
   updateCustomPageSettings: `
     UPDATE agenda_custom_pages
@@ -307,8 +315,10 @@ const agendaQueries = {
       zoom = $3,
       zoom_y = $4,
       offset_x = $5,
-      offset_y = $6
-    WHERE page_id = $7
+      offset_y = $6,
+      show_page_number = $7,
+      stamp_config = $8
+    WHERE page_id = $9
     RETURNING *
   `,
 

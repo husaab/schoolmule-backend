@@ -80,6 +80,19 @@ ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS zoom_y NUMERIC(5,3)
   CHECK (zoom_y IS NULL OR (zoom_y >= 0.2 AND zoom_y <= 4));
 
+-- Print the global page number (small chip, bottom-right) on uploaded
+-- custom pages. Default on; toggled per page (e.g. off for the cover).
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS show_page_number BOOLEAN NOT NULL DEFAULT true;
+
+-- Page-number chip settings per uploaded document:
+-- { "style": {"background": "#ffffff", "opacity": 0.82},
+--   "pages": {"2": {"enabled": false, "background": "#1a2a55", "opacity": 0.6}} }
+-- "pages" keys are 0-based source page indices overriding the document
+-- default (show_page_number + style).
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS stamp_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 -- Per-agenda template theme, e.g. {"background": "#f5ecd9"}.
 -- Shading tones on generated pages are derived from the background.
 ALTER TABLE agendas

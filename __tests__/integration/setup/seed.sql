@@ -802,3 +802,9 @@ CREATE TABLE IF NOT EXISTS planner_period_rules (
 );
 CREATE INDEX IF NOT EXISTS idx_planner_period_rules_school
   ON planner_period_rules(school, school_year_id);
+
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS show_page_number BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS stamp_config JSONB NOT NULL DEFAULT '{}'::jsonb;

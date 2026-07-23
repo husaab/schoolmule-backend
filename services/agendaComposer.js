@@ -72,6 +72,42 @@ function eventsForMonth(events, year, month) {
     }));
 }
 
+const DEFAULT_STAMP_STYLE = { background: '#ffffff', opacity: 0.82 };
+
+/** Dark text on light chips, white text on dark chips. */
+function stampTextColor(backgroundHex) {
+  let value = backgroundHex.slice(1);
+  if (value.length === 3) value = value.split('').map((c) => c + c).join('');
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 140 ? '#262626' : '#ffffff';
+}
+
+/**
+ * Resolve numbering for one source page of an uploaded document:
+ * per-page override (stamp_config.pages[index]) beats the document
+ * default (show_page_number + stamp_config.style) beats built-ins.
+ */
+function resolveStamp(page, sourcePageIndex) {
+  const config = page.stamp_config || {};
+  const docStyle = config.style || {};
+  const override = (config.pages && config.pages[String(sourcePageIndex)]) || {};
+
+  const enabled = override.enabled !== undefined
+    ? override.enabled !== false
+    : page.show_page_number !== false;
+  const background = override.background || docStyle.background || DEFAULT_STAMP_STYLE.background;
+  const opacity = override.opacity !== undefined
+    ? Number(override.opacity)
+    : (docStyle.opacity !== undefined ? Number(docStyle.opacity) : DEFAULT_STAMP_STYLE.opacity);
+
+  return {
+    stampNumber: enabled,
+    stampStyle: { background, opacity, textColor: stampTextColor(background) },
+  };
+}
+
 /** pg returns DATE columns as JS Dates; normalize to YYYY-MM-DD strings. */
 function toIso(value) {
   if (!value) return null;
@@ -132,6 +168,9 @@ function computeSequence({ agenda, months, customPages }) {
           anchor: page.anchor,
           anchorMonth: page.anchor_month,
           numbered: false,
+          // Print the global page number as a chip on this uploaded page
+          // (per-page toggle + style; generated pages use their footer)
+          ...resolveStamp(page, i),
         });
       }
     }

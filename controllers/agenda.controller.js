@@ -77,8 +77,46 @@ const toCamelCustomPage = (row) => ({
   zoomY: row.zoom_y !== undefined && row.zoom_y !== null ? Number(row.zoom_y) : null,
   offsetX: row.offset_x !== undefined ? Number(row.offset_x) : 0,
   offsetY: row.offset_y !== undefined ? Number(row.offset_y) : 0,
+  showPageNumber: row.show_page_number !== false,
+  stampConfig: row.stamp_config || {},
   createdAt: row.created_at
 });
+
+/** Validate a stamp_config object; returns an error message or null. */
+const validateStampConfig = (config) => {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return 'stampConfig must be an object';
+  }
+  const validateStyle = (style, label) => {
+    if (typeof style !== 'object' || style === null) return `${label} must be an object`;
+    if (style.background !== undefined && !HEX_COLOR.test(style.background)) {
+      return `${label}.background must be a hex color`;
+    }
+    if (style.opacity !== undefined &&
+        (typeof style.opacity !== 'number' || style.opacity < 0 || style.opacity > 1)) {
+      return `${label}.opacity must be a number between 0 and 1`;
+    }
+    if (style.enabled !== undefined && typeof style.enabled !== 'boolean') {
+      return `${label}.enabled must be a boolean`;
+    }
+    return null;
+  };
+  if (config.style !== undefined) {
+    const error = validateStyle(config.style, 'stampConfig.style');
+    if (error) return error;
+  }
+  if (config.pages !== undefined) {
+    if (typeof config.pages !== 'object' || config.pages === null || Array.isArray(config.pages)) {
+      return 'stampConfig.pages must be an object keyed by page index';
+    }
+    for (const [key, value] of Object.entries(config.pages)) {
+      if (!/^\d+$/.test(key)) return `stampConfig.pages key "${key}" must be a page index`;
+      const error = validateStyle(value, `stampConfig.pages[${key}]`);
+      if (error) return error;
+    }
+  }
+  return null;
+};
 
 /** Validate placement numbers; returns an error message or null. */
 const validatePlacement = ({ zoom, zoomY, offsetX, offsetY }) => {
@@ -392,7 +430,9 @@ const uploadCustomPage = async (req, res) => {
       1,    // zoom
       null, // zoom_y (uniform)
       0,    // offset_x
-      0     // offset_y
+      0,    // offset_y
+      true, // show_page_number
+      '{}'  // stamp_config
     ]);
     const page = rows[0];
 
@@ -469,7 +509,7 @@ const reorderCustomPages = async (req, res) => {
  */
 const updateCustomPage = async (req, res) => {
   const { agendaId, pageId } = req.params;
-  const { title, fitMode, zoom, zoomY, offsetX, offsetY } = req.body;
+  const { title, fitMode, zoom, zoomY, offsetX, offsetY, showPageNumber, stampConfig } = req.body;
 
   if (title !== undefined && (typeof title !== 'string' || title.trim().length === 0)) {
     return res.status(400).json({ status: 'failed', message: 'title cannot be empty' });
@@ -481,7 +521,16 @@ const updateCustomPage = async (req, res) => {
   if (placementError) {
     return res.status(400).json({ status: 'failed', message: placementError });
   }
-  if ([title, fitMode, zoom, zoomY, offsetX, offsetY].every((v) => v === undefined)) {
+  if (showPageNumber !== undefined && typeof showPageNumber !== 'boolean') {
+    return res.status(400).json({ status: 'failed', message: 'showPageNumber must be a boolean' });
+  }
+  if (stampConfig !== undefined) {
+    const stampError = validateStampConfig(stampConfig);
+    if (stampError) {
+      return res.status(400).json({ status: 'failed', message: stampError });
+    }
+  }
+  if ([title, fitMode, zoom, zoomY, offsetX, offsetY, showPageNumber, stampConfig].every((v) => v === undefined)) {
     return res.status(400).json({ status: 'failed', message: 'Nothing to update' });
   }
 
@@ -504,6 +553,8 @@ const updateCustomPage = async (req, res) => {
       zoomY !== undefined ? zoomY : (presetReset ? null : existing.zoom_y),
       offsetX !== undefined ? offsetX : (presetReset ? 0 : Number(existing.offset_x)),
       offsetY !== undefined ? offsetY : (presetReset ? 0 : Number(existing.offset_y)),
+      showPageNumber !== undefined ? showPageNumber : existing.show_page_number !== false,
+      JSON.stringify(stampConfig !== undefined ? stampConfig : (existing.stamp_config || {})),
       pageId
     ]);
 
@@ -594,6 +645,8 @@ const getAgendaManifest = async (req, res) => {
           kind: item.kind,
           pageNumber: item.pageNumber,
           numbered: item.numbered,
+          stampNumber: item.stampNumber,
+          stampStyle: item.stampStyle,
           month: item.month,
           year: item.year,
           weekIndex: item.weekIndex,
@@ -801,7 +854,9 @@ const cloneAgenda = async (req, res) => {
         page.zoom,
         page.zoom_y,
         page.offset_x,
-        page.offset_y
+        page.offset_y,
+        page.show_page_number,
+        JSON.stringify(page.stamp_config || {})
       ]);
       const newPage = insertedRows[0];
       const newPath = `${schoolFolder(source.school)}/${academicYear}/custom-pages/${newPage.page_id}${extension}`;
