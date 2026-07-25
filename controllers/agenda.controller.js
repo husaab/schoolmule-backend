@@ -658,6 +658,113 @@ const splitCustomPage = async (req, res) => {
 };
 
 /**
+ * POST /api/agendas/:agendaId/pages/:pageId/exclude
+ * Body: { page } — 1-based within THIS row's pages.
+ * Removes a single page from an uploaded document by shrinking the row's
+ * range (or splitting it around a middle page). The stored file is never
+ * modified; excluding a row's last remaining page deletes the row.
+ */
+const excludeCustomPagePage = async (req, res) => {
+  const { agendaId, pageId } = req.params;
+  const { page: pageNumberInRow } = req.body;
+
+  try {
+    const { rows: pageRows } = await db.query(agendaQueries.selectCustomPageById, [pageId]);
+    if (pageRows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Page not found' });
+    }
+    const page = pageRows[0];
+
+    const k = Number(pageNumberInRow);
+    if (!Number.isInteger(k) || k < 1 || k > page.page_count) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `page must be between 1 and ${page.page_count}`
+      });
+    }
+
+    // Only one page left — excluding it removes the whole item
+    if (page.page_count === 1) {
+      await db.query(agendaQueries.deleteCustomPage, [pageId]);
+      const { rows: refRows } = await db.query(
+        'SELECT COUNT(*)::int AS refs FROM agenda_custom_pages WHERE file_path = $1',
+        [page.file_path]
+      );
+      if (refRows[0].refs === 0) {
+        const { error } = await supabase.storage.from(AGENDA_BUCKET).remove([page.file_path]);
+        if (error) logger.error('Agenda page storage delete error:', error);
+      }
+      await db.query(agendaQueries.touchAgenda, [agendaId]);
+      return res.status(200).json({ status: 'success', data: { removedItem: true } });
+    }
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (k === 1) {
+        // Trim from the front
+        await client.query(
+          'UPDATE agenda_custom_pages SET page_from = page_from + 1, page_count = page_count - 1 WHERE page_id = $1',
+          [pageId]
+        );
+      } else if (k === page.page_count) {
+        // Trim from the back
+        await client.query(
+          'UPDATE agenda_custom_pages SET page_count = page_count - 1 WHERE page_id = $1',
+          [pageId]
+        );
+      } else {
+        // Middle: keep pages before it, new row for pages after it
+        await client.query(
+          `UPDATE agenda_custom_pages
+           SET sort_order = sort_order + 1
+           WHERE agenda_id = $1 AND anchor = $2
+             AND (anchor_month = $3 OR ($3::smallint IS NULL AND anchor_month IS NULL))
+             AND sort_order > $4`,
+          [agendaId, page.anchor, page.anchor_month, page.sort_order]
+        );
+        await client.query(
+          'UPDATE agenda_custom_pages SET page_count = $1 WHERE page_id = $2',
+          [k - 1, pageId]
+        );
+        await client.query(agendaQueries.insertCustomPage, [
+          agendaId,
+          page.anchor,
+          page.anchor_month,
+          page.sort_order + 1,
+          page.title ? `${page.title} (cont.)` : 'Continued',
+          page.file_path,
+          page.file_type,
+          page.mime_type,
+          page.page_count - k,
+          page.fit_mode,
+          page.zoom,
+          page.zoom_y,
+          page.offset_x,
+          page.offset_y,
+          page.show_page_number,
+          JSON.stringify(page.stamp_config || {}),
+          (page.page_from || 0) + k
+        ]);
+      }
+
+      await client.query(agendaQueries.touchAgenda, [agendaId]);
+      await client.query('COMMIT');
+      return res.status(200).json({ status: 'success', data: { removedItem: false } });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    logger.error('Error excluding page from custom document:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error removing page' });
+  }
+};
+
+/**
  * DELETE /api/agendas/:agendaId/pages/:pageId
  */
 const deleteCustomPage = async (req, res) => {
@@ -1014,6 +1121,7 @@ module.exports = {
   reorderCustomPages,
   updateCustomPage,
   splitCustomPage,
+  excludeCustomPagePage,
   deleteCustomPage,
   getCustomPageSignedUrl,
   getAgendaManifest,

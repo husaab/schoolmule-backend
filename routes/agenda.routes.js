@@ -12,6 +12,7 @@ const {
   reorderCustomPages,
   updateCustomPage,
   splitCustomPage,
+  excludeCustomPagePage,
   deleteCustomPage,
   getCustomPageSignedUrl,
   getAgendaManifest,
@@ -53,6 +54,7 @@ router.post('/:agendaId/pages', upload.single('file'), uploadCustomPage);
 router.patch('/:agendaId/pages/reorder', reorderCustomPages);
 router.patch('/:agendaId/pages/:pageId', updateCustomPage);
 router.post('/:agendaId/pages/:pageId/split', splitCustomPage);
+router.post('/:agendaId/pages/:pageId/exclude', excludeCustomPagePage);
 router.delete('/:agendaId/pages/:pageId', deleteCustomPage);
 router.get('/:agendaId/pages/:pageId/signed-url', getCustomPageSignedUrl);
 

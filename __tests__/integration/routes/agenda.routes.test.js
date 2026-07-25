@@ -463,6 +463,63 @@ describe('Integration: Agenda Routes', () => {
     expect(supabase._mockStorage.remove).toHaveBeenCalledWith([secondHalf.filePath]);
   });
 
+  it('removes single pages from an uploaded PDF (edges, middle, last remaining)', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    const pdf = await buildTestPdf(5);
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro').field('title', 'Policies')
+      .attach('file', pdf, { filename: 'policies.pdf', contentType: 'application/pdf' });
+    const pageId = upload.body.data.pageId;
+
+    // Remove first page: range trims to file pages 2-5
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
+      .send({ page: 1 });
+    let detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
+    let row = detail.body.data.customPages.find((p) => p.pageId === pageId);
+    expect(row).toMatchObject({ pageFrom: 1, pageCount: 4 });
+
+    // Remove last page of the row: file pages 2-4 remain
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
+      .send({ page: 4 });
+    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
+    row = detail.body.data.customPages.find((p) => p.pageId === pageId);
+    expect(row).toMatchObject({ pageFrom: 1, pageCount: 3 });
+
+    // Remove the middle page (file page 3): row splits into 2 + 4
+    const middle = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
+      .send({ page: 2 });
+    expect(middle.body.data.removedItem).toBe(false);
+    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
+    expect(detail.body.data.customPages).toHaveLength(2);
+    const [firstHalf, secondHalf] = detail.body.data.customPages;
+    expect(firstHalf).toMatchObject({ pageFrom: 1, pageCount: 1 });
+    expect(secondHalf).toMatchObject({ pageFrom: 3, pageCount: 1, title: 'Policies (cont.)' });
+
+    // Manifest shows exactly file pages 2 and 4 (0-based: 1 and 3)
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    const customs = manifest.body.data.items.filter((i) => i.kind === 'custom');
+    expect(customs.map((i) => i.sourcePageIndex)).toEqual([1, 3]);
+
+    // Out-of-range rejected
+    const bad = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${firstHalf.pageId}/exclude`)
+      .send({ page: 2 });
+    expect(bad.status).toBe(400);
+
+    // Excluding a row's only page deletes the row; the shared file
+    // survives until the last reference goes
+    supabase._mockStorage.remove.mockClear();
+    const removeFirst = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${firstHalf.pageId}/exclude`)
+      .send({ page: 1 });
+    expect(removeFirst.body.data.removedItem).toBe(true);
+    expect(supabase._mockStorage.remove).not.toHaveBeenCalled();
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${secondHalf.pageId}/exclude`)
+      .send({ page: 1 });
+    expect(supabase._mockStorage.remove).toHaveBeenCalled();
+
+    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
+    expect(detail.body.data.customPages).toHaveLength(0);
+  });
+
   it('themes the generated pages via a background color', async () => {
     const { body: { data: agenda } } = await createAgenda();
     expect(agenda.theme).toEqual({});
