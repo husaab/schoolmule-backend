@@ -808,3 +808,7 @@ ALTER TABLE agenda_custom_pages
 
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS stamp_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS page_from INTEGER NOT NULL DEFAULT 0
+  CHECK (page_from >= 0);

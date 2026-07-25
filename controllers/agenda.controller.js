@@ -79,6 +79,7 @@ const toCamelCustomPage = (row) => ({
   offsetY: row.offset_y !== undefined ? Number(row.offset_y) : 0,
   showPageNumber: row.show_page_number !== false,
   stampConfig: row.stamp_config || {},
+  pageFrom: row.page_from || 0,
   createdAt: row.created_at
 });
 
@@ -432,7 +433,8 @@ const uploadCustomPage = async (req, res) => {
       0,    // offset_x
       0,    // offset_y
       true, // show_page_number
-      '{}'  // stamp_config
+      '{}', // stamp_config
+      0     // page_from
     ]);
     const page = rows[0];
 
@@ -568,6 +570,94 @@ const updateCustomPage = async (req, res) => {
 };
 
 /**
+ * POST /api/agendas/:agendaId/pages/:pageId/split
+ * Body: { afterPage } — 1-based within THIS row's pages.
+ * Splits a multi-page PDF row into two rows sharing the same stored file
+ * with adjacent page ranges, so other pages can be inserted between them.
+ */
+const splitCustomPage = async (req, res) => {
+  const { agendaId, pageId } = req.params;
+  const { afterPage } = req.body;
+
+  try {
+    const { rows: pageRows } = await db.query(agendaQueries.selectCustomPageById, [pageId]);
+    if (pageRows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Page not found' });
+    }
+    const page = pageRows[0];
+
+    if (page.file_type !== 'pdf' || page.page_count < 2) {
+      return res.status(400).json({ status: 'failed', message: 'Only multi-page PDFs can be split' });
+    }
+    const splitAt = Number(afterPage);
+    if (!Number.isInteger(splitAt) || splitAt < 1 || splitAt >= page.page_count) {
+      return res.status(400).json({
+        status: 'failed',
+        message: `afterPage must be between 1 and ${page.page_count - 1}`
+      });
+    }
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Make room right after the original in its slot
+      await client.query(
+        `UPDATE agenda_custom_pages
+         SET sort_order = sort_order + 1
+         WHERE agenda_id = $1 AND anchor = $2
+           AND (anchor_month = $3 OR ($3::smallint IS NULL AND anchor_month IS NULL))
+           AND sort_order > $4`,
+        [agendaId, page.anchor, page.anchor_month, page.sort_order]
+      );
+
+      // First half keeps the original row identity
+      await client.query(
+        'UPDATE agenda_custom_pages SET page_count = $1 WHERE page_id = $2',
+        [splitAt, pageId]
+      );
+
+      // Second half: same file, adjacent range, same settings
+      const { rows: newRows } = await client.query(agendaQueries.insertCustomPage, [
+        agendaId,
+        page.anchor,
+        page.anchor_month,
+        page.sort_order + 1,
+        page.title ? `${page.title} (cont.)` : 'Continued',
+        page.file_path,
+        page.file_type,
+        page.mime_type,
+        page.page_count - splitAt,
+        page.fit_mode,
+        page.zoom,
+        page.zoom_y,
+        page.offset_x,
+        page.offset_y,
+        page.show_page_number,
+        JSON.stringify(page.stamp_config || {}),
+        (page.page_from || 0) + splitAt
+      ]);
+
+      await client.query(agendaQueries.touchAgenda, [agendaId]);
+      await client.query('COMMIT');
+
+      return res.status(200).json({
+        status: 'success',
+        data: { secondHalf: toCamelCustomPage(newRows[0]) }
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    logger.error('Error splitting custom page:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error splitting page' });
+  }
+};
+
+/**
  * DELETE /api/agendas/:agendaId/pages/:pageId
  */
 const deleteCustomPage = async (req, res) => {
@@ -579,8 +669,16 @@ const deleteCustomPage = async (req, res) => {
       return res.status(404).json({ status: 'failed', message: 'Page not found' });
     }
 
-    const { error } = await supabase.storage.from(AGENDA_BUCKET).remove([rows[0].file_path]);
-    if (error) logger.error('Agenda page storage delete error:', error);
+    // Split halves share one stored file — only remove it from storage
+    // when no other row still references it
+    const { rows: refRows } = await db.query(
+      'SELECT COUNT(*)::int AS refs FROM agenda_custom_pages WHERE file_path = $1',
+      [rows[0].file_path]
+    );
+    if (refRows[0].refs === 0) {
+      const { error } = await supabase.storage.from(AGENDA_BUCKET).remove([rows[0].file_path]);
+      if (error) logger.error('Agenda page storage delete error:', error);
+    }
 
     await db.query(agendaQueries.touchAgenda, [agendaId]);
 
@@ -647,6 +745,7 @@ const getAgendaManifest = async (req, res) => {
           numbered: item.numbered,
           stampNumber: item.stampNumber,
           stampStyle: item.stampStyle,
+          sliceIndex: item.sliceIndex,
           month: item.month,
           year: item.year,
           weekIndex: item.weekIndex,
@@ -856,7 +955,8 @@ const cloneAgenda = async (req, res) => {
         page.offset_x,
         page.offset_y,
         page.show_page_number,
-        JSON.stringify(page.stamp_config || {})
+        JSON.stringify(page.stamp_config || {}),
+        page.page_from || 0
       ]);
       const newPage = insertedRows[0];
       const newPath = `${schoolFolder(source.school)}/${academicYear}/custom-pages/${newPage.page_id}${extension}`;
@@ -913,6 +1013,7 @@ module.exports = {
   uploadCustomPage,
   reorderCustomPages,
   updateCustomPage,
+  splitCustomPage,
   deleteCustomPage,
   getCustomPageSignedUrl,
   getAgendaManifest,

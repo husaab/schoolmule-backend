@@ -150,6 +150,7 @@ function computeSequence({ agenda, months, customPages }) {
   const items = [];
   const pushCustom = (pages) => {
     for (const page of pages) {
+      const pageFrom = page.page_from || 0;
       for (let i = 0; i < page.page_count; i++) {
         items.push({
           kind: 'custom',
@@ -163,14 +164,20 @@ function computeSequence({ agenda, months, customPages }) {
           zoomY: page.zoom_y !== undefined && page.zoom_y !== null ? Number(page.zoom_y) : null,
           offsetX: page.offset_x !== undefined ? Number(page.offset_x) : 0,
           offsetY: page.offset_y !== undefined ? Number(page.offset_y) : 0,
-          sourcePageIndex: i,
+          // Absolute page index within the source FILE (rows produced by
+          // splitting share a file and cover different ranges of it)
+          sourcePageIndex: pageFrom + i,
+          // Slice-relative position for display ("page 2 of this item")
+          sliceIndex: i,
           sourcePageCount: page.page_count,
           anchor: page.anchor,
           anchorMonth: page.anchor_month,
           numbered: false,
           // Print the global page number as a chip on this uploaded page
-          // (per-page toggle + style; generated pages use their footer)
-          ...resolveStamp(page, i),
+          // (per-page toggle + style; generated pages use their footer).
+          // stamp_config.pages is keyed by ABSOLUTE source index so split
+          // halves keep their per-page settings.
+          ...resolveStamp(page, pageFrom + i),
         });
       }
     }

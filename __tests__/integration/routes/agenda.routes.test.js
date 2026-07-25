@@ -398,6 +398,71 @@ describe('Integration: Agenda Routes', () => {
     expect(cloneDetail.body.data.customPages[0].stampConfig.pages['0']).toEqual({ enabled: false });
   });
 
+  it('splits a multi-page PDF so pages can be inserted between the halves', async () => {
+    const { body: { data: agenda } } = await createAgenda();
+    const pdf = await buildTestPdf(5);
+    const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro').field('title', 'Handbook')
+      .attach('file', pdf, { filename: 'handbook.pdf', contentType: 'application/pdf' });
+    const originalId = upload.body.data.pageId;
+
+    // Split after page 2 -> Handbook (2 pages) + Handbook (cont.) (3 pages)
+    const split = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${originalId}/split`)
+      .send({ afterPage: 2 });
+    expect(split.status).toBe(200);
+    const secondHalf = split.body.data.secondHalf;
+    expect(secondHalf.pageCount).toBe(3);
+    expect(secondHalf.pageFrom).toBe(2);
+    expect(secondHalf.title).toBe('Handbook (cont.)');
+
+    const detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
+    const first = detail.body.data.customPages.find((p) => p.pageId === originalId);
+    expect(first.pageCount).toBe(2);
+    expect(first.pageFrom).toBe(0);
+    // Both halves reference the same stored file
+    expect(first.filePath).toBe(secondHalf.filePath);
+
+    // Insert an image between the halves (the whole point of splitting)
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    const inserted = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+      .field('anchor', 'intro').field('title', 'Inserted Notice')
+      .attach('file', png, { filename: 'notice.png', contentType: 'image/png' });
+    await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/reorder`)
+      .send([{ pageId: inserted.body.data.pageId, anchor: 'intro', anchorMonth: null, sortOrder: 1 }]);
+    // Second half must sit after the inserted page
+    await authenticatedRequest('patch', `/api/agendas/${agenda.agendaId}/pages/reorder`)
+      .send([{ pageId: secondHalf.pageId, anchor: 'intro', anchorMonth: null, sortOrder: 2 }]);
+
+    // Manifest: handbook 1-2, notice, handbook 3-5 (absolute source indices)
+    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    const intro = manifest.body.data.items.slice(0, 6);
+    expect(intro.map((i) => i.title)).toEqual([
+      'Handbook', 'Handbook',
+      'Inserted Notice',
+      'Handbook (cont.)', 'Handbook (cont.)', 'Handbook (cont.)',
+    ]);
+    expect(intro.map((i) => i.kind === 'custom' && i.fileType === 'pdf' ? i.sourcePageIndex : '-'))
+      .toEqual([0, 1, '-', 2, 3, 4]);
+    // Slice-relative display indices restart per half
+    expect(intro[3].sliceIndex).toBe(0);
+
+    // Invalid split points rejected
+    const badSplit = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${originalId}/split`)
+      .send({ afterPage: 5 });
+    expect(badSplit.status).toBe(400);
+
+    // Deleting one half must NOT remove the shared file from storage...
+    supabase._mockStorage.remove.mockClear();
+    await authenticatedRequest('delete', `/api/agendas/${agenda.agendaId}/pages/${originalId}`);
+    expect(supabase._mockStorage.remove).not.toHaveBeenCalled();
+    // ...but deleting the last reference removes it
+    await authenticatedRequest('delete', `/api/agendas/${agenda.agendaId}/pages/${secondHalf.pageId}`);
+    expect(supabase._mockStorage.remove).toHaveBeenCalledWith([secondHalf.filePath]);
+  });
+
   it('themes the generated pages via a background color', async () => {
     const { body: { data: agenda } } = await createAgenda();
     expect(agenda.theme).toEqual({});
@@ -485,12 +550,16 @@ describe('Integration: Agenda Routes', () => {
       return { data: { arrayBuffer: async () => buffer }, error: null };
     });
 
-    // Two intro pages (PDF) + one image page (embedded losslessly)
-    // + calendar events for the overview
+    // Two intro pages (PDF, split into two rows sharing one file) + one
+    // image page (embedded losslessly) + calendar events for the overview
     const pdf = await buildTestPdf(2);
-    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
+    const welcome = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
       .field('anchor', 'intro').field('title', 'Welcome')
       .attach('file', pdf, { filename: 'welcome.pdf', contentType: 'application/pdf' });
+    // Split exercises the shared-file assembly path end to end
+    const welcomeSplit = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${welcome.body.data.pageId}/split`)
+      .send({ afterPage: 1 });
+    expect(welcomeSplit.status).toBe(200);
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
       'base64'

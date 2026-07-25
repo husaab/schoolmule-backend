@@ -85,6 +85,14 @@ ALTER TABLE agenda_custom_pages
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS show_page_number BOOLEAN NOT NULL DEFAULT true;
 
+-- First source page (0-based) this row covers within its uploaded file.
+-- Splitting a multi-page PDF produces two rows sharing one file_path with
+-- adjacent [page_from, page_from+page_count) ranges, so other pages can
+-- be inserted between them — no external PDF merging needed.
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS page_from INTEGER NOT NULL DEFAULT 0
+  CHECK (page_from >= 0);
+
 -- Page-number chip settings per uploaded document:
 -- { "style": {"background": "#ffffff", "opacity": 0.82},
 --   "pages": {"2": {"enabled": false, "background": "#1a2a55", "opacity": 0.6}} }

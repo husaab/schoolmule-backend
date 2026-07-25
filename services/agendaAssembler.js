@@ -173,12 +173,14 @@ async function assembleAgenda(agendaId) {
   // So consecutive pages from the same source document are batched into
   // one copyPages call.
   const output = await PDFDocument.create();
-  const sourceCache = new Map(); // pageId -> PDFDocument (custom PDFs loaded once)
+  // Keyed by file_path: rows created by splitting a PDF share one file,
+  // so they also share one download and one dedup scope
+  const sourceCache = new Map(); // filePath -> PDFDocument
   const stampFont = await output.embedFont(StandardFonts.Helvetica);
 
   const sourceKeyOf = (item) => {
     if (item.kind !== 'custom') return `month:${item.month}`;
-    return item.fileType === 'pdf' ? `pdf:${item.pageId}` : `img:${item.pageId}:${item.sourcePageIndex}`;
+    return item.fileType === 'pdf' ? `pdf:${item.filePath}` : `img:${item.pageId}:${item.sourcePageIndex}`;
   };
 
   // Group consecutive manifest items sharing a source document
@@ -220,11 +222,11 @@ async function assembleAgenda(agendaId) {
     let source;
     let indices;
     if (first.kind === 'custom') {
-      source = sourceCache.get(first.pageId);
+      source = sourceCache.get(first.filePath);
       if (!source) {
         const buffer = await downloadFromStorage(first.filePath);
         source = await PDFDocument.load(buffer, { ignoreEncryption: true });
-        sourceCache.set(first.pageId, source);
+        sourceCache.set(first.filePath, source);
       }
       indices = run.items.map((item) => item.sourcePageIndex);
       const maxIndex = Math.max(...indices);
