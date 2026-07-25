@@ -184,8 +184,10 @@ async function assembleAgenda(agendaId) {
   };
 
   // Group consecutive manifest items sharing a source document
+  // (excluded placeholders never print)
+  const printedItems = manifest.items.filter((item) => !item.excluded);
   const runs = [];
-  for (const item of manifest.items) {
+  for (const item of printedItems) {
     const sourceKey = sourceKeyOf(item);
     const last = runs[runs.length - 1];
     if (last && last.sourceKey === sourceKey) {

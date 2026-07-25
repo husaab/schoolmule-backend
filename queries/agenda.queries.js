@@ -210,6 +210,7 @@ const agendaQueries = {
       p.show_page_number,
       p.stamp_config,
       p.page_from,
+      p.excluded_pages,
       p.created_at
     FROM agenda_custom_pages p
     WHERE p.agenda_id = $1
@@ -244,6 +245,7 @@ const agendaQueries = {
       p.show_page_number,
       p.stamp_config,
       p.page_from,
+      p.excluded_pages,
       p.created_at
     FROM agenda_custom_pages p
     WHERE p.page_id = $1
@@ -265,7 +267,7 @@ const agendaQueries = {
    * Insert custom page
    * Params: agenda_id, anchor, anchor_month, sort_order, title, file_path, file_type,
    *         mime_type, page_count, fit_mode, zoom, zoom_y, offset_x, offset_y,
-   *         show_page_number, stamp_config (jsonb), page_from
+   *         show_page_number, stamp_config (jsonb), page_from, excluded_pages (jsonb)
    */
   insertCustomPage: `
     INSERT INTO agenda_custom_pages (
@@ -285,9 +287,10 @@ const agendaQueries = {
       offset_y,
       show_page_number,
       stamp_config,
-      page_from
+      page_from,
+      excluded_pages
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
     RETURNING *
   `,
 

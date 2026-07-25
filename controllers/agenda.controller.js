@@ -80,6 +80,7 @@ const toCamelCustomPage = (row) => ({
   showPageNumber: row.show_page_number !== false,
   stampConfig: row.stamp_config || {},
   pageFrom: row.page_from || 0,
+  excludedPages: Array.isArray(row.excluded_pages) ? row.excluded_pages.map(Number) : [],
   createdAt: row.created_at
 });
 
@@ -434,7 +435,8 @@ const uploadCustomPage = async (req, res) => {
       0,    // offset_y
       true, // show_page_number
       '{}', // stamp_config
-      0     // page_from
+      0,    // page_from
+      '[]'  // excluded_pages
     ]);
     const page = rows[0];
 
@@ -635,7 +637,8 @@ const splitCustomPage = async (req, res) => {
         page.offset_y,
         page.show_page_number,
         JSON.stringify(page.stamp_config || {}),
-        (page.page_from || 0) + splitAt
+        (page.page_from || 0) + splitAt,
+        JSON.stringify(page.excluded_pages || [])
       ]);
 
       await client.query(agendaQueries.touchAgenda, [agendaId]);
@@ -659,10 +662,10 @@ const splitCustomPage = async (req, res) => {
 
 /**
  * POST /api/agendas/:agendaId/pages/:pageId/exclude
- * Body: { page } — 1-based within THIS row's pages.
- * Removes a single page from an uploaded document by shrinking the row's
- * range (or splitting it around a middle page). The stored file is never
- * modified; excluding a row's last remaining page deletes the row.
+ * Body: { page } — 1-based within THIS row's range.
+ * Hides one page of an uploaded document from the book. Non-destructive:
+ * the page is recorded in excluded_pages and shown as a restorable
+ * placeholder in the editor. The stored file is never modified.
  */
 const excludeCustomPagePage = async (req, res) => {
   const { agendaId, pageId } = req.params;
@@ -683,84 +686,66 @@ const excludeCustomPagePage = async (req, res) => {
       });
     }
 
-    // Only one page left — excluding it removes the whole item
-    if (page.page_count === 1) {
-      await db.query(agendaQueries.deleteCustomPage, [pageId]);
-      const { rows: refRows } = await db.query(
-        'SELECT COUNT(*)::int AS refs FROM agenda_custom_pages WHERE file_path = $1',
-        [page.file_path]
-      );
-      if (refRows[0].refs === 0) {
-        const { error } = await supabase.storage.from(AGENDA_BUCKET).remove([page.file_path]);
-        if (error) logger.error('Agenda page storage delete error:', error);
-      }
-      await db.query(agendaQueries.touchAgenda, [agendaId]);
-      return res.status(200).json({ status: 'success', data: { removedItem: true } });
+    const fileIndex = (page.page_from || 0) + k - 1;
+    const excluded = Array.isArray(page.excluded_pages) ? page.excluded_pages.map(Number) : [];
+    if (excluded.includes(fileIndex)) {
+      return res.status(400).json({ status: 'failed', message: 'This page is already hidden' });
     }
+    excluded.push(fileIndex);
+    excluded.sort((a, b) => a - b);
 
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
+    const { rows } = await db.query(
+      'UPDATE agenda_custom_pages SET excluded_pages = $1 WHERE page_id = $2 RETURNING *',
+      [JSON.stringify(excluded), pageId]
+    );
+    await db.query(agendaQueries.touchAgenda, [agendaId]);
 
-      if (k === 1) {
-        // Trim from the front
-        await client.query(
-          'UPDATE agenda_custom_pages SET page_from = page_from + 1, page_count = page_count - 1 WHERE page_id = $1',
-          [pageId]
-        );
-      } else if (k === page.page_count) {
-        // Trim from the back
-        await client.query(
-          'UPDATE agenda_custom_pages SET page_count = page_count - 1 WHERE page_id = $1',
-          [pageId]
-        );
-      } else {
-        // Middle: keep pages before it, new row for pages after it
-        await client.query(
-          `UPDATE agenda_custom_pages
-           SET sort_order = sort_order + 1
-           WHERE agenda_id = $1 AND anchor = $2
-             AND (anchor_month = $3 OR ($3::smallint IS NULL AND anchor_month IS NULL))
-             AND sort_order > $4`,
-          [agendaId, page.anchor, page.anchor_month, page.sort_order]
-        );
-        await client.query(
-          'UPDATE agenda_custom_pages SET page_count = $1 WHERE page_id = $2',
-          [k - 1, pageId]
-        );
-        await client.query(agendaQueries.insertCustomPage, [
-          agendaId,
-          page.anchor,
-          page.anchor_month,
-          page.sort_order + 1,
-          page.title ? `${page.title} (cont.)` : 'Continued',
-          page.file_path,
-          page.file_type,
-          page.mime_type,
-          page.page_count - k,
-          page.fit_mode,
-          page.zoom,
-          page.zoom_y,
-          page.offset_x,
-          page.offset_y,
-          page.show_page_number,
-          JSON.stringify(page.stamp_config || {}),
-          (page.page_from || 0) + k
-        ]);
-      }
-
-      await client.query(agendaQueries.touchAgenda, [agendaId]);
-      await client.query('COMMIT');
-      return res.status(200).json({ status: 'success', data: { removedItem: false } });
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    return res.status(200).json({ status: 'success', data: toCamelCustomPage(rows[0]) });
   } catch (error) {
-    logger.error('Error excluding page from custom document:', error);
-    return res.status(500).json({ status: 'failed', message: 'Error removing page' });
+    logger.error('Error hiding page from custom document:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error hiding page' });
+  }
+};
+
+/**
+ * POST /api/agendas/:agendaId/pages/:pageId/restore
+ * Body: { fileIndex? } — absolute 0-based page within the stored file
+ * (as reported in excludedPages / manifest sourcePageIndex).
+ * Omitting fileIndex restores every hidden page of the row.
+ */
+const restoreCustomPagePage = async (req, res) => {
+  const { agendaId, pageId } = req.params;
+  const { fileIndex } = req.body;
+
+  try {
+    const { rows: pageRows } = await db.query(agendaQueries.selectCustomPageById, [pageId]);
+    if (pageRows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Page not found' });
+    }
+    const page = pageRows[0];
+    const excluded = Array.isArray(page.excluded_pages) ? page.excluded_pages.map(Number) : [];
+
+    let remaining;
+    if (fileIndex === undefined) {
+      remaining = [];
+    } else {
+      const index = Number(fileIndex);
+      if (!excluded.includes(index)) {
+        return res.status(400).json({ status: 'failed', message: 'That page is not hidden' });
+      }
+      remaining = excluded.filter((i) => i !== index);
+    }
+
+    const { rows } = await db.query(
+      'UPDATE agenda_custom_pages SET excluded_pages = $1 WHERE page_id = $2 RETURNING *',
+      [JSON.stringify(remaining), pageId]
+    );
+    await db.query(agendaQueries.touchAgenda, [agendaId]);
+
+    return res.status(200).json({ status: 'success', data: toCamelCustomPage(rows[0]) });
+  } catch (error) {
+    logger.error('Error restoring hidden page:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error restoring page' });
   }
 };
 
@@ -853,6 +838,7 @@ const getAgendaManifest = async (req, res) => {
           stampNumber: item.stampNumber,
           stampStyle: item.stampStyle,
           sliceIndex: item.sliceIndex,
+          excluded: item.excluded,
           month: item.month,
           year: item.year,
           weekIndex: item.weekIndex,
@@ -1063,7 +1049,8 @@ const cloneAgenda = async (req, res) => {
         page.offset_y,
         page.show_page_number,
         JSON.stringify(page.stamp_config || {}),
-        page.page_from || 0
+        page.page_from || 0,
+        JSON.stringify(page.excluded_pages || [])
       ]);
       const newPage = insertedRows[0];
       const newPath = `${schoolFolder(source.school)}/${academicYear}/custom-pages/${newPage.page_id}${extension}`;
@@ -1122,6 +1109,7 @@ module.exports = {
   updateCustomPage,
   splitCustomPage,
   excludeCustomPagePage,
+  restoreCustomPagePage,
   deleteCustomPage,
   getCustomPageSignedUrl,
   getAgendaManifest,

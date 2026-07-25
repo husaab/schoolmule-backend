@@ -93,6 +93,12 @@ ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS page_from INTEGER NOT NULL DEFAULT 0
   CHECK (page_from >= 0);
 
+-- Pages of this row's range excluded from the book (absolute 0-based
+-- indices within the stored file). Kept as data — never destructive —
+-- so hidden pages appear as restorable placeholders in the editor.
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS excluded_pages JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 -- Page-number chip settings per uploaded document:
 -- { "style": {"background": "#ffffff", "opacity": 0.82},
 --   "pages": {"2": {"enabled": false, "background": "#1a2a55", "opacity": 0.6}} }

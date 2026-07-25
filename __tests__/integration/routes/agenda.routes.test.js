@@ -463,62 +463,91 @@ describe('Integration: Agenda Routes', () => {
     expect(supabase._mockStorage.remove).toHaveBeenCalledWith([secondHalf.filePath]);
   });
 
-  it('removes single pages from an uploaded PDF (edges, middle, last remaining)', async () => {
+  it('hides single PDF pages as restorable placeholders and restores them', async () => {
     const { body: { data: agenda } } = await createAgenda();
     const pdf = await buildTestPdf(5);
     const upload = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages`)
       .field('anchor', 'intro').field('title', 'Policies')
       .attach('file', pdf, { filename: 'policies.pdf', contentType: 'application/pdf' });
     const pageId = upload.body.data.pageId;
+    expect(upload.body.data.excludedPages).toEqual([]);
 
-    // Remove first page: range trims to file pages 2-5
+    // Hide pages 1 and 3 — the row keeps its full range, nothing destroyed
     await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
       .send({ page: 1 });
-    let detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
-    let row = detail.body.data.customPages.find((p) => p.pageId === pageId);
-    expect(row).toMatchObject({ pageFrom: 1, pageCount: 4 });
+    const hide3 = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
+      .send({ page: 3 });
+    expect(hide3.body.data.excludedPages).toEqual([0, 2]);
+    expect(hide3.body.data.pageCount).toBe(5);
 
-    // Remove last page of the row: file pages 2-4 remain
-    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
-      .send({ page: 4 });
-    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
-    row = detail.body.data.customPages.find((p) => p.pageId === pageId);
-    expect(row).toMatchObject({ pageFrom: 1, pageCount: 3 });
-
-    // Remove the middle page (file page 3): row splits into 2 + 4
-    const middle = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
-      .send({ page: 2 });
-    expect(middle.body.data.removedItem).toBe(false);
-    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
-    expect(detail.body.data.customPages).toHaveLength(2);
-    const [firstHalf, secondHalf] = detail.body.data.customPages;
-    expect(firstHalf).toMatchObject({ pageFrom: 1, pageCount: 1 });
-    expect(secondHalf).toMatchObject({ pageFrom: 3, pageCount: 1, title: 'Policies (cont.)' });
-
-    // Manifest shows exactly file pages 2 and 4 (0-based: 1 and 3)
-    const manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    // Manifest: all 5 items present, hidden ones marked with no page
+    // number; printed numbering skips them (pages 2,4,5 -> 1,2,3)
+    let manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
     const customs = manifest.body.data.items.filter((i) => i.kind === 'custom');
-    expect(customs.map((i) => i.sourcePageIndex)).toEqual([1, 3]);
+    expect(customs).toHaveLength(5);
+    expect(customs.map((i) => i.excluded)).toEqual([true, false, true, false, false]);
+    expect(customs.map((i) => i.pageNumber)).toEqual([null, 1, null, 2, 3]);
+    // 116 generated + 3 printed customs
+    expect(manifest.body.data.totalPages).toBe(119);
 
-    // Out-of-range rejected
-    const bad = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${firstHalf.pageId}/exclude`)
-      .send({ page: 2 });
-    expect(bad.status).toBe(400);
-
-    // Excluding a row's only page deletes the row; the shared file
-    // survives until the last reference goes
-    supabase._mockStorage.remove.mockClear();
-    const removeFirst = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${firstHalf.pageId}/exclude`)
+    // Double-hide rejected
+    const dupe = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
       .send({ page: 1 });
-    expect(removeFirst.body.data.removedItem).toBe(true);
-    expect(supabase._mockStorage.remove).not.toHaveBeenCalled();
-    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${secondHalf.pageId}/exclude`)
-      .send({ page: 1 });
-    expect(supabase._mockStorage.remove).toHaveBeenCalled();
+    expect(dupe.status).toBe(400);
 
-    detail = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}`);
-    expect(detail.body.data.customPages).toHaveLength(0);
-  });
+    // Restore one specific page (file index 2 = original page 3)
+    const restoreOne = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/restore`)
+      .send({ fileIndex: 2 });
+    expect(restoreOne.body.data.excludedPages).toEqual([0]);
+
+    // Restoring a page that isn't hidden is rejected
+    const notHidden = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/restore`)
+      .send({ fileIndex: 4 });
+    expect(notHidden.status).toBe(400);
+
+    // Restore-all clears the rest
+    const restoreAll = await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/restore`)
+      .send({});
+    expect(restoreAll.body.data.excludedPages).toEqual([]);
+
+    manifest = await authenticatedRequest('get', `/api/agendas/${agenda.agendaId}/manifest`);
+    expect(manifest.body.data.totalPages).toBe(121); // all 5 print again
+
+    // Hidden pages never print: hide one and run a REAL generation
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/pages/${pageId}/exclude`)
+      .send({ page: 5 });
+    const stored = new Map();
+    supabase._mockStorage.upload.mockImplementation(async (path, buffer) => {
+      stored.set(path, Buffer.from(buffer));
+      return { data: { path }, error: null };
+    });
+    supabase._mockStorage.download.mockImplementation(async (path) => {
+      const buffer = stored.get(path);
+      if (!buffer) return { data: null, error: { message: `not stored: ${path}` } };
+      return { data: { arrayBuffer: async () => buffer }, error: null };
+    });
+    // Re-upload the PDF buffer into mock storage under the row's path
+    const { rows: [rowData] } = await pool.query(
+      'SELECT file_path FROM agenda_custom_pages WHERE page_id = $1', [pageId]
+    );
+    stored.set(rowData.file_path, pdf);
+
+    await authenticatedRequest('post', `/api/agendas/${agenda.agendaId}/generate`);
+    let status = 'generating';
+    const deadline = Date.now() + 90000;
+    let row;
+    while (status === 'generating' && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      ({ rows: [row] } = await pool.query(
+        'SELECT status, generated_file_path, generated_page_count, generation_error FROM agendas WHERE agenda_id = $1',
+        [agenda.agendaId]
+      ));
+      status = row.status;
+    }
+    expect(row.generation_error).toBeNull();
+    expect(status).toBe('generated');
+    expect(row.generated_page_count).toBe(120); // 116 + 4 printed custom pages
+  }, 120000);
 
   it('themes the generated pages via a background color', async () => {
     const { body: { data: agenda } } = await createAgenda();

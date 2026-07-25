@@ -812,3 +812,6 @@ ALTER TABLE agenda_custom_pages
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS page_from INTEGER NOT NULL DEFAULT 0
   CHECK (page_from >= 0);
+
+ALTER TABLE agenda_custom_pages
+  ADD COLUMN IF NOT EXISTS excluded_pages JSONB NOT NULL DEFAULT '[]'::jsonb;

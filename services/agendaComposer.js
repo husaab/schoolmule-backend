@@ -151,9 +151,15 @@ function computeSequence({ agenda, months, customPages }) {
   const pushCustom = (pages) => {
     for (const page of pages) {
       const pageFrom = page.page_from || 0;
+      const excludedSet = new Set(
+        Array.isArray(page.excluded_pages) ? page.excluded_pages.map(Number) : []
+      );
       for (let i = 0; i < page.page_count; i++) {
         items.push({
           kind: 'custom',
+          // Hidden-but-restorable: stays in the manifest as a placeholder
+          // (no page number, skipped by the assembler)
+          excluded: excludedSet.has(pageFrom + i),
           pageId: page.page_id,
           title: page.title,
           fileType: page.file_type,
@@ -211,12 +217,21 @@ function computeSequence({ agenda, months, customPages }) {
 
   pushCustom(slots.closing);
 
+  // seq is positional over ALL items (stable keys/anchors, including
+  // hidden placeholders); pageNumber counts only pages that print.
+  let printedCount = 0;
   items.forEach((item, index) => {
     item.seq = index + 1;
-    item.pageNumber = index + 1;
+    if (item.excluded) {
+      item.pageNumber = null;
+      item.stampNumber = false;
+    } else {
+      printedCount += 1;
+      item.pageNumber = printedCount;
+    }
   });
 
-  return { totalPages: items.length, items };
+  return { totalPages: printedCount, items };
 }
 
 /**
