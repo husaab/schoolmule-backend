@@ -211,12 +211,12 @@ function generateSchedules(rawInput) {
   // Short attempts + persistent fail-weights beat few long attempts: a bad
   // random trajectory gets abandoned quickly and the learned weights redirect
   // the next restart at the troublesome sessions.
-  // Base-seeded runs need different loop budgets: on dense instances only a
-  // few percent of warm attempts re-solve AND clear the similarity filter
-  // against the base, and near-base duplicates are common early on. Attempts
-  // are node-bounded (~ms each), so the wall-clock deadline stays the real
-  // cutoff. Non-seeded runs keep the original tighter budgets.
-  const maxAttempts = candidateCount * (hasBaseSeed ? 200 : 10) + 20;
+  // maxAttempts is a runaway backstop, NOT the working budget — attempts are
+  // node-bounded (~ms each on small instances, ~100ms Luby dives on dense
+  // ones), so the wall-clock deadline must stay the real cutoff. A tight cap
+  // here silently truncates long searches: at 240-session scale, 70 attempts
+  // burn only ~25s of a 180s budget before giving up.
+  const maxAttempts = candidateCount * 200 + 20;
   const dupeLimit = hasBaseSeed
     ? Math.max(25, candidateCount)
     : Math.max(5, Math.ceil(candidateCount / 2));

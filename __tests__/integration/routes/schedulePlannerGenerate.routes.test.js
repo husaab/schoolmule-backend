@@ -228,3 +228,103 @@ describe('Integration: schedule draft CRUD', () => {
     expect(res.status).toBe(400);
   });
 });
+
+// The CP-SAT service is mocked at the transport boundary: these assert that the
+// route forwards the request and passes the service's envelope through to the
+// same 200/422 shapes the in-process solver produces.
+describe('Integration: POST /generate routed to the CP-SAT solver service', () => {
+  const originalUrl = process.env.SOLVER_URL;
+  let fetchSpy;
+
+  beforeEach(() => {
+    process.env.SOLVER_URL = 'http://solver.internal:8000';
+  });
+
+  afterEach(() => {
+    if (originalUrl === undefined) delete process.env.SOLVER_URL;
+    else process.env.SOLVER_URL = originalUrl;
+    if (fetchSpy) fetchSpy.mockRestore();
+  });
+
+  it('returns 200 with the service candidates and forwards the assembled input', async () => {
+    const { teacherId, classGroupId } = await setupSmallSchool();
+    const sessions = [
+      {
+        courseId: 'c-1',
+        sessionIndex: 0,
+        classGroupId,
+        courseName: 'Math',
+        day: 1,
+        startMin: 480,
+        endMin: 520,
+        teacherId,
+        roomId: null,
+        pinned: false,
+      },
+    ];
+    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        candidates: [{ candidateIndex: 0, sessions, metrics: { teacherLoadStdDev: 0, avgGapMinutesPerClass: 0 } }],
+        meta: { requested: 2, returned: 1, elapsedMs: 40, timedOut: false, seed: 9, nodes: 11, warnings: [] },
+      }),
+    });
+
+    const res = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 2,
+      seed: 9,
+      timeBudgetMs: 3000,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.candidates[0].sessions).toEqual(sessions);
+    expect(res.body.data.meta.returned).toBe(1);
+
+    // The service receives the same solver input the JS engine would have run.
+    const [url, options] = fetchSpy.mock.calls[0];
+    expect(url).toBe('http://solver.internal:8000/solve');
+    const sent = JSON.parse(options.body);
+    expect(sent.courses).toHaveLength(1);
+    expect(sent.courses[0].teacherId).toBe(teacherId);
+    expect(sent.days.map((d) => d.day).sort()).toEqual([1, 2]);
+  });
+
+  it('maps a service infeasible envelope to the existing 422 diagnostics shape', async () => {
+    await setupSmallSchool();
+    fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: false,
+        phase: 'search',
+        diagnostics: [{ code: 'PERIOD_RULE_IMPOSSIBLE', message: 'Ms. X cannot cover that window.' }],
+        partial: null,
+        meta: { requested: 1, returned: 0, elapsedMs: 20, timedOut: false, seed: 1, nodes: 4, warnings: [] },
+      }),
+    });
+
+    const res = await asAdmin('post', '/api/schedule-planner/generate').send({ numCandidates: 1 });
+
+    expect(res.status).toBe(422);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.message).toBe('Ms. X cannot cover that window.');
+    expect(res.body.data.phase).toBe('search');
+    expect(res.body.data.diagnostics[0].code).toBe('PERIOD_RULE_IMPOSSIBLE');
+  });
+
+  it('still returns a schedule when the service is down (JS fallback)', async () => {
+    await setupSmallSchool();
+    fetchSpy = jest.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const res = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 1,
+      seed: 42,
+      timeBudgetMs: 3000,
+    });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.data.candidates.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.data.candidates[0].sessions).toHaveLength(2);
+  });
+});
