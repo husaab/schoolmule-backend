@@ -66,6 +66,40 @@ describe('Integration: GET /api/schedule-planner/schedules/:id/pdf', () => {
     expect(doc.getPageCount()).toBe(2); // Ms. X + Mr. Y
   });
 
+  it('renders one page per day with ?view=day', async () => {
+    // Single class group whose two sessions land on different days:
+    // class view = 1 page, day view = 2 pages (Mon, Tue).
+    const t1 = await asAdmin('post', '/api/schedule-planner/teachers').send({ displayName: 'Ms. Z' });
+    const g1 = await asAdmin('post', '/api/schedule-planner/class-groups').send({ name: 'Grade 3' });
+    await asAdmin('post', `/api/schedule-planner/class-groups/${g1.body.data.classGroupId}/courses`).send({
+      name: 'Math', sessionsPerWeek: 2, maxPerDay: 1, assignedTeacherId: t1.body.data.plannerTeacherId,
+    });
+    await asAdmin('put', '/api/schedule-planner/day-templates').send({
+      days: [
+        { dayOfWeek: 1, fillableRanges: [{ startMin: 480, endMin: 600 }] },
+        { dayOfWeek: 2, fillableRanges: [{ startMin: 480, endMin: 600 }] },
+      ],
+    });
+    const gen = await asAdmin('post', '/api/schedule-planner/generate').send({
+      numCandidates: 1, seed: 12, timeBudgetMs: 2000,
+    });
+    const save = await asAdmin('post', '/api/schedule-planner/schedules').send({
+      name: 'Day View PDF', sessions: gen.body.data.candidates[0].sessions,
+    });
+
+    const res = await asAdmin('get', `/api/schedule-planner/schedules/${save.body.data.scheduleId}/pdf?view=day`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    const doc = await PDFDocument.load(res.body);
+    expect(doc.getPageCount()).toBe(2); // Monday + Tuesday
+  });
+
   it('404s for an unknown schedule', async () => {
     const res = await asAdmin(
       'get',

@@ -179,6 +179,21 @@ function preSolveCheck(model) {
           { courseId: course.id, daysWithLegal }
         )
       );
+    } else if (Number.isInteger(course.maxRepeatDays)) {
+      // With only R days allowed to hold a repeat, the best case is R days at
+      // maxPerDay and every other usable day at one session. Catch a config
+      // that can never fit here rather than burning the whole search budget.
+      const repeatDays = Math.min(course.maxRepeatDays, daysWithLegal);
+      const ceiling = repeatDays * course.maxPerDay + (daysWithLegal - repeatDays);
+      if (course.sessionsPerWeek > ceiling) {
+        errors.push(
+          diag(
+            CODES.SESSIONS_EXCEED_DAYS,
+            `${course.name} (${group.name}) has ${course.sessionsPerWeek} sessions/week, but with at most ${course.maxRepeatDays} repeat day(s) across ${daysWithLegal} usable day(s) it can hold at most ${ceiling}.`,
+            { courseId: course.id, daysWithLegal, maxRepeatDays: course.maxRepeatDays }
+          )
+        );
+      }
     }
   });
 

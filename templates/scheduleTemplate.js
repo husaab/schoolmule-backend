@@ -32,12 +32,13 @@ function colorFor(name, palette) {
 }
 
 /**
- * pages: [{ title, sessions: [{ day (1-7), startMin, endMin,
- *           primaryLabel, secondaryLabel, roomName }] }]
- * days: sorted ISO ints shown as columns (shared across pages)
+ * pages: [{ title, columns: [{ label, sessions: [{ startMin, endMin,
+ *           primaryLabel, secondaryLabel, roomName }] }] }]
+ * Columns are per page: weekdays for class/teacher layouts, class groups for
+ * the by-day layout.
  * rangeStartMin/rangeEndMin: vertical time window of the grid
  */
-function buildScheduleHtml({ schoolName, scheduleName, pages, days, rangeStartMin, rangeEndMin }) {
+function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, rangeEndMin }) {
   const span = Math.max(rangeEndMin - rangeStartMin, 1);
   const topPct = (min) => (((min - rangeStartMin) / span) * 100).toFixed(3);
   const heightPct = (from, to) => (((to - from) / span) * 100).toFixed(3);
@@ -50,10 +51,9 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, days, rangeStartMi
 
   const pageHtml = pages
     .map((page) => {
-      const columns = days
-        .map((day) => {
-          const daySessions = page.sessions.filter((s) => s.day === day);
-          const blocks = daySessions
+      const columns = page.columns
+        .map((col) => {
+          const blocks = col.sessions
             .map(
               (s) => `
               <div class="session" style="top:${topPct(s.startMin)}%;height:${heightPct(s.startMin, s.endMin)}%;background:${colorFor(s.primaryLabel, SESSION_COLORS)};">
@@ -66,7 +66,7 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, days, rangeStartMi
             .join('');
           return `
             <div class="day-col">
-              <div class="day-head">${DAY_LABELS[day - 1]}</div>
+              <div class="day-head">${escapeHtml(col.label)}</div>
               <div class="day-body">${blocks}</div>
             </div>`;
         })

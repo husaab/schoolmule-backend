@@ -213,3 +213,59 @@ describe('preSolveCheck', () => {
     expect(result.warnings.some((w) => w.code.endsWith('_TIGHT'))).toBe(true);
   });
 });
+
+describe('preSolveCheck — maxRepeatDays arithmetic', () => {
+  // 5 school days, one class, one teacher available every day.
+  const input = (sessionsPerWeek, maxPerDay, maxRepeatDays) => ({
+    config: { snapMinutes: 5, defaultCourseDurationMinutes: 40 },
+    days: [1, 2, 3, 4, 5].map((d) => ({ day: d, fillableRanges: [{ startMin: 480, endMin: 720 }] })),
+    fixedBlocks: [],
+    teachers: [{ teacherId: 't-1', name: 'Ms. X', allowedDays: [1, 2, 3, 4, 5], excludedWindows: [] }],
+    rooms: [],
+    classGroups: [{ classGroupId: 'cg-1', name: 'Grade 7' }],
+    courses: [
+      {
+        courseId: 'c-1',
+        classGroupId: 'cg-1',
+        name: 'Math',
+        sessionsPerWeek,
+        durationMinutes: 40,
+        teacherId: 't-1',
+        teacherCandidateIds: null,
+        roomId: null,
+        maxPerDay,
+        maxRepeatDays,
+      },
+    ],
+    pins: [],
+    periodRules: [],
+  });
+
+  const check = (...args) => {
+    const model = validateAndNormalize(input(...args));
+    return preSolveCheck(model).errors.filter((e) => e.code === 'SESSIONS_EXCEED_DAYS');
+  };
+
+  it('accepts 5 sessions over 5 days with no repeat allowed', () => {
+    expect(check(5, 2, 0)).toHaveLength(0);
+  });
+
+  it('rejects 6 sessions over 5 days with no repeat allowed', () => {
+    const e = check(6, 2, 0);
+    expect(e).toHaveLength(1);
+    expect(e[0].message).toContain('it can hold at most 5');
+  });
+
+  it('accepts 6 sessions over 5 days when one repeat day is allowed', () => {
+    expect(check(6, 2, 1)).toHaveLength(0);
+  });
+
+  it('rejects 8 sessions over 5 days with one repeat day at max 2/day', () => {
+    // ceiling = 1*2 + 4 = 6
+    expect(check(8, 2, 1)).toHaveLength(1);
+  });
+
+  it('is inert when maxRepeatDays is null', () => {
+    expect(check(9, 2, null)).toHaveLength(0);
+  });
+});

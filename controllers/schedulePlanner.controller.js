@@ -7,7 +7,7 @@ const q = require('../queries/schedulePlanner.queries');
 const logger = require('../logger');
 const { runSolverInWorker } = require('../services/scheduleSolver/run');
 const { createPDFBuffer } = require('../utils/pdfGenerator');
-const { buildScheduleHtml } = require('../templates/scheduleTemplate');
+const { buildScheduleHtml, DAY_LABELS } = require('../templates/scheduleTemplate');
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -1014,7 +1014,7 @@ const publishSchedule = async (req, res) => {
   }
 };
 
-// GET /schedules/:scheduleId/pdf?classGroupId=&view=classGroup|teacher
+// GET /schedules/:scheduleId/pdf?classGroupId=&view=class|teacher|day
 const getSchedulePdf = async (req, res) => {
   const { scheduleId } = req.params;
   const { classGroupId, view } = req.query;
@@ -1052,6 +1052,21 @@ const getSchedulePdf = async (req, res) => {
     const groupName = (id) => groupById.get(id)?.name || 'Unknown class';
     const roomName = (id) => (id ? roomById.get(id)?.name || null : null);
 
+    // secondary: what to print under the course name (teacher on class/day
+    // pages, class on teacher pages).
+    const cell = (s, secondary) => ({
+      startMin: s.startMin,
+      endMin: s.endMin,
+      primaryLabel: s.courseName,
+      secondaryLabel: secondary,
+      roomName: roomName(s.roomId),
+    });
+    const dayColumns = (subset, secondaryOf) =>
+      days.map((day) => ({
+        label: DAY_LABELS[day - 1],
+        sessions: subset.filter((s) => s.day === day).map((s) => cell(s, secondaryOf(s))),
+      }));
+
     let pages;
     if (view === 'teacher') {
       const byTeacher = new Map();
@@ -1062,16 +1077,25 @@ const getSchedulePdf = async (req, res) => {
       pages = [...byTeacher.entries()]
         .map(([id, own]) => ({
           title: teacherName(id),
-          sessions: own.map((s) => ({
-            day: s.day,
-            startMin: s.startMin,
-            endMin: s.endMin,
-            primaryLabel: s.courseName,
-            secondaryLabel: groupName(s.classGroupId),
-            roomName: roomName(s.roomId),
-          })),
+          columns: dayColumns(own, (s) => groupName(s.classGroupId)),
         }))
         .sort((a, b) => a.title.localeCompare(b.title));
+    } else if (view === 'day') {
+      // One page per weekday; columns are the class groups in grade order —
+      // the printable master grid.
+      const present = new Set(sessions.map((s) => s.classGroupId));
+      const orderedGroups = groupsQ.rows
+        .filter((g) => present.has(g.class_group_id))
+        .map((g) => g.class_group_id);
+      pages = days.map((day) => ({
+        title: DAY_LABELS[day - 1],
+        columns: orderedGroups.map((gid) => ({
+          label: groupName(gid),
+          sessions: sessions
+            .filter((s) => s.day === day && s.classGroupId === gid)
+            .map((s) => cell(s, teacherName(s.teacherId))),
+        })),
+      }));
     } else {
       const groupsInSchedule = [...new Set(sessions.map((s) => s.classGroupId))].filter(
         (id) => !classGroupId || id === classGroupId
@@ -1080,16 +1104,10 @@ const getSchedulePdf = async (req, res) => {
       pages = groupsInSchedule
         .map((id) => ({
           title: groupName(id),
-          sessions: sessions
-            .filter((s) => s.classGroupId === id)
-            .map((s) => ({
-              day: s.day,
-              startMin: s.startMin,
-              endMin: s.endMin,
-              primaryLabel: s.courseName,
-              secondaryLabel: teacherName(s.teacherId),
-              roomName: roomName(s.roomId),
-            })),
+          columns: dayColumns(
+            sessions.filter((s) => s.classGroupId === id),
+            (s) => teacherName(s.teacherId)
+          ),
         }))
         .sort((a, b) => a.title.localeCompare(b.title));
     }
@@ -1098,7 +1116,6 @@ const getSchedulePdf = async (req, res) => {
       schoolName: schoolQ.rows[0]?.name || school,
       scheduleName: schedule.name,
       pages,
-      days,
       rangeStartMin,
       rangeEndMin,
     });
