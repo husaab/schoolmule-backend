@@ -83,6 +83,36 @@ function spareCapViolations(rawInput, sessions) {
   return out;
 }
 
+// maxRepeatDays caps how many DAYS may hold a repeat, where maxPerDay caps how
+// many sessions land on one day. A course of 5 sessions whose teacher works only
+// 4 days must double up somewhere; this is what stops it doubling up on two
+// separate days instead of concentrating the repeat on one.
+// Exported so the JS solver can reject candidates the validator would reject.
+function repeatDayViolations(rawInput, sessions) {
+  const out = [];
+  for (const course of rawInput.courses || []) {
+    const cap = course.maxRepeatDays;
+    if (!Number.isInteger(cap) || cap < 0) continue;
+    const byDay = new Map();
+    for (const s of sessions) {
+      if (s.courseId !== course.courseId) continue;
+      byDay.set(s.day, (byDay.get(s.day) || 0) + 1);
+    }
+    const repeatDays = [...byDay.entries()].filter(([, count]) => count >= 2);
+    if (repeatDays.length > cap) {
+      out.push(
+        violation(
+          'MAX_REPEAT_DAYS_EXCEEDED',
+          `"${course.name}" repeats on ${repeatDays.length} day(s) (${repeatDays
+            .map(([day, count]) => `day ${day}: ${count}`)
+            .join(', ')}); at most ${cap} day(s) may hold a repeat.`
+        )
+      );
+    }
+  }
+  return out;
+}
+
 function validateCandidate(rawInput, candidate) {
   const violations = [];
   const snap = rawInput.config?.snapMinutes ?? 5;
@@ -356,6 +386,7 @@ function validateCandidate(rawInput, candidate) {
   }
 
   violations.push(...spareCapViolations(rawInput, sessions));
+  violations.push(...repeatDayViolations(rawInput, sessions));
 
   // Max distinct working days per week.
   for (const teacher of rawInput.teachers) {
@@ -395,4 +426,4 @@ function validateCandidate(rawInput, candidate) {
   return violations;
 }
 
-module.exports = { validateCandidate, spareCapViolations };
+module.exports = { validateCandidate, spareCapViolations, repeatDayViolations };

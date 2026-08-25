@@ -3,7 +3,7 @@
 // production callers run it inside worker.js.
 
 const { validateAndNormalize, SolverInputError } = require('./normalize');
-const { spareCapViolations } = require('./validator');
+const { spareCapViolations, repeatDayViolations } = require('./validator');
 const { preSolveCheck } = require('./feasibility');
 const { solveOne } = require('./solver');
 const diversity = require('./diversity');
@@ -224,7 +224,11 @@ function generateSchedules(rawInput) {
   const hasSpareCaps = (rawInput.teachers || []).some(
     (t) => Number.isInteger(t.maxSparesPerDay) && t.maxSparesPerDay >= 0
   );
+  const hasRepeatCaps = (rawInput.courses || []).some(
+    (c) => Number.isInteger(c.maxRepeatDays) && c.maxRepeatDays >= 0
+  );
   let spareRejects = 0;
+  let repeatRejects = 0;
   let worstFail = null;
   let consecutiveDupes = 0;
   let attempts = 0;
@@ -281,10 +285,14 @@ function generateSchedules(rawInput) {
     // candidate the validator would reject must never be emitted. Cheaper than
     // teaching the bitset search about gaps, and guaranteed consistent with the
     // oracle because it calls the oracle's own helper.
-    if (hasSpareCaps) {
+    if (hasSpareCaps || hasRepeatCaps) {
       const sessionsOut = toSessionsOutput(model, placements);
-      if (spareCapViolations(rawInput, sessionsOut).length > 0) {
+      if (hasSpareCaps && spareCapViolations(rawInput, sessionsOut).length > 0) {
         spareRejects++;
+        continue;
+      }
+      if (hasRepeatCaps && repeatDayViolations(rawInput, sessionsOut).length > 0) {
+        repeatRejects++;
         continue;
       }
     }
@@ -327,6 +335,20 @@ function generateSchedules(rawInput) {
           diag(
             CODES.SCHEDULE_SPACE_TIGHT,
             'Every schedule found was nearly identical to the base schedule — the constraints leave no sufficiently different variation.'
+          ),
+        ],
+        partial: null,
+        meta: { ...metaBase(), elapsedMs, timedOut, nodes: totalNodes },
+      };
+    }
+    if (repeatRejects > 0 && spareRejects === 0) {
+      return {
+        ok: false,
+        phase: 'search',
+        diagnostics: [
+          diag(
+            CODES.UNPLACEABLE_SESSION,
+            `Every schedule found repeated a course on too many days (${repeatRejects} rejected). Raise "max repeat days" for the affected course, or relax another constraint.`
           ),
         ],
         partial: null,

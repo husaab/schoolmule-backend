@@ -158,8 +158,9 @@ const selectCourseById = `
 const insertCourse = `
   INSERT INTO planner_courses
     (school, school_id, class_group_id, name, sessions_per_week, duration_minutes,
-     max_per_day, assigned_teacher_id, candidate_teacher_ids, required_room_id, school_year_id)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+     max_per_day, assigned_teacher_id, candidate_teacher_ids, required_room_id, school_year_id,
+     max_repeat_days)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
   RETURNING *
 `;
 
@@ -167,8 +168,8 @@ const updateCourse = `
   UPDATE planner_courses
   SET name = $1, sessions_per_week = $2, duration_minutes = $3, max_per_day = $4,
       assigned_teacher_id = $5, candidate_teacher_ids = $6::jsonb,
-      required_room_id = $7, updated_at = NOW()
-  WHERE course_id = $8 AND school = $9
+      required_room_id = $7, max_repeat_days = $8, updated_at = NOW()
+  WHERE course_id = $9 AND school = $10
   RETURNING *
 `;
 

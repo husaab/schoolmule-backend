@@ -320,3 +320,65 @@ describe('Integration: Day templates and fixed blocks', () => {
     expect(delRes.status).toBe(200);
   });
 });
+
+describe('Integration: course maxRepeatDays round-trip', () => {
+  it('creates, reads back, edits and clears maxRepeatDays', async () => {
+    const teacherRes = await createTeacher({ displayName: 'Ms. Repeat' });
+    const teacherId = teacherRes.body.data.plannerTeacherId;
+    const groupRes = await createClassGroup({ name: 'Grade 7 (repeat test)', grade: '7' });
+    const classGroupId = groupRes.body.data.classGroupId;
+
+    const created = await asAdmin(
+      'post',
+      `/api/schedule-planner/class-groups/${classGroupId}/courses`
+    ).send({ name: 'Math', sessionsPerWeek: 5, maxPerDay: 2, maxRepeatDays: 1, assignedTeacherId: teacherId });
+    expect(created.status).toBe(201);
+    expect(created.body.data.maxRepeatDays).toBe(1);
+    const courseId = created.body.data.courseId;
+
+    const edited = await asAdmin('patch', `/api/schedule-planner/courses/${courseId}`).send({
+      maxRepeatDays: 2,
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.maxRepeatDays).toBe(2);
+
+    // null explicitly clears the rule
+    const cleared = await asAdmin('patch', `/api/schedule-planner/courses/${courseId}`).send({
+      maxRepeatDays: null,
+    });
+    expect(cleared.body.data.maxRepeatDays).toBeNull();
+
+    // omitting it leaves the stored value untouched
+    await asAdmin('patch', `/api/schedule-planner/courses/${courseId}`).send({ maxRepeatDays: 3 });
+    const untouched = await asAdmin('patch', `/api/schedule-planner/courses/${courseId}`).send({
+      name: 'Math renamed',
+    });
+    expect(untouched.body.data.maxRepeatDays).toBe(3);
+
+    await asAdmin('delete', `/api/schedule-planner/class-groups/${classGroupId}`);
+    await asAdmin('delete', `/api/schedule-planner/teachers/${teacherId}`);
+  });
+
+  it('defaults maxRepeatDays to null and rejects a negative value', async () => {
+    const teacherRes = await createTeacher({ displayName: 'Ms. Plainrepeat' });
+    const teacherId = teacherRes.body.data.plannerTeacherId;
+    const groupRes = await createClassGroup({ name: 'Grade 8 (repeat test)', grade: '8' });
+    const classGroupId = groupRes.body.data.classGroupId;
+
+    const plain = await asAdmin(
+      'post',
+      `/api/schedule-planner/class-groups/${classGroupId}/courses`
+    ).send({ name: 'English', sessionsPerWeek: 3, assignedTeacherId: teacherId });
+    expect(plain.status).toBe(201);
+    expect(plain.body.data.maxRepeatDays).toBeNull();
+
+    const bad = await asAdmin(
+      'post',
+      `/api/schedule-planner/class-groups/${classGroupId}/courses`
+    ).send({ name: 'Bad', sessionsPerWeek: 3, assignedTeacherId: teacherId, maxRepeatDays: -1 });
+    expect(bad.status).toBe(400);
+
+    await asAdmin('delete', `/api/schedule-planner/class-groups/${classGroupId}`);
+    await asAdmin('delete', `/api/schedule-planner/teachers/${teacherId}`);
+  });
+});

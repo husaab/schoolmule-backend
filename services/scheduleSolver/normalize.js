@@ -256,6 +256,15 @@ function validateAndNormalize(rawInput) {
     if (!Number.isInteger(maxPerDay) || maxPerDay < 1) {
       fail('INVALID_MAX_PER_DAY', `Course "${c.name}" maxPerDay must be a positive integer.`);
     }
+    // Cap on how many DAYS may hold 2+ sessions of this course (null = no cap).
+    const maxRepeatDays =
+      Number.isInteger(c.maxRepeatDays) && c.maxRepeatDays >= 0 ? c.maxRepeatDays : null;
+    if (c.maxRepeatDays != null && maxRepeatDays === null) {
+      fail(
+        'INVALID_MAX_REPEAT_DAYS',
+        `Course "${c.name}" maxRepeatDays must be a non-negative integer.`
+      );
+    }
     return {
       id: c.courseId,
       name: c.name,
@@ -266,6 +275,7 @@ function validateAndNormalize(rawInput) {
       teacherCands,
       roomIdx,
       maxPerDay,
+      maxRepeatDays,
     };
   });
   const courseIndex = indexById(normCourses, 'id', 'course');

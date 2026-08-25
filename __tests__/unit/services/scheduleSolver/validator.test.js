@@ -404,3 +404,93 @@ describe('validateCandidate — maxSparesPerDay (gap semantics)', () => {
     expect(spareCodes(spareInput(null), [480, 600, 680])).toHaveLength(0);
   });
 });
+
+// maxRepeatDays caps how many DAYS hold 2+ sessions of a course, where
+// maxPerDay caps how many land on a single day.
+describe('validateCandidate — maxRepeatDays', () => {
+  const repeatInput = (cap) => ({
+    config: { snapMinutes: 5, defaultCourseDurationMinutes: 40 },
+    days: [1, 2, 3, 4, 5].map((d) => ({ day: d, fillableRanges: [{ startMin: 480, endMin: 720 }] })),
+    fixedBlocks: [],
+    teachers: [
+      { teacherId: 't-1', name: 'Ms. X', maxMinutesPerWeek: null, allowedDays: [1, 2, 3, 4, 5], excludedWindows: [] },
+    ],
+    rooms: [],
+    classGroups: [{ classGroupId: 'cg-1', name: 'Grade 7' }],
+    courses: [
+      {
+        courseId: 'c-1',
+        classGroupId: 'cg-1',
+        name: 'Math',
+        sessionsPerWeek: 5,
+        durationMinutes: 40,
+        teacherId: 't-1',
+        teacherCandidateIds: null,
+        roomId: null,
+        maxPerDay: 2,
+        maxRepeatDays: cap,
+      },
+    ],
+    pins: [],
+    periodRules: [],
+  });
+
+  // plan: [[day, count], ...] -> sessions stacked from 480 on each day
+  const build = (plan) => {
+    const sessions = [];
+    let i = 0;
+    for (const [day, count] of plan) {
+      for (let k = 0; k < count; k++) {
+        sessions.push({
+          courseId: 'c-1',
+          sessionIndex: i++,
+          classGroupId: 'cg-1',
+          courseName: 'Math',
+          day,
+          startMin: 480 + k * 40,
+          endMin: 520 + k * 40,
+          teacherId: 't-1',
+          roomId: null,
+          pinned: false,
+        });
+      }
+    }
+    return sessions;
+  };
+
+  const codes = (cap, plan) =>
+    validateCandidate(repeatInput(cap), { sessions: build(plan) }).filter(
+      (v) => v.code === 'MAX_REPEAT_DAYS_EXCEEDED'
+    );
+
+  it('accepts one doubled day when the cap is 1', () => {
+    expect(codes(1, [[1, 2], [2, 1], [3, 1], [5, 1]])).toHaveLength(0);
+  });
+
+  it('flags two doubled days when the cap is 1', () => {
+    const v = codes(1, [[1, 2], [2, 2], [3, 1]]);
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toContain('repeats on 2 day(s)');
+  });
+
+  it('accepts two doubled days when the cap is 2', () => {
+    expect(codes(2, [[1, 2], [2, 2], [3, 1]])).toHaveLength(0);
+  });
+
+  it('is inert when maxRepeatDays is null', () => {
+    expect(codes(null, [[1, 2], [2, 2], [3, 1]])).toHaveLength(0);
+  });
+
+  it('cap 0 forbids any repeat', () => {
+    expect(codes(0, [[1, 2], [2, 1], [3, 1], [4, 1]])).toHaveLength(1);
+  });
+
+  it('cap 0 accepts a course spread one per day', () => {
+    expect(codes(0, [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1]])).toHaveLength(0);
+  });
+
+  it('counts a tripled day as one repeat day, not two', () => {
+    // maxPerDay would catch the triple; maxRepeatDays only counts the day once.
+    expect(codes(1, [[1, 3], [2, 1], [3, 1]])).toHaveLength(0);
+  });
+});

@@ -792,6 +792,12 @@ ALTER TABLE planner_teachers
   CHECK (max_spares_per_day IS NULL OR max_spares_per_day >= 0),
   ADD COLUMN IF NOT EXISTS avoid_adjacent_spares BOOLEAN;
 
+-- ─── Schedule Planner v5 (from schedule_planner_v5_migration.sql) ───────
+
+ALTER TABLE planner_courses
+  ADD COLUMN IF NOT EXISTS max_repeat_days SMALLINT
+  CHECK (max_repeat_days IS NULL OR max_repeat_days >= 0);
+
 CREATE TABLE IF NOT EXISTS planner_period_rules (
   rule_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school         school NOT NULL,

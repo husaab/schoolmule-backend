@@ -56,6 +56,7 @@ const mapCourse = (row) => ({
   sessionsPerWeek: row.sessions_per_week,
   durationMinutes: row.duration_minutes,
   maxPerDay: row.max_per_day,
+  maxRepeatDays: row.max_repeat_days,
   assignedTeacherId: row.assigned_teacher_id,
   candidateTeacherIds: row.candidate_teacher_ids,
   requiredRoomId: row.required_room_id,
@@ -101,8 +102,9 @@ const handleError = (res, error, action) => {
   return fail(res, 500, `Error ${action}`);
 };
 
-// null/undefined = rule not applied for this teacher.
-const isValidSpareCap = (v) =>
+// Shared guard for optional numeric limits (teacher spare caps, course repeat
+// caps): null/undefined means "rule not applied", otherwise a non-negative int.
+const isOptionalNonNegativeInt = (v) =>
   v === undefined || v === null || (Number.isInteger(v) && v >= 0);
 
 const isValidWindow = (w) =>
@@ -171,7 +173,7 @@ const createTeacher = async (req, res) => {
   if (excludedWindows && !excludedWindows.every(isValidWindow)) {
     return fail(res, 400, 'excludedWindows entries need day (1-7), startMin and endMin (endMin > startMin)');
   }
-  if (!isValidSpareCap(maxSparesPerDay)) {
+  if (!isOptionalNonNegativeInt(maxSparesPerDay)) {
     return fail(res, 400, 'maxSparesPerDay must be a non-negative integer or null');
   }
   try {
@@ -205,7 +207,7 @@ const updateTeacher = async (req, res) => {
   if (body.excludedWindows && !body.excludedWindows.every(isValidWindow)) {
     return fail(res, 400, 'excludedWindows entries need day (1-7), startMin and endMin (endMin > startMin)');
   }
-  if (body.maxSparesPerDay !== undefined && !isValidSpareCap(body.maxSparesPerDay)) {
+  if (body.maxSparesPerDay !== undefined && !isOptionalNonNegativeInt(body.maxSparesPerDay)) {
     return fail(res, 400, 'maxSparesPerDay must be a non-negative integer or null');
   }
   try {
@@ -365,10 +367,13 @@ const createCourse = async (req, res) => {
   const { classGroupId } = req.params;
   const {
     name, sessionsPerWeek, durationMinutes, maxPerDay,
-    assignedTeacherId, candidateTeacherIds, requiredRoomId,
+    assignedTeacherId, candidateTeacherIds, requiredRoomId, maxRepeatDays,
   } = req.body;
   if (!name || !Number.isInteger(sessionsPerWeek) || sessionsPerWeek < 1) {
     return fail(res, 400, 'name and sessionsPerWeek (>= 1) are required');
+  }
+  if (!isOptionalNonNegativeInt(maxRepeatDays)) {
+    return fail(res, 400, 'maxRepeatDays must be a non-negative integer or null');
   }
   const teacherError = validateCourseTeachers(assignedTeacherId, candidateTeacherIds);
   if (teacherError) return fail(res, 400, teacherError);
@@ -388,6 +393,7 @@ const createCourse = async (req, res) => {
       JSON.stringify(candidateTeacherIds ?? []),
       requiredRoomId || null,
       req.schoolYear.schoolYearId,
+      maxRepeatDays ?? null,
     ]);
     return ok(res, mapCourse(rows[0]), 201);
   } catch (error) {
@@ -399,6 +405,9 @@ const updateCourse = async (req, res) => {
   const { courseId } = req.params;
   const body = req.body;
   try {
+    if (body.maxRepeatDays !== undefined && !isOptionalNonNegativeInt(body.maxRepeatDays)) {
+      return fail(res, 400, 'maxRepeatDays must be a non-negative integer or null');
+    }
     const { rows: existingRows } = await db.query(q.selectCourseById, [courseId, req.user.school]);
     if (existingRows.length === 0) return fail(res, 404, 'Course not found');
     const existing = existingRows[0];
@@ -416,6 +425,7 @@ const updateCourse = async (req, res) => {
       assignedTeacherId || null,
       JSON.stringify(candidateTeacherIds ?? []),
       body.requiredRoomId !== undefined ? body.requiredRoomId : existing.required_room_id,
+      body.maxRepeatDays !== undefined ? body.maxRepeatDays : existing.max_repeat_days,
       courseId,
       req.user.school,
     ]);
@@ -784,6 +794,7 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
       })(),
       roomId: r.required_room_id,
       maxPerDay: r.max_per_day,
+      maxRepeatDays: r.max_repeat_days,
     })),
     pins: Array.isArray(body.pinnedSessions) ? body.pinnedSessions : [],
     // Drop rules whose teacher/class no longer exists (JSONB-era safety net)
