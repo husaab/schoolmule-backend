@@ -10,6 +10,79 @@ function violation(code, message) {
   return { code, message };
 }
 
+function overlapTotal(intervals, from, to) {
+  const clipped = intervals
+    .map(([a, b]) => [Math.max(a, from), Math.min(b, to)])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let cursor = from;
+  for (const [a, b] of clipped) {
+    if (b > cursor) {
+      total += b - Math.max(a, cursor);
+      cursor = Math.max(cursor, b);
+    }
+  }
+  return total;
+}
+
+// Spare cap: at most N free period-slots strictly BETWEEN a teacher's first and
+// last session on a day. Free time before they start or after they finish is not
+// a spare, so arriving late or leaving early is unaffected. Group-scoped blocks
+// still count as spare (the teacher could have taught another group then);
+// school-wide blocks and their own exclusions do not.
+// Exported so the JS solver can reject candidates the validator would reject.
+function spareCapViolations(rawInput, sessions) {
+  const defaultDur = rawInput.config?.defaultCourseDurationMinutes ?? 40;
+  const daysByIso = new Map(rawInput.days.map((d) => [d.day, d]));
+  const out = [];
+  for (const teacher of rawInput.teachers) {
+    const cap = teacher.maxSparesPerDay;
+    if (!Number.isInteger(cap) || cap < 0) continue;
+    const own = sessions.filter((s) => s.teacherId === teacher.teacherId);
+    for (const dayIso of [...new Set(own.map((s) => s.day))]) {
+      const daySessions = own
+        .filter((s) => s.day === dayIso)
+        .sort((a, b) => a.startMin - b.startMin);
+      if (daySessions.length < 2) continue; // one session cannot straddle a gap
+      const spanStart = daySessions[0].startMin;
+      const spanEnd = Math.max(...daySessions.map((s) => s.endMin));
+      const day = daysByIso.get(dayIso);
+      if (!day) continue;
+      const busy = [
+        ...daySessions.map((s) => [s.startMin, s.endMin]),
+        ...(teacher.excludedWindows || [])
+          .filter((w) => w.day === dayIso)
+          .map((w) => [w.startMin, w.endMin]),
+        ...(rawInput.fixedBlocks || [])
+          .filter(
+            (b) =>
+              b.day === dayIso &&
+              (!Array.isArray(b.classGroupIds) || b.classGroupIds.length === 0)
+          )
+          .map((b) => [b.startMin, b.endMin]),
+      ];
+      let freeMin = 0;
+      for (const range of day.fillableRanges) {
+        const from = Math.max(range.startMin, spanStart);
+        const to = Math.min(range.endMin, spanEnd);
+        if (to <= from) continue;
+        freeMin += to - from - overlapTotal(busy, from, to);
+      }
+      const spares = Math.floor(freeMin / defaultDur);
+      if (spares > cap) {
+        out.push(
+          violation(
+            'SPARE_CAP_VIOLATION',
+            `${teacher.name} has ${spares} spare period(s) on day ${dayIso} (${freeMin} free min between their first and last session); the limit is ${cap}.`
+          )
+        );
+      }
+    }
+  }
+  return out;
+}
+
 function validateCandidate(rawInput, candidate) {
   const violations = [];
   const snap = rawInput.config?.snapMinutes ?? 5;
@@ -218,22 +291,6 @@ function validateCandidate(rawInput, candidate) {
 
   // Period rules: teach ("class's window sessions belong to teacher T on
   // >= N days") and free ("teacher keeps >= N period-slots free in window").
-  const overlapTotal = (intervals, from, to) => {
-    const clipped = intervals
-      .map(([a, b]) => [Math.max(a, from), Math.min(b, to)])
-      .filter(([a, b]) => b > a)
-      .sort((x, y) => x[0] - y[0]);
-    let total = 0;
-    let cursor = from;
-    for (const [a, b] of clipped) {
-      if (b > cursor) {
-        total += b - Math.max(a, cursor);
-        cursor = Math.max(cursor, b);
-      }
-    }
-    return total;
-  };
-
   for (const rule of rawInput.periodRules || []) {
     if (rule.kind === 'teach') {
       let qualifying = 0;
@@ -298,6 +355,8 @@ function validateCandidate(rawInput, candidate) {
     }
   }
 
+  violations.push(...spareCapViolations(rawInput, sessions));
+
   // Max distinct working days per week.
   for (const teacher of rawInput.teachers) {
     if (!Number.isInteger(teacher.maxDaysPerWeek) || teacher.maxDaysPerWeek < 1) continue;
@@ -336,4 +395,4 @@ function validateCandidate(rawInput, candidate) {
   return violations;
 }
 
-module.exports = { validateCandidate };
+module.exports = { validateCandidate, spareCapViolations };

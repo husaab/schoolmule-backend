@@ -296,3 +296,111 @@ describe('validateCandidate', () => {
     expect(codes(validateCandidate(raw, cand))).toContain('PIN_MOVED');
   });
 });
+
+// Spare = a free period-slot strictly BETWEEN a teacher's first and last session
+// of a day. Free time before they start or after they finish is not a spare.
+describe('validateCandidate — maxSparesPerDay (gap semantics)', () => {
+  // One day 08:00-12:00 = six 40-minute slots at 480/520/560/600/640/680.
+  const spareInput = (cap, overrides = {}) => ({
+    config: { snapMinutes: 5, defaultCourseDurationMinutes: 40 },
+    days: [{ day: 1, fillableRanges: [{ startMin: 480, endMin: 720 }] }],
+    fixedBlocks: [],
+    teachers: [
+      {
+        teacherId: 't-1',
+        name: 'Ms. X',
+        maxMinutesPerWeek: null,
+        allowedDays: [1],
+        excludedWindows: [],
+        maxSparesPerDay: cap,
+      },
+    ],
+    rooms: [],
+    classGroups: [{ classGroupId: 'cg-1', name: 'Grade 1' }],
+    courses: [
+      {
+        courseId: 'c-1',
+        classGroupId: 'cg-1',
+        name: 'Math',
+        sessionsPerWeek: 3,
+        durationMinutes: 40,
+        teacherId: 't-1',
+        teacherCandidateIds: null,
+        roomId: null,
+        maxPerDay: 3,
+      },
+    ],
+    pins: [],
+    periodRules: [],
+    ...overrides,
+  });
+
+  const at = (starts) =>
+    starts.map((startMin, i) => ({
+      courseId: 'c-1',
+      sessionIndex: i,
+      classGroupId: 'cg-1',
+      courseName: 'Math',
+      day: 1,
+      startMin,
+      endMin: startMin + 40,
+      teacherId: 't-1',
+      roomId: null,
+      pinned: false,
+    }));
+
+  const spareCodes = (input, starts) =>
+    validateCandidate(input, { sessions: at(starts) }).filter((v) => v.code === 'SPARE_CAP_VIOLATION');
+
+  it('accepts a contiguous run (no gaps)', () => {
+    expect(spareCodes(spareInput(1), [480, 520, 560])).toHaveLength(0);
+  });
+
+  it('accepts exactly one gap when the cap is 1', () => {
+    expect(spareCodes(spareInput(1), [480, 560, 600])).toHaveLength(0);
+  });
+
+  it('flags two separate gaps', () => {
+    const v = spareCodes(spareInput(1), [480, 560, 640]);
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toContain('2 spare period(s)');
+  });
+
+  it('flags one double-length gap as two spares', () => {
+    expect(spareCodes(spareInput(1), [480, 600, 640])).toHaveLength(1);
+  });
+
+  it('ignores free time before the first and after the last session', () => {
+    // Starts late (480/520 free) and finishes early — no interior gap at all.
+    expect(spareCodes(spareInput(0), [560, 600, 640])).toHaveLength(0);
+  });
+
+  it('does not count a school-wide fixed block sitting between two sessions', () => {
+    const input = spareInput(0, {
+      fixedBlocks: [{ label: 'Assembly', day: 1, startMin: 520, endMin: 560, classGroupIds: [] }],
+    });
+    expect(spareCodes(input, [480, 560, 600])).toHaveLength(0);
+  });
+
+  it('still counts a group-scoped block as spare time', () => {
+    // The teacher could have taught another group then, so it is a real spare.
+    const input = spareInput(0, {
+      fixedBlocks: [{ label: 'G1 Lunch', day: 1, startMin: 520, endMin: 560, classGroupIds: ['cg-1'] }],
+    });
+    expect(spareCodes(input, [480, 560, 600])).toHaveLength(1);
+  });
+
+  it('does not count the teacher’s own excluded window as spare', () => {
+    const input = spareInput(0);
+    input.teachers[0].excludedWindows = [{ day: 1, startMin: 520, endMin: 560 }];
+    expect(spareCodes(input, [480, 560, 600])).toHaveLength(0);
+  });
+
+  it('never fires for a single-session day', () => {
+    expect(spareCodes(spareInput(0), [560])).toHaveLength(0);
+  });
+
+  it('is inert when maxSparesPerDay is null', () => {
+    expect(spareCodes(spareInput(null), [480, 600, 680])).toHaveLength(0);
+  });
+});

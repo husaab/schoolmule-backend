@@ -21,6 +21,8 @@ const mapTeacher = (row) => ({
   maxWeeklyMinutes: row.max_weekly_minutes,
   dailySpareMinutes: row.daily_spare_minutes,
   maxDaysPerWeek: row.max_days_per_week,
+  maxSparesPerDay: row.max_spares_per_day,
+  avoidAdjacentSpares: row.avoid_adjacent_spares,
   allowedDays: row.allowed_days,
   excludedWindows: row.excluded_windows,
   notes: row.notes,
@@ -99,6 +101,10 @@ const handleError = (res, error, action) => {
   return fail(res, 500, `Error ${action}`);
 };
 
+// null/undefined = rule not applied for this teacher.
+const isValidSpareCap = (v) =>
+  v === undefined || v === null || (Number.isInteger(v) && v >= 0);
+
 const isValidWindow = (w) =>
   Number.isInteger(w.startMin) &&
   Number.isInteger(w.endMin) &&
@@ -157,12 +163,16 @@ const createTeacher = async (req, res) => {
   const {
     userId, staffId, displayName, isFullTime, maxWeeklyMinutes,
     dailySpareMinutes, maxDaysPerWeek, allowedDays, excludedWindows, notes,
+    maxSparesPerDay, avoidAdjacentSpares,
   } = req.body;
   if (!displayName || typeof displayName !== 'string') {
     return fail(res, 400, 'displayName is required');
   }
   if (excludedWindows && !excludedWindows.every(isValidWindow)) {
     return fail(res, 400, 'excludedWindows entries need day (1-7), startMin and endMin (endMin > startMin)');
+  }
+  if (!isValidSpareCap(maxSparesPerDay)) {
+    return fail(res, 400, 'maxSparesPerDay must be a non-negative integer or null');
   }
   try {
     const schoolId = await resolveSchoolId(req.user.school);
@@ -180,6 +190,8 @@ const createTeacher = async (req, res) => {
       JSON.stringify(excludedWindows ?? []),
       notes || null,
       req.schoolYear.schoolYearId,
+      maxSparesPerDay ?? null,
+      avoidAdjacentSpares ?? null,
     ]);
     return ok(res, mapTeacher(rows[0]), 201);
   } catch (error) {
@@ -192,6 +204,9 @@ const updateTeacher = async (req, res) => {
   const body = req.body;
   if (body.excludedWindows && !body.excludedWindows.every(isValidWindow)) {
     return fail(res, 400, 'excludedWindows entries need day (1-7), startMin and endMin (endMin > startMin)');
+  }
+  if (body.maxSparesPerDay !== undefined && !isValidSpareCap(body.maxSparesPerDay)) {
+    return fail(res, 400, 'maxSparesPerDay must be a non-negative integer or null');
   }
   try {
     const { rows: existingRows } = await db.query(q.selectTeacherById, [teacherId, req.user.school]);
@@ -208,6 +223,8 @@ const updateTeacher = async (req, res) => {
       JSON.stringify(body.allowedDays ?? existing.allowed_days),
       JSON.stringify(body.excludedWindows ?? existing.excluded_windows),
       body.notes !== undefined ? body.notes : existing.notes,
+      body.maxSparesPerDay !== undefined ? body.maxSparesPerDay : existing.max_spares_per_day,
+      body.avoidAdjacentSpares !== undefined ? body.avoidAdjacentSpares : existing.avoid_adjacent_spares,
       teacherId,
       req.user.school,
     ]);
@@ -745,6 +762,8 @@ async function assembleSolverInput(school, body = {}, yearId = null) {
       maxMinutesPerWeek: r.max_weekly_minutes,
       dailySpareMinutes: r.daily_spare_minutes,
       maxDaysPerWeek: r.max_days_per_week,
+      maxSparesPerDay: r.max_spares_per_day,
+      avoidAdjacentSpares: r.avoid_adjacent_spares === true,
       allowedDays: r.allowed_days,
       excludedWindows: r.excluded_windows,
     })),

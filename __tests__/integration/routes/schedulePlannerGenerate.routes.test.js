@@ -328,3 +328,56 @@ describe('Integration: POST /generate routed to the CP-SAT solver service', () =
     expect(res.body.data.candidates[0].sessions).toHaveLength(2);
   });
 });
+
+describe('Integration: teacher spare rules round-trip through the API', () => {
+  it('creates, reads back, edits and clears maxSparesPerDay / avoidAdjacentSpares', async () => {
+    const created = await asAdmin('post', '/api/schedule-planner/teachers').send({
+      displayName: 'Ms. Homeroom',
+      maxSparesPerDay: 1,
+      avoidAdjacentSpares: true,
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.data.maxSparesPerDay).toBe(1);
+    expect(created.body.data.avoidAdjacentSpares).toBe(true);
+    const id = created.body.data.plannerTeacherId;
+
+    const listed = await asAdmin('get', '/api/schedule-planner/teachers');
+    const mine = listed.body.data.find((t) => t.plannerTeacherId === id);
+    expect(mine.maxSparesPerDay).toBe(1);
+
+    const edited = await asAdmin('patch', `/api/schedule-planner/teachers/${id}`).send({
+      maxSparesPerDay: 2,
+      avoidAdjacentSpares: false,
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.maxSparesPerDay).toBe(2);
+    expect(edited.body.data.avoidAdjacentSpares).toBe(false);
+
+    // null clears the rule (teacher opts out again)
+    const cleared = await asAdmin('patch', `/api/schedule-planner/teachers/${id}`).send({
+      maxSparesPerDay: null,
+    });
+    expect(cleared.body.data.maxSparesPerDay).toBeNull();
+
+    const removed = await asAdmin('delete', `/api/schedule-planner/teachers/${id}`);
+    expect(removed.status).toBe(200);
+  });
+
+  it('rejects a negative spare cap', async () => {
+    const res = await asAdmin('post', '/api/schedule-planner/teachers').send({
+      displayName: 'Ms. Bad',
+      maxSparesPerDay: -1,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('defaults both fields to null for teachers that do not opt in', async () => {
+    const res = await asAdmin('post', '/api/schedule-planner/teachers').send({
+      displayName: 'Ms. Plain',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data.maxSparesPerDay).toBeNull();
+    expect(res.body.data.avoidAdjacentSpares).toBeNull();
+    await asAdmin('delete', `/api/schedule-planner/teachers/${res.body.data.plannerTeacherId}`);
+  });
+});

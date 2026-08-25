@@ -33,8 +33,9 @@ const insertTeacher = `
   INSERT INTO planner_teachers
     (school, school_id, user_id, staff_id, display_name, is_full_time,
      max_weekly_minutes, daily_spare_minutes, max_days_per_week,
-     allowed_days, excluded_windows, notes, school_year_id)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
+     allowed_days, excluded_windows, notes, school_year_id,
+     max_spares_per_day, avoid_adjacent_spares)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15)
   RETURNING *
 `;
 
@@ -42,8 +43,9 @@ const updateTeacher = `
   UPDATE planner_teachers
   SET user_id = $1, staff_id = $2, display_name = $3, is_full_time = $4,
       max_weekly_minutes = $5, daily_spare_minutes = $6, max_days_per_week = $7,
-      allowed_days = $8::jsonb, excluded_windows = $9::jsonb, notes = $10, updated_at = NOW()
-  WHERE planner_teacher_id = $11 AND school = $12
+      allowed_days = $8::jsonb, excluded_windows = $9::jsonb, notes = $10,
+      max_spares_per_day = $11, avoid_adjacent_spares = $12, updated_at = NOW()
+  WHERE planner_teacher_id = $13 AND school = $14
   RETURNING *
 `;
 

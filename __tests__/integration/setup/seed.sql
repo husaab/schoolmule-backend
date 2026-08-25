@@ -785,6 +785,13 @@ ALTER TABLE planner_teachers
   ADD COLUMN IF NOT EXISTS max_days_per_week SMALLINT
   CHECK (max_days_per_week IS NULL OR max_days_per_week BETWEEN 1 AND 7);
 
+-- ─── Schedule Planner v4 (from schedule_planner_v4_migration.sql) ───────
+
+ALTER TABLE planner_teachers
+  ADD COLUMN IF NOT EXISTS max_spares_per_day SMALLINT
+  CHECK (max_spares_per_day IS NULL OR max_spares_per_day >= 0),
+  ADD COLUMN IF NOT EXISTS avoid_adjacent_spares BOOLEAN;
+
 CREATE TABLE IF NOT EXISTS planner_period_rules (
   rule_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school         school NOT NULL,
