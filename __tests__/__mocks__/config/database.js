@@ -20,8 +20,17 @@
 
 const DEFAULT_SCHOOL_YEAR_ID = '99999999-9999-4999-8999-999999999999';
 
+// Match only the lookups resolveSchoolYear actually performs — both start with
+// the school_years column list. A query that merely *references* school_years
+// in a subquery (e.g. teacher attendance's open-school-days rule) has to fall
+// through to the normal response queue, or it silently steals the middleware's
+// default row and never consumes the slot the test queued for it.
 function isSchoolYearsQuery(sql) {
-  return typeof sql === 'string' && sql.includes('FROM school_years');
+  return (
+    typeof sql === 'string' &&
+    sql.includes('FROM school_years') &&
+    /^\s*SELECT\s+school_year_id\b/i.test(sql)
+  );
 }
 
 function defaultSchoolYearRow(params) {

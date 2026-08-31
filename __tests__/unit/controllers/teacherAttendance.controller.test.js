@@ -10,6 +10,14 @@ jest.mock('puppeteer', () => ({
 }));
 
 const request = require('supertest');
+
+/** Rows shaped like teacherAttendanceQueries.selectOpenSchoolDays returns. */
+const openSchoolDayRows = (month, count) =>
+  Array.from({ length: count }, (_, i) => ({
+    day: `${month}-${String(i + 1).padStart(2, '0')}`,
+    is_elapsed: true,
+  }));
+
 const { getApp } = require('../../helpers/testApp');
 const {
   mockAdminUser,
@@ -209,10 +217,11 @@ describe('Teacher Attendance Controller', () => {
         ],
         rowCount: 2,
       });
-      // Working days query
+      // Open school days query — 22 elapsed weekdays, none assumed-present
+      // because October 2025 predates ASSUMED_PRESENT_FROM.
       db.query.mockResolvedValueOnce({
-        rows: [{ working_days: 22 }],
-        rowCount: 1,
+        rows: openSchoolDayRows('2025-10', 22),
+        rowCount: 22,
       });
 
       const res = await request(app)
@@ -226,6 +235,53 @@ describe('Teacher Attendance Controller', () => {
       expect(res.body.data.workingDays).toBe(22);
       expect(res.body.data.presentDays).toBe(1);
       expect(res.body.data.absentDays).toBe(1);
+    });
+
+    it('should assume present on elapsed open school days with no record', async () => {
+      const token = mockTeacherUser();
+      const db = require('../../__mocks__/config/database');
+
+      // The teacher only ever recorded one day — an absence.
+      db.query.mockResolvedValueOnce({
+        rows: [{ attendance_date: '2026-09-10', status: 'ABSENT', notes: 'Sick' }],
+        rowCount: 1,
+      });
+      // Sept 8-11 are open; Sept 14 has not happened yet.
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { day: '2026-09-08', is_elapsed: true },
+          { day: '2026-09-09', is_elapsed: true },
+          { day: '2026-09-10', is_elapsed: true },
+          { day: '2026-09-11', is_elapsed: true },
+          { day: '2026-09-14', is_elapsed: false },
+        ],
+        rowCount: 5,
+      });
+
+      const res = await request(app)
+        .get(url)
+        .set('Authorization', `Bearer ${token}`)
+        .query({ month: '2026-09' });
+
+      expect(res.status).toBe(200);
+
+      const byDate = Object.fromEntries(
+        res.body.data.records.map((r) => [r.attendanceDate.substring(0, 10), r.status])
+      );
+
+      // Gaps fill in as present, the explicit absence survives, and a day that
+      // has not happened yet is left alone.
+      expect(byDate['2026-09-08']).toBe('PRESENT');
+      expect(byDate['2026-09-09']).toBe('PRESENT');
+      expect(byDate['2026-09-10']).toBe('ABSENT');
+      expect(byDate['2026-09-11']).toBe('PRESENT');
+      expect(byDate['2026-09-14']).toBeUndefined();
+
+      expect(res.body.data.records).toHaveLength(4);
+      expect(res.body.data.presentDays).toBe(3);
+      expect(res.body.data.absentDays).toBe(1);
+      // Working days counts every open school day, elapsed or not.
+      expect(res.body.data.workingDays).toBe(5);
     });
 
     it('should return 400 when month is missing', async () => {
@@ -328,10 +384,11 @@ describe('Teacher Attendance Controller', () => {
         ],
         rowCount: 1,
       });
-      // Working days query
+      // Open school days query — 22 elapsed weekdays, none assumed-present
+      // because October 2025 predates ASSUMED_PRESENT_FROM.
       db.query.mockResolvedValueOnce({
-        rows: [{ working_days: 22 }],
-        rowCount: 1,
+        rows: openSchoolDayRows('2025-10', 22),
+        rowCount: 22,
       });
 
       const res = await request(app)

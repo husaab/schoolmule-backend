@@ -64,15 +64,43 @@ const teacherAttendanceQueries = {
     RETURNING *
   `,
 
-  // Working days in a month (non-weekend days)
-  selectWorkingDays: `
-    SELECT COUNT(*)::int AS working_days
+  /**
+   * Open school days in a month — the days staff are actually expected in.
+   * A day qualifies when it is a weekday, falls inside one of the school's
+   * configured school years, and is not covered by a calendar event flagged
+   * is_school_closed (holidays, PA days, breaks).
+   *
+   * This backs both the "Working Days" stat and the assumed-present rule, so
+   * the two can never disagree. `is_elapsed` marks days on or before today in
+   * the schools' local timezone — every tenant is an Ontario school, and using
+   * the DB's UTC "today" would mark tomorrow as elapsed all evening.
+   *
+   * $1 = month (YYYY-MM), $2 = school enum
+   */
+  selectOpenSchoolDays: `
+    SELECT
+      to_char(d, 'YYYY-MM-DD') AS day,
+      (d::date <= (now() AT TIME ZONE 'America/Toronto')::date) AS is_elapsed
     FROM generate_series(
       ($1 || '-01')::date,
       (($1 || '-01')::date + INTERVAL '1 month' - INTERVAL '1 day')::date,
       '1 day'
     ) AS d
     WHERE EXTRACT(dow FROM d) NOT IN (0, 6)
+      AND EXISTS (
+        SELECT 1
+        FROM school_years sy
+        WHERE sy.school = $2
+          AND d::date BETWEEN sy.start_date AND sy.end_date
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM school_calendar_events e
+        WHERE e.school = $2
+          AND e.is_school_closed = true
+          AND d::date BETWEEN e.start_date AND COALESCE(e.end_date, e.start_date)
+      )
+    ORDER BY d
   `,
 };
 

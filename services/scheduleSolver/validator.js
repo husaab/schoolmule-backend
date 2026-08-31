@@ -26,11 +26,15 @@ function overlapTotal(intervals, from, to) {
   return total;
 }
 
-// Spare cap: at most N free period-slots strictly BETWEEN a teacher's first and
-// last session on a day. Free time before they start or after they finish is not
-// a spare, so arriving late or leaving early is unaffected. Group-scoped blocks
-// still count as spare (the teacher could have taught another group then);
-// school-wide blocks and their own exclusions do not.
+// Spare cap: at most N free period-slots on any day the teacher works. EVERY
+// non-teaching period counts -- including a free first or last period. A teacher
+// who arrives at 9:55 has a spare at 8:55, because that hour is hers either way.
+//
+// Time is not a spare when the teacher is genuinely occupied: school-wide blocks,
+// their own excluded windows, and a group-scoped block (lunch, snack) belonging
+// to a class they teach that day -- a homeroom teacher sitting with her class at
+// lunch is on duty, not free. A group-scoped block for a class she does NOT teach
+// that day is still spare, since she could have taught then.
 // Exported so the JS solver can reject candidates the validator would reject.
 function spareCapViolations(rawInput, sessions) {
   const defaultDur = rawInput.config?.defaultCourseDurationMinutes ?? 40;
@@ -41,15 +45,11 @@ function spareCapViolations(rawInput, sessions) {
     if (!Number.isInteger(cap) || cap < 0) continue;
     const own = sessions.filter((s) => s.teacherId === teacher.teacherId);
     for (const dayIso of [...new Set(own.map((s) => s.day))]) {
-      const daySessions = own
-        .filter((s) => s.day === dayIso)
-        .sort((a, b) => a.startMin - b.startMin);
-      if (daySessions.length < 2) continue; // one session cannot straddle a gap
-      const spanStart = daySessions[0].startMin;
-      const spanEnd = Math.max(...daySessions.map((s) => s.endMin));
+      const daySessions = own.filter((s) => s.day === dayIso);
+      if (daySessions.length === 0) continue; // not working -- not a spare day
       const day = daysByIso.get(dayIso);
       if (!day) continue;
-      const busy = [
+      const alwaysBusy = [
         ...daySessions.map((s) => [s.startMin, s.endMin]),
         ...(teacher.excludedWindows || [])
           .filter((w) => w.day === dayIso)
@@ -62,19 +62,38 @@ function spareCapViolations(rawInput, sessions) {
           )
           .map((b) => [b.startMin, b.endMin]),
       ];
-      let freeMin = 0;
-      for (const range of day.fillableRanges) {
-        const from = Math.max(range.startMin, spanStart);
-        const to = Math.min(range.endMin, spanEnd);
-        if (to <= from) continue;
-        freeMin += to - from - overlapTotal(busy, from, to);
-      }
+
+      // She can only sit with ONE class at lunch, so duty credit comes from a
+      // single class group -- not every group she happens to teach that day.
+      // Take the most generous choice, so a borderline day is never failed
+      // because we picked the wrong class on her behalf.
+      const groupsTaughtToday = [...new Set(daySessions.map((s) => s.classGroupId))];
+      const freeForGroup = (groupId) => {
+        const busy = [
+          ...alwaysBusy,
+          ...(rawInput.fixedBlocks || [])
+            .filter(
+              (b) =>
+                b.day === dayIso &&
+                Array.isArray(b.classGroupIds) &&
+                b.classGroupIds.includes(groupId)
+            )
+            .map((b) => [b.startMin, b.endMin]),
+        ];
+        let mins = 0;
+        for (const range of day.fillableRanges) {
+          mins += range.endMin - range.startMin - overlapTotal(busy, range.startMin, range.endMin);
+        }
+        return mins;
+      };
+      // The whole schedulable day counts, not just first-session to last.
+      const freeMin = Math.min(...groupsTaughtToday.map(freeForGroup));
       const spares = Math.floor(freeMin / defaultDur);
       if (spares > cap) {
         out.push(
           violation(
             'SPARE_CAP_VIOLATION',
-            `${teacher.name} has ${spares} spare period(s) on day ${dayIso} (${freeMin} free min between their first and last session); the limit is ${cap}.`
+            `${teacher.name} has ${spares} spare period(s) on day ${dayIso} (${freeMin} free min across the school day); the limit is ${cap}.`
           )
         );
       }
