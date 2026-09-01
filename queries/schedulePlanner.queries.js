@@ -321,12 +321,6 @@ const insertScheduleFixedBlock = `
   VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
 `;
 
-const selectFixedBlocksForSchedule = `
-  SELECT * FROM planner_schedule_fixed_blocks
-  WHERE schedule_id = $1
-  ORDER BY day_of_week, start_min
-`;
-
 // The single published schedule for a school/year, readable by any verified
 // user — the teacher surfaces need its name/published_at, not its config.
 const selectPublishedSchedule = `
@@ -396,7 +390,6 @@ module.exports = {
   selectSessionsForSchedule,
   deleteFixedBlocksForSchedule,
   insertScheduleFixedBlock,
-  selectFixedBlocksForSchedule,
   selectPublishedSchedule,
   selectMyFixedBlocks,
 };
