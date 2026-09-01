@@ -69,6 +69,10 @@ const SUGGEST_RULES = [
 
 // Best-effort translation of a choice option's text to a grade token.
 // "Junior Kindergarten (born in 2022)" → 'JK'; "Grade 1" → '1'.
+//
+// Deliberately mirrored by guessEnumValue() in the frontend's
+// FieldMappingEditor.tsx, which re-seeds the option map when an admin re-points
+// a field mid-edit without a server round-trip. Keep the two regexes in sync.
 function suggestGradeValue(optionText) {
   const l = String(optionText).toLowerCase();
   if (/junior\s*k|^jk\b|\bjk\b/.test(l)) return 'JK';
@@ -349,7 +353,4 @@ module.exports = {
   applyUpdate,
   dependentTables,
   sideEffects: { assignHomeroomTeacher, enrollInGradeClasses },
-  // Unused today, but names the coupling explicitly so a second target has an
-  // obvious place to declare its own link column.
-  submissionLinkColumn: 'imported_student_id',
 };
