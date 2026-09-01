@@ -306,6 +306,46 @@ const selectSessionsForSchedule = `
   ORDER BY class_group_name, day_of_week, start_min
 `;
 
+// ─── Published fixed-block snapshots (v6) ────────────────────────────────
+// Breaks (Snack/Lunch/Salat) are snapshotted on publish so teachers can see
+// them without read access to the admin-only planner_fixed_blocks config.
+
+const deleteFixedBlocksForSchedule = `
+  DELETE FROM planner_schedule_fixed_blocks WHERE schedule_id = $1
+`;
+
+const insertScheduleFixedBlock = `
+  INSERT INTO planner_schedule_fixed_blocks
+    (schedule_id, school, school_id, class_group_ids, label,
+     day_of_week, start_min, end_min, school_year_id)
+  VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+`;
+
+const selectFixedBlocksForSchedule = `
+  SELECT * FROM planner_schedule_fixed_blocks
+  WHERE schedule_id = $1
+  ORDER BY day_of_week, start_min
+`;
+
+// The single published schedule for a school/year, readable by any verified
+// user — the teacher surfaces need its name/published_at, not its config.
+const selectPublishedSchedule = `
+  SELECT schedule_id, name, published_at
+  FROM planner_schedules
+  WHERE school = $1 AND status = 'published'
+    AND ($2::uuid IS NULL OR school_year_id = $2)
+  LIMIT 1
+`;
+
+const selectMyFixedBlocks = `
+  SELECT psfb.*
+  FROM planner_schedule_fixed_blocks psfb
+  JOIN planner_schedules ps ON ps.schedule_id = psfb.schedule_id
+  WHERE ps.school = $1 AND ps.status = 'published'
+    AND ($2::uuid IS NULL OR psfb.school_year_id = $2)
+  ORDER BY psfb.day_of_week, psfb.start_min
+`;
+
 module.exports = {
   selectSettings,
   upsertSettings,
@@ -354,4 +394,9 @@ module.exports = {
   selectMySessions,
   selectPublicSchedule,
   selectSessionsForSchedule,
+  deleteFixedBlocksForSchedule,
+  insertScheduleFixedBlock,
+  selectFixedBlocksForSchedule,
+  selectPublishedSchedule,
+  selectMyFixedBlocks,
 };

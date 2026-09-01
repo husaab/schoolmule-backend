@@ -15,6 +15,11 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
       created_at,
       last_modified_at,
       is_archived,
@@ -39,6 +44,11 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
       created_at,
       last_modified_at,
       is_archived,
@@ -66,6 +76,11 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
       created_at,
       last_modified_at,
       is_archived,
@@ -90,9 +105,13 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
-      school_year_id
+      school_year_id,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
     )
     RETURNING *
   `,
@@ -113,6 +132,10 @@ const studentQueries = {
       father_email         = COALESCE($10, father_email),
       father_number        = COALESCE($11, father_number),
       emergency_contact    = COALESCE($12, emergency_contact),
+      date_of_birth        = COALESCE($14, date_of_birth),
+      address              = COALESCE($15, address),
+      health_card_number   = COALESCE($16, health_card_number),
+      medical_notes        = COALESCE($17, medical_notes),
       last_modified_at     = NOW()
     WHERE student_id = $13
     RETURNING *
@@ -146,6 +169,11 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
       created_at,
       last_modified_at,
       is_archived,
@@ -196,6 +224,11 @@ const studentQueries = {
       father_email,
       father_number,
       emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
       created_at,
       last_modified_at,
       is_archived,

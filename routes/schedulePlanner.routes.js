@@ -3,8 +3,11 @@ const router = express.Router();
 const requireAdmin = require('../middleware/requireAdmin');
 const controller = require('../controllers/schedulePlanner.controller');
 
-// Any verified user (teacher dashboard widget)
+// Any verified user (teacher dashboard widget, /my-schedule page, exports).
+// These read only the published snapshot tables, never the planner config.
 router.get('/my-schedule', controller.getMySchedule);
+router.get('/my-schedule/pdf', controller.getMySchedulePdf);
+router.get('/my-schedule/ics', controller.getMyScheduleIcs);
 
 // Everything below is ADMIN-only
 router.use(requireAdmin);

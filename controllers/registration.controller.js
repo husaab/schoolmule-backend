@@ -5,6 +5,13 @@ const supabase = require('../config/supabaseClient');
 const multer = require('multer');
 const path = require('path');
 const ExcelJS = require('exceljs');
+const {
+  buildSubmissionsSort,
+  buildSubmissionsWhere,
+  parseSorts,
+  parseFieldFilters,
+  parseImportState,
+} = require('../services/submissionFilters');
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -46,169 +53,14 @@ function toCamelSubmission(row) {
     submittedAt: row.submitted_at,
     ipAddress: row.ip_address,
     status: row.status,
+    // Import provenance — null until this submission has been imported as a
+    // student. `status` deliberately stays a human workflow field (new /
+    // reviewed / archived) and is not overloaded to mean "imported".
+    importedStudentId: row.imported_student_id || null,
+    importedAt: row.imported_at || null,
+    importedBy: row.imported_by || null,
+    importedStudentName: row.imported_student_name || null,
   };
-}
-
-// ─── Sorting Helpers ──────────────────────────────────────────────────
-// Submissions store answers as JSONB keyed by field UUIDs. Sorting must
-// happen at the DB level because the data is paginated. For radio fields
-// (e.g. Grade) we want natural order using the field's own options array,
-// not alphabetical (which would put "Grade 10" before "Grade 2").
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Builds a single ORDER BY fragment for one field.
-// Mutates `params` to append any new bind values; returns the SQL fragment.
-function buildFieldSortClause(field, dir, params) {
-  if (!UUID_REGEX.test(field.field_id)) {
-    throw new Error('Invalid field_id format'); // should never happen — defensive
-  }
-  const direction = dir === 'desc' ? 'DESC' : 'ASC';
-
-  if ((field.field_type === 'radio' || field.field_type === 'select') && Array.isArray(field.options) && field.options.length > 0) {
-    // Natural sort using the form's option order
-    params.push(field.options);
-    return `array_position($${params.length}::text[], answers->>'${field.field_id}') ${direction} NULLS LAST`;
-  }
-
-  // Plain text comparison (works for text/email/phone/textarea/date)
-  return `LOWER(answers->>'${field.field_id}') ${direction} NULLS LAST`;
-}
-
-// Heuristic: identify the "Grade" and "Name" fields for default CSV sort
-function findGradeField(fields) {
-  return fields.find(f =>
-    (f.field_type === 'radio' || f.field_type === 'select') &&
-    /grade|kindergarten/i.test(f.label || '')
-  ) || null;
-}
-
-function findStudentNameField(fields) {
-  return fields.find(f => /name of student/i.test(f.label || '')) || null;
-}
-
-// Builds the ORDER BY clause for submissions queries from an ordered list of
-// sort specs (priority order). Each spec is { fieldId, dir } where fieldId is a
-// field UUID or the special string 'submittedAt'.
-// - useExportDefault: if true and no sorts given, sort by Grade ASC, Name ASC
-// Returns { clause: string, params: array }
-function buildSubmissionsSort(fields, sorts, useExportDefault) {
-  const params = [];
-  const list = Array.isArray(sorts) ? sorts : [];
-  const fragments = [];
-  let hasSubmittedAt = false;
-
-  for (const s of list) {
-    if (s.fieldId === 'submittedAt') {
-      fragments.push(`submitted_at ${s.dir === 'asc' ? 'ASC' : 'DESC'}`);
-      hasSubmittedAt = true;
-      continue;
-    }
-    const field = fields.find(f => f.field_id === s.fieldId);
-    if (field) {
-      fragments.push(buildFieldSortClause(field, s.dir, params));
-    }
-  }
-
-  if (fragments.length > 0) {
-    // Append a stable secondary sort unless the user already sorts by date.
-    const clause = hasSubmittedAt ? fragments.join(', ') : `${fragments.join(', ')}, submitted_at DESC`;
-    return { clause, params };
-  }
-
-  if (useExportDefault) {
-    const defFragments = [];
-    const grade = findGradeField(fields);
-    const name = findStudentNameField(fields);
-    if (grade) defFragments.push(buildFieldSortClause(grade, 'asc', params));
-    if (name) defFragments.push(buildFieldSortClause(name, 'asc', params));
-    if (defFragments.length > 0) {
-      return { clause: `${defFragments.join(', ')}, submitted_at DESC`, params };
-    }
-  }
-
-  return { clause: 'submitted_at DESC', params };
-}
-
-// ─── Filter Helpers ─────────────────────────────────────────────────────
-// Submissions are filtered by status, submission date range, and arbitrary
-// per-field answer values. Field-value filters match against the JSONB answers
-// keyed by field UUID. Choice fields match exactly (any of the selected values);
-// text-ish fields match by case-insensitive "contains".
-
-// Parse the multi-sort `sort` query param ("fieldId:dir,fieldId:dir"), falling
-// back to the legacy single `sortFieldId`/`sortDir` params.
-function parseSorts(query) {
-  if (query.sort) {
-    return String(query.sort)
-      .split(',')
-      .map(pair => {
-        const [fieldId, dir] = pair.split(':');
-        return { fieldId: (fieldId || '').trim(), dir: dir === 'desc' ? 'desc' : 'asc' };
-      })
-      .filter(s => s.fieldId);
-  }
-  if (query.sortFieldId) {
-    return [{ fieldId: query.sortFieldId, dir: query.sortDir === 'desc' ? 'desc' : 'asc' }];
-  }
-  return [];
-}
-
-// Parse the `fieldFilters` query param (URL-encoded JSON array of
-// { fieldId, values }). Returns [] on any malformed input.
-function parseFieldFilters(query) {
-  if (!query.fieldFilters) return [];
-  try {
-    const parsed = JSON.parse(query.fieldFilters);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(f => f && typeof f.fieldId === 'string' && Array.isArray(f.values))
-      .map(f => ({ fieldId: f.fieldId, values: f.values.map(v => String(v)) }));
-  } catch {
-    return [];
-  }
-}
-
-// Builds the WHERE body (excluding the leading "WHERE") for submissions queries.
-// form_id is always bound to $1 by the caller; this returns the remaining bind
-// values in order ($2, $3, ...). Used by the list, count, and export queries so
-// they stay consistent. Invalid/unknown field filters are silently skipped.
-function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters }) {
-  const params = [];
-  const conds = ['form_id = $1'];
-  let idx = 1; // $1 = form_id (supplied by caller)
-
-  idx++; params.push(status || null);
-  conds.push(`($${idx}::varchar IS NULL OR status = $${idx})`);
-
-  idx++; params.push(dateFrom || null);
-  conds.push(`($${idx}::timestamptz IS NULL OR submitted_at >= $${idx})`);
-
-  idx++; params.push(dateTo || null);
-  conds.push(`($${idx}::timestamptz IS NULL OR submitted_at <= $${idx})`);
-
-  const fieldMap = new Map(fields.map(f => [f.field_id, f]));
-  for (const ff of (fieldFilters || [])) {
-    const field = fieldMap.get(ff.fieldId);
-    if (!field || !UUID_REGEX.test(ff.fieldId)) continue; // skip unknown/malformed
-    const values = (Array.isArray(ff.values) ? ff.values : [])
-      .map(v => String(v))
-      .filter(v => v !== '');
-    if (values.length === 0) continue;
-
-    if (field.field_type === 'select' || field.field_type === 'radio') {
-      idx++; params.push(values);
-      conds.push(`answers->>'${field.field_id}' = ANY($${idx}::text[])`);
-    } else {
-      const ors = values.map(v => {
-        idx++; params.push(`%${v}%`);
-        return `answers->>'${field.field_id}' ILIKE $${idx}`;
-      });
-      conds.push(`(${ors.join(' OR ')})`);
-    }
-  }
-
-  return { clause: conds.join('\n        AND '), params };
 }
 
 // Multer config for banner upload
@@ -576,6 +428,7 @@ const getSubmissions = async (req, res) => {
     } = req.query;
     const sorts = parseSorts(req.query);
     const fieldFilters = parseFieldFilters(req.query);
+    const importState = parseImportState(req.query);
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -595,6 +448,7 @@ const getSubmissions = async (req, res) => {
       dateFrom,
       dateTo,
       fieldFilters,
+      importState,
     });
     const { clause: orderClause, params: orderParams } = buildSubmissionsSort(fields, sorts, false);
 
@@ -607,8 +461,13 @@ const getSubmissions = async (req, res) => {
     const limitIdx = shift + orderParams.length + 1;
     const offsetIdx = limitIdx + 1;
 
+    // The scalar subquery (rather than a JOIN) keeps every column reference in
+    // the shared WHERE/ORDER BY clauses unqualified and unambiguous.
     const sql = `
-      SELECT * FROM registration_form_submissions
+      SELECT *,
+        (SELECT name FROM students
+          WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name
+      FROM registration_form_submissions
       WHERE ${whereClause}
       ORDER BY ${shiftedOrderClause}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}
@@ -644,7 +503,8 @@ const getSubmissions = async (req, res) => {
 const getSubmission = async (req, res) => {
   try {
     const { submissionId } = req.params;
-    const { rows } = await db.query(registrationQueries.selectSubmissionById, [submissionId]);
+    const school = req.user.school;
+    const { rows } = await db.query(registrationQueries.selectSubmissionById, [submissionId, school]);
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
@@ -663,7 +523,7 @@ const updateSubmission = async (req, res) => {
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ status: 'failed', message: 'Invalid status' });
     }
-    const { rows } = await db.query(registrationQueries.updateSubmissionStatus, [status, submissionId]);
+    const { rows } = await db.query(registrationQueries.updateSubmissionStatus, [status, submissionId, req.user.school]);
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
@@ -755,7 +615,7 @@ const updateSubmissionAnswers = async (req, res) => {
 const deleteSubmission = async (req, res) => {
   try {
     const { submissionId } = req.params;
-    const { rows } = await db.query(registrationQueries.deleteSubmission, [submissionId]);
+    const { rows } = await db.query(registrationQueries.deleteSubmission, [submissionId, req.user.school]);
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
@@ -775,6 +635,7 @@ const exportSubmissions = async (req, res) => {
     const { status: filterStatus, dateFrom, dateTo } = req.query;
     const sorts = parseSorts(req.query);
     const fieldFilters = parseFieldFilters(req.query);
+    const importState = parseImportState(req.query);
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -791,6 +652,7 @@ const exportSubmissions = async (req, res) => {
       dateFrom,
       dateTo,
       fieldFilters,
+      importState,
     });
     const { clause: orderClause, params: orderParams } = buildSubmissionsSort(
       fields,

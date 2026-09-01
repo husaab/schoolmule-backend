@@ -21,6 +21,13 @@ const toCamel = (s) => ({
     phone: s.father_number,
   },
   emergencyContact: s.emergency_contact,
+  dateOfBirth: s.date_of_birth,
+  address: s.address,
+  healthCardNumber: s.health_card_number,
+  medicalNotes: s.medical_notes,
+  // Set when this student was created (or enriched) by importing a
+  // registration form submission; null for manually-entered students.
+  sourceSubmissionId: s.source_submission_id ?? null,
   createdAt: s.created_at,
   lastModifiedAt: s.last_modified_at,
   isArchived: s.is_archived,
@@ -72,7 +79,11 @@ const createStudent = async (req, res) => {
     oen,
     mother = {},
     father = {},
-    emergencyContact
+    emergencyContact,
+    dateOfBirth,
+    address,
+    healthCardNumber,
+    medicalNotes
     } = req.body;
   const school = req.user.school;
   const schoolYearId = req.schoolYear?.schoolYearId || null;
@@ -99,7 +110,11 @@ const createStudent = async (req, res) => {
       father.email || null,
       father.phone || null,
       emergencyContact,
-      schoolYearId
+      schoolYearId,
+      dateOfBirth || null,
+      address || null,
+      healthCardNumber || null,
+      medicalNotes || null
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
@@ -126,6 +141,10 @@ const updateStudent = async (req, res) => {
     mother = {},
     father = {},
     emergencyContact,
+    dateOfBirth,
+    address,
+    healthCardNumber,
+    medicalNotes,
   } = req.body;
 
   const vals = [
@@ -142,6 +161,10 @@ const updateStudent = async (req, res) => {
     father.phone ?? null,
     emergencyContact ?? null,
     id,
+    dateOfBirth ?? null,
+    address ?? null,
+    healthCardNumber ?? null,
+    medicalNotes ?? null,
   ];
 
   try {

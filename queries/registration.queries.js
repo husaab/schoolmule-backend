@@ -131,16 +131,25 @@ const registrationQueries = {
   // buildSubmissionsWhere in registration.controller.js) so the count matches
   // the field-value filters applied to the list query.
 
+  // All three of the below are school-scoped through the parent form. Without
+  // that join a user from any school could read, restatus, or delete another
+  // school's submission just by knowing its UUID.
   selectSubmissionById: `
-    SELECT * FROM registration_form_submissions
-    WHERE submission_id = $1
+    SELECT s.*,
+      (SELECT name FROM students WHERE student_id = s.imported_student_id) AS imported_student_name
+    FROM registration_form_submissions s
+    JOIN registration_forms f ON s.form_id = f.form_id
+    WHERE s.submission_id = $1 AND f.school = $2
   `,
 
   updateSubmissionStatus: `
-    UPDATE registration_form_submissions
+    UPDATE registration_form_submissions s
     SET status = $1
-    WHERE submission_id = $2
-    RETURNING *
+    FROM registration_forms f
+    WHERE s.submission_id = $2
+      AND s.form_id = f.form_id
+      AND f.school = $3
+    RETURNING s.*
   `,
 
   // School-scoped via the parent form so a user can only edit submissions
@@ -159,9 +168,12 @@ const registrationQueries = {
   // for the same reason as selectSubmissionsFiltered.
 
   deleteSubmission: `
-    DELETE FROM registration_form_submissions
-    WHERE submission_id = $1
-    RETURNING *
+    DELETE FROM registration_form_submissions s
+    USING registration_forms f
+    WHERE s.submission_id = $1
+      AND s.form_id = f.form_id
+      AND f.school = $2
+    RETURNING s.*
   `,
 
   countNewSubmissionsBySchool: `

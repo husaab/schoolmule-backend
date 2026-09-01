@@ -4,6 +4,7 @@
 
 const db = require('../config/database');
 const q = require('../queries/schedulePlanner.queries');
+const calendarQ = require('../queries/schoolCalendar.queries');
 const logger = require('../logger');
 const { runSolverInWorker } = require('../services/scheduleSolver/run');
 const { createPDFBuffer } = require('../utils/pdfGenerator');
@@ -966,10 +967,11 @@ const publishSchedule = async (req, res) => {
     }
 
     const yearId = req.schoolYear.schoolYearId;
-    const [teachersQ, groupsQ, roomsQ] = await Promise.all([
+    const [teachersQ, groupsQ, roomsQ, blocksQ] = await Promise.all([
       client.query(q.selectTeachersBySchool, [school, yearId]),
       client.query(q.selectClassGroupsBySchool, [school, yearId]),
       client.query(q.selectRoomsBySchool, [school, yearId]),
+      client.query(q.selectFixedBlocksBySchool, [school, yearId]),
     ]);
     const teacherById = new Map(teachersQ.rows.map((r) => [r.planner_teacher_id, r]));
     const groupById = new Map(groupsQ.rows.map((r) => [r.class_group_id, r]));
@@ -980,6 +982,7 @@ const publishSchedule = async (req, res) => {
     const { rows: demoted } = await client.query(q.demotePublishedSchedules, [school, yearId]);
     for (const row of demoted) {
       await client.query(q.deleteSessionsForSchedule, [row.schedule_id]);
+      await client.query(q.deleteFixedBlocksForSchedule, [row.schedule_id]);
     }
     const { rows: published } = await client.query(q.markSchedulePublished, [scheduleId, school]);
     await client.query(q.deleteSessionsForSchedule, [scheduleId]);
@@ -1004,6 +1007,22 @@ const publishSchedule = async (req, res) => {
         yearId,
       ]);
     }
+    // Breaks are snapshotted too: teachers read them from here, not from the
+    // admin-only planner_fixed_blocks config.
+    await client.query(q.deleteFixedBlocksForSchedule, [scheduleId]);
+    for (const b of blocksQ.rows) {
+      await client.query(q.insertScheduleFixedBlock, [
+        scheduleId,
+        school,
+        schoolId,
+        JSON.stringify(b.class_group_ids || []),
+        b.label,
+        b.day_of_week,
+        b.start_min,
+        b.end_min,
+        yearId,
+      ]);
+    }
     await client.query('COMMIT');
     return ok(res, mapSchedule(published[0]));
   } catch (error) {
@@ -1014,10 +1033,12 @@ const publishSchedule = async (req, res) => {
   }
 };
 
-// GET /schedules/:scheduleId/pdf?classGroupId=&view=class|teacher|day
+// GET /schedules/:scheduleId/pdf?classGroupId=&teacherId=&view=class|teacher|day
+// teacherId narrows the teacher view to a single staff member; without it the
+// teacher view renders every teacher, one page each.
 const getSchedulePdf = async (req, res) => {
   const { scheduleId } = req.params;
-  const { classGroupId, view } = req.query;
+  const { classGroupId, teacherId, view } = req.query;
   const school = req.user.school;
   try {
     const { rows: scheduleRows } = await db.query(q.selectScheduleById, [scheduleId, school]);
@@ -1075,11 +1096,13 @@ const getSchedulePdf = async (req, res) => {
         byTeacher.get(s.teacherId).push(s);
       }
       pages = [...byTeacher.entries()]
+        .filter(([id]) => !teacherId || id === teacherId)
         .map(([id, own]) => ({
           title: teacherName(id),
           columns: dayColumns(own, (s) => groupName(s.classGroupId)),
         }))
         .sort((a, b) => a.title.localeCompare(b.title));
+      if (pages.length === 0) return fail(res, 404, 'Teacher not in this schedule');
     } else if (view === 'day') {
       // One page per weekday; columns are the class groups in grade order —
       // the printable master grid.
@@ -1136,15 +1159,265 @@ const getSchedulePdf = async (req, res) => {
   }
 };
 
-// GET /my-schedule — any verified user; published sessions linked to them.
+// ─── Teacher-facing surfaces ─────────────────────────────────────────────
+// Everything below is readable by any verified user, so it reads only the
+// published snapshot tables — never the admin-gated planner config.
+
+const mapSnapshotBlock = (row) => ({
+  fixedBlockId: row.snapshot_block_id,
+  classGroupIds: row.class_group_ids || [],
+  label: row.label,
+  dayOfWeek: row.day_of_week,
+  startMin: row.start_min,
+  endMin: row.end_min,
+});
+
+/** yyyy-mm-dd in server-local time (school calendar dates are date-only). */
+const isoDate = (d) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/** ISO weekday, Monday = 1 … Sunday = 7. */
+const isoDay = (d) => (d.getDay() === 0 ? 7 : d.getDay());
+
+/** Monday of the week containing `date`. */
+const mondayOf = (date) => {
+  const d = new Date(date);
+  d.setDate(d.getDate() - (isoDay(d) - 1));
+  return d;
+};
+
+// School-closed events (holidays, PA days) overlapping a date range. Without
+// this a teacher sees Monday's timetable on a PA day.
+const selectClosures = async (school, yearId, from, to) => {
+  const { rows } = await db.query(calendarQ.selectEventsBySchoolAndRange, [
+    school, from, to, yearId,
+  ]);
+  return rows
+    .filter((r) => r.is_school_closed)
+    .map((r) => ({
+      title: r.title,
+      category: r.category,
+      startDate: isoDate(new Date(r.start_date)),
+      endDate: isoDate(new Date(r.end_date || r.start_date)),
+    }));
+};
+
+/** Every individual closed date across a set of (possibly multi-day) closures. */
+const expandClosureDates = (closures) => {
+  const dates = new Set();
+  for (const c of closures) {
+    const cursor = new Date(`${c.startDate}T00:00:00`);
+    const end = new Date(`${c.endDate}T00:00:00`);
+    while (cursor <= end) {
+      dates.add(isoDate(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+  return dates;
+};
+
+// GET /my-schedule — the published timetable filtered to the caller, plus the
+// breaks, day bounds and closures needed to render a real day.
 const getMySchedule = async (req, res) => {
   try {
-    const { rows } = await db.query(q.selectMySessions, [
-      req.user.userId, req.user.school, req.schoolYear?.schoolYearId || null,
+    const school = req.user.school;
+    const yearId = req.schoolYear?.schoolYearId || null;
+    const monday = mondayOf(new Date());
+    const sunday = new Date(monday);
+    sunday.setDate(sunday.getDate() + 6);
+
+    const [sessionsQ, blocksQ, daysQ, publishedQ, closures] = await Promise.all([
+      db.query(q.selectMySessions, [req.user.userId, school, yearId]),
+      db.query(q.selectMyFixedBlocks, [school, yearId]),
+      db.query(q.selectDayTemplatesBySchool, [school, yearId]),
+      db.query(q.selectPublishedSchedule, [school, yearId]),
+      selectClosures(school, yearId, isoDate(monday), isoDate(sunday)),
     ]);
-    return ok(res, { sessions: rows.map(mapMaterializedSession) });
+
+    const published = publishedQ.rows[0] || null;
+    return ok(res, {
+      sessions: sessionsQ.rows.map(mapMaterializedSession),
+      fixedBlocks: blocksQ.rows.map(mapSnapshotBlock),
+      dayTemplates: daysQ.rows.map(mapDayTemplate),
+      schedule: published
+        ? {
+            scheduleId: published.schedule_id,
+            name: published.name,
+            publishedAt: published.published_at,
+          }
+        : null,
+      weekStart: isoDate(monday),
+      closures,
+    });
   } catch (error) {
     return handleError(res, error, 'fetching my schedule');
+  }
+};
+
+/** Shared page-builder input for one teacher's week. */
+const teacherPdfPage = (sessions) => {
+  const days = [...new Set(sessions.map((s) => s.day_of_week))].sort((a, b) => a - b);
+  return {
+    title: sessions[0].teacher_name,
+    columns: days.map((day) => ({
+      label: DAY_LABELS[day - 1],
+      sessions: sessions
+        .filter((s) => s.day_of_week === day)
+        .map((s) => ({
+          startMin: s.start_min,
+          endMin: s.end_min,
+          primaryLabel: s.course_name,
+          secondaryLabel: s.class_group_name,
+          roomName: s.room_name,
+        })),
+    })),
+  };
+};
+
+// GET /my-schedule/pdf — the caller's own week, same template as admin Print.
+const getMySchedulePdf = async (req, res) => {
+  try {
+    const school = req.user.school;
+    const yearId = req.schoolYear?.schoolYearId || null;
+    const [sessionsQ, daysQ, schoolQ, publishedQ] = await Promise.all([
+      db.query(q.selectMySessions, [req.user.userId, school, yearId]),
+      db.query(q.selectDayTemplatesBySchool, [school, yearId]),
+      db.query('SELECT name FROM schools WHERE school_code = $1', [school]),
+      db.query(q.selectPublishedSchedule, [school, yearId]),
+    ]);
+    const sessions = sessionsQ.rows;
+    if (sessions.length === 0) {
+      return fail(res, 404, 'You have no sessions in the published schedule');
+    }
+
+    const allRanges = daysQ.rows.flatMap((r) => r.fillable_ranges || []);
+    const rangeStartMin = allRanges.length
+      ? Math.min(...allRanges.map((r) => r.startMin))
+      : Math.min(...sessions.map((s) => s.start_min));
+    const rangeEndMin = allRanges.length
+      ? Math.max(...allRanges.map((r) => r.endMin))
+      : Math.max(...sessions.map((s) => s.end_min));
+
+    const html = buildScheduleHtml({
+      schoolName: schoolQ.rows[0]?.name || school,
+      scheduleName: publishedQ.rows[0]?.name || 'Schedule',
+      pages: [teacherPdfPage(sessions)],
+      rangeStartMin,
+      rangeEndMin,
+    });
+    const buffer = await createPDFBuffer(html, {
+      format: 'Letter',
+      landscape: true,
+      preferCSSPageSize: true,
+      margin: { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+    res.set('Content-Type', 'application/pdf');
+    res.set(
+      'Content-Disposition',
+      `inline; filename="${sessions[0].teacher_name.replace(/[^\w.-]+/g, '_')}_schedule.pdf"`
+    );
+    return res.send(buffer);
+  } catch (error) {
+    return handleError(res, error, 'exporting my schedule PDF');
+  }
+};
+
+const ICS_DAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+
+const icsEscape = (v) => String(v || '').replace(/([\;,])/g, '\\$1').replace(/\n/g, '\\n');
+
+/** Floating local date-time (`YYYYMMDDTHHMMSS`) — no timezone, so a period
+ *  stays at its wall-clock time in whatever calendar app imports it. */
+const icsLocal = (date, minutes) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T${pad(h)}${pad(m)}00`;
+};
+
+/** First date on or after `from` that falls on ISO weekday `day`. */
+const firstOnOrAfter = (from, day) => {
+  const d = new Date(from);
+  d.setDate(d.getDate() + ((day - isoDay(d) + 7) % 7));
+  return d;
+};
+
+// GET /my-schedule/ics — the caller's week as recurring calendar events,
+// bounded by the school year and with closed days excluded.
+const getMyScheduleIcs = async (req, res) => {
+  try {
+    const school = req.user.school;
+    const yearId = req.schoolYear?.schoolYearId || null;
+    const [sessionsQ, yearQ] = await Promise.all([
+      db.query(q.selectMySessions, [req.user.userId, school, yearId]),
+      yearId
+        ? db.query(
+            'SELECT label, start_date, end_date FROM school_years WHERE school_year_id = $1',
+            [yearId]
+          )
+        : db.query(
+            'SELECT label, start_date, end_date FROM school_years WHERE school = $1 AND is_active LIMIT 1',
+            [school]
+          ),
+    ]);
+    const sessions = sessionsQ.rows;
+    if (sessions.length === 0) {
+      return fail(res, 404, 'You have no sessions in the published schedule');
+    }
+    const year = yearQ.rows[0];
+    if (!year) {
+      return fail(res, 400, 'No school year is configured, so the recurrence cannot be bounded');
+    }
+
+    const yearStart = new Date(year.start_date);
+    const yearEnd = new Date(year.end_date);
+    const closedDates = expandClosureDates(
+      await selectClosures(school, yearId, isoDate(yearStart), isoDate(yearEnd))
+    );
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//School Mule//Schedule//EN',
+      'CALSCALE:GREGORIAN',
+      `X-WR-CALNAME:${icsEscape(`My Schedule ${year.label}`)}`,
+    ];
+
+    for (const s of sessions) {
+      const first = firstOnOrAfter(yearStart, s.day_of_week);
+      if (first > yearEnd) continue;
+
+      // One EXDATE per closed day that would otherwise land on this period.
+      const exdates = [];
+      const cursor = new Date(first);
+      while (cursor <= yearEnd) {
+        if (closedDates.has(isoDate(cursor))) exdates.push(icsLocal(cursor, s.start_min));
+        cursor.setDate(cursor.getDate() + 7);
+      }
+
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:${s.session_id}@schoolmule`,
+        `DTSTAMP:${stamp}`,
+        `DTSTART:${icsLocal(first, s.start_min)}`,
+        `DTEND:${icsLocal(first, s.end_min)}`,
+        `RRULE:FREQ=WEEKLY;BYDAY=${ICS_DAYS[s.day_of_week - 1]};UNTIL=${icsLocal(yearEnd, 1439)}`,
+        `SUMMARY:${icsEscape(`${s.course_name} · ${s.class_group_name}`)}`
+      );
+      if (exdates.length) lines.push(`EXDATE:${exdates.join(',')}`);
+      if (s.room_name) lines.push(`LOCATION:${icsEscape(s.room_name)}`);
+      lines.push('END:VEVENT');
+    }
+    lines.push('END:VCALENDAR');
+
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="my-schedule.ics"');
+    return res.send(`${lines.join('\r\n')}\r\n`);
+  } catch (error) {
+    return handleError(res, error, 'exporting my schedule calendar');
   }
 };
 
@@ -1195,6 +1468,8 @@ module.exports = {
   deleteSchedule,
   publishSchedule,
   getMySchedule,
+  getMySchedulePdf,
+  getMyScheduleIcs,
   getSchedulePdf,
   mapMaterializedSession,
 };

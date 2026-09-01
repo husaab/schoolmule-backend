@@ -828,3 +828,19 @@ ALTER TABLE agenda_custom_pages
 
 ALTER TABLE agenda_custom_pages
   ADD COLUMN IF NOT EXISTS excluded_pages JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- ─── Schedule Planner v6 (from schedule_planner_v6_migration.sql) ───────
+
+CREATE TABLE IF NOT EXISTS planner_schedule_fixed_blocks (
+  snapshot_block_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  schedule_id        UUID NOT NULL REFERENCES planner_schedules(schedule_id) ON DELETE CASCADE,
+  school             school NOT NULL,
+  school_id          UUID REFERENCES schools(school_id),
+  class_group_ids    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  label              VARCHAR(255) NOT NULL,
+  day_of_week        SMALLINT NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
+  start_min          SMALLINT NOT NULL CHECK (start_min BETWEEN 0 AND 1439),
+  end_min            SMALLINT NOT NULL CHECK (end_min > start_min AND end_min <= 1440),
+  school_year_id     UUID REFERENCES school_years(school_year_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_psfb_schedule ON planner_schedule_fixed_blocks(schedule_id);
