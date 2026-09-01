@@ -188,8 +188,49 @@ function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters,
   return { clause: conds.join('\n        AND '), params };
 }
 
+// The SELECT list shared by the list, export and import-scope queries, so all
+// three see the same submission shape. The imported student's name comes from a
+// scalar subquery rather than a JOIN, which keeps every column reference in the
+// WHERE/ORDER BY clauses below unqualified and therefore unambiguous.
+const SUBMISSION_SELECT = `*,
+      (SELECT name FROM students
+        WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name`;
+
+/**
+ * Composes a complete submissions query's WHERE and ORDER BY with one correctly
+ * ordered param list.
+ *
+ * buildSubmissionsSort numbers its own binds from $1, so they have to be shifted
+ * past form_id ($1) and the WHERE params before the two clauses can share a
+ * param array. That arithmetic is easy to get subtly wrong and every call site
+ * needs it identically, so it lives here rather than being repeated.
+ *
+ * Returns { whereClause, orderClause, params, nextParamIndex } where
+ * `nextParamIndex` is the $n a caller should use for its first extra bind
+ * (LIMIT, OFFSET, ...).
+ */
+function buildSubmissionsQuery(formId, fields, filters, sorts, useExportDefault = false) {
+  const { clause: whereClause, params: whereParams } = buildSubmissionsWhere(fields, filters);
+  const { clause: rawOrderClause, params: orderParams } = buildSubmissionsSort(fields, sorts, useExportDefault);
+
+  const shift = 1 + whereParams.length;
+  const orderClause = rawOrderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
+
+  const params = [formId, ...whereParams, ...orderParams];
+  return {
+    whereClause,
+    orderClause,
+    params,
+    // Params for the WHERE alone, for a matching COUNT(*) query.
+    countParams: [formId, ...whereParams],
+    nextParamIndex: params.length + 1,
+  };
+}
+
 module.exports = {
   UUID_REGEX,
+  SUBMISSION_SELECT,
+  buildSubmissionsQuery,
   buildFieldSortClause,
   findGradeField,
   findStudentNameField,

@@ -6,8 +6,8 @@ const multer = require('multer');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const {
-  buildSubmissionsSort,
-  buildSubmissionsWhere,
+  buildSubmissionsQuery,
+  SUBMISSION_SELECT,
   parseSorts,
   parseFieldFilters,
   parseImportState,
@@ -442,48 +442,28 @@ const getSubmissions = async (req, res) => {
 
     const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
 
-    // Build dynamic WHERE (form_id = $1, then filter params) and ORDER BY.
-    const { clause: whereClause, params: whereParams } = buildSubmissionsWhere(fields, {
-      status: filterStatus,
-      dateFrom,
-      dateTo,
-      fieldFilters,
-      importState,
-    });
-    const { clause: orderClause, params: orderParams } = buildSubmissionsSort(fields, sorts, false);
+    const { whereClause, orderClause, params, countParams, nextParamIndex } =
+      buildSubmissionsQuery(formId, fields, {
+        status: filterStatus,
+        dateFrom,
+        dateTo,
+        fieldFilters,
+        importState,
+      }, sorts);
 
-    // Final param order: [formId, ...whereParams, ...orderParams, limit, offset].
-    // buildSubmissionsSort placed its params at $1, $2, ... — shift them past
-    // form_id ($1) plus the where params.
-    const shift = 1 + whereParams.length;
-    const shiftedOrderClause = orderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
-
-    const limitIdx = shift + orderParams.length + 1;
-    const offsetIdx = limitIdx + 1;
-
-    // The scalar subquery (rather than a JOIN) keeps every column reference in
-    // the shared WHERE/ORDER BY clauses unqualified and unambiguous.
     const sql = `
-      SELECT *,
-        (SELECT name FROM students
-          WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name
+      SELECT ${SUBMISSION_SELECT}
       FROM registration_form_submissions
       WHERE ${whereClause}
-      ORDER BY ${shiftedOrderClause}
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      ORDER BY ${orderClause}
+      LIMIT $${nextParamIndex} OFFSET $${nextParamIndex + 1}
     `;
 
-    const { rows } = await db.query(sql, [
-      formId,
-      ...whereParams,
-      ...orderParams,
-      parseInt(limit, 10),
-      offset,
-    ]);
+    const { rows } = await db.query(sql, [...params, parseInt(limit, 10), offset]);
 
     // Count uses the same WHERE so pagination.total reflects field filters.
     const countSql = `SELECT COUNT(*) FROM registration_form_submissions WHERE ${whereClause}`;
-    const { rows: countRows } = await db.query(countSql, [formId, ...whereParams]);
+    const { rows: countRows } = await db.query(countSql, countParams);
 
     return res.status(200).json({
       status: 'success',
@@ -545,7 +525,7 @@ const updateSubmissionAnswers = async (req, res) => {
     }
 
     // Look up the submission (and confirm it exists) to get its form_id.
-    const { rows: subRows } = await db.query(registrationQueries.selectSubmissionById, [submissionId]);
+    const { rows: subRows } = await db.query(registrationQueries.selectSubmissionById, [submissionId, school]);
     if (subRows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
@@ -646,30 +626,23 @@ const exportSubmissions = async (req, res) => {
     // Get field definitions for column headers
     const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
 
-    // Build dynamic WHERE + ORDER BY (explicit sort wins; otherwise Grade ASC, Name ASC)
-    const { clause: whereClause, params: whereParams } = buildSubmissionsWhere(fields, {
-      status: filterStatus,
-      dateFrom,
-      dateTo,
-      fieldFilters,
-      importState,
-    });
-    const { clause: orderClause, params: orderParams } = buildSubmissionsSort(
+    // Explicit sort wins; otherwise Grade ASC, Name ASC.
+    const { whereClause, orderClause, params } = buildSubmissionsQuery(
+      formId,
       fields,
+      { status: filterStatus, dateFrom, dateTo, fieldFilters, importState },
       sorts,
       true, // useExportDefault — multi-column Grade+Name when no explicit sort
     );
 
-    const shift = 1 + whereParams.length;
-    const shiftedOrderClause = orderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
-
     const sql = `
-      SELECT * FROM registration_form_submissions
+      SELECT ${SUBMISSION_SELECT}
+      FROM registration_form_submissions
       WHERE ${whereClause}
-      ORDER BY ${shiftedOrderClause}
+      ORDER BY ${orderClause}
     `;
 
-    const { rows: submissions } = await db.query(sql, [formId, ...whereParams, ...orderParams]);
+    const { rows: submissions } = await db.query(sql, params);
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Submissions');

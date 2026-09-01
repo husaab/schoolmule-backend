@@ -14,7 +14,7 @@
 const importQueries = require('../../queries/registrationImport.queries');
 const registrationQueries = require('../../queries/registration.queries');
 const { classifyBatch } = require('./classify');
-const { buildSubmissionsWhere, buildSubmissionsSort } = require('../submissionFilters');
+const { buildSubmissionsQuery, SUBMISSION_SELECT } = require('../submissionFilters');
 
 // Hard ceiling on one import. Well above the largest real form (Al Haadi's
 // biggest is 133) but low enough that a single transaction stays quick.
@@ -29,8 +29,8 @@ const MAX_IMPORT_ROWS = 1000;
  *                                                     — everything matching the
  *                                                       page's current filters
  *
- * Filtered mode reuses buildSubmissionsWhere, the exact same builder the
- * submissions list and CSV export use, so "import all matching filters"
+ * Filtered mode goes through buildSubmissionsQuery, the exact same composer
+ * the submissions list and CSV export use, so "import all matching filters"
  * operates on precisely the rows the admin is looking at.
  */
 async function resolveScope(client, { formId, school, scope, fields }) {
@@ -41,29 +41,29 @@ async function resolveScope(client, { formId, school, scope, fields }) {
     return rows;
   }
 
-  const { clause: whereClause, params: whereParams } = buildSubmissionsWhere(fields, {
-    status: scope?.status,
-    dateFrom: scope?.dateFrom,
-    dateTo: scope?.dateTo,
-    fieldFilters: scope?.fieldFilters,
-    importState: scope?.importState,
-  });
-  const { clause: orderClause, params: orderParams } = buildSubmissionsSort(fields, scope?.sorts, false);
+  const { whereClause, orderClause, params, nextParamIndex } = buildSubmissionsQuery(
+    formId,
+    fields,
+    {
+      status: scope?.status,
+      dateFrom: scope?.dateFrom,
+      dateTo: scope?.dateTo,
+      fieldFilters: scope?.fieldFilters,
+      importState: scope?.importState,
+    },
+    scope?.sorts,
+  );
 
-  const shift = 1 + whereParams.length;
-  const shiftedOrder = orderClause.replace(/\$(\d+)/g, (_, n) => `$${parseInt(n, 10) + shift}`);
-  const limitIdx = shift + orderParams.length + 1;
-
+  // One over the cap, so the caller can tell "exactly at the limit" from
+  // "more than the limit" and warn instead of silently truncating.
   const sql = `
-    SELECT *,
-      (SELECT name FROM students
-        WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name
+    SELECT ${SUBMISSION_SELECT}
     FROM registration_form_submissions
     WHERE ${whereClause}
-    ORDER BY ${shiftedOrder}
-    LIMIT $${limitIdx}
+    ORDER BY ${orderClause}
+    LIMIT $${nextParamIndex}
   `;
-  const { rows } = await client.query(sql, [formId, ...whereParams, ...orderParams, MAX_IMPORT_ROWS + 1]);
+  const { rows } = await client.query(sql, [...params, MAX_IMPORT_ROWS + 1]);
   return rows;
 }
 
@@ -191,14 +191,13 @@ async function runExecute(db, {
       }
 
       if (row.action === 'update') {
-        const updated = await target.applyUpdate(client, row.matchedEntityId, row.diff);
-        if (!updated) {
-          results.push({ submissionId: row.submissionId, action: 'skip', reason: 'Nothing left to fill in' });
-          continue;
-        }
-
+        // Claim the submission BEFORE writing. A create has to write first
+        // (there is no student id to claim with until the row exists, hence the
+        // delete-on-loss above), but an update already knows its target, so
+        // claiming first means a lost race writes nothing at all rather than
+        // leaving fields changed by an import that reports itself as skipped.
         const { rows: claimed } = await client.query(importQueries.markSubmissionImported, [
-          row.submissionId, updated.student_id, userId, school,
+          row.submissionId, row.matchedEntityId, userId, school,
         ]);
         if (claimed.length === 0) {
           results.push({
@@ -206,6 +205,15 @@ async function runExecute(db, {
             action: 'skip',
             reason: 'Imported by someone else while this import was running',
           });
+          continue;
+        }
+
+        const updated = await target.applyUpdate(client, row.matchedEntityId, row.diff);
+        if (!updated) {
+          // Nothing to write after all — release the claim so the submission
+          // isn't left marked as imported by a no-op.
+          await client.query(importQueries.clearSubmissionImport, [row.submissionId, school]);
+          results.push({ submissionId: row.submissionId, action: 'skip', reason: 'Nothing left to fill in' });
           continue;
         }
         await client.query(importQueries.setStudentSourceSubmission, [updated.student_id, row.submissionId]);
