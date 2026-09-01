@@ -42,6 +42,33 @@ const parentPortalQueries = {
     WHERE rcf.student_id = $1
     ORDER BY rcf.term, c.subject
   `,
+
+  /**
+   * When this parent last looked at each of their children's marks.
+   *
+   * Drives the dashboard's NEW badge. The comparison against published_at
+   * happens on the server, not in the browser, so a wrong client clock
+   * can't misreport what's new. A NULL means the parent has never opened
+   * the dashboard, in which case everything published counts as new.
+   *
+   * Params: $1 parent_id
+   */
+  selectLastSeenByParent: `
+    SELECT student_id, last_seen_at
+    FROM parent_students
+    WHERE parent_id = $1
+  `,
+
+  /**
+   * Mark every child of this parent as seen, clearing the NEW badges.
+   * Params: $1 parent_id
+   */
+  markParentPublicationsSeen: `
+    UPDATE parent_students
+    SET last_seen_at = NOW()
+    WHERE parent_id = $1
+    RETURNING last_seen_at
+  `,
 };
 
 module.exports = parentPortalQueries;

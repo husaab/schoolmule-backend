@@ -8,6 +8,7 @@ const userRoutes = require("./routes/user.routes");
 const studentRoutes = require("./routes/student.routes")
 const classRoutes = require("./routes/class.routes")
 const assessmentRoutes = require("./routes/assessment.routes")
+const assessmentPublishRoutes = require("./routes/assessmentPublish.routes")
 const teacherRoutes = require("./routes/teacher.routes")
 const studentAssessmentRoutes = require("./routes/studentAssessment.routes")
 const attendanceRoutes = require("./routes/attendance.routes")
@@ -85,6 +86,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/classes", classRoutes);
 app.use("/api/assessments", assessmentRoutes);
+app.use("/api/assessment-publications", assessmentPublishRoutes);
 app.use("/api/teachers", teacherRoutes);
 app.use('/api/studentAssessments', studentAssessmentRoutes);
 app.use("/api/attendance", attendanceRoutes);

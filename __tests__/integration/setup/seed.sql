@@ -844,3 +844,54 @@ CREATE TABLE IF NOT EXISTS planner_schedule_fixed_blocks (
   school_year_id     UUID REFERENCES school_years(school_year_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_psfb_schedule ON planner_schedule_fixed_blocks(schedule_id);
+
+-- ─── Assessment Publishing (from assessment_publish_migration.sql) ─────
+
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS published_by UUID REFERENCES users(user_id);
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS publication_batch_id UUID;
+ALTER TABLE assessments ADD COLUMN IF NOT EXISTS parent_comment TEXT;
+CREATE INDEX IF NOT EXISTS idx_assessments_class_published ON assessments(class_id, is_published);
+
+CREATE TABLE IF NOT EXISTS assessment_publication_batches (
+  batch_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  class_id              UUID NOT NULL REFERENCES classes(class_id) ON DELETE CASCADE,
+  school                school NOT NULL,
+  action                VARCHAR(10) NOT NULL CHECK (action IN ('publish', 'unpublish')),
+  assessment_ids        UUID[] NOT NULL,
+  batch_comment         TEXT,
+  triggered_by          UUID REFERENCES users(user_id),
+  student_warning_count INTEGER NOT NULL DEFAULT 0,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_assessment_publication_batches_class
+  ON assessment_publication_batches(class_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS assessment_publication_emails (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id        UUID NOT NULL REFERENCES assessment_publication_batches(batch_id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  sent_by         UUID REFERENCES users(user_id),
+  email_addresses JSONB NOT NULL,
+  assessment_ids  UUID[] NOT NULL,
+  school          school NOT NULL,
+  status          VARCHAR(10) NOT NULL DEFAULT 'sent'
+                    CHECK (status IN ('sent', 'failed', 'skipped')),
+  error_message   TEXT,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_assessment_publication_emails_batch
+  ON assessment_publication_emails(batch_id);
+
+CREATE TABLE IF NOT EXISTS ai_weekly_summaries (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id   UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  week_start   DATE NOT NULL,
+  content      TEXT NOT NULL,
+  model        TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (student_id, week_start)
+);
+
+ALTER TABLE parent_students ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;

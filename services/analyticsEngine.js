@@ -18,8 +18,13 @@
 
 const db = require('../config/database');
 const q = require('../queries/analytics.queries');
+const stats = require('../utils/statsUtils');
 const { calculateStudentGrade } = require('../utils/gradeCalculator');
-const { computeClassPctForStudent } = require('./studentViewEvaluator');
+const {
+  computeClassPctForStudent,
+  computeAssessmentForStudent,
+  buildScoreLookup,
+} = require('./studentViewEvaluator');
 
 const VALID_ENGINES = ['null_skip', 'null_zero'];
 const DEFAULT_ENGINE = 'null_skip';
@@ -105,10 +110,54 @@ function countWorkStatus(assessments, studentRows) {
 }
 
 /**
+ * Prune one class down to the assessments a parent is allowed to see.
+ *
+ * Visible = published assessments ∪ categories with ≥1 published child.
+ *
+ * That second clause is load-bearing, not a nicety. Both grade engines
+ * reach a category's children only by first finding the category in the
+ * top-level list (`filter(a => !a.parent_assessment_id)`) and then
+ * filtering children off it. Drop a category whose child is published and
+ * that child becomes structurally unreachable — it silently vanishes from
+ * finalPct AND from countWorkStatus, with no error anywhere. Keeping the
+ * category also gives partial category publishing for free: the rollup is
+ * computed from just the published children's weights.
+ *
+ * Pruning happens BEFORE computePct/countWorkStatus run, so the class
+ * percentage is genuinely recomputed over the published subset rather
+ * than display-filtered. Both engines normalise by the sum of weights in
+ * the array they are handed, so neither needs to know this happened.
+ */
+function prunePublishedOnly(cls) {
+  const publishedIds = new Set(
+    cls.assessments.filter((a) => a.is_published).map((a) => a.assessment_id),
+  );
+  const visibleIds = new Set(publishedIds);
+
+  for (const a of cls.assessments) {
+    if (!a.is_parent) continue;
+    const hasPublishedChild = cls.assessments.some(
+      (c) => c.parent_assessment_id === a.assessment_id && publishedIds.has(c.assessment_id),
+    );
+    if (hasPublishedChild) visibleIds.add(a.assessment_id);
+  }
+
+  cls.assessments = cls.assessments.filter((a) => visibleIds.has(a.assessment_id));
+  for (const stu of cls.students.values()) {
+    stu.rows = stu.rows.filter((r) => visibleIds.has(r.assessment_id));
+  }
+}
+
+/**
  * Group the flat SQL rows into the AnalyticsMatrix shape and run the
  * grade engine over every (student, class) pair.
+ *
+ * publishedOnly restricts the matrix to parent-visible work (see
+ * prunePublishedOnly). It is opt-in: teacher analytics, the admin
+ * dashboard and report cards pass nothing and get the full matrix,
+ * unchanged.
  */
-function buildMatrixFromRows(rows, termId, engine) {
+function buildMatrixFromRows(rows, termId, engine, { publishedOnly = false } = {}) {
   const classes = new Map(); // classId -> class record
 
   for (const r of rows) {
@@ -139,6 +188,9 @@ function buildMatrixFromRows(rows, termId, engine) {
         parent_assessment_id: r.parent_assessment_id,
         date: r.assessment_date,
         sort_order: r.sort_order,
+        is_published: r.is_published,
+        parent_comment: r.parent_comment,
+        published_at: r.published_at,
       });
     }
 
@@ -160,6 +212,7 @@ function buildMatrixFromRows(rows, termId, engine) {
   const students = new Map(); // studentId -> cross-class record
   for (const cls of classes.values()) {
     delete cls._assessmentIds;
+    if (publishedOnly) prunePublishedOnly(cls);
     for (const stu of cls.students.values()) {
       stu.finalPct = computePct(engine, cls.assessments, stu.rows);
       const ws = countWorkStatus(cls.assessments, stu.rows);
@@ -194,6 +247,94 @@ function buildMatrixFromRows(rows, termId, engine) {
 }
 
 /**
+ * One student's full per-class breakdown, in API shape.
+ *
+ * Extracted from parentPortal.controller so the parent grades endpoint and
+ * the AI weekly summary read identical numbers from one implementation.
+ *
+ * Category (is_parent) rows carry rollupPct — their weighted average over
+ * graded children — computed by the shared null-skip helper rather than
+ * re-derived. Without it a category row looks ungraded (categories have no
+ * student_assessments row of their own, so score is always null) and reads
+ * as missing work to a parent.
+ *
+ * Returns null when the student is not in the matrix at all.
+ */
+function getStudentClassBreakdown(matrix, studentId) {
+  const cross = matrix.students.get(studentId);
+  if (!cross) return null;
+
+  const classes = [];
+  const missingWork = [];
+
+  for (const enrolled of cross.classes) {
+    const cls = matrix.classes.get(enrolled.classId);
+    const stu = cls.students.get(studentId);
+    const scoreLookup = buildScoreLookup(stu.rows);
+    const byId = new Map(cls.assessments.map((a) => [a.assessment_id, a]));
+
+    // Mean of the class's non-null finalPcts (null-skip aware).
+    const peerPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
+
+    classes.push({
+      classId: cls.classId,
+      subject: cls.subject,
+      teacherName: cls.teacherName,
+      finalPct: stats.round1(stu.finalPct),
+      classAvg: peerPcts.length ? stats.round1(stats.mean(peerPcts)) : null,
+      missingCount: stu.missingCount,
+      excludedCount: stu.excludedCount,
+      assessmentScores: stu.rows.map((r) => {
+        const assessment = byId.get(r.assessment_id);
+        const isParent = Boolean(r.is_parent);
+        const rollup =
+          isParent && assessment
+            ? computeAssessmentForStudent(assessment, cls.assessments, scoreLookup)
+            : null;
+
+        return {
+          assessmentId: r.assessment_id,
+          name: r.assessment_name,
+          date: r.assessment_date,
+          score: r.score == null ? null : parseFloat(r.score),
+          maxScore: r.max_score == null ? null : parseFloat(r.max_score),
+          weightPoints: r.weight_points == null ? null : parseFloat(r.weight_points),
+          isExcluded: Boolean(r.is_excluded),
+          isParent,
+          parentAssessmentId: r.parent_assessment_id,
+          // Categories have no raw score — this is their weighted rollup
+          // over graded children, or null when none are graded yet.
+          rollupPct: rollup && rollup.isGraded ? stats.round1(rollup.pct) : null,
+          parentComment: r.parent_comment || null,
+          publishedAt: r.published_at || null,
+        };
+      }),
+    });
+
+    for (const a of stu.missingAssessments) {
+      missingWork.push({
+        classId: cls.classId,
+        subject: cls.subject,
+        assessmentId: a.assessment_id,
+        assessmentName: a.name,
+        assessmentDate: a.date,
+        weightPoints: a.weight_points == null ? null : parseFloat(a.weight_points),
+        isParent: Boolean(a.is_parent),
+      });
+    }
+  }
+
+  return {
+    studentId: cross.studentId,
+    studentName: cross.studentName,
+    gradeLevel: cross.gradeLevel,
+    overallAvg: overallAvgForStudent(cross),
+    classes,
+    missingWork,
+  };
+}
+
+/**
  * Overall average across a student's classes: mean of non-null finalPcts.
  * Returns null when the student has no graded work anywhere.
  */
@@ -205,10 +346,14 @@ function overallAvgForStudent(crossRecord) {
 
 /**
  * Fetch (or reuse cached) analytics matrix for a school + term + engine.
+ *
+ * publishedOnly (parent portal only) restricts the matrix to assessments
+ * teachers have published, and is cached separately from the full matrix
+ * so the two never bleed into each other.
  */
-async function buildAnalyticsMatrix(school, termId, engine) {
+async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = false } = {}) {
   const eng = normalizeEngine(engine);
-  const key = `${school}:${termId}:${eng}`;
+  const key = `${school}:${termId}:${eng}:${publishedOnly ? 'pub' : 'all'}`;
   const cached = matrixCache.get(key);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.matrix;
@@ -218,7 +363,7 @@ async function buildAnalyticsMatrix(school, termId, engine) {
     termId === ALL_TERMS
       ? await db.query(q.selectAnalyticsMatrixAllTerms, [school])
       : await db.query(q.selectAnalyticsMatrix, [school, termId]);
-  const matrix = buildMatrixFromRows(rows, termId, eng);
+  const matrix = buildMatrixFromRows(rows, termId, eng, { publishedOnly });
   matrixCache.set(key, { matrix, timestamp: Date.now() });
   return matrix;
 }
@@ -284,7 +429,11 @@ async function buildAiSnapshot(school, termId, engine) {
 
 function invalidateCache(school, termId, engine) {
   if (school && termId && engine) {
-    matrixCache.delete(`${school}:${termId}:${engine}`);
+    // Both variants: a key carries a :pub/:all suffix since the parent
+    // portal got its own published-only matrix, so deleting the bare
+    // 3-part key would match nothing at all.
+    matrixCache.delete(`${school}:${termId}:${engine}:all`);
+    matrixCache.delete(`${school}:${termId}:${engine}:pub`);
     return;
   }
   for (const key of matrixCache.keys()) {
@@ -297,6 +446,7 @@ module.exports = {
   buildAiSnapshot,
   getAttendanceMap,
   overallAvgForStudent,
+  getStudentClassBreakdown,
   invalidateCache,
   normalizeEngine,
   DEFAULT_ENGINE,

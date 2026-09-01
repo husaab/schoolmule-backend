@@ -35,6 +35,9 @@ const analyticsQueries = {
       a.parent_assessment_id,
       a.date                  AS assessment_date,
       a.sort_order,
+      a.is_published,
+      a.parent_comment,
+      a.published_at,
       sa.score,
       CASE WHEN sea.assessment_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_excluded
     FROM class_students AS cs
@@ -84,6 +87,9 @@ const analyticsQueries = {
       a.parent_assessment_id,
       a.date                  AS assessment_date,
       a.sort_order,
+      a.is_published,
+      a.parent_comment,
+      a.published_at,
       sa.score,
       CASE WHEN sea.assessment_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_excluded
     FROM class_students AS cs

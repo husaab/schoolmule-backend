@@ -25,6 +25,9 @@ function matrixRow(overrides = {}) {
     sort_order: 1,
     score: 80,
     is_excluded: false,
+    is_published: true,
+    parent_comment: null,
+    published_at: '2025-10-02T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -192,5 +195,207 @@ describe('buildAiSnapshot', () => {
     expect(s.attendancePct).toBe(90);
     expect(s.lowestSubject).toBe('Science');
     expect(s.lowestPct).toBeCloseTo(40);
+  });
+});
+
+describe('publishedOnly (parent-visible matrix)', () => {
+  // Two standalones worth 50 pts each: a1 graded 80%, a2 graded 40%.
+  // Unfiltered that averages to 60%.
+  const rows = [
+    matrixRow({ assessment_id: 'a1', score: 80, is_published: true }),
+    matrixRow({ assessment_id: 'a2', assessment_name: 'Quiz 2', score: 40, is_published: false }),
+  ];
+
+  it('defaults to off — the full matrix is unchanged', () => {
+    const withoutOption = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const explicitlyOff = engine.buildMatrixFromRows(rows, 't1', 'null_skip', {
+      publishedOnly: false,
+    });
+    expect(withoutOption.classes.get('c1').students.get('s1').finalPct).toBeCloseTo(60);
+    expect(explicitlyOff.classes.get('c1').students.get('s1').finalPct).toBeCloseTo(60);
+  });
+
+  it('recomputes finalPct over the published subset, not just hiding rows', () => {
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true });
+    const stu = matrix.classes.get('c1').students.get('s1');
+    // a2's 40% is gone AND its 50 pts leave the denominator -> 80%, not 60%.
+    expect(stu.finalPct).toBeCloseTo(80);
+    expect(stu.rows).toHaveLength(1);
+    expect(matrix.classes.get('c1').assessments).toHaveLength(1);
+  });
+
+  it('does the same for the null_zero engine', () => {
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_zero', { publishedOnly: true });
+    expect(matrix.classes.get('c1').students.get('s1').finalPct).toBeCloseTo(80);
+  });
+
+  it('does not count unpublished work as missing', () => {
+    const withMissing = [
+      matrixRow({ assessment_id: 'a1', score: 80, is_published: true }),
+      matrixRow({ assessment_id: 'a2', score: null, is_published: false }),
+    ];
+    const parentView = engine.buildMatrixFromRows(withMissing, 't1', 'null_skip', {
+      publishedOnly: true,
+    });
+    const teacherView = engine.buildMatrixFromRows(withMissing, 't1', 'null_skip');
+    expect(parentView.classes.get('c1').students.get('s1').missingCount).toBe(0);
+    expect(teacherView.classes.get('c1').students.get('s1').missingCount).toBe(1);
+  });
+
+  // The structural-inclusion rule. Both engines reach a category's children
+  // only by finding the category in the top-level list first, so dropping an
+  // unpublished category would make its published child unreachable — it
+  // would silently vanish from finalPct with no error anywhere.
+  describe('structural inclusion of categories', () => {
+    const categoryRows = [
+      matrixRow({
+        assessment_id: 'cat',
+        assessment_name: 'Quizzes',
+        is_parent: true,
+        weight_points: 100,
+        max_score: null,
+        score: null,
+        is_published: false, // category itself never explicitly published
+      }),
+      matrixRow({
+        assessment_id: 'kid1',
+        assessment_name: 'Quiz 1',
+        parent_assessment_id: 'cat',
+        weight_points: 10,
+        score: 90,
+        is_published: true,
+      }),
+      matrixRow({
+        assessment_id: 'kid2',
+        assessment_name: 'Quiz 2',
+        parent_assessment_id: 'cat',
+        weight_points: 10,
+        score: 50,
+        is_published: false,
+      }),
+    ];
+
+    it('keeps an unpublished category alive when a child is published', () => {
+      const matrix = engine.buildMatrixFromRows(categoryRows, 't1', 'null_skip', {
+        publishedOnly: true,
+      });
+      const cls = matrix.classes.get('c1');
+      const ids = cls.assessments.map((a) => a.assessment_id);
+      expect(ids).toContain('cat');
+      expect(ids).toContain('kid1');
+      expect(ids).not.toContain('kid2');
+      // Rollup over the published child only: 90%, not (90+50)/2.
+      expect(cls.students.get('s1').finalPct).toBeCloseTo(90);
+    });
+
+    it('drops a category once none of its children are published', () => {
+      const nonePublished = categoryRows.map((r) => ({ ...r, is_published: false }));
+      const matrix = engine.buildMatrixFromRows(nonePublished, 't1', 'null_skip', {
+        publishedOnly: true,
+      });
+      const cls = matrix.classes.get('c1');
+      expect(cls.assessments).toHaveLength(0);
+      expect(cls.students.get('s1').finalPct).toBeNull();
+    });
+  });
+});
+
+describe('getStudentClassBreakdown', () => {
+  it('returns null for a student who is not in the matrix', () => {
+    const matrix = engine.buildMatrixFromRows([matrixRow()], 't1', 'null_skip');
+    expect(engine.getStudentClassBreakdown(matrix, 'nobody')).toBeNull();
+  });
+
+  it('gives a category its rollup percentage instead of a null score', () => {
+    const rows = [
+      matrixRow({
+        assessment_id: 'cat',
+        assessment_name: 'Quizzes',
+        is_parent: true,
+        weight_points: 100,
+        max_score: null,
+        score: null,
+      }),
+      matrixRow({
+        assessment_id: 'kid1',
+        parent_assessment_id: 'cat',
+        weight_points: 10,
+        score: 90,
+      }),
+      matrixRow({
+        assessment_id: 'kid2',
+        parent_assessment_id: 'cat',
+        weight_points: 10,
+        score: 70,
+      }),
+    ];
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
+    const category = breakdown.classes[0].assessmentScores.find((a) => a.assessmentId === 'cat');
+
+    expect(category.score).toBeNull(); // categories have no raw score...
+    expect(category.rollupPct).toBeCloseTo(80); // ...but do have a rollup
+    expect(category.isParent).toBe(true);
+  });
+
+  it('leaves rollupPct null on a category with no graded children', () => {
+    const rows = [
+      matrixRow({
+        assessment_id: 'cat',
+        is_parent: true,
+        weight_points: 100,
+        max_score: null,
+        score: null,
+      }),
+      matrixRow({ assessment_id: 'kid1', parent_assessment_id: 'cat', score: null }),
+    ];
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
+    const category = breakdown.classes[0].assessmentScores.find((a) => a.assessmentId === 'cat');
+    expect(category.rollupPct).toBeNull();
+  });
+
+  it('flags category rows in missingWork so the parent portal can filter them', () => {
+    const rows = [
+      matrixRow({
+        assessment_id: 'cat',
+        is_parent: true,
+        weight_points: 100,
+        max_score: null,
+        score: null,
+      }),
+      matrixRow({ assessment_id: 'kid1', parent_assessment_id: 'cat', score: null }),
+    ];
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
+    expect(breakdown.missingWork).toHaveLength(1);
+    expect(breakdown.missingWork[0].isParent).toBe(true);
+  });
+});
+
+describe('invalidateCache with the publishedOnly key', () => {
+  it('clears both the full and published-only variants by exact key', async () => {
+    mockQueryResponse([matrixRow()]);
+    const full = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
+    mockQueryResponse([matrixRow()]);
+    const parentView = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip', {
+      publishedOnly: true,
+    });
+    expect(db.query).toHaveBeenCalledTimes(2); // separate cache entries
+
+    // The exact-match branch must know about the :pub/:all suffix — a bare
+    // 3-part key would silently match nothing and leave both entries stale.
+    engine.invalidateCache('SCH', 't1', 'null_skip');
+
+    mockQueryResponse([matrixRow()]);
+    const refetchedFull = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
+    mockQueryResponse([matrixRow()]);
+    const refetchedParent = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip', {
+      publishedOnly: true,
+    });
+
+    expect(refetchedFull).not.toBe(full);
+    expect(refetchedParent).not.toBe(parentView);
+    expect(db.query).toHaveBeenCalledTimes(4);
   });
 });

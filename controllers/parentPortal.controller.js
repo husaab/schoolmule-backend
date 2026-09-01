@@ -16,6 +16,7 @@ const parentStudentQueries = require('../queries/parentStudent.queries');
 const termQueries = require('../queries/term.queries');
 const progressReportQueries = require('../queries/progressReports.queries');
 const schoolCalendarQueries = require('../queries/schoolCalendar.queries');
+const aiWeeklySummary = require('../services/aiWeeklySummary.service');
 const { academicYearToRange } = require('../utils/agendaCalendar');
 
 // ────────────────────────────────────────────────────────────────────
@@ -59,11 +60,12 @@ async function resolveTerm(req) {
   return { termId: row.term_id, row };
 }
 
-/** Per-class average: mean of student finalPcts (null-skip aware). */
-function classAvgPct(cls) {
-  const pcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
-  return pcts.length ? stats.round1(stats.mean(pcts)) : null;
-}
+// Parents only ever see published work, and unpublished assessments are
+// excluded from their averages entirely — the matrix is pruned before the
+// grade engine runs, so finalPct is genuinely recomputed over the published
+// subset rather than display-filtered. Teacher-facing consumers of the same
+// engine pass nothing and are unaffected.
+const PARENT_VIEW = { publishedOnly: true };
 
 const mapEventToResponse = (event) => ({
   eventId: event.event_id,
@@ -128,7 +130,7 @@ const getSummary = async (req, res) => {
     let attendance = new Map();
     if (termId) {
       [matrix, attendance] = await Promise.all([
-        engine.buildAnalyticsMatrix(school, termId, eng),
+        engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW),
         engine.getAttendanceMap(school, termId),
       ]);
     }
@@ -209,54 +211,14 @@ const getStudentGrades = async (req, res) => {
     }
 
     const [matrix, attendance] = await Promise.all([
-      engine.buildAnalyticsMatrix(school, termId, eng),
+      engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW),
       engine.getAttendanceMap(school, termId),
     ]);
 
-    const cross = matrix.students.get(studentId);
-    if (!cross) {
+    // Shared with the AI weekly summary, so both read identical numbers.
+    const breakdown = engine.getStudentClassBreakdown(matrix, studentId);
+    if (!breakdown) {
       return res.status(200).json({ status: 'success', data: emptyGrades(studentId, termId, eng) });
-    }
-
-    const overallAvg = engine.overallAvgForStudent(cross);
-
-    const classes = [];
-    const missingWork = [];
-    for (const enrolled of cross.classes) {
-      const cls = matrix.classes.get(enrolled.classId);
-      const stu = cls.students.get(studentId);
-
-      classes.push({
-        classId: cls.classId,
-        subject: cls.subject,
-        teacherName: cls.teacherName,
-        finalPct: stats.round1(stu.finalPct),
-        classAvg: classAvgPct(cls),
-        missingCount: stu.missingCount,
-        excludedCount: stu.excludedCount,
-        assessmentScores: stu.rows.map((r) => ({
-          assessmentId: r.assessment_id,
-          name: r.assessment_name,
-          date: r.assessment_date,
-          score: r.score == null ? null : parseFloat(r.score),
-          maxScore: r.max_score == null ? null : parseFloat(r.max_score),
-          weightPoints: r.weight_points == null ? null : parseFloat(r.weight_points),
-          isExcluded: Boolean(r.is_excluded),
-          isParent: Boolean(r.is_parent),
-          parentAssessmentId: r.parent_assessment_id,
-        })),
-      });
-
-      for (const a of stu.missingAssessments) {
-        missingWork.push({
-          classId: cls.classId,
-          subject: cls.subject,
-          assessmentId: a.assessment_id,
-          assessmentName: a.name,
-          assessmentDate: a.date,
-          weightPoints: a.weight_points == null ? null : parseFloat(a.weight_points),
-        });
-      }
     }
 
     const att = attendance.get(studentId) || null;
@@ -264,21 +226,21 @@ const getStudentGrades = async (req, res) => {
     return res.status(200).json({
       status: 'success',
       data: {
-        studentId: cross.studentId,
-        studentName: cross.studentName,
-        gradeLevel: cross.gradeLevel,
+        studentId: breakdown.studentId,
+        studentName: breakdown.studentName,
+        gradeLevel: breakdown.gradeLevel,
         termId,
         engine: eng,
         attendance: att
           ? { presentDays: att.presentDays, totalDays: att.totalDays, pct: att.pct }
           : null,
         overall: {
-          avg: stats.round1(overallAvg),
-          classCount: cross.classes.length,
-          missingCount: missingWork.length,
+          avg: stats.round1(breakdown.overallAvg),
+          classCount: breakdown.classes.length,
+          missingCount: breakdown.missingWork.length,
         },
-        classes,
-        missingWork,
+        classes: breakdown.classes,
+        missingWork: breakdown.missingWork,
       },
     });
   } catch (error) {
@@ -434,10 +396,162 @@ const getCalendar = async (req, res) => {
   }
 };
 
+// ────────────────────────────────────────────────────────────────────
+// GET /api/parent-portal/recent-publications?limit=
+// Newest published marks across every linked child, for the dashboard.
+//
+// Built from the published-only matrix rather than raw SQL so a category
+// carries its rollup percentage — a category has no student_assessments
+// row of its own, so a score-based query would drop it entirely.
+// ────────────────────────────────────────────────────────────────────
+const getRecentPublications = async (req, res) => {
+  const { school, userId } = req.user;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 8, 50);
+
+  try {
+    const eng = engine.normalizeEngine(req.query.engine);
+    const { termId } = await resolveTerm(req);
+
+    const [{ rows: linkRows }, { rows: seenRows }] = await Promise.all([
+      db.query(parentStudentQueries.selectStudentsByParentId, [
+        userId,
+        req.schoolYear?.schoolYearId ?? null,
+      ]),
+      db.query(parentPortalQueries.selectLastSeenByParent, [userId]),
+    ]);
+
+    const children = linkRows.filter((r) => r.school === school);
+    if (!termId || children.length === 0) {
+      return res.status(200).json({ status: 'success', data: { items: [], newCount: 0 } });
+    }
+
+    const lastSeenByStudent = new Map(seenRows.map((r) => [r.student_id, r.last_seen_at]));
+    const matrix = await engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW);
+
+    const items = [];
+    for (const child of children) {
+      const breakdown = engine.getStudentClassBreakdown(matrix, child.student_id);
+      if (!breakdown) continue;
+
+      const lastSeen = lastSeenByStudent.get(child.student_id);
+      const lastSeenTime = lastSeen ? new Date(lastSeen).getTime() : null;
+
+      for (const cls of breakdown.classes) {
+        for (const a of cls.assessmentScores) {
+          if (!a.publishedAt) continue;
+          if (a.parentAssessmentId) continue; // the category represents its children
+          if (a.isExcluded) continue;
+
+          const pct = a.isParent
+            ? a.rollupPct
+            : a.score != null && a.maxScore
+              ? stats.round1((a.score / a.maxScore) * 100)
+              : null;
+          if (pct == null) continue; // nothing to report yet
+
+          const publishedTime = new Date(a.publishedAt).getTime();
+          items.push({
+            studentId: child.student_id,
+            childName: child.student_name,
+            classId: cls.classId,
+            subject: cls.subject,
+            assessmentId: a.assessmentId,
+            assessmentName: a.name,
+            score: a.score,
+            maxScore: a.maxScore,
+            pct,
+            comment: a.parentComment,
+            publishedAt: a.publishedAt,
+            isNew: lastSeenTime == null || publishedTime > lastSeenTime,
+          });
+        }
+      }
+    }
+
+    items.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    const trimmed = items.slice(0, limit);
+
+    return res.status(200).json({
+      status: 'success',
+      data: { items: trimmed, newCount: trimmed.filter((i) => i.isNew).length },
+    });
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return res.status(400).json({ status: 'failed', message: error.message });
+    }
+    logger.error('Error fetching recent publications:', error);
+    return res
+      .status(500)
+      .json({ status: 'failed', message: 'Error fetching recent publications' });
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/parent-portal/recent-publications/seen
+// Clears the NEW badges for every child linked to this parent.
+// ────────────────────────────────────────────────────────────────────
+const markPublicationsSeen = async (req, res) => {
+  try {
+    const { rows } = await db.query(parentPortalQueries.markParentPublicationsSeen, [
+      req.user.userId,
+    ]);
+    return res.status(200).json({
+      status: 'success',
+      data: { seenAt: rows[0]?.last_seen_at || new Date().toISOString() },
+    });
+  } catch (error) {
+    logger.error('Error marking publications seen:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error updating seen state' });
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────
+// GET /api/parent-portal/students/:studentId/weekly-summary
+//
+// Always 200s. When generation fails or no OpenAI key is configured the
+// payload carries content: null / unavailable: true, and the dashboard
+// simply renders without the card.
+// ────────────────────────────────────────────────────────────────────
+const getWeeklySummary = async (req, res) => {
+  const { school } = req.user;
+  const { studentId } = req.params;
+
+  try {
+    const eng = engine.normalizeEngine(req.query.engine);
+    const { termId } = await resolveTerm(req);
+
+    const summary = await aiWeeklySummary.getOrGenerateWeeklySummary({
+      school,
+      studentId,
+      termId,
+      engineName: eng,
+    });
+
+    return res.status(200).json({ status: 'success', data: { studentId, ...summary } });
+  } catch (error) {
+    // The dashboard must never break over a missing summary.
+    logger.error('Error building weekly AI summary:', error);
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        studentId,
+        content: null,
+        weekStart: null,
+        weekEnd: null,
+        generatedAt: null,
+        unavailable: true,
+      },
+    });
+  }
+};
+
 module.exports = {
   getSummary,
   getStudentGrades,
   getStudentAttendance,
   getStudentFeedback,
   getCalendar,
+  getRecentPublications,
+  markPublicationsSeen,
+  getWeeklySummary,
 };

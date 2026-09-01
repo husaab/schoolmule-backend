@@ -40,7 +40,12 @@ const q = require('../queries/studentView.queries');
 // Returns the student's % in the class, or `null` if they have zero graded
 // assessments in this class (in which case the class is excluded from their
 // across-class average).
-function computeClassPctForStudent(assessments, scoreRowsForStudent) {
+/**
+ * Build the { assessment_id -> { score, isExcluded } } lookup that the
+ * per-assessment math below reads from. Exported so callers that evaluate
+ * several assessments for the same student build it only once.
+ */
+function buildScoreLookup(scoreRowsForStudent) {
   const scoreLookup = {};
   for (const row of scoreRowsForStudent) {
     scoreLookup[row.assessment_id] = {
@@ -48,43 +53,85 @@ function computeClassPctForStudent(assessments, scoreRowsForStudent) {
       isExcluded: Boolean(row.is_excluded),
     };
   }
+  return scoreLookup;
+}
 
+/**
+ * One top-level assessment's result for one student, null-skip semantics.
+ *
+ * This is the single source of truth for "what did this student get on
+ * this assessment" — computeClassPctForStudent below calls it per
+ * top-level assessment, and so do the publish email, the publish
+ * ungraded-count preview, and the parent portal's category rollup. Do not
+ * re-derive this math anywhere else.
+ *
+ * Returns:
+ *   isGraded  — false when the assessment contributes no weight (excluded,
+ *               ungraded standalone, or a category with no graded children).
+ *               Callers must skip these entirely, never treat them as 0.
+ *   pct       — 0-100, or null when !isGraded.
+ *   earned/max— raw points for a standalone (what an email shows as
+ *               "18/20"); null for a category, which has no raw score of
+ *               its own — only a weighted rollup of its children.
+ *   weight    — this assessment's weight_points, i.e. how much the class
+ *               total is scaled by when it is graded.
+ */
+function computeAssessmentForStudent(assessment, allAssessments, scoreLookup) {
+  const weight = parseFloat(assessment.weight_points) || 0;
+  const notGraded = { isGraded: false, pct: null, earned: null, max: null, weight };
+
+  const sd = scoreLookup[assessment.assessment_id];
+  if (sd?.isExcluded) return notGraded;
+
+  if (assessment.is_parent) {
+    const children = allAssessments.filter(
+      (c) => c.parent_assessment_id === assessment.assessment_id,
+    );
+    let childEarned = 0;
+    let childMax = 0;
+    for (const c of children) {
+      const csd = scoreLookup[c.assessment_id];
+      if (csd?.isExcluded) continue;
+      if (csd?.score == null) continue; // skip ungraded children
+      const max = parseFloat(c.max_score) || 100;
+      const cw = parseFloat(c.weight_points) || 0;
+      const pct = max > 0 ? Math.min(csd.score / max, 1) : 0;
+      childEarned += pct * cw;
+      childMax += cw;
+    }
+    if (childMax === 0) return notGraded; // no graded children → skip parent
+    return {
+      isGraded: true,
+      pct: (childEarned / childMax) * 100,
+      earned: null, // a category has no raw score, only a rollup
+      max: null,
+      weight,
+    };
+  }
+
+  if (sd?.score == null) return notGraded; // skip ungraded standalone
+  const max = parseFloat(assessment.max_score) || 100;
+  return {
+    isGraded: true,
+    pct: max > 0 ? (sd.score / max) * 100 : 0,
+    earned: sd.score,
+    max,
+    weight,
+  };
+}
+
+function computeClassPctForStudent(assessments, scoreRowsForStudent) {
+  const scoreLookup = buildScoreLookup(scoreRowsForStudent);
   const topLevel = assessments.filter((a) => !a.parent_assessment_id);
 
   let earned = 0;       // sum of (pct × weight) for graded assessments
   let activeWeight = 0; // sum of weights of graded assessments
 
   for (const a of topLevel) {
-    const sd = scoreLookup[a.assessment_id];
-    if (sd?.isExcluded) continue;
-
-    const weight = parseFloat(a.weight_points) || 0;
-
-    if (a.is_parent) {
-      const children = assessments.filter((c) => c.parent_assessment_id === a.assessment_id);
-      let childEarned = 0;
-      let childMax = 0;
-      for (const c of children) {
-        const csd = scoreLookup[c.assessment_id];
-        if (csd?.isExcluded) continue;
-        if (csd?.score == null) continue; // skip ungraded children
-        const max = parseFloat(c.max_score) || 100;
-        const cw = parseFloat(c.weight_points) || 0;
-        const pct = max > 0 ? Math.min(csd.score / max, 1) : 0;
-        childEarned += pct * cw;
-        childMax += cw;
-      }
-      if (childMax === 0) continue; // no graded children → skip parent
-      const parentPct = (childEarned / childMax) * 100;
-      earned += (parentPct * weight) / 100;
-      activeWeight += weight;
-    } else {
-      if (sd?.score == null) continue; // skip ungraded standalone
-      const max = parseFloat(a.max_score) || 100;
-      const pct = max > 0 ? (sd.score / max) * 100 : 0;
-      earned += (pct * weight) / 100;
-      activeWeight += weight;
-    }
+    const result = computeAssessmentForStudent(a, assessments, scoreLookup);
+    if (!result.isGraded) continue;
+    earned += (result.pct * result.weight) / 100;
+    activeWeight += result.weight;
   }
 
   if (activeWeight === 0) return null;
@@ -396,4 +443,8 @@ module.exports = {
   // null_skip engine. (The Al Haadi T2 report card uses the gradebook
   // missing-zero engine instead, so it agrees with the gradebook.)
   computeClassPctForStudent,
+  // per-assessment null-skip math, shared with the publish email/preview
+  // and the parent portal's category rollup
+  computeAssessmentForStudent,
+  buildScoreLookup,
 };

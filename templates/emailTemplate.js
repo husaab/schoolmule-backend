@@ -313,6 +313,104 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
   `;
 }
 
+// Shared school footer. The progress-report and certificate templates each
+// carry their own inline copy of this; new templates use this one rather
+// than adding a third.
+function schoolFooterHTML(schoolInfo, schoolName) {
+  if (!schoolInfo) {
+    return `
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
+        Powered by School Mule
+      </p>
+    `;
+  }
+
+  let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">`;
+  footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
+  footer += `<p style="margin: 0 0 4px 0;"><strong>${schoolInfo.name || schoolName}</strong></p>`;
+
+  if (schoolInfo.address) {
+    footer += `<p style="margin: 0 0 2px 0;">${schoolInfo.address}</p>`;
+  }
+  if (schoolInfo.phone && schoolInfo.email) {
+    footer += `<p style="margin: 0 0 2px 0;">📞 ${schoolInfo.phone}  |  📧 ${schoolInfo.email}</p>`;
+  } else if (schoolInfo.phone) {
+    footer += `<p style="margin: 0 0 2px 0;">📞 ${schoolInfo.phone}</p>`;
+  } else if (schoolInfo.email) {
+    footer += `<p style="margin: 0 0 2px 0;">📧 ${schoolInfo.email}</p>`;
+  }
+
+  footer += `</div>`;
+  return footer;
+}
+
+/**
+ * "New grades posted" digest — one per guardian per child per publish batch.
+ *
+ * assessments: [{ name, scoreLabel, pctLabel, comment }] — already formatted
+ * by the caller, which owns the grade math (a category has no raw score, only
+ * a rollup percentage, so scoreLabel may be empty).
+ */
+function getAssessmentPublishedEmailHTML({
+  studentName,
+  className,
+  assessments,
+  batchComment,
+  schoolName,
+  schoolInfo,
+  portalUrl,
+}) {
+  const rows = assessments
+    .map(
+      (a) => `
+    <tr>
+      <td style="padding: 10px 8px; border-bottom: 1px solid #eee;">
+        <strong>${escapeHtml(a.name)}</strong>
+        ${a.comment
+          ? `<div style="color: #666; font-size: 13px; margin-top: 4px;">${escapeHtml(a.comment).replace(/\n/g, '<br>')}</div>`
+          : ''}
+      </td>
+      <td style="padding: 10px 8px; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
+        ${a.scoreLabel ? `${escapeHtml(a.scoreLabel)} ` : ''}<span style="color: #888;">${escapeHtml(a.pctLabel)}</span>
+      </td>
+    </tr>`,
+    )
+    .join('');
+
+  const plural = assessments.length > 1 ? 'assessments have' : 'assessment has';
+
+  return `
+    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
+                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+      <h2 style="color: #00ACC1;">New Grades for ${escapeHtml(studentName)} 📊</h2>
+      <p>Dear Parent/Guardian,</p>
+      <p>The following ${plural} been graded and shared with you in
+         <strong>${escapeHtml(className)}</strong>:</p>
+      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+        ${rows}
+      </table>
+      ${batchComment
+        ? `
+        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
+          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Message from the teacher:</h3>
+          <p style="margin-bottom: 0; line-height: 1.5;">${escapeHtml(batchComment).replace(/\n/g, '<br>')}</p>
+        </div>
+      `
+        : ''}
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${portalUrl}"
+           style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none;
+                  border-radius: 5px; font-weight: bold; display: inline-block;">
+          View in Parent Portal
+        </a>
+      </div>
+      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
+      ${schoolFooterHTML(schoolInfo, schoolName)}
+    </div>
+  `;
+}
+
 module.exports = {
   getVerificationEmailHTML,
   getConfirmedEmailHTML,
@@ -327,6 +425,7 @@ module.exports = {
   getProgressReportEmailHTML,
   getReportCardEmailHTML,
   getCertificateEmailHTML,
+  getAssessmentPublishedEmailHTML,
   getDefaultEmailBody,
   resolveEmailBody
 };
