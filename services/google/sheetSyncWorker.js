@@ -23,13 +23,39 @@ const MAX_ATTEMPTS = 6;
 
 let timer = null;
 let draining = false;
+// Set when the outbox tables are missing. A worker that cannot possibly
+// succeed should say so once and stand down, not log an error every tick.
+let disabledReason = null;
+
+// Postgres: relation does not exist.
+const UNDEFINED_TABLE = '42P01';
 
 /**
  * Process one job, if any is due.
  * @returns the number of jobs handled (0 or 1)
  */
 async function drainOnce() {
-  const { rows } = await db.query(queries.claimNextJob, []);
+  if (disabledReason) return 0;
+
+  let rows;
+  try {
+    ({ rows } = await db.query(queries.claimNextJob, []));
+  } catch (error) {
+    if (error?.code === UNDEFINED_TABLE) {
+      // The sheets migration has not been applied to this database. Stop
+      // rather than repeating this every 5 seconds; a restart after the
+      // migration brings the worker back.
+      disabledReason = 'google_sheets_sync_migration.sql has not been applied';
+      stopWorker();
+      logger.error(
+        { migration: 'google_sheets_sync_migration.sql' },
+        'Sheet sync worker disabled: outbox tables are missing. Apply the migration and restart.',
+      );
+      return 0;
+    }
+    throw error;
+  }
+
   const job = rows[0];
   if (!job) return 0;
 
@@ -69,6 +95,15 @@ async function drainAll(limit = 25) {
 function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   if (timer) return;
 
+  // Nothing to sync if the integration was never configured, so don't poll at
+  // all. Saves a query every 5s on deployments that don't use the feature.
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    logger.info('Sheet sync worker not started: Google OAuth is not configured');
+    return;
+  }
+
+  disabledReason = null;
+
   timer = setInterval(async () => {
     // Skip a tick rather than overlapping runs; the next one picks up anyway.
     if (draining) return;
@@ -95,4 +130,11 @@ function stopWorker() {
   }
 }
 
-module.exports = { startWorker, stopWorker, drainOnce, drainAll, MAX_ATTEMPTS };
+module.exports = {
+  startWorker,
+  stopWorker,
+  drainOnce,
+  drainAll,
+  MAX_ATTEMPTS,
+  isDisabled: () => disabledReason,
+};

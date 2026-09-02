@@ -93,8 +93,57 @@ describe('sheetSyncWorker.drainAll', () => {
   });
 });
 
+describe('missing migration', () => {
+  it('disables itself after one error instead of logging every 5 seconds', async () => {
+    // Reproduces deploying the backend before applying the migration: the
+    // worker cannot possibly succeed, so it must stand down rather than
+    // erroring on every tick forever.
+    await jest.isolateModulesAsync(async () => {
+      const freshDb = require('../../../__mocks__/config/database');
+      const fresh = require('../../../../services/google/sheetSyncWorker');
+
+      const undefinedTable = Object.assign(new Error('relation "sheet_sync_jobs" does not exist'), { code: '42P01' });
+      freshDb.query.mockRejectedValueOnce(undefinedTable);
+
+      await expect(fresh.drainOnce()).resolves.toBe(0);
+      expect(fresh.isDisabled()).toMatch(/migration/);
+
+      // A second call must not hit the database again.
+      const callsBefore = freshDb.query.mock.calls.length;
+      await fresh.drainOnce();
+      expect(freshDb.query.mock.calls.length).toBe(callsBefore);
+    });
+  });
+
+  it('still surfaces other database errors rather than swallowing them', async () => {
+    await jest.isolateModulesAsync(async () => {
+      const freshDb = require('../../../__mocks__/config/database');
+      const fresh = require('../../../../services/google/sheetSyncWorker');
+
+      freshDb.query.mockRejectedValueOnce(Object.assign(new Error('connection terminated'), { code: '57P01' }));
+      await expect(fresh.drainOnce()).rejects.toThrow('connection terminated');
+      expect(fresh.isDisabled()).toBeNull();
+    });
+  });
+});
+
 describe('worker lifecycle', () => {
-  afterEach(() => worker.stopWorker());
+  const savedClientId = process.env.GOOGLE_CLIENT_ID;
+  beforeEach(() => { process.env.GOOGLE_CLIENT_ID = 'client-id'; });
+  afterEach(() => {
+    worker.stopWorker();
+    if (savedClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = savedClientId;
+  });
+
+  it('does not poll at all when Google is not configured', () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    const spy = jest.spyOn(global, 'setInterval');
+    worker.startWorker(60000);
+    // Deployments that never use the feature shouldn't pay a query every 5s.
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 
   it('is not started merely by importing the module', () => {
     // Every test suite requires server.js; a poller started at import would

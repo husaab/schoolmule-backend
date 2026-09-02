@@ -4,8 +4,6 @@
 // all the decision-making lives in sheetReconciler, so this module can stay a
 // direct translation of a plan into API calls.
 
-const { google } = require('googleapis');
-
 /** Converts a 0-based column index to a spreadsheet letter: 0 → A, 26 → AA. */
 function columnLetter(index) {
   let n = index;
@@ -28,8 +26,13 @@ function blockRange(tabName, width) {
   return `'${tabName.replace(/'/g, "''")}'!A:${columnLetter(width - 1)}`;
 }
 
-const sheetsApi = (auth) => google.sheets({ version: 'v4', auth });
-const driveApi = (auth) => google.drive({ version: 'v3', auth });
+// Lazy for the same reason as googleAuth: keep the ~230ms googleapis load off
+// every test suite and off boot.
+// eslint-disable-next-line global-require
+const googleApi = () => require('googleapis').google;
+
+const sheetsApi = (auth) => googleApi().sheets({ version: 'v4', auth });
+const driveApi = (auth) => googleApi().drive({ version: 'v3', auth });
 
 /** Reads the tab's current owned-block values as a grid. */
 async function readGrid(auth, { spreadsheetId, tabName, width }) {

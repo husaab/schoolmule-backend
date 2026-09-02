@@ -8,7 +8,6 @@
 // for is non-sensitive, which is what lets the app be published without
 // sensitive-scope verification.
 
-const { google } = require('googleapis');
 const db = require('../../config/database');
 const logger = require('../../logger');
 const queries = require('../../queries/googleSheets.queries');
@@ -40,12 +39,21 @@ class NeedsReconnectError extends Error {
   }
 }
 
+// Required lazily rather than at module load. `googleapis` costs ~230ms to
+// require, and server.js is imported by every one of the backend's test
+// suites — none of which touch Google. Loading it on first use keeps that cost
+// off the suites, and off boot for deployments that never link a sheet.
+function googleApi() {
+  // eslint-disable-next-line global-require
+  return require('googleapis').google;
+}
+
 function oauthClient() {
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } = process.env;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
     throw new Error('Google OAuth is not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI)');
   }
-  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
+  return new (googleApi().auth.OAuth2)(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
 }
 
 /**
@@ -77,7 +85,7 @@ async function exchangeCode(code) {
   }
 
   client.setCredentials(tokens);
-  const { data } = await google.oauth2({ version: 'v2', auth: client }).userinfo.get();
+  const { data } = await googleApi().oauth2({ version: 'v2', auth: client }).userinfo.get();
 
   return { refreshToken: tokens.refresh_token, email: data.email };
 }
