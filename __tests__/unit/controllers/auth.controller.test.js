@@ -409,24 +409,54 @@ describe('POST /api/auth/logout', () => {
 describe('DELETE /api/auth/delete-user', () => {
   const url = '/api/auth/delete-user';
 
-  it('deletes a user account', async () => {
+  it('deletes the authenticated user\'s own account', async () => {
+    const token = mockAdminUser();
     mockQueryResponse([], 1); // rowCount = 1
 
     const res = await request(app)
       .delete(url)
-      .send({ userId: 'some-user-id' });
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.message).toContain('deleted');
   });
 
+  it('rejects an unauthenticated request', async () => {
+    const res = await request(app)
+      .delete(url)
+      .send({ userId: TEST_ADMIN_USER_ID });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('ignores a userId in the body and deletes only the caller', async () => {
+    const token = mockAdminUser();
+    const db = require('../../__mocks__/config/database');
+    mockQueryResponse([], 1);
+
+    const res = await request(app)
+      .delete(url)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ userId: 'someone-elses-account' });
+
+    expect(res.status).toBe(200);
+    // The delete must be scoped to the token's user, never the body's.
+    const deleteCall = db.query.mock.calls.find((c) => /DELETE FROM users/i.test(c[0]));
+    expect(deleteCall).toBeDefined();
+    expect(deleteCall[1]).toEqual([TEST_ADMIN_USER_ID]);
+    expect(deleteCall[1]).not.toContain('someone-elses-account');
+  });
+
   it('returns 404 when user not found', async () => {
+    const token = mockAdminUser();
     mockQueryResponse([], 0); // rowCount = 0
 
     const res = await request(app)
       .delete(url)
-      .send({ userId: 'nonexistent-id' });
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
 
     expect(res.status).toBe(404);
   });

@@ -16,7 +16,7 @@ router.get( "/confirm-email", verifyEmail);
 router.post('/approve-school', verifyUser, approveUserForSchool);
 router.get('/pending-approvals', verifyUser,  getPendingApprovals);
 router.post('/resend-approval-email', verificationEmailLimiter, resendSchoolApprovalEmail);
-router.delete('/delete-user', deleteUserAccount);
+router.delete('/delete-user', verifyUser, deleteUserAccount);
 router.post('/decline-school', verifyUser, declineUserForSchool);
 router.post('/logout', logout);
 

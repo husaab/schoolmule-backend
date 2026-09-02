@@ -430,7 +430,14 @@ const resendSchoolApprovalEmail = async (req, res) => {
 };
 
 const deleteUserAccount = async (req, res) => {
-  const { userId } = req.body;
+  // Self-service only: the account to delete comes from the verified token, never
+  // from the request body. Trusting a body-supplied userId here would let any
+  // authenticated caller delete someone else's account.
+  const userId = req.user?.userId;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, message: "Not authenticated" });
+  }
 
   try {
     const result = await db.query(userQueries.deleteUser, [userId]);

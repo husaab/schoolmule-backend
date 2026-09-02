@@ -5,7 +5,7 @@ jest.mock('resend', () => ({
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser } = require('../../helpers/mockAuth');
-const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+const { mockQueryResponse, mockQueryError, mockTransactionSequence, mockTransactionError } = require('../../helpers/mockDb');
 const { buildAssessmentRow, buildCreateAssessmentBody } = require('../../helpers/factories');
 const { v4: uuidv4 } = require('uuid');
 
@@ -46,6 +46,60 @@ describe('Assessment Controller', () => {
       const res = await authGet(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(404);
       expect(res.body.status).toBe('failed');
+    });
+
+    it('should apply deletes, creates and updates in one transaction', async () => {
+      const updated = buildAssessmentRow({ name: 'Parent' });
+      const created = buildAssessmentRow({ name: 'New child' });
+      // DELETE, INSERT, then the batch UPDATE.
+      mockTransactionSequence([
+        { rows: [] },
+        { rows: [created] },
+        { rows: [updated] },
+      ]);
+
+      const res = await authPatch('/api/assessments/batch').send({
+        deleteIds: [uuidv4()],
+        creates: [{ classId: uuidv4(), name: 'New child', weightPoints: 10 }],
+        updates: [{ assessmentId: updated.assessment_id, name: 'Parent' }],
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.created).toHaveLength(1);
+      expect(res.body.deletedIds).toHaveLength(1);
+    });
+
+    it('should roll back and not commit when a later step fails', async () => {
+      // BEGIN succeeds, the DELETE succeeds, then the INSERT blows up.
+      mockTransactionError(1, 'insert failed', [{ rows: [] }]);
+
+      const res = await authPatch('/api/assessments/batch').send({
+        deleteIds: [uuidv4()],
+        creates: [{ classId: uuidv4(), name: 'New child' }],
+      });
+
+      expect(res.status).toBe(500);
+      const db = require('../../__mocks__/config/database');
+      const issued = db._mockClient.query.mock.calls.map((c) => c[0]);
+      expect(issued).toContain('ROLLBACK');
+      expect(issued).not.toContain('COMMIT');
+    });
+
+    it('should accept a delete-only request with no updates', async () => {
+      mockTransactionSequence([{ rows: [] }]);
+      const res = await authPatch('/api/assessments/batch').send({
+        deleteIds: [uuidv4()],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(0);
+    });
+
+    it('should return 400 when every list is empty', async () => {
+      const res = await authPatch('/api/assessments/batch').send({
+        updates: [], deleteIds: [], creates: [],
+      });
+      expect(res.status).toBe(400);
     });
 
     it('should return 500 on database error', async () => {
@@ -176,7 +230,8 @@ describe('Assessment Controller', () => {
     it('should return 200 on successful batch update', async () => {
       const row1 = buildAssessmentRow({ name: 'A1' });
       const row2 = buildAssessmentRow({ name: 'A2' });
-      mockQueryResponse([row1, row2]);
+      // The endpoint is transactional now: BEGIN -> batch update -> COMMIT.
+      mockTransactionSequence([{ rows: [row1, row2] }]);
       const res = await authPatch('/api/assessments/batch').send({
         updates: [
           { assessmentId: row1.assessment_id, name: 'A1' },
@@ -209,7 +264,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
-      mockQueryError('batch failed');
+      mockTransactionError(0, 'batch failed');
       const res = await authPatch('/api/assessments/batch').send({
         updates: [{ assessmentId: uuidv4(), name: 'Test' }],
       });

@@ -460,19 +460,56 @@ const getChildAssessments = async (req, res) => {
 // 7) PATCH /assessments/batch
 //    → Update multiple assessments at once
 //
-const batchUpdateAssessments = async (req, res) => {
-  const { updates } = req.body
+/** Shared row -> API shape mapper for assessments. */
+const mapAssessmentRow = (a) => ({
+  assessmentId:       a.assessment_id,
+  classId:            a.class_id,
+  name:               a.name,
+  weightPercent:      parseFloat(a.weight_percent),
+  createdAt:          a.created_at,
+  lastModifiedAt:     a.last_modified_at,
+  parentAssessmentId: a.parent_assessment_id || null,
+  isParent:           a.is_parent === true,
+  sortOrder:          a.sort_order,
+  maxScore:           a.max_score,
+  weightPoints:       a.weight_points,
+  date:               a.date,
+})
 
-  // Validate input
-  if (!Array.isArray(updates) || updates.length === 0) {
+/**
+ * PATCH /assessments/batch
+ *
+ * Applies deletes, creates and updates for a class's assessments as ONE
+ * transaction. Editing a parent used to mean three separate requests from the
+ * client — delete removed children, create new ones, then update the rest — so
+ * a failure partway through left the deletions already committed with nothing
+ * to roll them back. Everything here now commits together or not at all.
+ *
+ * Body: { updates?: [...], deleteIds?: uuid[], creates?: [...] }
+ * All three are optional, but at least one must be non-empty.
+ */
+const batchUpdateAssessments = async (req, res) => {
+  const { updates, deleteIds, creates } = req.body
+
+  const updateList = updates === undefined ? [] : updates
+  const deleteList = deleteIds === undefined ? [] : deleteIds
+  const createList = creates === undefined ? [] : creates
+
+  if (!Array.isArray(updateList) || !Array.isArray(deleteList) || !Array.isArray(createList)) {
+    return res.status(400).json({
+      status: 'failed',
+      message: 'updates, deleteIds and creates must each be an array',
+    })
+  }
+
+  if (updateList.length === 0 && deleteList.length === 0 && createList.length === 0) {
     return res.status(400).json({
       status: 'failed',
       message: 'Updates array is required and must not be empty',
     })
   }
 
-  // Validate each update object
-  for (const update of updates) {
+  for (const update of updateList) {
     if (!update.assessmentId) {
       return res.status(400).json({
         status: 'failed',
@@ -481,44 +518,77 @@ const batchUpdateAssessments = async (req, res) => {
     }
   }
 
-  try {
-    // Extract data for the batch update query
-    const assessmentIds = updates.map(u => u.assessmentId)
-    const names = updates.map(u => u.name || null)
-    const weightPercents = updates.map(u => u.weightPercent || null)
-    const weightPoints = updates.map(u => u.weightPoints || null)
-    const maxScores = updates.map(u => u.maxScore || null)
-    const sortOrders = updates.map(u => u.sortOrder || null)
-    const dates = updates.map(u => u.date || null)
+  for (const create of createList) {
+    if (!create.classId || !create.name) {
+      return res.status(400).json({
+        status: 'failed',
+        message: 'Each create must include classId and name',
+      })
+    }
+  }
 
-    const { rows } = await db.query(
-      assessmentQueries.batchUpdateAssessments,
-      [assessmentIds, names, weightPercents, weightPoints, maxScores, sortOrders, dates]
+  const client = await db.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    // 1) Removals first, so freed-up points are gone before the rest is reweighted.
+    for (const assessmentId of deleteList) {
+      await client.query(assessmentQueries.deleteAssessmentById, [assessmentId])
+    }
+
+    // 2) New children.
+    const createdRows = []
+    for (const c of createList) {
+      const { rows } = await client.query(assessmentQueries.createAssessment, [
+        c.classId,
+        c.name,
+        c.weightPercent ?? null,
+        c.parentAssessmentId ?? null,
+        c.isParent === true,
+        c.sortOrder ?? null,
+        c.maxScore ?? null,
+        c.weightPoints ?? null,
+        c.date ?? null,
+      ])
+      createdRows.push(rows[0])
+    }
+
+    // 3) Updates to whatever remains.
+    let updatedRows = []
+    if (updateList.length > 0) {
+      const { rows } = await client.query(assessmentQueries.batchUpdateAssessments, [
+        updateList.map((u) => u.assessmentId),
+        updateList.map((u) => u.name || null),
+        updateList.map((u) => u.weightPercent || null),
+        updateList.map((u) => u.weightPoints || null),
+        updateList.map((u) => u.maxScore || null),
+        updateList.map((u) => u.sortOrder || null),
+        updateList.map((u) => u.date || null),
+      ])
+      updatedRows = rows
+    }
+
+    await client.query('COMMIT')
+
+    logger.info(
+      `Batch assessment write: ${updatedRows.length} updated, ${createdRows.length} created, ${deleteList.length} deleted`
     )
 
-    logger.info(`Batch updated ${rows.length} assessments`)
     return res.status(200).json({
       status: 'success',
-      data: rows.map((a) => ({
-        assessmentId:       a.assessment_id,
-        classId:            a.class_id,
-        name:               a.name,
-        weightPercent:      parseFloat(a.weight_percent),
-        createdAt:          a.created_at,
-        lastModifiedAt:     a.last_modified_at,
-        parentAssessmentId: a.parent_assessment_id || null,
-        isParent:           a.is_parent === true,
-        sortOrder:          a.sort_order,
-        maxScore:           a.max_score,
-        weightPoints:       a.weight_points,
-        date:               a.date,
-      })),
+      data: updatedRows.map(mapAssessmentRow),
+      created: createdRows.map(mapAssessmentRow),
+      deletedIds: deleteList,
     })
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
     logger.error(error)
     return res
       .status(500)
       .json({ status: 'failed', message: 'Error batch updating assessments' })
+  } finally {
+    client.release()
   }
 }
 
