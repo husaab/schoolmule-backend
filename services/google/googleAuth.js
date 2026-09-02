@@ -3,10 +3,10 @@
 // OAuth for the Google Sheets integration: building the consent URL, exchanging
 // the code, and handing out authorized clients for background syncing.
 //
-// Scope is deliberately just `drive.file` — access to the specific files the
-// user picks or that we create, and nothing else in their Drive. It is a
-// non-sensitive scope, which is what lets the app be published without
-// sensitive-scope verification. Never widen this to `spreadsheets`.
+// Drive access is deliberately just `drive.file` — the specific files the user
+// picks or that we create, and nothing else in their Drive. Every scope we ask
+// for is non-sensitive, which is what lets the app be published without
+// sensitive-scope verification.
 
 const { google } = require('googleapis');
 const db = require('../../config/database');
@@ -14,7 +14,15 @@ const logger = require('../../logger');
 const queries = require('../../queries/googleSheets.queries');
 const { encryptToken, decryptToken } = require('../../utils/tokenCrypto');
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+// drive.file  — the specific files the user picks or that we create.
+// openid + userinfo.email — only to record which Google account connected, so
+// the UI can show "Connected as …". All three are non-sensitive scopes, so the
+// app stays out of sensitive-scope verification. Never add `spreadsheets`.
+const SCOPES = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/drive.file',
+];
 
 /**
  * Raised when Google says the stored grant is dead — revoked by the user,

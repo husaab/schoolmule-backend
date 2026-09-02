@@ -41,9 +41,25 @@ describe('googleAuth', () => {
   });
 
   describe('scope', () => {
-    it('requests drive.file and nothing else', () => {
-      // Widening this would push the app into sensitive-scope verification.
-      expect(SCOPES).toEqual(['https://www.googleapis.com/auth/drive.file']);
+    it('requests drive.file plus only the basic identity scopes', () => {
+      expect(SCOPES).toEqual([
+        'openid',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/drive.file',
+      ]);
+    });
+
+    it('requests no sensitive scope', () => {
+      // `spreadsheets` or full `drive` would push the app into sensitive-scope
+      // verification and gate it behind a Google review.
+      expect(SCOPES).not.toContain('https://www.googleapis.com/auth/spreadsheets');
+      expect(SCOPES).not.toContain('https://www.googleapis.com/auth/drive');
+    });
+
+    it('includes the scope userinfo.get() needs, or exchangeCode fails at runtime', () => {
+      // exchangeCode reads the account email to show "Connected as …"; with
+      // only drive.file that call returns an insufficient-scope error.
+      expect(SCOPES).toContain('https://www.googleapis.com/auth/userinfo.email');
     });
   });
 
