@@ -112,7 +112,20 @@ async function getAuthorizedClient(school) {
   if (connection.status === 'needs_reconnect') throw new NeedsReconnectError();
 
   const client = oauthClient();
-  client.setCredentials({ refresh_token: decryptToken(connection.refresh_token) });
+
+  let refreshToken;
+  try {
+    refreshToken = decryptToken(connection.refresh_token);
+  } catch (error) {
+    // The stored token can't be read — almost always GOOGLE_TOKEN_ENC_KEY
+    // having changed. Functionally identical to a revoked grant: no retry can
+    // fix it, and reconnecting is exactly the remedy, so surface it that way
+    // rather than as a cryptic crypto error the school can do nothing with.
+    await db.query(queries.markConnectionNeedsReconnect, [school]);
+    logger.error({ school, err: error.message }, 'Stored Google token could not be decrypted; reconnect required');
+    throw new NeedsReconnectError();
+  }
+  client.setCredentials({ refresh_token: refreshToken });
 
   try {
     await client.getAccessToken();

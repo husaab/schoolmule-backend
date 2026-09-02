@@ -163,6 +163,17 @@ describe('googleAuth', () => {
       expect(sqls.some((s) => /needs_reconnect/.test(s))).toBe(true);
     });
 
+    it('asks for a reconnect when the stored token cannot be decrypted', async () => {
+      // Happens when GOOGLE_TOKEN_ENC_KEY is rotated. Retrying can never fix
+      // it, and "reconnect" is the actual remedy — so it must not surface as a
+      // raw crypto error the school can do nothing about.
+      mockQueryResponse([connectionRow({ refresh_token: 'not:valid:ciphertext' })]);
+      mockQueryResponse([{ status: 'needs_reconnect' }]);
+
+      await expect(getAuthorizedClient('ALHAADIACADEMY')).rejects.toThrow(NeedsReconnectError);
+      expect(db.query.mock.calls.some(([sql]) => /needs_reconnect/.test(sql))).toBe(true);
+    });
+
     it('rethrows a transient failure unchanged, keeping it retryable', async () => {
       mockQueryResponse([connectionRow()]);
       mockGetAccessToken.mockRejectedValueOnce(new Error('socket hang up'));
