@@ -127,4 +127,9 @@ if (require.main === module) {
       logger.info(`server is running on port ${PORT}`)
       logger.info(`cross origin enabled for ${process.env.CROSS_ORIGIN_URL}`)
   });
+
+  // Drains the Google Sheets sync outbox. Deliberately started here rather
+  // than at module load: every test suite requires this file, and a poller
+  // started on import would leave timers running across the whole suite.
+  require("./services/google/sheetSyncWorker").startWorker();
 }
