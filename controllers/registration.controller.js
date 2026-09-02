@@ -1,6 +1,7 @@
 const db = require('../config/database');
 const registrationQueries = require('../queries/registration.queries');
 const statusQueries = require('../queries/registrationStatus.queries');
+const googleSheetsQueries = require('../queries/googleSheets.queries');
 const logger = require('../logger');
 const supabase = require('../config/supabaseClient');
 const multer = require('multer');
@@ -414,6 +415,19 @@ const upsertFields = async (req, res) => {
   }
 };
 
+
+// Queues a Google Sheets refresh for a form. Best-effort by design: a sheet
+// that briefly lags is far better than an admin action failing because Google
+// or the outbox is unavailable. The enqueue is a no-op for unlinked forms and
+// coalesces when a job is already pending.
+async function queueSheetSync(formId) {
+  try {
+    await db.query(googleSheetsQueries.enqueueJob, [formId]);
+  } catch (error) {
+    logger.warn({ err: error, formId }, 'Could not queue sheet sync');
+  }
+}
+
 // ─── Submissions ────────────────────────────────────────────────────
 
 const getSubmissions = async (req, res) => {
@@ -510,6 +524,7 @@ const updateSubmission = async (req, res) => {
       return res.status(400).json({ status: 'failed', message: 'Invalid status' });
     }
     const { rows } = await db.query(registrationQueries.updateSubmissionStatus, [status, submissionId, req.user.school]);
+    if (rows.length > 0) await queueSheetSync(rows[0].form_id);
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
@@ -591,6 +606,7 @@ const updateSubmissionAnswers = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
+    await queueSheetSync(rows[0].form_id);
     return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0]) });
   } catch (error) {
     logger.error({ err: error }, 'Error updating submission answers');
@@ -605,6 +621,9 @@ const deleteSubmission = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
+    // The row stays in the sheet; the reconciler marks it (deleted) so the
+    // school's notes on that family are not destroyed.
+    await queueSheetSync(rows[0].form_id);
     return res.status(200).json({ status: 'success', message: 'Submission deleted' });
   } catch (error) {
     logger.error({ err: error }, 'Error deleting submission');

@@ -31,6 +31,7 @@ const jkRoutes = require("./routes/jk.routes")
 const skRoutes = require("./routes/sk.routes")
 const registrationRoutes = require("./routes/registration.routes")
 const registrationPublicRoutes = require("./routes/registrationPublic.routes")
+const googleSheetsPublicRoutes = require("./routes/googleSheetsPublic.routes")
 const schedulePublicRoutes = require("./routes/schedulePublic.routes")
 const studentViewRoutes = require("./routes/studentView.routes")
 const analyticsRoutes = require("./routes/analytics.routes")
@@ -70,6 +71,10 @@ app.use(httpLogger);
 app.use("/api/auth", authRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/registration/public", registrationPublicRoutes);
+// Google's OAuth callback lands here with no Authorization header, so it must
+// be mounted ahead of verifyUser. Non-matching /google/* paths fall through to
+// the authenticated registration router below.
+app.use("/api/registration/google", googleSheetsPublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);

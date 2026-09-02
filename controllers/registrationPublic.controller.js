@@ -1,5 +1,6 @@
 const db = require('../config/database');
 const queries = require('../queries/registrationPublic.queries');
+const googleSheetsQueries = require('../queries/googleSheets.queries');
 const logger = require('../logger');
 
 function toCamelForm(row) {
@@ -131,6 +132,15 @@ const submitForm = async (req, res) => {
       JSON.stringify(sanitizedAnswers),
       ipAddress,
     ]);
+
+    // Queue the sheet refresh, but never let it affect the response. A parent
+    // submitting a form must not see a failure because Google is unreachable —
+    // the job row is durable, so the write happens once the outbox drains.
+    try {
+      await db.query(googleSheetsQueries.enqueueJob, [form.form_id]);
+    } catch (error) {
+      logger.warn({ err: error, formId: form.form_id }, 'Could not queue sheet sync');
+    }
 
     return res.status(201).json({
       status: 'success',

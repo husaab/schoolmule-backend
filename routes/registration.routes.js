@@ -3,6 +3,7 @@ const router = express.Router();
 const controller = require('../controllers/registration.controller');
 const importController = require('../controllers/registrationImport.controller');
 const statusController = require('../controllers/registrationStatus.controller');
+const sheetsController = require('../controllers/googleSheets.controller');
 
 // ─── Forms ──────────────────────────────────────────────────────────
 router.get('/forms', controller.getForms);
@@ -26,6 +27,17 @@ router.get('/forms/:formId/submissions/:submissionId', controller.getSubmission)
 router.patch('/submissions/:submissionId/status', controller.updateSubmission);
 router.patch('/submissions/:submissionId/answers', controller.updateSubmissionAnswers);
 router.delete('/submissions/:submissionId', controller.deleteSubmission);
+
+// ─── Google Sheets sync ─────────────────────────────────────────────
+// The OAuth callback is NOT here — Google sends the browser there without a
+// JWT, so it lives in googleSheetsPublic.routes.js, mounted before verifyUser.
+router.get('/google/status', sheetsController.getConnectionStatus);
+router.get('/google/auth-url', sheetsController.getAuthUrl);
+router.delete('/google/connection', sheetsController.disconnect);
+router.get('/forms/:formId/sheet', sheetsController.getSheetLink);
+router.put('/forms/:formId/sheet', sheetsController.linkSheet);
+router.delete('/forms/:formId/sheet', sheetsController.unlinkSheet);
+router.post('/forms/:formId/sheet/sync', sheetsController.syncNow);
 
 // ─── Submission statuses ────────────────────────────────────────────
 // Shared by every form in the school, so these are not nested under a form.

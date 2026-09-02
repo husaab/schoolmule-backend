@@ -11,10 +11,12 @@
 // transaction rather than trusting the preview payload, so a stale preview
 // cannot cause a write the server would not have chosen on its own.
 
+const logger = require('../../logger');
 const importQueries = require('../../queries/registrationImport.queries');
 const registrationQueries = require('../../queries/registration.queries');
 const { classifyBatch } = require('./classify');
 const { buildSubmissionsQuery, SUBMISSION_SELECT } = require('../submissionFilters');
+const googleSheetsQueries = require('../../queries/googleSheets.queries');
 
 // Hard ceiling on one import. Well above the largest real form (Al Haadi's
 // biggest is 133) but low enough that a single transaction stays quick.
@@ -247,6 +249,15 @@ async function runExecute(db, {
     }
 
     await client.query('COMMIT');
+
+    // An import flips statuses to reviewed and links submissions, so the sheet
+    // is now stale. Queued after COMMIT so a sheet problem can never roll back
+    // a successful import.
+    try {
+      await db.query(googleSheetsQueries.enqueueJob, [formId]);
+    } catch (error) {
+      logger.warn({ err: error, formId }, 'Could not queue sheet sync after import');
+    }
 
     return {
       ok: true,
