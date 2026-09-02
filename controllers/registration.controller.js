@@ -1,5 +1,6 @@
 const db = require('../config/database');
 const registrationQueries = require('../queries/registration.queries');
+const statusQueries = require('../queries/registrationStatus.queries');
 const logger = require('../logger');
 const supabase = require('../config/supabaseClient');
 const multer = require('multer');
@@ -499,8 +500,13 @@ const updateSubmission = async (req, res) => {
   try {
     const { submissionId } = req.params;
     const { status } = req.body;
-    const validStatuses = ['new', 'reviewed', 'archived'];
-    if (!validStatuses.includes(status)) {
+
+    // Statuses are per-school and user-editable, so the valid set comes from
+    // the school's vocabulary rather than a hardcoded list.
+    const { rows: known } = await db.query(
+      statusQueries.selectStatusByKey, [req.user.school, status],
+    );
+    if (known.length === 0) {
       return res.status(400).json({ status: 'failed', message: 'Invalid status' });
     }
     const { rows } = await db.query(registrationQueries.updateSubmissionStatus, [status, submissionId, req.user.school]);
