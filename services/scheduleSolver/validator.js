@@ -26,74 +26,107 @@ function overlapTotal(intervals, from, to) {
   return total;
 }
 
-// Spare cap: at most N free period-slots on any day the teacher works. EVERY
-// non-teaching period counts -- including a free first or last period. A teacher
-// who arrives at 9:55 has a spare at 8:55, because that hour is hers either way.
+// Spares are counted in PERIOD SLOTS, not minutes. A school day is a fixed
+// number of teaching periods; a spare is a period in which the teacher has no
+// class. Lunch, snack and prayer sit between periods and are never spares --
+// supervising your class at lunch is work, not free time.
 //
-// Time is not a spare when the teacher is genuinely occupied: school-wide blocks,
-// their own excluded windows, and a group-scoped block (lunch, snack) belonging
-// to a class they teach that day -- a homeroom teacher sitting with her class at
-// lunch is on duty, not free. A group-scoped block for a class she does NOT teach
-// that day is still spare, since she could have taught then.
+// Every empty period counts, including a free first or last one: a teacher whose
+// first class is at 9:55 has a spare at 8:55. `lateStartExempt` waives that for
+// teachers whose hours genuinely begin later.
+//
+// A period is unavailable to a teacher (so neither taught nor spare) when her own
+// excluded windows cover it in every class group's variant of that period.
 // Exported so the JS solver can reject candidates the validator would reject.
-function spareCapViolations(rawInput, sessions) {
+function periodGridByDay(rawInput) {
+  const snap = rawInput.config?.snapMinutes ?? 5;
   const defaultDur = rawInput.config?.defaultCourseDurationMinutes ?? 40;
-  const daysByIso = new Map(rawInput.days.map((d) => [d.day, d]));
+  const grids = new Map(); // day -> Map(classGroupId -> [ {startMin,endMin} ])
+  for (const day of rawInput.days) {
+    const perGroup = new Map();
+    for (const group of rawInput.classGroups) {
+      const blocks = (rawInput.fixedBlocks || []).filter(
+        (b) =>
+          b.day === day.day &&
+          (!Array.isArray(b.classGroupIds) ||
+            b.classGroupIds.length === 0 ||
+            b.classGroupIds.includes(group.classGroupId))
+      );
+      const slots = [];
+      for (const range of day.fillableRanges) {
+        let cursor = Math.ceil(range.startMin / snap) * snap;
+        while (cursor + defaultDur <= range.endMin) {
+          const end = cursor + defaultDur;
+          const clash = blocks.some((b) => cursor < b.endMin && b.startMin < end);
+          if (!clash) {
+            slots.push({ startMin: cursor, endMin: end });
+            cursor = end;                     // greedy: take it, move past it
+          } else {
+            cursor += snap;
+          }
+        }
+      }
+      perGroup.set(group.classGroupId, slots);
+    }
+    grids.set(day.day, perGroup);
+  }
+  return grids;
+}
+
+function spareCapViolations(rawInput, sessions) {
   const out = [];
+  const grids = periodGridByDay(rawInput);
+  const anyGroup = rawInput.classGroups[0]?.classGroupId;
+
   for (const teacher of rawInput.teachers) {
-    const cap = teacher.maxSparesPerDay;
-    if (!Number.isInteger(cap) || cap < 0) continue;
+    const rawCap = teacher.maxSparesPerDay;
+    const rawMin = teacher.minSparesPerDay;
+    const hasCap = Number.isInteger(rawCap) && rawCap >= 0;
+    const hasMin = Number.isInteger(rawMin) && rawMin > 0;
+    if (!hasCap && !hasMin) continue;
+    const cap = hasCap ? rawCap : Number.POSITIVE_INFINITY;
+    const min = hasMin ? rawMin : 0;
+
     const own = sessions.filter((s) => s.teacherId === teacher.teacherId);
     for (const dayIso of [...new Set(own.map((s) => s.day))]) {
       const daySessions = own.filter((s) => s.day === dayIso);
-      if (daySessions.length === 0) continue; // not working -- not a spare day
-      const day = daysByIso.get(dayIso);
-      if (!day) continue;
-      const alwaysBusy = [
-        ...daySessions.map((s) => [s.startMin, s.endMin]),
-        ...(teacher.excludedWindows || [])
-          .filter((w) => w.day === dayIso)
-          .map((w) => [w.startMin, w.endMin]),
-        ...(rawInput.fixedBlocks || [])
-          .filter(
-            (b) =>
-              b.day === dayIso &&
-              (!Array.isArray(b.classGroupIds) || b.classGroupIds.length === 0)
-          )
-          .map((b) => [b.startMin, b.endMin]),
-      ];
+      const perGroup = grids.get(dayIso);
+      if (!perGroup) continue;
+      const slots = perGroup.get(anyGroup) || [];
 
-      // She can only sit with ONE class at lunch, so duty credit comes from a
-      // single class group -- not every group she happens to teach that day.
-      // Take the most generous choice, so a borderline day is never failed
-      // because we picked the wrong class on her behalf.
-      const groupsTaughtToday = [...new Set(daySessions.map((s) => s.classGroupId))];
-      const freeForGroup = (groupId) => {
-        const busy = [
-          ...alwaysBusy,
-          ...(rawInput.fixedBlocks || [])
-            .filter(
-              (b) =>
-                b.day === dayIso &&
-                Array.isArray(b.classGroupIds) &&
-                b.classGroupIds.includes(groupId)
-            )
-            .map((b) => [b.startMin, b.endMin]),
-        ];
-        let mins = 0;
-        for (const range of day.fillableRanges) {
-          mins += range.endMin - range.startMin - overlapTotal(busy, range.startMin, range.endMin);
-        }
-        return mins;
-      };
-      // The whole schedulable day counts, not just first-session to last.
-      const freeMin = Math.min(...groupsTaughtToday.map(freeForGroup));
-      const spares = Math.floor(freeMin / defaultDur);
+      // A period is available unless her exclusions cover it in EVERY group's
+      // variant of that period (different grades break at different times).
+      const exclusions = (teacher.excludedWindows || []).filter((w) => w.day === dayIso);
+      let available = 0;
+      for (let i = 0; i < slots.length; i++) {
+        const variants = [...perGroup.values()].map((v) => v[i]).filter(Boolean);
+        const usable = variants.some(
+          (v) => !exclusions.some((w) => v.startMin < w.endMin && w.startMin < v.endMin)
+        );
+        if (usable) available++;
+      }
+
+      let taught = daySessions.length;
+      if (teacher.lateStartExempt) {
+        // Periods before her first class are hers, so drop them from the count.
+        const firstStart = Math.min(...daySessions.map((s) => s.startMin));
+        const before = slots.filter((v) => v.endMin <= firstStart).length;
+        available -= before;
+      }
+      const spares = Math.max(0, available - taught);
+
       if (spares > cap) {
         out.push(
           violation(
             'SPARE_CAP_VIOLATION',
-            `${teacher.name} has ${spares} spare period(s) on day ${dayIso} (${freeMin} free min across the school day); the limit is ${cap}.`
+            `${teacher.name} has ${spares} free period(s) on day ${dayIso} (teaches ${taught} of ${available}); the limit is ${cap}.`
+          )
+        );
+      } else if (spares < min) {
+        out.push(
+          violation(
+            'SPARE_MIN_VIOLATION',
+            `${teacher.name} has only ${spares} free period(s) on day ${dayIso} (teaches ${taught} of ${available}); at least ${min} required.`
           )
         );
       }

@@ -59,7 +59,7 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, ran
               <div class="session" style="top:${topPct(s.startMin)}%;height:${heightPct(s.startMin, s.endMin)}%;background:${colorFor(s.primaryLabel, SESSION_COLORS)};">
                 <div class="session-name">${escapeHtml(s.primaryLabel)}</div>
                 <div class="session-meta">${toHHMM(s.startMin)}–${toHHMM(s.endMin)}</div>
-                ${s.secondaryLabel ? `<div class="session-meta">${escapeHtml(s.secondaryLabel)}</div>` : ''}
+                ${s.secondaryLabel ? `<div class="session-who">${escapeHtml(s.secondaryLabel)}</div>` : ''}
                 ${s.roomName ? `<div class="session-meta">${escapeHtml(s.roomName)}</div>` : ''}
               </div>`
             )
@@ -108,24 +108,28 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, ran
   .page:last-child { page-break-after: auto; }
   .page-header { display: flex; justify-content: space-between; align-items: baseline;
                  border-bottom: 2px solid #0f766e; padding-bottom: 6px; margin-bottom: 8px; }
-  .school-name { font-size: 15px; font-weight: 700; color: #0f766e; }
-  .schedule-name { font-size: 10px; color: #6b7280; }
-  .page-title { font-size: 18px; font-weight: 700; }
+  .school-name { font-size: 20px; font-weight: 700; color: #0f766e; }
+  .schedule-name { font-size: 13px; color: #6b7280; }
+  .page-title { font-size: 24px; font-weight: 700; }
   .grid { flex: 1; display: flex; min-height: 0; }
-  .ruler { width: 0.7in; display: flex; flex-direction: column; }
+  .ruler { width: 0.9in; display: flex; flex-direction: column; }
   .ruler-body { position: relative; flex: 1; }
   .mark { position: absolute; right: 4px; transform: translateY(-50%); }
-  .mark span { font-size: 7px; color: #6b7280; }
+  .mark span { font-size: 11px; color: #6b7280; }
   .day-col { flex: 1; display: flex; flex-direction: column; border-left: 1px solid #e5e7eb; }
   .day-col:last-child { border-right: 1px solid #e5e7eb; }
-  .day-head { height: 20px; font-size: 10px; font-weight: 600; text-align: center;
-              line-height: 20px; background: #f0fdfa; border-bottom: 1px solid #e5e7eb; }
+  .day-head { height: 28px; font-size: 15px; font-weight: 600; text-align: center;
+              line-height: 28px; background: #f0fdfa; border-bottom: 1px solid #e5e7eb; }
   .day-body { position: relative; flex: 1; background:
               repeating-linear-gradient(to bottom, transparent, transparent 49px, #f3f4f6 50px); }
   .session { position: absolute; left: 2px; right: 2px; border-radius: 3px;
-             border: 1px solid rgba(0,0,0,0.12); padding: 2px 4px; overflow: hidden; }
-  .session-name { font-size: 8px; font-weight: 700; }
-  .session-meta { font-size: 7px; color: #374151; }
+             border: 1px solid rgba(0,0,0,0.12); padding: 2px 5px; overflow: hidden;
+             line-height: 1.18; }
+  .session-name { font-size: 14px; font-weight: 700; }
+  .session-meta { font-size: 11px; color: #4b5563; }
+  /* The teacher (or, in the by-teacher view, the class) is the thing people scan
+     for, so it gets its own weight and size rather than sharing the timestamp's. */
+  .session-who { font-size: 12px; font-weight: 600; color: #111827; }
 </style>
 </head>
 <body>${pageHtml}</body>
