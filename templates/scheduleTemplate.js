@@ -129,7 +129,7 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, ran
   .session-meta { font-size: 11px; color: #4b5563; }
   /* The teacher (or, in the by-teacher view, the class) is the thing people scan
      for, so it gets its own weight and size rather than sharing the timestamp's. */
-  .session-who { font-size: 12px; font-weight: 600; color: #111827; }
+  .session-who { font-size: 11px; font-weight: 600; color: #111827; }
 </style>
 </head>
 <body>${pageHtml}</body>

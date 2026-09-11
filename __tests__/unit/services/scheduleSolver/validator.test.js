@@ -372,7 +372,7 @@ describe('validateCandidate — maxSparesPerDay (free-period counting)', () => {
     // Starts at 08:40 rather than 08:00 -- that first hour is still hers.
     const v = spareCodes(spareInput(0), at(ALL_SIX.slice(1)));
     expect(v).toHaveLength(1);
-    expect(v[0].message).toContain('1 spare period(s)');
+    expect(v[0].message).toContain('1 free period(s)');
   });
 
   it('counts a free LAST period as a spare', () => {
@@ -382,7 +382,7 @@ describe('validateCandidate — maxSparesPerDay (free-period counting)', () => {
   it('fires for a single-session day (five spares)', () => {
     const v = spareCodes(spareInput(2), at([560]));
     expect(v).toHaveLength(1);
-    expect(v[0].message).toContain('5 spare period(s)');
+    expect(v[0].message).toContain('5 free period(s)');
   });
 
   it('does not count school-wide blocked time as a spare', () => {
@@ -397,9 +397,20 @@ describe('validateCandidate — maxSparesPerDay (free-period counting)', () => {
     expect(spareCodes(input, at(ALL_SIX.slice(1)))).toHaveLength(0);
   });
 
-  it('does NOT count the lunch of a class she teaches that day', () => {
+  it('a block on ONE group still leaves the period available via another group', () => {
+    // Grade 1 is at lunch, but Grade 5 is in class -- she could be teaching it,
+    // so the period is genuinely free time for her.
     const input = spareInput(0);
     input.fixedBlocks = [{ label: 'G1 Lunch', day: 1, startMin: 480, endMin: 520, classGroupIds: ['cg-1'] }];
+    const v = spareCodes(input, at(ALL_SIX.slice(1)));
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toContain('teaches 5 of 6');
+  });
+
+  it('a block on EVERY group removes the period from her day', () => {
+    // School-wide: nobody is in class, so it is not a period she could have taught.
+    const input = spareInput(0);
+    input.fixedBlocks = [{ label: 'Assembly', day: 1, startMin: 480, endMin: 520, classGroupIds: [] }];
     expect(spareCodes(input, at(ALL_SIX.slice(1)))).toHaveLength(0);
   });
 
@@ -407,37 +418,6 @@ describe('validateCandidate — maxSparesPerDay (free-period counting)', () => {
     const input = spareInput(0);
     input.fixedBlocks = [{ label: 'G5 Lunch', day: 1, startMin: 480, endMin: 520, classGroupIds: ['cg-2'] }];
     expect(spareCodes(input, at(ALL_SIX.slice(1)))).toHaveLength(1);
-  });
-
-  it('credits only ONE class group of duty — she cannot attend two lunches', () => {
-    // Teaches both grades; two separate lunches exist. Only the better single
-    // choice counts, so exactly one of the two 40-min blocks is duty and the
-    // other stays a spare.
-    const input = spareInput(0);
-    input.courses.push({
-      courseId: 'c-2',
-      classGroupId: 'cg-2',
-      name: 'Science',
-      sessionsPerWeek: 1,
-      durationMinutes: 40,
-      teacherId: 't-1',
-      teacherCandidateIds: null,
-      roomId: null,
-      maxPerDay: 1,
-    });
-    input.fixedBlocks = [
-      { label: 'G1 Lunch', day: 1, startMin: 480, endMin: 520, classGroupIds: ['cg-1'] },
-      { label: 'G5 Lunch', day: 1, startMin: 520, endMin: 560, classGroupIds: ['cg-2'] },
-    ];
-    const sessions = [
-      ...at([600, 640], 'cg-1'),
-      { courseId: 'c-2', sessionIndex: 0, classGroupId: 'cg-2', courseName: 'Science',
-        day: 1, startMin: 680, endMin: 720, teacherId: 't-1', roomId: null, pinned: false },
-    ];
-    // 6 periods, teaches 3. One lunch is duty, the other is a spare -> 2 spares.
-    const v = spareCodes(input, sessions);
-    expect(v).toHaveLength(1);
-    expect(v[0].message).toContain('2 spare period(s)');
   });
 
   it('is inert when maxSparesPerDay is null', () => {
@@ -532,5 +512,79 @@ describe('validateCandidate — maxRepeatDays', () => {
   it('counts a tripled day as one repeat day, not two', () => {
     // maxPerDay would catch the triple; maxRepeatDays only counts the day once.
     expect(codes(1, [[1, 3], [2, 1], [3, 1]])).toHaveLength(0);
+  });
+});
+
+// Regression: a class group that is only open for a period or two (JK/SK run a
+// couple of sessions a week) must not shrink every teacher's period count. The
+// grid reference used to be classGroups[0], so adding a short-day group at the
+// front silently disabled the spare rules for everyone.
+describe('validateCandidate — spare rules vs a short-day class group', () => {
+  const input = (cap) => ({
+    config: { snapMinutes: 5, defaultCourseDurationMinutes: 40 },
+    days: [{ day: 1, fillableRanges: [{ startMin: 480, endMin: 720 }] }],
+    // JK first, and open for exactly one period on this day.
+    fixedBlocks: [
+      { label: 'JK not in session', day: 1, startMin: 480, endMin: 560, classGroupIds: ['cg-jk'] },
+      { label: 'JK not in session', day: 1, startMin: 600, endMin: 720, classGroupIds: ['cg-jk'] },
+    ],
+    teachers: [
+      {
+        teacherId: 't-1',
+        name: 'Ms. X',
+        maxMinutesPerWeek: null,
+        allowedDays: [1],
+        excludedWindows: [],
+        maxSparesPerDay: cap,
+      },
+    ],
+    rooms: [],
+    classGroups: [
+      { classGroupId: 'cg-jk', name: 'JK' },
+      { classGroupId: 'cg-1', name: 'Grade 1' },
+    ],
+    courses: [
+      {
+        courseId: 'c-1',
+        classGroupId: 'cg-1',
+        name: 'Math',
+        sessionsPerWeek: 3,
+        durationMinutes: 40,
+        teacherId: 't-1',
+        teacherCandidateIds: null,
+        roomId: null,
+        maxPerDay: 3,
+      },
+    ],
+    pins: [],
+    periodRules: [],
+  });
+
+  // Teaches 3 of the day's 6 periods -> 3 spares, regardless of JK's short day.
+  const sessions = [480, 520, 560].map((startMin, i) => ({
+    courseId: 'c-1',
+    sessionIndex: i,
+    classGroupId: 'cg-1',
+    courseName: 'Math',
+    day: 1,
+    startMin,
+    endMin: startMin + 40,
+    teacherId: 't-1',
+    roomId: null,
+    pinned: false,
+  }));
+
+  const codes = (cap) =>
+    validateCandidate(input(cap), { sessions }).filter((v) => v.code === 'SPARE_CAP_VIOLATION');
+
+  it('counts the full day, not the short group’s one period', () => {
+    const v = codes(1);
+    expect(v).toHaveLength(1);
+    expect(v[0].message).toContain('3 free period(s)');
+    expect(v[0].message).toContain('teaches 3 of 6');
+  });
+
+  it('passes when the cap actually allows those spares', () => {
+    expect(codes(3)).toHaveLength(0);
   });
 });

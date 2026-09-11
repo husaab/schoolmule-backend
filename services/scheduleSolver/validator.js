@@ -76,7 +76,6 @@ function periodGridByDay(rawInput) {
 function spareCapViolations(rawInput, sessions) {
   const out = [];
   const grids = periodGridByDay(rawInput);
-  const anyGroup = rawInput.classGroups[0]?.classGroupId;
 
   for (const teacher of rawInput.teachers) {
     const rawCap = teacher.maxSparesPerDay;
@@ -92,7 +91,11 @@ function spareCapViolations(rawInput, sessions) {
       const daySessions = own.filter((s) => s.day === dayIso);
       const perGroup = grids.get(dayIso);
       if (!perGroup) continue;
-      const slots = perGroup.get(anyGroup) || [];
+      // Reference grid = the fullest day any group has. Taking an arbitrary
+      // group's would let a short-day group (JK/SK, open only a period or two)
+      // collapse every teacher's period count and silently disable the rule.
+      let slots = [];
+      for (const v of perGroup.values()) if (v.length > slots.length) slots = v;
 
       // A period is available unless her exclusions cover it in EVERY group's
       // variant of that period (different grades break at different times).
