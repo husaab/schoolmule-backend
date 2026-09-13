@@ -122,14 +122,14 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, ran
               line-height: 28px; background: #f0fdfa; border-bottom: 1px solid #e5e7eb; }
   .day-body { position: relative; flex: 1; background:
               repeating-linear-gradient(to bottom, transparent, transparent 49px, #f3f4f6 50px); }
-  .session { position: absolute; left: 2px; right: 2px; border-radius: 3px;
-             border: 1px solid rgba(0,0,0,0.12); padding: 2px 5px; overflow: hidden;
-             line-height: 1.18; }
-  .session-name { font-size: 14px; font-weight: 700; }
-  .session-meta { font-size: 11px; color: #4b5563; }
-  /* The teacher (or, in the by-teacher view, the class) is the thing people scan
-     for, so it gets its own weight and size rather than sharing the timestamp's. */
-  .session-who { font-size: 11px; font-weight: 600; color: #111827; }
+  .session { position: absolute; left: 3px; right: 3px; border-radius: 4px;
+             border: 1px solid rgba(0,0,0,0.12); padding: 5px 7px; overflow: hidden;
+             line-height: 1.3; }
+  .session-name { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+  .session-meta { font-size: 10.5px; color: #4b5563; }
+  /* The teacher (by-class view) or class (by-teacher view). Secondary to the
+     course name, so it sits a notch below it in both size and weight. */
+  .session-who { font-size: 10px; font-weight: 500; color: #374151; margin-top: 2px; }
 </style>
 </head>
 <body>${pageHtml}</body>

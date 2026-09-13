@@ -100,6 +100,47 @@ describe('Integration: GET /api/schedule-planner/schedules/:id/pdf', () => {
     expect(doc.getPageCount()).toBe(2); // Monday + Tuesday
   });
 
+  it('renders a single class page with ?classGroupId=', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const list = await asAdmin('get', '/api/schedule-planner/config');
+    const gid = list.body.data.classGroups.find((g) => g.name === 'Grade 1').classGroupId;
+    const res = await asAdmin('get', `/api/schedule-planner/schedules/${scheduleId}/pdf?classGroupId=${gid}`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const doc = await PDFDocument.load(res.body);
+    expect(doc.getPageCount()).toBe(1); // Grade 1 only
+  });
+
+  it('renders a single teacher page with ?view=teacher&teacherId=', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const list = await asAdmin('get', '/api/schedule-planner/config');
+    const tid = list.body.data.teachers.find((t) => t.displayName === 'Ms. X').plannerTeacherId;
+    const res = await asAdmin('get', `/api/schedule-planner/schedules/${scheduleId}/pdf?view=teacher&teacherId=${tid}`)
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const doc = await PDFDocument.load(res.body);
+    expect(doc.getPageCount()).toBe(1); // Ms. X only
+  });
+
+  it('404s for a teacherId not in the schedule', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const res = await asAdmin(
+      'get',
+      `/api/schedule-planner/schedules/${scheduleId}/pdf?view=teacher&teacherId=00000000-0000-0000-0000-000000000000`
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('404s for an unknown schedule', async () => {
     const res = await asAdmin(
       'get',

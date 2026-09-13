@@ -70,6 +70,26 @@ const getResetEmailHTML = ({ name, url }) => `
   </div>
 `;
 
+const escapeInviteText = (value) =>
+  String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Sent when an admin creates an account from the Users page.
+const getInviteEmailHTML = ({ name, schoolName, invitedBy, role, url }) => `
+  <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+    <h2 style="color: #00ACC1;">You're invited to School Mule 👋</h2>
+    <p>Hello <strong>${escapeInviteText(name)}</strong>,</p>
+    <p>${escapeInviteText(invitedBy)} has created a <strong>${escapeInviteText(role.toLowerCase())}</strong> account for you at <strong>${escapeInviteText(schoolName)}</strong>. Set a password to get started:</p>
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${url}"
+        style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+        Set Your Password
+      </a>
+    </div>
+    <p>This link expires in 7 days. If it has expired, ask your school administrator to resend the invite, or use "Forgot password" on the login page.</p>
+    <p style="color: #888; font-size: 12px;">— School Mule Team</p>
+  </div>
+`;
+
 // src/controllers/emailTemplates.js
 function getContactEmailHTML({ name, email, message }) {
   return `
@@ -418,6 +438,7 @@ module.exports = {
   getAdminNotifyEmailHTML,
   getDeclineEmailHTML,
   getResetEmailHTML,
+  getInviteEmailHTML,
   getContactEmailHTML,
   getTicketEmailHTML,
   getNewMessageEmailHTML,
