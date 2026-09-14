@@ -153,6 +153,25 @@ const updateSettings = async (req, res) => {
 
 // ─── Teachers ────────────────────────────────────────────────────────────
 
+/**
+ * An account may back only one planner teacher per school year: two would
+ * merge both teachers' published periods into one person's schedule. Returns
+ * the conflicting teacher's name, or null when the link is free.
+ */
+const linkConflict = async (req, userId, plannerTeacherId) => {
+  if (!userId) return null;
+  const { rows } = await db.query(q.selectOtherTeacherLinkedToUser, [
+    req.user.school,
+    userId,
+    req.schoolYear?.schoolYearId || null,
+    plannerTeacherId,
+  ]);
+  return rows[0]?.display_name ?? null;
+};
+
+const linkConflictMessage = (name) =>
+  `That account is already linked to ${name}. Unlink it there first.`;
+
 const listTeachers = async (req, res) => {
   try {
     const { rows } = await db.query(q.selectTeachersBySchool, [req.user.school, req.schoolYear?.schoolYearId || null]);
@@ -178,6 +197,8 @@ const createTeacher = async (req, res) => {
     return fail(res, 400, 'maxSparesPerDay must be a non-negative integer or null');
   }
   try {
+    const conflict = await linkConflict(req, userId, null);
+    if (conflict) return fail(res, 409, linkConflictMessage(conflict));
     const schoolId = await resolveSchoolId(req.user.school);
     const { rows } = await db.query(q.insertTeacher, [
       req.user.school,
@@ -215,6 +236,10 @@ const updateTeacher = async (req, res) => {
     const { rows: existingRows } = await db.query(q.selectTeacherById, [teacherId, req.user.school]);
     if (existingRows.length === 0) return fail(res, 404, 'Teacher not found');
     const existing = existingRows[0];
+    if (body.userId && body.userId !== existing.user_id) {
+      const conflict = await linkConflict(req, body.userId, teacherId);
+      if (conflict) return fail(res, 409, linkConflictMessage(conflict));
+    }
     const { rows } = await db.query(q.updateTeacher, [
       body.userId !== undefined ? body.userId : existing.user_id,
       body.staffId !== undefined ? body.staffId : existing.staff_id,

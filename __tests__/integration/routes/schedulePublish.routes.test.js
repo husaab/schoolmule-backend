@@ -174,6 +174,30 @@ describe('Integration: GET /api/schedule-planner/my-schedule', () => {
   });
 });
 
+describe('Integration: account link uniqueness', () => {
+  it('rejects linking one account to a second planner teacher', async () => {
+    await seedSchoolAndUser();
+    await asAdmin('post', '/api/schedule-planner/teachers').send({
+      displayName: 'Ms. X',
+      userId: TEACHER_USER_ID,
+    });
+
+    const createRes = await asAdmin('post', '/api/schedule-planner/teachers').send({
+      displayName: 'Ms. Y',
+      userId: TEACHER_USER_ID,
+    });
+    expect(createRes.status).toBe(409);
+    expect(createRes.body.message).toMatch(/Ms\. X/);
+
+    const other = await asAdmin('post', '/api/schedule-planner/teachers').send({ displayName: 'Ms. Z' });
+    const patchRes = await asAdmin(
+      'patch',
+      `/api/schedule-planner/teachers/${other.body.data.plannerTeacherId}`
+    ).send({ userId: TEACHER_USER_ID });
+    expect(patchRes.status).toBe(409);
+  });
+});
+
 describe('Integration: GET /api/schedule-planner/school-schedule', () => {
   it('returns every session of the published schedule to admins', async () => {
     await seedSchoolAndUser();

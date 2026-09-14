@@ -29,6 +29,16 @@ const selectTeacherById = `
   SELECT * FROM planner_teachers WHERE planner_teacher_id = $1 AND school = $2
 `;
 
+// Another planner teacher in the same school year already linked to an account.
+// $4 excludes the teacher being edited (NULL when creating).
+const selectOtherTeacherLinkedToUser = `
+  SELECT planner_teacher_id, display_name FROM planner_teachers
+  WHERE school = $1 AND user_id = $2
+    AND ($3::uuid IS NULL OR school_year_id = $3)
+    AND ($4::uuid IS NULL OR planner_teacher_id <> $4)
+  LIMIT 1
+`;
+
 const insertTeacher = `
   INSERT INTO planner_teachers
     (school, school_id, user_id, staff_id, display_name, is_full_time,
@@ -369,6 +379,7 @@ module.exports = {
   upsertSettings,
   selectTeachersBySchool,
   selectTeacherById,
+  selectOtherTeacherLinkedToUser,
   insertTeacher,
   updateTeacher,
   deleteTeacher,
