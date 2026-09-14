@@ -136,4 +136,4 @@ function buildScheduleHtml({ schoolName, scheduleName, pages, rangeStartMin, ran
 </html>`;
 }
 
-module.exports = { buildScheduleHtml, DAY_LABELS };
+module.exports = { buildScheduleHtml, DAY_LABELS, SESSION_COLORS, colorFor, toHHMM };

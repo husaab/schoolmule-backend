@@ -7,8 +7,8 @@ const q = require('../queries/schedulePlanner.queries');
 const calendarQ = require('../queries/schoolCalendar.queries');
 const logger = require('../logger');
 const { runSolverInWorker } = require('../services/scheduleSolver/run');
-const { createPDFBuffer } = require('../utils/pdfGenerator');
-const { buildScheduleHtml, DAY_LABELS } = require('../templates/scheduleTemplate');
+const { sendScheduleExport } = require('../services/scheduleExport');
+const { DAY_LABELS } = require('../templates/scheduleTemplate');
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -1058,12 +1058,13 @@ const publishSchedule = async (req, res) => {
   }
 };
 
-// GET /schedules/:scheduleId/pdf?classGroupId=&teacherId=&view=class|teacher|day
+// GET /schedules/:scheduleId/pdf?classGroupId=&teacherId=&view=class|teacher|day&format=pdf|png|docx
 // teacherId narrows the teacher view to a single staff member; without it the
-// teacher view renders every teacher, one page each.
+// teacher view renders every teacher, one page each. The route keeps its /pdf
+// name for existing links; `format` picks PDF (default), PNG or Word.
 const getSchedulePdf = async (req, res) => {
   const { scheduleId } = req.params;
-  const { classGroupId, teacherId, view } = req.query;
+  const { classGroupId, teacherId, view, format } = req.query;
   const school = req.user.school;
   try {
     const { rows: scheduleRows } = await db.query(q.selectScheduleById, [scheduleId, school]);
@@ -1160,27 +1161,20 @@ const getSchedulePdf = async (req, res) => {
         .sort((a, b) => a.title.localeCompare(b.title));
     }
 
-    const html = buildScheduleHtml({
-      schoolName: schoolQ.rows[0]?.name || school,
-      scheduleName: schedule.name,
-      pages,
-      rangeStartMin,
-      rangeEndMin,
-    });
-    const buffer = await createPDFBuffer(html, {
-      format: 'Letter',
-      landscape: true,
-      preferCSSPageSize: true,
-      margin: { top: 0, bottom: 0, left: 0, right: 0 },
-    });
-    res.set('Content-Type', 'application/pdf');
-    res.set(
-      'Content-Disposition',
-      `inline; filename="${schedule.name.replace(/[^\w.-]+/g, '_')}.pdf"`
+    return await sendScheduleExport(
+      res,
+      {
+        schoolName: schoolQ.rows[0]?.name || school,
+        scheduleName: schedule.name,
+        pages,
+        rangeStartMin,
+        rangeEndMin,
+      },
+      format,
+      schedule.name
     );
-    return res.send(buffer);
   } catch (error) {
-    return handleError(res, error, 'exporting schedule PDF');
+    return handleError(res, error, 'exporting schedule');
   }
 };
 
@@ -1312,7 +1306,7 @@ const teacherPdfPage = (sessions) => {
   };
 };
 
-// GET /my-schedule/pdf — the caller's own week, same template as admin Print.
+// GET /my-schedule/pdf?format=pdf|png|docx — the caller's own week, same template as admin Print.
 const getMySchedulePdf = async (req, res) => {
   try {
     const school = req.user.school;
@@ -1336,27 +1330,20 @@ const getMySchedulePdf = async (req, res) => {
       ? Math.max(...allRanges.map((r) => r.endMin))
       : Math.max(...sessions.map((s) => s.end_min));
 
-    const html = buildScheduleHtml({
-      schoolName: schoolQ.rows[0]?.name || school,
-      scheduleName: publishedQ.rows[0]?.name || 'Schedule',
-      pages: [teacherPdfPage(sessions)],
-      rangeStartMin,
-      rangeEndMin,
-    });
-    const buffer = await createPDFBuffer(html, {
-      format: 'Letter',
-      landscape: true,
-      preferCSSPageSize: true,
-      margin: { top: 0, bottom: 0, left: 0, right: 0 },
-    });
-    res.set('Content-Type', 'application/pdf');
-    res.set(
-      'Content-Disposition',
-      `inline; filename="${sessions[0].teacher_name.replace(/[^\w.-]+/g, '_')}_schedule.pdf"`
+    return await sendScheduleExport(
+      res,
+      {
+        schoolName: schoolQ.rows[0]?.name || school,
+        scheduleName: publishedQ.rows[0]?.name || 'Schedule',
+        pages: [teacherPdfPage(sessions)],
+        rangeStartMin,
+        rangeEndMin,
+      },
+      req.query.format,
+      `${sessions[0].teacher_name}_schedule`
     );
-    return res.send(buffer);
   } catch (error) {
-    return handleError(res, error, 'exporting my schedule PDF');
+    return handleError(res, error, 'exporting my schedule');
   }
 };
 

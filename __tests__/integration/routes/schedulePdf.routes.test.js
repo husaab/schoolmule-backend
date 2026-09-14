@@ -149,3 +149,65 @@ describe('Integration: GET /api/schedule-planner/schedules/:id/pdf', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ─── PNG / Word formats ───────────────────────────────────────────────────
+
+const JSZip = require('jszip');
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+const getBinary = (url) =>
+  asAdmin('get', url)
+    .buffer(true)
+    .parse((r, cb) => {
+      const chunks = [];
+      r.on('data', (c) => chunks.push(c));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+
+describe('Integration: schedule export formats', () => {
+  it('downloads a single class as one PNG', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const groups = await asAdmin('get', '/api/schedule-planner/class-groups');
+    const res = await getBinary(
+      `/api/schedule-planner/schedules/${scheduleId}/pdf?format=png&classGroupId=${groups.body.data[0].classGroupId}`
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename=".+\.png"$/);
+    expect(res.body.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+  });
+
+  it('bundles one PNG per page into a zip for the whole school', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const res = await getBinary(`/api/schedule-planner/schedules/${scheduleId}/pdf?format=png`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/zip');
+    const zip = await JSZip.loadAsync(res.body);
+    const names = Object.keys(zip.files).sort();
+    expect(names).toEqual(['01_Grade_1.png', '02_Grade_2.png']);
+    const first = await zip.file(names[0]).async('nodebuffer');
+    expect(first.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+  });
+
+  it('downloads an editable Word document with a table per page', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const res = await getBinary(`/api/schedule-planner/schedules/${scheduleId}/pdf?format=docx&view=teacher`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+    const docx = await JSZip.loadAsync(res.body);
+    const xml = await docx.file('word/document.xml').async('string');
+    expect(xml).toContain('Ms. X');
+    expect(xml).toContain('Mr. Y');
+    expect(xml).toContain('Math');
+    expect((xml.match(/<w:tbl>/g) || []).length).toBe(2);
+  });
+
+  it('rejects an unknown format', async () => {
+    const scheduleId = await setupTwoGroupDraft();
+    const res = await asAdmin('get', `/api/schedule-planner/schedules/${scheduleId}/pdf?format=gif`);
+    expect(res.status).toBe(400);
+  });
+});
