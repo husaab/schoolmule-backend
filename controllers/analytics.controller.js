@@ -163,7 +163,57 @@ function buildTermDiff(currentMatrix, compareMatrix) {
   }
   bySubject.sort((a, b) => a.subject.localeCompare(b.subject));
 
-  return { byGrade, bySubject };
+  // Whole-school delta, computed over every student rather than averaged
+  // from the grade rows, so it is exact instead of a weighted estimate.
+  const schoolAvg = (matrix) => {
+    const pcts = [];
+    for (const students of groupStudentsByGrade(matrix).values()) {
+      for (const s of students) if (s.overallAvg != null) pcts.push(s.overallAvg);
+    }
+    return pcts.length ? stats.mean(pcts) : null;
+  };
+  const cur = schoolAvg(currentMatrix);
+  const prev = schoolAvg(compareMatrix);
+  const school = {
+    currentAvg: stats.round1(cur),
+    previousAvg: stats.round1(prev),
+    avgDiff: cur != null && prev != null ? stats.round1(cur - prev) : null,
+  };
+
+  return { school, byGrade, bySubject };
+}
+
+/**
+ * Work-status roll-up for one class: how many gradable (leaf) assessments
+ * nobody has a score for yet, how many are graded but still hidden from
+ * parents, and when grading last happened. Categories (is_parent) are
+ * skipped — they carry no scores of their own.
+ */
+function classWorkStatus(cls) {
+  const scoredCount = new Map(); // assessmentId -> students with a usable score
+  for (const stu of cls.students.values()) {
+    for (const r of stu.rows) {
+      if (r.is_excluded || r.score == null) continue;
+      scoredCount.set(r.assessment_id, (scoredCount.get(r.assessment_id) || 0) + 1);
+    }
+  }
+
+  const leaves = cls.assessments.filter((a) => !a.is_parent);
+  let ungradedAssessments = 0;
+  let unpublishedGraded = 0;
+  let lastGradedDate = null;
+  for (const a of leaves) {
+    if (!scoredCount.get(a.assessment_id)) {
+      ungradedAssessments += 1;
+      continue;
+    }
+    if (!a.is_published) unpublishedGraded += 1;
+    if (a.date) {
+      const iso = typeof a.date === 'string' ? a.date.slice(0, 10) : a.date.toISOString().slice(0, 10);
+      if (!lastGradedDate || iso > lastGradedDate) lastGradedDate = iso;
+    }
+  }
+  return { assessmentCount: leaves.length, ungradedAssessments, unpublishedGraded, lastGradedDate };
 }
 
 /** Per-assessment stats for a class (avg/median/completion/anomaly). */
@@ -503,6 +553,68 @@ const getAiSnapshot = async (req, res) => {
 };
 
 // ────────────────────────────────────────────────────────────────────
+// GET /api/analytics/classes-health?termId=&engine=
+// Per-class grading health for the dashboard: average, missing work,
+// ungraded and unpublished assessments. Admins see every class; teachers
+// only the classes they own or co-teach (server-enforced, mirroring
+// requireClassOwnership), so the same route serves both dashboards.
+// ────────────────────────────────────────────────────────────────────
+const getClassesHealth = async (req, res) => {
+  const { school, role, userId } = req.user;
+  const { termId } = req.query;
+  if (!termId) {
+    return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: termId' });
+  }
+  if (role !== 'ADMIN' && role !== 'TEACHER') {
+    return res.status(403).json({ status: 'failed', message: 'Staff access required' });
+  }
+
+  try {
+    const eng = engine.normalizeEngine(req.query.engine);
+    const matrix = await engine.buildAnalyticsMatrix(school, termId, eng);
+
+    let allowed = null; // null = every class in the school
+    if (role === 'TEACHER') {
+      const { rows } = await db.query(q.selectClassIdsForTeacher, [userId]);
+      allowed = new Set(rows.map((r) => r.class_id));
+    }
+
+    const classes = [];
+    for (const cls of matrix.classes.values()) {
+      if (allowed && !allowed.has(cls.classId)) continue;
+      const students = [...cls.students.values()];
+      classes.push({
+        classId: cls.classId,
+        subject: cls.subject,
+        grade: cls.grade,
+        teacherName: cls.teacherName,
+        termId: cls.termId,
+        studentCount: students.length,
+        classAvg: classAvgPct(cls),
+        classMedian: classMedianPct(cls),
+        missingCount: students.reduce((sum, s) => sum + s.missingCount, 0),
+        studentIds: students.map((s) => s.studentId),
+        ...classWorkStatus(cls),
+      });
+    }
+    classes.sort(
+      (a, b) => gradeSortKey(a.grade) - gradeSortKey(b.grade) || a.subject.localeCompare(b.subject),
+    );
+
+    return res.status(200).json({
+      status: 'success',
+      data: { termId, engine: eng, scope: allowed ? 'mine' : 'school', classes },
+    });
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return res.status(400).json({ status: 'failed', message: error.message });
+    }
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching class health' });
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────
 // POST /api/analytics/invalidate-cache
 // Body (all optional): { termId, engine } — always scoped to the JWT school.
 // ────────────────────────────────────────────────────────────────────
@@ -630,5 +742,6 @@ module.exports = {
   getStudentDetail,
   getAiSnapshot,
   getTermComparison,
+  getClassesHealth,
   invalidateCache,
 };

@@ -1,6 +1,6 @@
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
-const { mockAdminUser, mockTeacherUser } = require('../../helpers/mockAuth');
+const { mockAdminUser, mockTeacherUser, mockParentUser } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
 const engine = require('../../../services/analyticsEngine');
 
@@ -85,6 +85,7 @@ describe('GET /api/analytics/overview', () => {
       previousAvg: 70,
       avgDiff: 5,
     });
+    expect(res.body.data.termDiff.school).toEqual({ currentAvg: 75, previousAvg: 70, avgDiff: 5 });
   });
 
   it('returns 400 when termId is missing', async () => {
@@ -335,5 +336,83 @@ describe('POST /api/analytics/invalidate-cache', () => {
       .send({ termId: 't1' });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('success');
+  });
+});
+
+// ─── GET /api/analytics/classes-health ──────────────────────────
+describe('GET /api/analytics/classes-health', () => {
+  const url = '/api/analytics/classes-health';
+
+  // Class c1 (Math): two students, three assessments —
+  //   a1 published, both scored; a2 unpublished, only s1 scored; a3 nobody scored.
+  // Class c2 (Science): one student, one published scored assessment.
+  const healthRows = [
+    matrixRow({ assessment_id: 'a1', is_published: true, score: 85 }),
+    matrixRow({ assessment_id: 'a2', assessment_name: 'Quiz 2', is_published: false, score: 70, assessment_date: '2025-10-08' }),
+    matrixRow({ assessment_id: 'a3', assessment_name: 'Quiz 3', is_published: false, score: null, assessment_date: '2025-10-15' }),
+    matrixRow({ student_id: 's2', student_name: 'Bob', assessment_id: 'a1', is_published: true, score: 65 }),
+    matrixRow({ student_id: 's2', student_name: 'Bob', assessment_id: 'a2', assessment_name: 'Quiz 2', is_published: false, score: null, assessment_date: '2025-10-08' }),
+    matrixRow({ student_id: 's2', student_name: 'Bob', assessment_id: 'a3', assessment_name: 'Quiz 3', is_published: false, score: null, assessment_date: '2025-10-15' }),
+    matrixRow({ class_id: 'c2', subject: 'Science', assessment_id: 'a4', assessment_name: 'Lab 1', is_published: true, score: 90 }),
+  ];
+
+  it('gives admins every class with work-status roll-ups', async () => {
+    mockQueryResponse(healthRows); // matrix
+
+    const res = await request(app).get(url).set(authHeader()).query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.scope).toBe('school');
+    expect(res.body.data.classes).toHaveLength(2);
+
+    const math = res.body.data.classes.find((c) => c.classId === 'c1');
+    expect(math).toMatchObject({
+      subject: 'Math',
+      grade: '5',
+      studentCount: 2,
+      assessmentCount: 3,
+      ungradedAssessments: 1, // a3
+      unpublishedGraded: 1, // a2
+      missingCount: 3, // s1 misses a3; s2 misses a2 + a3
+      lastGradedDate: '2025-10-08',
+    });
+    expect(math.classAvg).toBeCloseTo(71.3, 1); // (77.5 + 65) / 2
+    expect(math.studentIds.sort()).toEqual(['s1', 's2']);
+
+    const sci = res.body.data.classes.find((c) => c.classId === 'c2');
+    expect(sci).toMatchObject({ studentCount: 1, ungradedAssessments: 0, unpublishedGraded: 0, missingCount: 0 });
+  });
+
+  it('limits teachers to the classes they own or co-teach', async () => {
+    mockQueryResponse(healthRows); // matrix
+    mockQueryResponse([{ class_id: 'c2' }]); // teacher's class ids
+
+    const res = await request(app)
+      .get(url)
+      .set({ Authorization: `Bearer ${mockTeacherUser()}` })
+      .query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.scope).toBe('mine');
+    expect(res.body.data.classes.map((c) => c.classId)).toEqual(['c2']);
+  });
+
+  it('refuses parents', async () => {
+    const res = await request(app)
+      .get(url)
+      .set({ Authorization: `Bearer ${mockParentUser()}` })
+      .query({ termId: 't1' });
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 when termId is missing', async () => {
+    const res = await request(app).get(url).set(authHeader());
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 500 on database error', async () => {
+    mockQueryError(new Error('boom'));
+    const res = await request(app).get(url).set(authHeader()).query({ termId: 't1' });
+    expect(res.status).toBe(500);
   });
 });

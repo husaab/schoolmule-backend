@@ -7,6 +7,7 @@ const {
   getStudentDetail,
   getAiSnapshot,
   getTermComparison,
+  getClassesHealth,
   invalidateCache,
 } = require('../controllers/analytics.controller');
 
@@ -17,6 +18,7 @@ router.get('/class/:classId', getClassDetail);
 router.get('/student/:studentId', getStudentDetail);
 router.get('/snapshot', getAiSnapshot);
 router.get('/term-comparison', getTermComparison);
+router.get('/classes-health', getClassesHealth);
 router.post('/invalidate-cache', invalidateCache);
 
 module.exports = router;

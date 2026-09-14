@@ -182,6 +182,16 @@ const analyticsQueries = {
     WHERE school = $1
     ORDER BY start_date ASC NULLS LAST, name ASC
   `,
+
+  /**
+   * Classes a teacher owns or co-teaches (same rule as requireClassOwnership).
+   * Params: $1 teacher user id
+   */
+  selectClassIdsForTeacher: `
+    SELECT c.class_id FROM classes AS c WHERE c.teacher_id = $1
+    UNION
+    SELECT ct.class_id FROM class_teachers AS ct WHERE ct.teacher_id = $1
+  `,
 };
 
 module.exports = analyticsQueries;
