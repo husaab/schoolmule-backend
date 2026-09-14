@@ -69,7 +69,7 @@ const userQueries = {
       UPDATE users 
       SET is_verified_school = true,
           last_modified_at = NOW()
-      WHERE user_id = $1
+      WHERE user_id = $1 AND school = $2
       RETURNING user_id, email, username, is_verified_school
     `,
 
@@ -82,7 +82,7 @@ const userQueries = {
     resendSchoolApprovalEmail: `
       SELECT user_id, email, username, first_name
       FROM users
-      WHERE user_id = $1 AND is_verified = true AND is_verified_school = false
+      WHERE user_id = $1 AND school = $2 AND is_verified = true AND is_verified_school = false
     `,
 
     getAdminsBySchool: `

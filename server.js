@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const verifyUser = require('./middleware/verifyUserMiddleware');
 const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
+const adminUserRoutes = require("./routes/adminUser.routes");
 const studentRoutes = require("./routes/student.routes")
 const classRoutes = require("./routes/class.routes")
 const assessmentRoutes = require("./routes/assessment.routes")
@@ -88,6 +89,7 @@ app.use("/api/schools", schoolRoutes);
 app.use(resolveSchoolYear);
 
 app.use("/api/users", userRoutes);
+app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/classes", classRoutes);
 app.use("/api/assessments", assessmentRoutes);

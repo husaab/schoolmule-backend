@@ -4,7 +4,7 @@ jest.mock('resend', () => ({
 
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
-const { mockAdminUser, TEST_ADMIN_USER_ID, TEST_SCHOOL } = require('../../helpers/mockAuth');
+const { mockAdminUser, mockTeacherUser, TEST_ADMIN_USER_ID, TEST_TEACHER_USER_ID, TEST_SCHOOL } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError, mockTransactionSequence, mockTransactionError } = require('../../helpers/mockDb');
 const { buildUserRow } = require('../../helpers/factories');
 
@@ -35,6 +35,12 @@ describe('User Controller', () => {
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].userId).toBe(row.user_id);
       expect(res.body.data[0].email).toBe(row.email);
+      expect(res.body.data[0]).not.toHaveProperty('emailToken');
+    });
+
+    it('should return 403 for non-admins', async () => {
+      const res = await request(app).get('/api/users').set('Authorization', `Bearer ${mockTeacherUser()}`);
+      expect(res.status).toBe(403);
     });
 
     it('should return 200 with empty array when no users', async () => {
@@ -62,6 +68,11 @@ describe('User Controller', () => {
       expect(res.body.status).toBe('success');
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].school).toBe(TEST_SCHOOL);
+    });
+
+    it('should return 403 for another school', async () => {
+      const res = await authGet('/api/users/school/PLAYGROUND');
+      expect(res.status).toBe(403);
     });
 
     it('should return 500 on database error', async () => {
@@ -127,11 +138,26 @@ describe('User Controller', () => {
   // ── deleteUser ──────────────────────────────────────────────
   describe('DELETE /api/users/:id', () => {
     it('should return 200 on successful deletion', async () => {
+      mockQueryResponse([buildUserRow({ user_id: '00000000-0000-0000-0000-000000000001' })]);
       mockQueryResponse([], 1);
       const res = await authDelete('/api/users/00000000-0000-0000-0000-000000000001');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.message).toMatch(/deleted/i);
+    });
+
+    it('should return 403 when the user belongs to another school', async () => {
+      mockQueryResponse([buildUserRow({ school: 'PLAYGROUND' })]);
+      const res = await authDelete('/api/users/00000000-0000-0000-0000-000000000001');
+      expect(res.status).toBe(403);
+    });
+
+    it('should return 403 for non-admins', async () => {
+      mockQueryResponse([buildUserRow()]);
+      const res = await request(app)
+        .delete('/api/users/00000000-0000-0000-0000-000000000001')
+        .set('Authorization', `Bearer ${mockTeacherUser()}`);
+      expect(res.status).toBe(403);
     });
 
     it('should return 404 when user not found', async () => {
@@ -152,6 +178,7 @@ describe('User Controller', () => {
   // ── updateUser ──────────────────────────────────────────────
   describe('PUT /api/users/:id', () => {
     it('should return 200 on successful update', async () => {
+      mockQueryResponse([buildUserRow({ user_id: '00000000-0000-0000-0000-000000000001' })]);
       mockQueryResponse([], 1);
       const res = await authPut('/api/users/00000000-0000-0000-0000-000000000001').send({
         email: 'updated@test.com',
@@ -181,6 +208,34 @@ describe('User Controller', () => {
       });
       expect(res.status).toBe(404);
       expect(res.body.status).toBe('failed');
+    });
+
+    it('should return 403 when a non-admin changes their own role', async () => {
+      mockQueryResponse([buildUserRow({ user_id: TEST_TEACHER_USER_ID, role: 'TEACHER' })]);
+      const res = await request(app)
+        .put(`/api/users/${TEST_TEACHER_USER_ID}`)
+        .set('Authorization', `Bearer ${mockTeacherUser()}`)
+        .send({ email: 'user@test.com', username: 'Test User', school: TEST_SCHOOL, role: 'ADMIN' });
+      expect(res.status).toBe(403);
+    });
+
+    it('should let a non-admin update their own username', async () => {
+      mockQueryResponse([buildUserRow({ user_id: TEST_TEACHER_USER_ID, role: 'TEACHER' })]);
+      mockQueryResponse([], 1);
+      const res = await request(app)
+        .put(`/api/users/${TEST_TEACHER_USER_ID}`)
+        .set('Authorization', `Bearer ${mockTeacherUser()}`)
+        .send({ email: 'user@test.com', username: 'New Name', school: TEST_SCHOOL, role: 'TEACHER' });
+      expect(res.status).toBe(200);
+    });
+
+    it('should return 403 when a non-admin edits someone else', async () => {
+      mockQueryResponse([buildUserRow()]);
+      const res = await request(app)
+        .put('/api/users/00000000-0000-0000-0000-000000000001')
+        .set('Authorization', `Bearer ${mockTeacherUser()}`)
+        .send({ email: 'user@test.com', username: 'Test User', school: TEST_SCHOOL, role: 'TEACHER' });
+      expect(res.status).toBe(403);
     });
 
     it('should return 500 on database error', async () => {
@@ -216,12 +271,20 @@ describe('User Controller', () => {
       expect(res.body.status).toBe('success');
     });
 
+    it('should return 403 when changing someone else\'s password', async () => {
+      const res = await authPut('/api/users/00000000-0000-0000-0000-000000000099/password').send({
+        oldPassword: 'OldPassword1!',
+        newPassword: 'NewPassword1!',
+      });
+      expect(res.status).toBe(403);
+    });
+
     it('should return 404 when user not found', async () => {
       // Transaction: BEGIN, SELECT password returns empty
       mockTransactionSequence([
         { rows: [] },
       ]);
-      const res = await authPut('/api/users/00000000-0000-0000-0000-000000000099/password').send({
+      const res = await authPut(`/api/users/${TEST_ADMIN_USER_ID}/password`).send({
         oldPassword: 'OldPassword1!',
         newPassword: 'NewPassword1!',
       });

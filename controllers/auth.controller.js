@@ -340,7 +340,7 @@ const getSchoolYearContext = async (school) => {
 const approveUserForSchool = async (req, res) => {
   const { userId } = req.body;
   try {
-    const result = await db.query(userQueries.approveUserSchool, [userId]);
+    const result = await db.query(userQueries.approveUserSchool, [userId, req.user.school]);
 
     if (result.rows.length === 0) {
       throw { status: 404, message: "User not found or already approved" };
@@ -371,7 +371,8 @@ const approveUserForSchool = async (req, res) => {
 };
 
 const getPendingApprovals = async (req, res) => {
-  const { school } = req.query;
+  // Always the admin's own school; a ?school= param is ignored.
+  const school = req.user?.school;
 
   if (!school) {
     return res.status(400).json({
@@ -399,7 +400,7 @@ const getPendingApprovals = async (req, res) => {
 const resendSchoolApprovalEmail = async (req, res) => {
   const { userId } = req.body;
   try {
-    const result = await db.query(userQueries.resendSchoolApprovalEmail, [userId]);
+    const result = await db.query(userQueries.resendSchoolApprovalEmail, [userId, req.user.school]);
 
     if (result.rows.length === 0) {
       throw { status: 404, message: "User not found or already approved" };
@@ -464,7 +465,7 @@ const declineUserForSchool = async (req, res) => {
 
   try {
     const result = await db.query(userQueries.selectById, [userId]);
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0 || result.rows[0].school !== req.user.school) {
       throw { status: 404, message: "User not found" };
     }
 

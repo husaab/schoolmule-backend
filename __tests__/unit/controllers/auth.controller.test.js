@@ -345,15 +345,14 @@ describe('GET /api/auth/pending-approvals', () => {
     expect(res.body.users).toHaveLength(2);
   });
 
-  it('returns 400 when school is missing', async () => {
-    const token = mockAdminUser();
+  it('returns 403 for non-admins', async () => {
+    const token = mockAdminUser({ role: 'TEACHER' });
 
     const res = await request(app)
       .get(url)
       .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(400);
-    expect(res.body.success).toBe(false);
+    expect(res.status).toBe(403);
   });
 });
 

@@ -4,6 +4,7 @@ getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserFo
 validateResetToken, resetPassword, validateSession} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
+const requireAdmin = require('../middleware/requireAdmin');
 const { signupLimiter, loginLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
 
 const router = express.Router();
@@ -13,11 +14,11 @@ router.post( "/login", loginLimiter, responseParser(login));
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 
-router.post('/approve-school', verifyUser, approveUserForSchool);
-router.get('/pending-approvals', verifyUser,  getPendingApprovals);
-router.post('/resend-approval-email', verificationEmailLimiter, resendSchoolApprovalEmail);
+router.post('/approve-school', verifyUser, requireAdmin, approveUserForSchool);
+router.get('/pending-approvals', verifyUser, requireAdmin, getPendingApprovals);
+router.post('/resend-approval-email', verifyUser, requireAdmin, verificationEmailLimiter, resendSchoolApprovalEmail);
 router.delete('/delete-user', verifyUser, deleteUserAccount);
-router.post('/decline-school', verifyUser, declineUserForSchool);
+router.post('/decline-school', verifyUser, requireAdmin, declineUserForSchool);
 router.post('/logout', logout);
 
 // Password reset routes

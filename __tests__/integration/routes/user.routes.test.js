@@ -169,14 +169,14 @@ describe('Integration: User Routes', () => {
       expect(res.status).toBe(401);
     });
 
-    it('returns 404 when user does not exist', async () => {
+    it('returns 403 when changing another user\'s password', async () => {
       const res = await authenticatedRequest('put', '/api/users/00000000-0000-0000-0000-000000000000/password')
         .send({
           oldPassword: 'old',
           newPassword: 'new',
         });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(403);
     });
   });
 

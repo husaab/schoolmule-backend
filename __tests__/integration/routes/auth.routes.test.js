@@ -213,16 +213,22 @@ describe('Integration: Auth Routes', () => {
       expect(Array.isArray(res.body.users)).toBe(true);
     });
 
-    it('returns 400 when school is missing', async () => {
+    it('uses the admin\'s own school and ignores ?school=', async () => {
       await pool.query(
         `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true)`,
-        [TEST_USER_ID, 'admin@test.com', 'Admin User', 'hashed', 'Admin', 'User', 'ALHAADIACADEMY', 'ADMIN']
+         VALUES ($1, 'pending@test.com', 'Pending User', 'hashed', 'Pending', 'User', 'PLAYGROUND', 'TEACHER', true, false)`,
+        ['550e8400-e29b-41d4-a716-446655440077']
       );
 
-      const res = await authenticatedRequest('get', '/api/auth/pending-approvals');
+      const res = await authenticatedRequest('get', '/api/auth/pending-approvals?school=PLAYGROUND');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      expect(res.body.users.map((u) => u.email)).not.toContain('pending@test.com');
+    });
+
+    it('rejects non-admins', async () => {
+      const res = await authenticatedRequest('get', '/api/auth/pending-approvals', { role: 'TEACHER' });
+      expect(res.status).toBe(403);
     });
   });
 });

@@ -104,11 +104,6 @@ const adminUserQueries = {
   `,
 
   //  $1 = school
-  countAdminsInSchool: `
-    SELECT COUNT(*)::int AS count FROM users WHERE school = $1 AND role = 'ADMIN'
-  `,
-
-  //  $1 = school
   selectSchoolName: `
     SELECT name FROM schools WHERE school_code = $1
   `,

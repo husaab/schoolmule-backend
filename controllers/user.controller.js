@@ -3,29 +3,38 @@ const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
 
+// email_token is a secret (it verifies the account) and is never sent out.
+const toUser = (user) => ({
+  userId: user.user_id,
+  username: user.username,
+  fullName: `${user.first_name} ${user.last_name}`,
+  firstName: user.first_name,
+  lastName: user.last_name,
+  email: user.email,
+  school: user.school,
+  role: user.role,
+  createdAt: user.created_at,
+  lastModifiedAt: user.last_modified_at,
+  isVerified: user.is_verified,
+});
+
+const isAdmin = (req) => req.user?.role === "ADMIN";
+
+// A user may act on their own record; an admin may act on anyone in their school.
+const canAccess = (req, target) =>
+  target.user_id === req.user?.userId || (isAdmin(req) && target.school === req.user?.school);
+
+const forbidden = (res) =>
+  res.status(403).json({ status: "failed", message: "You don't have access to this user" });
+
 const getAllUser = async (req, res) => {
+  if (!isAdmin(req)) return forbidden(res);
+
   try {
-    const sql = userQueries.selectAllUsers;
-    const result = await db.query(sql);
+    const { rows } = await db.query(userQueries.selectUsersBySchool, [req.user.school]);
 
     logger.info("All users fetched successfully");
-    return res.status(200).json({
-      status: "success",
-      data: result.rows.map(user => ({
-        userId: user.user_id,
-        username: user.username,
-        fullName: `${user.first_name} ${user.last_name}`,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        school: user.school,
-        role: user.role,
-        createdAt: user.created_at,
-        lastModifiedAt: user.last_modified_at,
-        isVerified: user.is_verified,
-        emailToken: user.email_token
-      }))
-    });
+    return res.status(200).json({ status: "success", data: rows.map(toUser) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ status: "failed", message: "Error fetching users" });
@@ -34,23 +43,11 @@ const getAllUser = async (req, res) => {
 
 const getUsersBySchool = async (req, res) => {
   const { school } = req.params;
+  if (!isAdmin(req) || school !== req.user.school) return forbidden(res);
+
   try {
     const { rows } = await db.query(userQueries.selectUsersBySchool, [school]);
-    const data = rows.map(u => ({
-      userId: u.user_id,
-      username: u.username,
-      fullName: `${u.first_name} ${u.last_name}`,
-      firstName: u.first_name,
-      lastName: u.last_name,
-      email: u.email,
-      school: u.school,
-      role: u.role,
-      createdAt: u.created_at,
-      lastModifiedAt: u.last_modified_at,
-      isVerified: u.is_verified,
-      emailToken: u.email_token
-    }));
-    return res.status(200).json({ status: "success", data });
+    return res.status(200).json({ status: "success", data: rows.map(toUser) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ status: "failed", message: "Error fetching users by school" });
@@ -64,31 +61,15 @@ const getUserByEmail = async (req, res) => {
   }
 
   try {
-    const sql = userQueries.selectByEmail;
-    const result = await db.query(sql, [email]);
+    const result = await db.query(userQueries.selectByEmail, [email]);
+    const user = result.rows[0];
 
-    if (result.rows.length === 0) {
+    // Out-of-scope users read as missing so the endpoint can't probe for emails.
+    if (!user || !canAccess(req, user)) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
 
-    const user = result.rows[0];
-    return res.status(200).json({
-      status: "success",
-      data: {
-        userId: user.user_id,
-        username: user.username,
-        fullName: `${user.first_name} ${user.last_name}`,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        school: user.school,
-        role: user.role,
-        createdAt: user.created_at,
-        lastModifiedAt: user.last_modified_at,
-        isVerified: user.is_verified,
-        emailToken: user.email_token
-      }
-    });
+    return res.status(200).json({ status: "success", data: toUser(user) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ status: "failed", message: "Internal Server Error" });
@@ -98,31 +79,14 @@ const getUserByEmail = async (req, res) => {
 const getUser = async (req, res) => {
   const id = req.params.id;
   try {
-    const sql = userQueries.selectById;
-    const result = await db.query(sql, [id]);
+    const result = await db.query(userQueries.selectById, [id]);
+    const user = result.rows[0];
 
-    if (result.rows.length === 0) {
+    if (!user || !canAccess(req, user)) {
       return res.status(404).json({ status: "failed", message: `User with id ${id} not found` });
     }
 
-    const user = result.rows[0];
-    return res.status(200).json({
-      status: "success",
-      data: {
-        userId: user.user_id,
-        username: user.username,
-        fullName: `${user.first_name} ${user.last_name}`,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        school: user.school,
-        role: user.role,
-        createdAt: user.created_at,
-        lastModifiedAt: user.last_modified_at,
-        isVerified: user.is_verified,
-        emailToken: user.email_token
-      }
-    });
+    return res.status(200).json({ status: "success", data: toUser(user) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ status: "failed", message: "Error fetching user" });
@@ -132,12 +96,15 @@ const getUser = async (req, res) => {
 const deleteUser = async (req, res) => {
   const { id } = req.params;
   try {
-    const sql = userQueries.deleteUser;
-    const result = await db.query(sql, [id]);
+    const { rows } = await db.query(userQueries.selectById, [id]);
+    const target = rows[0];
 
-    if (result.rowCount === 0) {
+    if (!target) {
       return res.status(404).json({ status: "failed", message: "User not found or already deleted" });
     }
+    if (!isAdmin(req) || target.school !== req.user.school) return forbidden(res);
+
+    await db.query(userQueries.deleteUser, [id]);
 
     logger.info({ status: "success", message: "User deleted" });
     return res.status(200).json({ status: "success", message: "User deleted successfully" });
@@ -158,12 +125,20 @@ const updateUser = async (req, res) => {
   const [firstName = "", lastName = ""] = username.split(" ");
 
   try {
-    const sql = userQueries.updateUserById;
-    const result = await db.query(sql, [email, username, firstName, lastName, school, role, id]);
+    const { rows } = await db.query(userQueries.selectById, [id]);
+    const target = rows[0];
 
-    if (result.rowCount === 0) {
+    if (!target) {
       return res.status(404).json({ status: "failed", message: "User not found or not updated" });
     }
+    if (!canAccess(req, target)) return forbidden(res);
+
+    // Nobody moves an account to another school, and only admins change roles.
+    if (school !== target.school || (role !== target.role && !isAdmin(req))) {
+      return forbidden(res);
+    }
+
+    await db.query(userQueries.updateUserById, [email, username, firstName, lastName, school, role, id]);
 
     logger.info({ status: "success", message: "User updated" });
     return res.status(200).json({ status: "success", message: "User updated successfully" });
@@ -177,6 +152,10 @@ const updatePassword = async (req, res) => {
   const { id } = req.params;
   const { oldPassword, newPassword } = req.body;
   const saltRounds = 10;
+
+  if (id !== req.user?.userId) {
+    return res.status(403).json({ status: "failed", message: "You can only change your own password" });
+  }
 
   const client = await db.connect();
 
