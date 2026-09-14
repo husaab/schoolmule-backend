@@ -6,6 +6,8 @@ const {
   updateMyRecord,
   getAllForSchoolMonth,
   updateAnyRecord,
+  setWorkDays,
+  resetWorkDays,
   downloadPDF,
 } = require("../controllers/teacherAttendance.controller");
 
@@ -17,6 +19,8 @@ router.post("/checkin", checkIn);
 router.get("/me", getMyMonth);
 router.patch("/me/:date", updateMyRecord);
 router.get("/pdf", downloadPDF);
+router.put("/work-days/:teacherId", setWorkDays);
+router.delete("/work-days/:teacherId", resetWorkDays);
 
 // Base route & parameterized admin routes
 router.get("/", getAllForSchoolMonth);

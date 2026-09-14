@@ -20,16 +20,23 @@ const getStaffAttendanceHTML = (data) => {
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(parseInt(year), parseInt(mon) - 1, d);
     const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-    dayHeaders.push({ day: d, isWeekend });
+    const isoDay = date.getDay() === 0 ? 7 : date.getDay();
+    dayHeaders.push({ day: d, isWeekend, isoDay });
   }
 
   const teacherRows = teachers
     .map((t) => {
       const recordMap = {};
       t.records.forEach((r) => {
-        const d = new Date(r.attendanceDate).getDate();
+        // Day-of-month from the date itself; parsing "YYYY-MM-DD" as a Date
+        // reads it as UTC midnight and can land on the previous day.
+        const d =
+          r.attendanceDate instanceof Date
+            ? r.attendanceDate.getDate()
+            : parseInt(String(r.attendanceDate).substring(8, 10), 10);
         recordMap[d] = r;
       });
+      const workDays = t.workDays || [1, 2, 3, 4, 5];
 
       const presentCount = t.records.filter((r) => r.status === "PRESENT").length;
       const absentCount = t.records.filter((r) => r.status === "ABSENT").length;
@@ -39,8 +46,9 @@ const getStaffAttendanceHTML = (data) => {
           const record = recordMap[dh.day];
           const status = record?.status;
           const hasNote = !!(record?.notes);
-          let bg = dh.isWeekend ? "#f1f5f9" : "#ffffff";
-          let text = "";
+          const offDay = !dh.isWeekend && !workDays.includes(dh.isoDay);
+          let bg = dh.isWeekend ? "#f1f5f9" : offDay ? "#f8fafc" : "#ffffff";
+          let text = offDay ? '<span style="color:#cbd5e1;">–</span>' : "";
           if (status === "PRESENT") {
             bg = "#dcfce7";
             text = "P";
@@ -61,6 +69,7 @@ const getStaffAttendanceHTML = (data) => {
           ${cells}
           <td style="padding:4px;text-align:center;font-size:11px;font-weight:600;background:#dcfce7;border:1px solid #e2e8f0;">${presentCount}</td>
           <td style="padding:4px;text-align:center;font-size:11px;font-weight:600;background:#fee2e2;border:1px solid #e2e8f0;">${absentCount}</td>
+          <td style="padding:4px;text-align:center;font-size:11px;font-weight:600;background:#f8fafc;border:1px solid #e2e8f0;">${t.workingDays ?? workingDays}</td>
         </tr>
       `;
     })
@@ -121,6 +130,7 @@ const getStaffAttendanceHTML = (data) => {
     <div class="legend-item"><div class="legend-box" style="background:#dcfce7;"></div> Present</div>
     <div class="legend-item"><div class="legend-box" style="background:#fee2e2;"></div> Absent</div>
     <div class="legend-item"><div class="legend-box" style="background:#f1f5f9;"></div> Weekend</div>
+    <div class="legend-item"><div class="legend-box" style="background:#f8fafc;"></div> – Not scheduled</div>
     <div class="legend-item"><div class="legend-box" style="background:#fefce8;border-color:#fde047;"></div> Has note</div>
   </div>
 
@@ -131,6 +141,7 @@ const getStaffAttendanceHTML = (data) => {
         ${dayHeaderCells}
         <th style="padding:4px;text-align:center;font-size:10px;font-weight:600;background:#dcfce7;border:1px solid #e2e8f0;">P</th>
         <th style="padding:4px;text-align:center;font-size:10px;font-weight:600;background:#fee2e2;border:1px solid #e2e8f0;">A</th>
+        <th style="padding:4px;text-align:center;font-size:10px;font-weight:600;background:#f8fafc;border:1px solid #e2e8f0;" title="Working days">Days</th>
       </tr>
     </thead>
     <tbody>
@@ -139,7 +150,7 @@ const getStaffAttendanceHTML = (data) => {
   </table>
 
   <div class="summary">
-    Working days in ${monthName}: <strong>${workingDays}</strong> &nbsp;|&nbsp; Teachers: <strong>${teachers.length}</strong>
+    School days in ${monthName}: <strong>${workingDays}</strong> &nbsp;|&nbsp; Teachers: <strong>${teachers.length}</strong>
   </div>
 
   ${notesRows ? `

@@ -28,19 +28,55 @@ const loadOpenSchoolDays = async (month, school) => {
   return rows.map((r) => ({ day: r.day, isElapsed: r.is_elapsed }));
 };
 
+const EVERY_WEEKDAY = [1, 2, 3, 4, 5];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** ISO weekday (Monday = 1 … Sunday = 7) of a YYYY-MM-DD key, in local time. */
+const isoWeekday = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return dow === 0 ? 7 : dow;
+};
+
 /**
- * Fill in the days a teacher never explicitly recorded. Any elapsed open school
- * day on or after ASSUMED_PRESENT_FROM with no record of its own reads as
- * PRESENT — assumed and confirmed days are deliberately indistinguishable.
+ * Each staff member's work days for a month, keyed by user_id:
+ * an admin override wins, then the schedule planner, then every weekday.
+ * `source` lets the UI say where the days came from.
+ */
+const loadWorkDays = async (month, school, userId = null) => {
+  const { rows } = await db.query(teacherAttendanceQueries.selectWorkDayInputs, [school, month, userId]);
+  const byUser = new Map();
+  for (const row of rows) {
+    if (row.custom_days?.length) {
+      byUser.set(row.user_id, { days: row.custom_days.map(Number), source: "custom" });
+    } else if (row.planner_days?.length) {
+      byUser.set(row.user_id, { days: row.planner_days.map(Number), source: "planner" });
+    } else {
+      byUser.set(row.user_id, { days: EVERY_WEEKDAY, source: "default" });
+    }
+  }
+  return byUser;
+};
+
+/** Open school days this person actually works — their expected days. */
+const expectedDaysFor = (openDays, workDays) =>
+  openDays.filter((d) => workDays.days.includes(isoWeekday(d.day)));
+
+/**
+ * Fill in the days a teacher never explicitly recorded. Any elapsed expected
+ * day (open school day they work) on or after ASSUMED_PRESENT_FROM with no
+ * record of its own reads as PRESENT — assumed and confirmed days are
+ * deliberately indistinguishable. Days they don't work stay empty, but a real
+ * check-in on one (covering a shift) is kept and counts.
  *
  * Nothing is written to the database, so the dashboard check-in prompt is
  * unaffected: it reads teacher_attendance directly and keeps asking until a
  * real row exists.
  */
-const withAssumedPresent = (records, openDays) => {
+const withAssumedPresent = (records, expectedDays) => {
   const recorded = new Set(records.map((r) => dateKey(r.attendanceDate)));
 
-  const assumed = openDays
+  const assumed = expectedDays
     .filter((d) => d.isElapsed && d.day >= ASSUMED_PRESENT_FROM && !recorded.has(d.day))
     .map((d) => ({ attendanceDate: d.day, status: "PRESENT", notes: null }));
 
@@ -51,12 +87,14 @@ const withAssumedPresent = (records, openDays) => {
 
 /**
  * Shared read path for the admin month view and the PDF: every teacher at the
- * school with their records for the month, assumed-present days included.
+ * school with their records for the month, assumed-present days included, and
+ * their own work days and working-day count.
  */
 const buildSchoolMonth = async (month, school) => {
-  const [dataResult, openDays] = await Promise.all([
+  const [dataResult, openDays, workDaysByUser] = await Promise.all([
     db.query(teacherAttendanceQueries.selectAllForSchoolMonth, [month, school]),
     loadOpenSchoolDays(month, school),
+    loadWorkDays(month, school),
   ]);
 
   const teacherMap = {};
@@ -80,25 +118,39 @@ const buildSchoolMonth = async (month, school) => {
     }
   });
 
-  const teachers = Object.values(teacherMap).map((t) => ({
-    ...t,
-    records: withAssumedPresent(t.records, openDays),
-  }));
+  const teachers = Object.values(teacherMap).map((t) => {
+    const workDays = workDaysByUser.get(t.teacherId) ?? { days: EVERY_WEEKDAY, source: "default" };
+    const expectedDays = expectedDaysFor(openDays, workDays);
+    return {
+      ...t,
+      records: withAssumedPresent(t.records, expectedDays),
+      workDays: workDays.days,
+      workDaysSource: workDays.source,
+      workingDays: expectedDays.length,
+    };
+  });
 
+  // Top-level workingDays stays the school's open days for older clients.
   return { teachers, workingDays: openDays.length };
 };
 
 // GET /today?date=YYYY-MM-DD
 const getTodayStatus = async (req, res) => {
   try {
-    const { userId } = req.user;
+    const { userId, school } = req.user;
     const { date } = req.query;
 
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ status: "failed", message: "date query param required (YYYY-MM-DD)" });
     }
 
-    const { rows } = await db.query(teacherAttendanceQueries.selectTodayStatus, [userId, date]);
+    const month = date.substring(0, 7);
+    const [{ rows }, openDays, workDaysByUser] = await Promise.all([
+      db.query(teacherAttendanceQueries.selectTodayStatus, [userId, date]),
+      loadOpenSchoolDays(month, school),
+      loadWorkDays(month, school, userId),
+    ]);
+    const workDays = workDaysByUser.get(userId) ?? { days: EVERY_WEEKDAY, source: "default" };
 
     return res.status(200).json({
       status: "success",
@@ -106,6 +158,9 @@ const getTodayStatus = async (req, res) => {
         checkedIn: rows.length > 0,
         status: rows.length > 0 ? rows[0].status : null,
         notes: rows.length > 0 ? rows[0].notes : null,
+        // False on school closures and on this person's days off, so the
+        // dashboard doesn't ask them to check in.
+        expected: expectedDaysFor(openDays, workDays).some((d) => d.day === date),
       },
     });
   } catch (error) {
@@ -156,10 +211,13 @@ const getMyMonth = async (req, res) => {
       return res.status(400).json({ status: "failed", message: "month query param required (YYYY-MM)" });
     }
 
-    const [recordsResult, openDays] = await Promise.all([
+    const [recordsResult, openDays, workDaysByUser] = await Promise.all([
       db.query(teacherAttendanceQueries.selectMyMonth, [userId, month]),
       loadOpenSchoolDays(month, school),
+      loadWorkDays(month, school, userId),
     ]);
+    const workDays = workDaysByUser.get(userId) ?? { days: EVERY_WEEKDAY, source: "default" };
+    const expectedDays = expectedDaysFor(openDays, workDays);
 
     const records = withAssumedPresent(
       recordsResult.rows.map((r) => ({
@@ -167,14 +225,16 @@ const getMyMonth = async (req, res) => {
         status: r.status,
         notes: r.notes ?? null,
       })),
-      openDays
+      expectedDays
     );
 
     return res.status(200).json({
       status: "success",
       data: {
         records,
-        workingDays: openDays.length,
+        workDays: workDays.days,
+        workDaysSource: workDays.source,
+        workingDays: expectedDays.length,
         presentDays: records.filter((r) => r.status === "PRESENT").length,
         absentDays: records.filter((r) => r.status === "ABSENT").length,
       },
@@ -271,6 +331,62 @@ const updateAnyRecord = async (req, res) => {
   }
 };
 
+// PUT /work-days/:teacherId (admin) — body { workDays: [1..7] }
+const setWorkDays = async (req, res) => {
+  try {
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({ status: "failed", message: "Admin access required" });
+    }
+
+    const { teacherId } = req.params;
+    const { workDays } = req.body;
+    if (!UUID_RE.test(teacherId)) {
+      return res.status(404).json({ status: "failed", message: "Staff member not found" });
+    }
+    const valid =
+      Array.isArray(workDays) &&
+      workDays.length > 0 &&
+      workDays.every((d) => Number.isInteger(d) && d >= 1 && d <= 7);
+    if (!valid) {
+      return res.status(400).json({ status: "failed", message: "workDays must be a non-empty list of weekdays (1-7)" });
+    }
+
+    const staff = await db.query(teacherAttendanceQueries.selectStaffMember, [teacherId, req.user.school]);
+    if (staff.rows.length === 0) {
+      return res.status(404).json({ status: "failed", message: "Staff member not found" });
+    }
+
+    const days = [...new Set(workDays)].sort((a, b) => a - b);
+    await db.query(teacherAttendanceQueries.upsertWorkSchedule, [teacherId, req.user.school, days, req.user.userId]);
+
+    return res.status(200).json({
+      status: "success",
+      data: { teacherId, workDays: days, workDaysSource: "custom" },
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Failed to save work days" });
+  }
+};
+
+// DELETE /work-days/:teacherId (admin) — back to the schedule planner / every weekday
+const resetWorkDays = async (req, res) => {
+  try {
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({ status: "failed", message: "Admin access required" });
+    }
+
+    if (!UUID_RE.test(req.params.teacherId)) {
+      return res.status(404).json({ status: "failed", message: "Staff member not found" });
+    }
+    await db.query(teacherAttendanceQueries.deleteWorkSchedule, [req.params.teacherId, req.user.school]);
+    return res.status(200).json({ status: "success", data: { teacherId: req.params.teacherId } });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Failed to reset work days" });
+  }
+};
+
 // GET /pdf?school=X&month=YYYY-MM&teacherId= (admin)
 const downloadPDF = async (req, res) => {
   try {
@@ -316,5 +432,7 @@ module.exports = {
   updateMyRecord,
   getAllForSchoolMonth,
   updateAnyRecord,
+  setWorkDays,
+  resetWorkDays,
   downloadPDF,
 };

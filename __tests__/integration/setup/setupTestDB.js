@@ -33,6 +33,7 @@ const ALL_TABLES = [
   'school_assets',
   'patch_note_dismissals',
   'patch_notes',
+  'staff_work_schedules',
   'teacher_attendance',
   'progress_reports',
   'progress_report_feedback',

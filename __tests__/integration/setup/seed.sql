@@ -895,3 +895,15 @@ CREATE TABLE IF NOT EXISTS ai_weekly_summaries (
 );
 
 ALTER TABLE parent_students ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+
+-- Mirrors staff_work_schedules_migration.sql
+CREATE TABLE IF NOT EXISTS staff_work_schedules (
+  user_id     UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+  school      school NOT NULL,
+  work_days   SMALLINT[] NOT NULL CHECK (
+    cardinality(work_days) > 0 AND work_days <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[]
+  ),
+  updated_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
