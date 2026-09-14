@@ -1218,9 +1218,12 @@ const expandClosureDates = (closures) => {
   return dates;
 };
 
-// GET /my-schedule — the published timetable filtered to the caller, plus the
-// breaks, day bounds and closures needed to render a real day.
-const getMySchedule = async (req, res) => {
+/**
+ * The published timetable plus the breaks, day bounds and closures needed to
+ * render a real day. `mine` narrows sessions to the caller; otherwise every
+ * session in the school is returned (admin whole-school view).
+ */
+const sendPublishedSchedule = async (req, res, { mine }) => {
   try {
     const school = req.user.school;
     const yearId = req.schoolYear?.schoolYearId || null;
@@ -1229,7 +1232,9 @@ const getMySchedule = async (req, res) => {
     sunday.setDate(sunday.getDate() + 6);
 
     const [sessionsQ, blocksQ, daysQ, publishedQ, closures] = await Promise.all([
-      db.query(q.selectMySessions, [req.user.userId, school, yearId]),
+      mine
+        ? db.query(q.selectMySessions, [req.user.userId, school, yearId])
+        : db.query(q.selectSchoolSessions, [school, yearId]),
       db.query(q.selectMyFixedBlocks, [school, yearId]),
       db.query(q.selectDayTemplatesBySchool, [school, yearId]),
       db.query(q.selectPublishedSchedule, [school, yearId]),
@@ -1252,9 +1257,15 @@ const getMySchedule = async (req, res) => {
       closures,
     });
   } catch (error) {
-    return handleError(res, error, 'fetching my schedule');
+    return handleError(res, error, mine ? 'fetching my schedule' : 'fetching school schedule');
   }
 };
+
+// GET /my-schedule — the published timetable filtered to the caller.
+const getMySchedule = (req, res) => sendPublishedSchedule(req, res, { mine: true });
+
+// GET /school-schedule (admin) — every teacher's sessions in the published timetable.
+const getSchoolSchedule = (req, res) => sendPublishedSchedule(req, res, { mine: false });
 
 /** Shared page-builder input for one teacher's week. */
 const teacherPdfPage = (sessions) => {
@@ -1468,6 +1479,7 @@ module.exports = {
   deleteSchedule,
   publishSchedule,
   getMySchedule,
+  getSchoolSchedule,
   getMySchedulePdf,
   getMyScheduleIcs,
   getSchedulePdf,

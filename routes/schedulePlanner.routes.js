@@ -12,6 +12,9 @@ router.get('/my-schedule/ics', controller.getMyScheduleIcs);
 // Everything below is ADMIN-only
 router.use(requireAdmin);
 
+// Whole-school published timetable (navbar, dashboard, /school-schedule).
+router.get('/school-schedule', controller.getSchoolSchedule);
+
 router.get('/config', controller.getConfig);
 
 router.get('/settings', controller.getSettings);

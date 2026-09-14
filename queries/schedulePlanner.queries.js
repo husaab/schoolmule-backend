@@ -39,14 +39,28 @@ const insertTeacher = `
   RETURNING *
 `;
 
+// The account link is also written through to the published snapshot, so a
+// teacher linked (or unlinked) after publishing sees the change immediately
+// instead of waiting for the admin to republish.
 const updateTeacher = `
-  UPDATE planner_teachers
-  SET user_id = $1, staff_id = $2, display_name = $3, is_full_time = $4,
-      max_weekly_minutes = $5, daily_spare_minutes = $6, max_days_per_week = $7,
-      allowed_days = $8::jsonb, excluded_windows = $9::jsonb, notes = $10,
-      max_spares_per_day = $11, avoid_adjacent_spares = $12, updated_at = NOW()
-  WHERE planner_teacher_id = $13 AND school = $14
-  RETURNING *
+  WITH updated AS (
+    UPDATE planner_teachers
+    SET user_id = $1, staff_id = $2, display_name = $3, is_full_time = $4,
+        max_weekly_minutes = $5, daily_spare_minutes = $6, max_days_per_week = $7,
+        allowed_days = $8::jsonb, excluded_windows = $9::jsonb, notes = $10,
+        max_spares_per_day = $11, avoid_adjacent_spares = $12, updated_at = NOW()
+    WHERE planner_teacher_id = $13 AND school = $14
+    RETURNING *
+  ), synced AS (
+    UPDATE planner_schedule_sessions pss
+    SET teacher_user_id = updated.user_id
+    FROM updated, planner_schedules ps
+    WHERE pss.planner_teacher_id = updated.planner_teacher_id
+      AND ps.schedule_id = pss.schedule_id
+      AND ps.status = 'published'
+      AND pss.teacher_user_id IS DISTINCT FROM updated.user_id
+  )
+  SELECT * FROM updated
 `;
 
 // ─── Period rules ────────────────────────────────────────────────────────
@@ -293,6 +307,16 @@ const selectMySessions = `
   ORDER BY pss.day_of_week, pss.start_min
 `;
 
+// Every session of the published schedule — the admin's whole-school view.
+const selectSchoolSessions = `
+  SELECT pss.*
+  FROM planner_schedule_sessions pss
+  JOIN planner_schedules ps ON ps.schedule_id = pss.schedule_id
+  WHERE ps.school = $1 AND ps.status = 'published'
+    AND ($2::uuid IS NULL OR pss.school_year_id = $2)
+  ORDER BY pss.day_of_week, pss.start_min, pss.teacher_name
+`;
+
 const selectPublicSchedule = `
   SELECT ps.schedule_id, ps.name AS schedule_name, ps.published_at, s.name AS school_name
   FROM planner_schedules ps
@@ -386,6 +410,7 @@ module.exports = {
   deleteSessionsForSchedule,
   insertScheduleSession,
   selectMySessions,
+  selectSchoolSessions,
   selectPublicSchedule,
   selectSessionsForSchedule,
   deleteFixedBlocksForSchedule,

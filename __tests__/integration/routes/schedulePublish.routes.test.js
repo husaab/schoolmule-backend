@@ -147,6 +147,52 @@ describe('Integration: GET /api/schedule-planner/my-schedule', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.sessions).toEqual([]);
   });
+
+  it('shows sessions to a teacher linked after publishing, without republishing', async () => {
+    await seedSchoolAndUser();
+    const { scheduleId } = await setupAndSaveDraft({ linkTeacherUser: false });
+    await asAdmin('post', `/api/schedule-planner/schedules/${scheduleId}/publish`);
+
+    const before = await asTeacher('get', '/api/schedule-planner/my-schedule');
+    expect(before.body.data.sessions).toEqual([]);
+
+    const teachers = await asAdmin('get', '/api/schedule-planner/teachers');
+    const { plannerTeacherId } = teachers.body.data[0];
+    const linkRes = await asAdmin('patch', `/api/schedule-planner/teachers/${plannerTeacherId}`).send({
+      userId: TEACHER_USER_ID,
+    });
+    expect(linkRes.status).toBe(200);
+    expect(linkRes.body.data.userId).toBe(TEACHER_USER_ID);
+
+    const after = await asTeacher('get', '/api/schedule-planner/my-schedule');
+    expect(after.body.data.sessions).toHaveLength(2);
+
+    // Unlinking removes them again
+    await asAdmin('patch', `/api/schedule-planner/teachers/${plannerTeacherId}`).send({ userId: null });
+    const unlinked = await asTeacher('get', '/api/schedule-planner/my-schedule');
+    expect(unlinked.body.data.sessions).toEqual([]);
+  });
+});
+
+describe('Integration: GET /api/schedule-planner/school-schedule', () => {
+  it('returns every session of the published schedule to admins', async () => {
+    await seedSchoolAndUser();
+    // Unlinked teacher: the admin view must not depend on account links.
+    const { scheduleId } = await setupAndSaveDraft({ linkTeacherUser: false });
+    await asAdmin('post', `/api/schedule-planner/schedules/${scheduleId}/publish`);
+
+    const res = await asAdmin('get', '/api/schedule-planner/school-schedule');
+    expect(res.status).toBe(200);
+    expect(res.body.data.sessions).toHaveLength(2);
+    expect(res.body.data.sessions[0].teacherName).toBe('Ms. X');
+    expect(res.body.data.schedule.name).toBe('Master Schedule');
+  });
+
+  it('is forbidden to teachers', async () => {
+    await seedSchoolAndUser();
+    const res = await asTeacher('get', '/api/schedule-planner/school-schedule');
+    expect(res.status).toBe(403);
+  });
 });
 
 describe('Integration: public schedule endpoint', () => {
