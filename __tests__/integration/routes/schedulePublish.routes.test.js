@@ -7,10 +7,13 @@ const { getTestPool } = require('../setup/setupTestDB');
 
 const SCHOOL = 'ALHAADIACADEMY';
 const TEACHER_USER_ID = '550e8400-e29b-41d4-a716-446655440042';
+const PARENT_USER_ID = '550e8400-e29b-41d4-a716-446655440043';
 
 const asAdmin = (method, url) => authenticatedRequest(method, url);
 const asTeacher = (method, url) =>
   authenticatedRequest(method, url, { role: 'TEACHER', userId: TEACHER_USER_ID });
+const asParent = (method, url) =>
+  authenticatedRequest(method, url, { role: 'PARENT', userId: PARENT_USER_ID });
 
 async function seedSchoolAndUser() {
   const pool = getTestPool();
@@ -212,9 +215,20 @@ describe('Integration: GET /api/schedule-planner/school-schedule', () => {
     expect(res.body.data.schedule.name).toBe('Master Schedule');
   });
 
-  it('is forbidden to teachers', async () => {
+  it('is readable by teachers, who see every session — not just their own', async () => {
     await seedSchoolAndUser();
+    const { scheduleId } = await setupAndSaveDraft({ linkTeacherUser: false });
+    await asAdmin('post', `/api/schedule-planner/schedules/${scheduleId}/publish`);
+
     const res = await asTeacher('get', '/api/schedule-planner/school-schedule');
+    expect(res.status).toBe(200);
+    expect(res.body.data.sessions).toHaveLength(2);
+    expect(res.body.data.schedule.name).toBe('Master Schedule');
+  });
+
+  it('is forbidden to parents', async () => {
+    await seedSchoolAndUser();
+    const res = await asParent('get', '/api/schedule-planner/school-schedule');
     expect(res.status).toBe(403);
   });
 });

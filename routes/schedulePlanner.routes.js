@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const requireAdmin = require('../middleware/requireAdmin');
+const requireStaff = require('../middleware/requireStaff');
 const controller = require('../controllers/schedulePlanner.controller');
 
 // Any verified user (teacher dashboard widget, /my-schedule page, exports).
@@ -9,11 +10,13 @@ router.get('/my-schedule', controller.getMySchedule);
 router.get('/my-schedule/pdf', controller.getMySchedulePdf);
 router.get('/my-schedule/ics', controller.getMyScheduleIcs);
 
+// Whole-school published timetable (navbar, dashboard, /school-schedule).
+// Any staff member may read it — teachers use it to find a class or a
+// colleague — but parents never see other people's timetables.
+router.get('/school-schedule', requireStaff, controller.getSchoolSchedule);
+
 // Everything below is ADMIN-only
 router.use(requireAdmin);
-
-// Whole-school published timetable (navbar, dashboard, /school-schedule).
-router.get('/school-schedule', controller.getSchoolSchedule);
 
 router.get('/config', controller.getConfig);
 
