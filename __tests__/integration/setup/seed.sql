@@ -896,14 +896,38 @@ CREATE TABLE IF NOT EXISTS ai_weekly_summaries (
 
 ALTER TABLE parent_students ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
 
--- Mirrors staff_work_schedules_migration.sql
+-- Mirrors staff_work_schedules_migration.sql + staff_pay_schedules_migration.sql
 CREATE TABLE IF NOT EXISTS staff_work_schedules (
-  user_id     UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
-  school      school NOT NULL,
-  work_days   SMALLINT[] NOT NULL CHECK (
-    cardinality(work_days) > 0 AND work_days <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[]
+  user_id       UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+  school        school NOT NULL,
+  work_days     SMALLINT[] CHECK (
+    work_days IS NULL OR (cardinality(work_days) > 0 AND work_days <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[])
   ),
-  updated_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  hours_per_day NUMERIC(4,2) CHECK (hours_per_day > 0 AND hours_per_day <= 24),
+  updated_by    UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT staff_work_schedules_not_empty CHECK (work_days IS NOT NULL OR hours_per_day IS NOT NULL)
 );
+
+-- Mirrors staff_pay_schedules_migration.sql
+CREATE TABLE IF NOT EXISTS staff_pay_schedules (
+  school                   school PRIMARY KEY,
+  frequency                TEXT NOT NULL CHECK (frequency IN ('MONTHLY', 'SEMI_MONTHLY', 'BIWEEKLY', 'WEEKLY')),
+  pay_day_of_month         SMALLINT CHECK (pay_day_of_month BETWEEN 1 AND 31),
+  second_pay_day_of_month  SMALLINT CHECK (second_pay_day_of_month BETWEEN 1 AND 31),
+  anchor_pay_date          DATE,
+  default_hours_per_day    NUMERIC(4,2) NOT NULL DEFAULT 7.5 CHECK (default_hours_per_day > 0 AND default_hours_per_day <= 24),
+  updated_by               UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT staff_pay_schedules_shape CHECK (
+    (frequency = 'MONTHLY'      AND pay_day_of_month IS NOT NULL) OR
+    (frequency = 'SEMI_MONTHLY' AND pay_day_of_month IS NOT NULL AND second_pay_day_of_month IS NOT NULL
+                                AND second_pay_day_of_month <> pay_day_of_month) OR
+    (frequency IN ('BIWEEKLY', 'WEEKLY') AND anchor_pay_date IS NOT NULL)
+  )
+);
+
+ALTER TABLE teacher_attendance
+  ADD COLUMN IF NOT EXISTS hours NUMERIC(4,2) CHECK (hours >= 0 AND hours <= 24);
