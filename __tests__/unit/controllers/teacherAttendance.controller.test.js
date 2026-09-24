@@ -920,5 +920,60 @@ describe('Teacher Attendance Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ schedule: null, period: null });
     });
+
+    it('returns the period containing ?date= so a past pay day can be reviewed', async () => {
+      const token = mockTeacherUser();
+      const db = require('../../__mocks__/config/database');
+      db.query.mockResolvedValueOnce({ rows: [payScheduleRow()], rowCount: 1 });
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { teacher_id: TEST_TEACHER_USER_ID, first_name: 'Teacher', last_name: 'User', username: 'teacher', attendance_date: '2026-08-10', status: 'ABSENT', notes: null, hours: null },
+          { teacher_id: TEST_TEACHER_USER_ID, first_name: 'Teacher', last_name: 'User', username: 'teacher', attendance_date: '2026-08-11', status: 'PRESENT', notes: null, hours: null },
+        ],
+        rowCount: 2,
+      });
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { day: '2026-08-10', is_elapsed: true },
+          { day: '2026-08-11', is_elapsed: true },
+        ],
+        rowCount: 2,
+      });
+      db.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      db.query.mockResolvedValueOnce({ rows: [payScheduleRow()], rowCount: 1 });
+
+      const res = await request(app)
+        .get('/api/teacher-attendance/me/pay-period')
+        .set('Authorization', `Bearer ${token}`)
+        .query({ date: '2026-08-01' });
+
+      expect(res.status).toBe(200);
+      // Aug 1 falls in the period paid Aug 25 (Jul 26 – Aug 25), which is over.
+      // (Before Sept 2026 nothing is assumed present, so both days are explicit.)
+      expect(res.body.data.period).toMatchObject({
+        payDate: '2026-08-25',
+        startDate: '2026-07-26',
+        endDate: '2026-08-25',
+        throughDate: '2026-08-25',
+        isComplete: true,
+        presentDays: 1,
+        absentDays: 1,
+        hoursWorked: 7,
+      });
+      // The range queried is the period, not the month.
+      const rangeCall = db.query.mock.calls.find((c) => Array.isArray(c[1]) && c[1].includes('2026-07-26'));
+      expect(rangeCall).toBeDefined();
+      expect(rangeCall[1]).toEqual(expect.arrayContaining(['2026-07-26', '2026-08-25']));
+    });
+
+    it('rejects a malformed ?date=', async () => {
+      const token = mockTeacherUser();
+      const res = await request(app)
+        .get('/api/teacher-attendance/me/pay-period')
+        .set('Authorization', `Bearer ${token}`)
+        .query({ date: '2026/08/01' });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('date must be YYYY-MM-DD');
+    });
   });
 });

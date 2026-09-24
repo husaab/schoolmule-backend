@@ -343,15 +343,19 @@ const updateMyRecord = async (req, res) => {
 };
 
 // GET /me/pay-period — my hours so far in the period paid on the next pay day
+// GET /me/pay-period?date=YYYY-MM-DD — the period containing that date (for history)
 const getMyPayPeriod = async (req, res) => {
   try {
     const { userId, school } = req.user;
+    const { date } = req.query;
+    if (date && !DATE_RE.test(date)) return fail(res, 400, "date must be YYYY-MM-DD");
+
     const schedule = await loadPaySchedule(school);
     if (!schedule) {
       return res.status(200).json({ status: "success", data: { schedule: null, period: null } });
     }
 
-    const period = payPeriods.periodContaining(schedule, torontoToday());
+    const period = payPeriods.periodContaining(schedule, date || torontoToday());
     const built = await buildPayPeriod(period, school, userId);
     const { teachers, ...meta } = built;
     const me = teachers.find((t) => t.teacherId === userId) ?? null;
