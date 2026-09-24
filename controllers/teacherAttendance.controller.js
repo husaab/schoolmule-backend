@@ -342,6 +342,21 @@ const updateMyRecord = async (req, res) => {
   }
 };
 
+// DELETE /me/:date — remove what I recorded for a day
+const deleteMyRecord = async (req, res) => {
+  try {
+    const { userId, school } = req.user;
+    const { date } = req.params;
+    if (!DATE_RE.test(date)) return fail(res, 400, "date must be YYYY-MM-DD");
+
+    const { rowCount } = await db.query(teacherAttendanceQueries.deleteRecord, [userId, date, school]);
+    return res.status(200).json({ status: "success", data: { teacherId: userId, attendanceDate: date, deleted: rowCount > 0 } });
+  } catch (error) {
+    logger.error(error);
+    return fail(res, 500, "Failed to delete record");
+  }
+};
+
 // GET /me/pay-period — my hours so far in the period paid on the next pay day
 // GET /me/pay-period?date=YYYY-MM-DD — the period containing that date (for history)
 const getMyPayPeriod = async (req, res) => {
@@ -436,6 +451,23 @@ const updateAnyRecord = async (req, res) => {
 };
 
 // ─── Admin: per-staff work profile ────────────────────────────────────────
+
+// DELETE /:teacherId/:date (admin) — remove a day's record for anyone
+const deleteAnyRecord = async (req, res) => {
+  try {
+    if (!isAdmin(req)) return forbid(res);
+
+    const { teacherId, date } = req.params;
+    if (!UUID_RE.test(teacherId)) return fail(res, 404, "Staff member not found");
+    if (!DATE_RE.test(date)) return fail(res, 400, "date must be YYYY-MM-DD");
+
+    const { rowCount } = await db.query(teacherAttendanceQueries.deleteRecord, [teacherId, date, req.user.school]);
+    return res.status(200).json({ status: "success", data: { teacherId, attendanceDate: date, deleted: rowCount > 0 } });
+  } catch (error) {
+    logger.error(error);
+    return fail(res, 500, "Failed to delete record");
+  }
+};
 
 const requireStaffMember = async (req, res) => {
   const { teacherId } = req.params;
@@ -690,9 +722,11 @@ module.exports = {
   checkIn,
   getMyMonth,
   updateMyRecord,
+  deleteMyRecord,
   getMyPayPeriod,
   getAllForSchoolMonth,
   updateAnyRecord,
+  deleteAnyRecord,
   setWorkDays,
   resetWorkDays,
   setHoursPerDay,

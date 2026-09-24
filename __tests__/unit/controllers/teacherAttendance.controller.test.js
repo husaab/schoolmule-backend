@@ -891,6 +891,62 @@ describe('Teacher Attendance Controller', () => {
     });
   });
 
+  describe('DELETE /api/teacher-attendance/me/:date and /:teacherId/:date', () => {
+    it('lets me remove my own record for a day', async () => {
+      const token = mockTeacherUser();
+      const db = require('../../__mocks__/config/database');
+      db.query.mockResolvedValueOnce({ rows: [{ teacher_id: TEST_TEACHER_USER_ID, attendance_date: '2026-09-10' }], rowCount: 1 });
+
+      const res = await request(app).delete('/api/teacher-attendance/me/2026-09-10').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ teacherId: TEST_TEACHER_USER_ID, attendanceDate: '2026-09-10', deleted: true });
+      const call = db.query.mock.calls.find((c) => c[0].includes('DELETE FROM teacher_attendance'));
+      expect(call[1]).toEqual([TEST_TEACHER_USER_ID, '2026-09-10', TEST_SCHOOL]);
+    });
+
+    it('reports deleted: false when there was nothing recorded (an assumed-present day)', async () => {
+      const token = mockTeacherUser();
+      mockQueryResponse([]);
+      const res = await request(app).delete('/api/teacher-attendance/me/2026-09-10').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.deleted).toBe(false);
+    });
+
+    it('rejects a malformed date', async () => {
+      const token = mockTeacherUser();
+      const res = await request(app).delete('/api/teacher-attendance/me/2026-9-1').set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(400);
+    });
+
+    it('lets an admin remove anyone\'s record, scoped to the admin\'s school', async () => {
+      const token = mockAdminUser();
+      const db = require('../../__mocks__/config/database');
+      db.query.mockResolvedValueOnce({ rows: [{ teacher_id: TEST_TEACHER_USER_ID, attendance_date: '2026-09-10' }], rowCount: 1 });
+
+      const res = await request(app)
+        .delete(`/api/teacher-attendance/${TEST_TEACHER_USER_ID}/2026-09-10`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ teacherId: TEST_TEACHER_USER_ID, attendanceDate: '2026-09-10', deleted: true });
+      const call = db.query.mock.calls.find((c) => c[0].includes('DELETE FROM teacher_attendance'));
+      expect(call[1]).toEqual([TEST_TEACHER_USER_ID, '2026-09-10', TEST_SCHOOL]);
+    });
+
+    it('is admin-only for other people and validates the id', async () => {
+      const teacher = mockTeacherUser();
+      const forbidden = await request(app)
+        .delete(`/api/teacher-attendance/${TEST_ADMIN_USER_ID}/2026-09-10`)
+        .set('Authorization', `Bearer ${teacher}`);
+      expect(forbidden.status).toBe(403);
+
+      const admin = mockAdminUser();
+      const bad = await request(app).delete('/api/teacher-attendance/not-a-uuid/2026-09-10').set('Authorization', `Bearer ${admin}`);
+      expect(bad.status).toBe(404);
+    });
+  });
+
   describe('GET /api/teacher-attendance/me/pay-period', () => {
     it('returns my hours so far in the current period', async () => {
       const token = mockTeacherUser();

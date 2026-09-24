@@ -4,9 +4,11 @@ const {
   checkIn,
   getMyMonth,
   updateMyRecord,
+  deleteMyRecord,
   getMyPayPeriod,
   getAllForSchoolMonth,
   updateAnyRecord,
+  deleteAnyRecord,
   setWorkDays,
   resetWorkDays,
   setHoursPerDay,
@@ -26,6 +28,7 @@ router.post("/checkin", checkIn);
 router.get("/me", getMyMonth);
 router.get("/me/pay-period", getMyPayPeriod);
 router.patch("/me/:date", updateMyRecord);
+router.delete("/me/:date", deleteMyRecord);
 router.get("/pdf", downloadPDF);
 
 // Pay schedule (per school) and pay periods (hours worked up to each pay day)
@@ -43,5 +46,6 @@ router.delete("/hours-per-day/:teacherId", resetHoursPerDay);
 // Base route & parameterized admin routes
 router.get("/", getAllForSchoolMonth);
 router.patch("/:teacherId/:date", updateAnyRecord);
+router.delete("/:teacherId/:date", deleteAnyRecord);
 
 module.exports = router;

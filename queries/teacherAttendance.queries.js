@@ -234,6 +234,15 @@ const teacherAttendanceQueries = {
   deletePaySchedule: `
     DELETE FROM staff_pay_schedules WHERE school = $1
   `,
+
+  // DELETE /me/:date and /:teacherId/:date — drop what was recorded for a day.
+  // The day then reads as it would with no record: assumed present when it is
+  // an elapsed expected day from Sept 2026 on, otherwise unmarked.
+  deleteRecord: `
+    DELETE FROM teacher_attendance
+    WHERE teacher_id = $1 AND attendance_date = $2::date AND school = $3
+    RETURNING teacher_id, attendance_date
+  `,
 };
 
 module.exports = teacherAttendanceQueries;
