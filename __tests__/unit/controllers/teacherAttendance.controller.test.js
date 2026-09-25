@@ -35,6 +35,7 @@ const payScheduleRow = (overrides = {}) => ({
   second_pay_day_of_month: null,
   anchor_pay_date: null,
   default_hours_per_day: '7.00',
+  work_day_start: null,
   updated_at: '2026-09-01T00:00:00Z',
   ...overrides,
 });
@@ -766,6 +767,8 @@ describe('Teacher Attendance Controller', () => {
         payDayOfMonth: 25,
         defaultHoursPerDay: 7,
         description: 'Monthly on the 25th',
+        workDayStart: null,
+        workDayStartLabel: null,
       });
       expect(res.body.data.currentPeriod.payDate).toMatch(/-25$/);
       expect(res.body.data.currentPeriod.startDate).toMatch(/-26$/);
@@ -790,12 +793,12 @@ describe('Teacher Attendance Controller', () => {
       const res = await request(app)
         .put(url)
         .set('Authorization', `Bearer ${token}`)
-        .send({ frequency: 'biweekly', anchorPayDate: '2026-09-11', defaultHoursPerDay: 8 });
+        .send({ frequency: 'biweekly', anchorPayDate: '2026-09-11', defaultHoursPerDay: 8, workDayStart: '8:30' });
 
       expect(res.status).toBe(200);
       expect(res.body.data.schedule.description).toBe('Every second Friday');
       const params = db.query.mock.calls.find((c) => c[0].includes('INSERT INTO staff_pay_schedules'))[1];
-      expect(params.slice(0, 6)).toEqual([TEST_SCHOOL, 'BIWEEKLY', null, null, '2026-09-11', 8]);
+      expect(params.slice(0, 7)).toEqual([TEST_SCHOOL, 'BIWEEKLY', null, null, '2026-09-11', 8, '08:30']);
     });
 
     it('validates the payload', async () => {

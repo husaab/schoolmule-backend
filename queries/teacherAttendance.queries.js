@@ -217,8 +217,8 @@ const teacherAttendanceQueries = {
 
   upsertPaySchedule: `
     INSERT INTO staff_pay_schedules
-      (school, frequency, pay_day_of_month, second_pay_day_of_month, anchor_pay_date, default_hours_per_day, updated_by)
-    VALUES ($1, $2, $3, $4, $5::date, $6, $7)
+      (school, frequency, pay_day_of_month, second_pay_day_of_month, anchor_pay_date, default_hours_per_day, work_day_start, updated_by)
+    VALUES ($1, $2, $3, $4, $5::date, $6, $7::time, $8)
     ON CONFLICT (school)
     DO UPDATE SET
       frequency = EXCLUDED.frequency,
@@ -226,6 +226,7 @@ const teacherAttendanceQueries = {
       second_pay_day_of_month = EXCLUDED.second_pay_day_of_month,
       anchor_pay_date = EXCLUDED.anchor_pay_date,
       default_hours_per_day = EXCLUDED.default_hours_per_day,
+      work_day_start = EXCLUDED.work_day_start,
       updated_by = EXCLUDED.updated_by,
       updated_at = now()
     RETURNING *

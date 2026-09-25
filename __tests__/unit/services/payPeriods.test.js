@@ -7,6 +7,7 @@ const {
   sumHours,
   normalizeSchedule,
   describeSchedule,
+  describeWorkDayStart,
 } = require('../../../services/payPeriods');
 
 const monthly25 = { frequency: 'MONTHLY', payDayOfMonth: 25 };
@@ -127,8 +128,17 @@ describe('payPeriods', () => {
           secondPayDayOfMonth: null,
           anchorPayDate: null,
           defaultHoursPerDay: 7,
+          workDayStart: null,
         },
       });
+    });
+
+    it('accepts and normalizes an expected start time', () => {
+      expect(normalizeSchedule({ frequency: 'MONTHLY', payDayOfMonth: 25, workDayStart: '8:30' }).value.workDayStart).toBe('08:30');
+      expect(normalizeSchedule({ frequency: 'MONTHLY', payDayOfMonth: 25, workDayStart: '08:30:00' }).value.workDayStart).toBe('08:30');
+      expect(normalizeSchedule({ frequency: 'MONTHLY', payDayOfMonth: 25, workDayStart: '' }).value.workDayStart).toBeNull();
+      expect(normalizeSchedule({ frequency: 'MONTHLY', payDayOfMonth: 25, workDayStart: '25:00' }).error).toMatch(/workDayStart/);
+      expect(normalizeSchedule({ frequency: 'MONTHLY', payDayOfMonth: 25, workDayStart: 'morning' }).error).toMatch(/workDayStart/);
     });
 
     it('orders semi-monthly days', () => {
@@ -149,6 +159,13 @@ describe('payPeriods', () => {
         /defaultHoursPerDay/
       );
     });
+  });
+
+  it('describes the expected start time', () => {
+    expect(describeWorkDayStart('08:30:00')).toBe('8:30 a.m.');
+    expect(describeWorkDayStart('13:05')).toBe('1:05 p.m.');
+    expect(describeWorkDayStart('00:00')).toBe('12:00 a.m.');
+    expect(describeWorkDayStart(null)).toBeNull();
   });
 
   it('describes schedules', () => {

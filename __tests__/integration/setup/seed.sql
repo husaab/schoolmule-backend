@@ -918,6 +918,7 @@ CREATE TABLE IF NOT EXISTS staff_pay_schedules (
   second_pay_day_of_month  SMALLINT CHECK (second_pay_day_of_month BETWEEN 1 AND 31),
   anchor_pay_date          DATE,
   default_hours_per_day    NUMERIC(4,2) NOT NULL DEFAULT 7.5 CHECK (default_hours_per_day > 0 AND default_hours_per_day <= 24),
+  work_day_start           TIME,
   updated_by               UUID REFERENCES users(user_id) ON DELETE SET NULL,
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),

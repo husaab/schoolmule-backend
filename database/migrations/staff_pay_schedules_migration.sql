@@ -62,7 +62,7 @@ ALTER TABLE teacher_attendance
 
 -- ─── Al Haadi Academy: paid monthly on the 25th ──────────────────────────
 INSERT INTO staff_pay_schedules (school, frequency, pay_day_of_month, default_hours_per_day)
-VALUES ('ALHAADIACADEMY', 'MONTHLY', 25, 7.0)
+VALUES ('ALHAADIACADEMY', 'MONTHLY', 25, 6.5)
 ON CONFLICT (school) DO NOTHING;
 
 -- ─── Al Haadi Academy: drop check-ins recorded outside any school year ───

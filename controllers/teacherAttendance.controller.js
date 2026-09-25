@@ -98,6 +98,9 @@ const mapSchedule = (row) =>
         secondPayDayOfMonth: row.second_pay_day_of_month ?? null,
         anchorPayDate: row.anchor_pay_date ? dateKey(row.anchor_pay_date) : null,
         defaultHoursPerDay: Number(row.default_hours_per_day),
+        // pg returns TIME as "HH:MM:SS"; the API speaks "HH:MM".
+        workDayStart: row.work_day_start ? String(row.work_day_start).substring(0, 5) : null,
+        workDayStartLabel: payPeriods.describeWorkDayStart(row.work_day_start),
         description: payPeriods.describeSchedule({
           frequency: row.frequency,
           payDayOfMonth: row.pay_day_of_month,
@@ -592,7 +595,7 @@ const getPaySchedule = async (req, res) => {
   }
 };
 
-// PUT /pay-schedule (admin) — body { frequency, payDayOfMonth?, secondPayDayOfMonth?, anchorPayDate?, defaultHoursPerDay? }
+// PUT /pay-schedule (admin) — body { frequency, payDayOfMonth?, secondPayDayOfMonth?, anchorPayDate?, defaultHoursPerDay?, workDayStart? }
 const savePaySchedule = async (req, res) => {
   try {
     if (!isAdmin(req)) return forbid(res);
@@ -607,6 +610,7 @@ const savePaySchedule = async (req, res) => {
       value.secondPayDayOfMonth,
       value.anchorPayDate,
       value.defaultHoursPerDay,
+      value.workDayStart,
       req.user.userId,
     ]);
     const schedule = mapSchedule(rows[0]);

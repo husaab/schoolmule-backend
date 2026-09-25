@@ -187,8 +187,11 @@ const getStaffAttendanceHTML = (data) => {
     )
     .join("");
 
+  const workDay = schedule?.workDayStartLabel
+    ? `Work day: <strong>from ${escHtml(schedule.workDayStartLabel)}, ${fmtHours(schedule.defaultHoursPerDay)} h</strong>`
+    : `Default day: <strong>${fmtHours(schedule?.defaultHoursPerDay)} h</strong>`;
   const scheduleLine = schedule
-    ? `Pay schedule: <strong>${escHtml(schedule.description)}</strong> &nbsp;|&nbsp; Default day: <strong>${fmtHours(schedule.defaultHoursPerDay)} h</strong>`
+    ? `Pay schedule: <strong>${escHtml(schedule.description)}</strong> &nbsp;|&nbsp; ${workDay}`
     : `No pay schedule configured &mdash; hours use ${fmtHours(data.schoolHoursPerDay ?? 7.5)} h per day`;
 
   return `<!DOCTYPE html>

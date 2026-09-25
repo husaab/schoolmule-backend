@@ -129,6 +129,18 @@ const normalizeSchedule = (body) => {
     return { error: "defaultHoursPerDay must be between 0 and 24" };
   }
 
+  // Optional "expected in by" time, HH:MM (24h). Empty clears it.
+  let workDayStart = null;
+  if (body.workDayStart !== null && body.workDayStart !== undefined && String(body.workDayStart).trim() !== "") {
+    const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(body.workDayStart).trim());
+    const hh = match ? Number(match[1]) : NaN;
+    const mm = match ? Number(match[2]) : NaN;
+    if (!match || hh > 23 || mm > 59) {
+      return { error: "workDayStart must be a time of day (HH:MM)" };
+    }
+    workDayStart = `${String(hh).padStart(2, "0")}:${match[2]}`;
+  }
+
   const dayOk = (d) => Number.isInteger(d) && d >= 1 && d <= 31;
   const value = {
     frequency,
@@ -136,6 +148,7 @@ const normalizeSchedule = (body) => {
     secondPayDayOfMonth: null,
     anchorPayDate: null,
     defaultHoursPerDay: Math.round(hours * 100) / 100,
+    workDayStart,
   };
 
   if (frequency === "MONTHLY" || frequency === "SEMI_MONTHLY") {
@@ -171,6 +184,16 @@ const ordinal = (n) => {
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+/** "8:30 a.m." from "08:30" / "08:30:00"; null when unset. */
+const describeWorkDayStart = (time) => {
+  if (!time) return null;
+  const [hh, mm] = String(time).split(":").map(Number);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  const suffix = hh < 12 ? "a.m." : "p.m.";
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12}:${String(mm).padStart(2, "0")} ${suffix}`;
+};
+
 const describeSchedule = (schedule) => {
   if (!schedule) return null;
   switch (schedule.frequency) {
@@ -201,4 +224,5 @@ module.exports = {
   sumHours,
   normalizeSchedule,
   describeSchedule,
+  describeWorkDayStart,
 };
