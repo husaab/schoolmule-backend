@@ -6,7 +6,9 @@ const escHtml = (str) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const displayName = (t) => escHtml(`${t.firstName || ""} ${t.lastName || t.username || ""}`.trim());
+/** "First Last", falling back to the username when there is no last name. */
+const staffName = (t) => `${t.firstName || ""} ${t.lastName || t.username || ""}`.trim();
+const displayName = (t) => escHtml(staffName(t));
 
 /** "Sept 25, 2026" from a YYYY-MM-DD key, without any timezone shift. */
 const longDate = (key) => {
@@ -262,4 +264,4 @@ const getStaffAttendanceHTML = (data) => {
 </html>`;
 };
 
-module.exports = { getStaffAttendanceHTML };
+module.exports = { getStaffAttendanceHTML, fmtHours, longDate, staffName };

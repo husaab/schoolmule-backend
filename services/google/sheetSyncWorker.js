@@ -4,7 +4,12 @@
 //
 // Changes enqueue a job row inside the caller's own transaction, so a write
 // survives a crash or a restart. This module is what turns those rows into
-// actual Sheets writes.
+// actual Sheets writes — a form's tab (kind = 'form') or a school's staff-hours
+// spreadsheet (kind = 'staff_hours').
+//
+// It also owns the nightly refresh of every linked staff-hours sheet: the
+// in-progress pay period's assumed-present hours grow each day with no
+// database write, so nothing else would ever queue a sync for them.
 //
 // IMPORTANT: startWorker() must only be called from a real server process (see
 // the require.main guard in server.js). Every test suite requires server.js, so
@@ -14,6 +19,7 @@ const db = require('../../config/database');
 const logger = require('../../logger');
 const queries = require('../../queries/googleSheets.queries');
 const { syncForm } = require('./sheetSyncEngine');
+const { syncStaffHours } = require('./staffHoursSyncEngine');
 const { NeedsReconnectError } = require('./googleAuth');
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -23,12 +29,36 @@ const MAX_ATTEMPTS = 6;
 
 let timer = null;
 let draining = false;
+// Toronto date of the last nightly enqueue. Every tenant is an Ontario
+// school, so one clock serves them all.
+let lastNightlyDate = null;
 // Set when the outbox tables are missing. A worker that cannot possibly
 // succeed should say so once and stand down, not log an error every tick.
 let disabledReason = null;
 
 // Postgres: relation does not exist.
 const UNDEFINED_TABLE = '42P01';
+
+const torontoDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+
+/** Runs the sync a job asks for. Jobs from before the migration have no kind and are forms. */
+const runJob = (job) => (job.kind === 'staff_hours' ? syncStaffHours(job.school) : syncForm(job.form_id));
+
+/**
+ * Queue a refresh of every linked staff-hours sheet once per Toronto day.
+ * Several server instances may each fire; the outbox's partial unique index
+ * collapses them into one job per school.
+ *
+ * @returns the number of jobs queued
+ */
+async function enqueueNightlyIfDue(today = torontoDate()) {
+  if (today === lastNightlyDate) return 0;
+  // Mark first so a database hiccup does not make every tick retry it.
+  lastNightlyDate = today;
+  const { rows } = await db.query(queries.enqueueNightlyStaffHoursJobs, []);
+  if (rows.length > 0) logger.info({ schools: rows.length }, 'Nightly staff hours sheet refresh queued');
+  return rows.length;
+}
 
 /**
  * Process one job, if any is due.
@@ -45,11 +75,11 @@ async function drainOnce() {
       // The sheets migration has not been applied to this database. Stop
       // rather than repeating this every 5 seconds; a restart after the
       // migration brings the worker back.
-      disabledReason = 'google_sheets_sync_migration.sql has not been applied';
+      disabledReason = 'google_sheets_sync_migration.sql / staff_hours_sheet_migration.sql has not been applied';
       stopWorker();
       logger.error(
-        { migration: 'google_sheets_sync_migration.sql' },
-        'Sheet sync worker disabled: outbox tables are missing. Apply the migration and restart.',
+        { migrations: ['google_sheets_sync_migration.sql', 'staff_hours_sheet_migration.sql'] },
+        'Sheet sync worker disabled: outbox tables are missing. Apply the migrations and restart.',
       );
       return 0;
     }
@@ -59,8 +89,9 @@ async function drainOnce() {
   const job = rows[0];
   if (!job) return 0;
 
+  const target = { jobId: job.job_id, kind: job.kind || 'form', formId: job.form_id, school: job.school };
   try {
-    await syncForm(job.form_id);
+    await runJob(job);
     await db.query(queries.completeJob, [job.job_id]);
     return 1;
   } catch (error) {
@@ -68,15 +99,12 @@ async function drainOnce() {
     // fixes it, so fail now instead of burning an hour of backoff.
     if (error instanceof NeedsReconnectError || error?.needsReconnect) {
       await db.query(queries.failJobPermanently, [job.job_id, 'Google access needs to be reconnected']);
-      logger.warn({ formId: job.form_id }, 'Sheet sync halted: reconnect required');
+      logger.warn(target, 'Sheet sync halted: reconnect required');
       return 1;
     }
 
     await db.query(queries.failJob, [job.job_id, String(error.message || error), MAX_ATTEMPTS]);
-    logger.warn(
-      { formId: job.form_id, attempts: job.attempts, err: error.message },
-      'Sheet sync failed; will retry',
-    );
+    logger.warn({ ...target, attempts: job.attempts, err: error.message }, 'Sheet sync failed; will retry');
     return 1;
   }
 }
@@ -103,12 +131,15 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   }
 
   disabledReason = null;
+  // A restart part-way through the day must not re-run the nightly refresh.
+  lastNightlyDate = torontoDate();
 
   timer = setInterval(async () => {
     // Skip a tick rather than overlapping runs; the next one picks up anyway.
     if (draining) return;
     draining = true;
     try {
+      if (!disabledReason) await enqueueNightlyIfDue();
       await drainAll();
     } catch (error) {
       // Never let a worker error take the process down.
@@ -135,6 +166,9 @@ module.exports = {
   stopWorker,
   drainOnce,
   drainAll,
+  enqueueNightlyIfDue,
   MAX_ATTEMPTS,
   isDisabled: () => disabledReason,
+  // Test hook: forget the last nightly date.
+  _resetNightly: () => { lastNightlyDate = null; },
 };

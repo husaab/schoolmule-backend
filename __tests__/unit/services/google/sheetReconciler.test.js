@@ -185,3 +185,110 @@ describe('planReconcile', () => {
     expect(plan.updates).toHaveLength(0); // the first 120 already match exactly
   });
 });
+
+// ─── planReconcileGrid (the general planner the form adapter sits on) ───────
+
+const { planReconcileGrid } = require('../../../../services/google/sheetReconciler');
+
+describe('planReconcileGrid', () => {
+  const info = ['Pay day Sept 25, 2026', 'Period complete'];
+  const head = ['Staff ID', 'Staff member', 'Hours'];
+  const rows = [
+    { id: 't1', values: ['t1', 'Aisha Khan', 84.5] },
+    { id: 't2', values: ['t2', 'Bilal Ahmed', 40] },
+  ];
+  const total = { id: '__total__', values: ['__total__', 'Total', 124.5] };
+  const mark = (existing) => {
+    const v = [...existing];
+    if (!String(v[1]).endsWith(' (removed)')) v[1] = `${v[1]} (removed)`;
+    return v;
+  };
+
+  it('writes every header row and appends every row into an empty tab', () => {
+    const plan = planReconcileGrid({ grid: [], headerRows: [info, head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.insertColumns).toBe(0);
+    expect(plan.headerWrites).toEqual([
+      { rowIndex: 0, values: ['Pay day Sept 25, 2026', 'Period complete', ''] },
+      { rowIndex: 1, values: head },
+    ]);
+    expect(plan.appends).toEqual([rows[0].values, rows[1].values, total.values]);
+    expect(plan.appendStartRow).toBe(2);
+  });
+
+  it('is a no-op when the sheet matches, even though Sheets trims trailing blanks', () => {
+    const grid = [
+      ['Pay day Sept 25, 2026', 'Period complete'], // short: trailing blank trimmed by Sheets
+      head,
+      ['t1', 'Aisha Khan', '84.5'],
+      ['t2', 'Bilal Ahmed', '40'],
+      ['__total__', 'Total', '124.5'],
+    ];
+    const plan = planReconcileGrid({ grid, headerRows: [info, head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.isNoop).toBe(true);
+  });
+
+  it('does not mistake a short title row for a narrow block', () => {
+    const grid = [['Pay day Sept 25, 2026'], head, ['t1', 'Aisha Khan', '84.5']];
+    const plan = planReconcileGrid({ grid, headerRows: [info, head], rows, width: 3 });
+    expect(plan.insertColumns).toBe(0);
+  });
+
+  it('inserts columns based on the stored previous width, not the grid', () => {
+    // The block grew from 3 to 4 columns and the school has a notes column
+    // sitting right where the new column must go: the read at width 4
+    // returns their notes in column D.
+    const grid = [[...head, 'Notes'], ['t1', 'Aisha Khan', '84.5', 'called Monday']];
+    const plan = planReconcileGrid({
+      grid, headerRows: [[...head, 'Total']], rows: [{ id: 't1', values: ['t1', 'Aisha Khan', 84.5, 84.5] }],
+      width: 4, previousWidth: 3,
+    });
+    expect(plan.insertColumns).toBe(1);
+    expect(plan.headerWrites[0].values).toEqual([...head, 'Total']);
+    expect(plan.updates).toEqual([{ rowIndex: 1, values: ['t1', 'Aisha Khan', 84.5, 84.5] }]);
+  });
+
+  it('keeps the pinned row last when new rows are appended', () => {
+    const grid = [head, ['t1', 'Aisha Khan', '84.5'], ['__total__', 'Total', '84.5']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    // t2 takes the Total row's slot; Total is re-emitted after it.
+    expect(plan.appendStartRow).toBe(2);
+    expect(plan.appends).toEqual([rows[1].values, total.values]);
+    expect(plan.updates).toEqual([]);
+  });
+
+  it('updates the pinned row in place when nothing is appended', () => {
+    const grid = [head, ['t1', 'Aisha Khan', '84.5'], ['t2', 'Bilal Ahmed', '40'], ['__total__', 'Total', '0']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.appends).toEqual([]);
+    expect(plan.updates).toEqual([{ rowIndex: 3, values: total.values }]);
+  });
+
+  it('falls back to a plain append when the school typed rows beneath the pinned one', () => {
+    const grid = [head, ['t1', 'Aisha Khan', '84.5'], ['__total__', 'Total', '84.5'], ['', 'my own note', '']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.appendStartRow).toBe(4);
+    expect(plan.appends).toEqual([rows[1].values]);
+    expect(plan.updates).toEqual([{ rowIndex: 2, values: total.values }]);
+  });
+
+  it('marks rows with no matching id using the caller\'s rule, and never deletes them', () => {
+    const grid = [head, ['t1', 'Aisha Khan', '84.5'], ['t9', 'Old Teacher', '10']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [rows[0]], width: 3, missing: { mark } });
+    expect(plan.updates).toEqual([{ rowIndex: 2, values: ['t9', 'Old Teacher (removed)', '10'] }]);
+    // Already marked → nothing to write.
+    const again = planReconcileGrid({ grid: [head, ['t1', 'Aisha Khan', '84.5'], ['t9', 'Old Teacher (removed)', '10']], headerRows: [head], rows: [rows[0]], width: 3, missing: { mark } });
+    expect(again.isNoop).toBe(true);
+  });
+
+  it('leaves unmatched rows alone when no missing rule is given', () => {
+    const grid = [head, ['t9', 'Old Teacher', '10']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [], width: 3 });
+    expect(plan.isNoop).toBe(true);
+  });
+
+  it('pads every write to the owned width so a shrunken block blanks its stale cells', () => {
+    const plan = planReconcileGrid({ grid: [], headerRows: [head], rows: [rows[0]], width: 5 });
+    expect(plan.headerWrites[0].values).toEqual([...head, '', '']);
+    expect(plan.appends[0]).toEqual(['t1', 'Aisha Khan', 84.5, '', '']);
+  });
+});

@@ -276,5 +276,45 @@ describe('Google Sheets Controller', () => {
       );
       expect(res.headers.location).toContain('google=connected');
     });
+
+    it('returns the admin to the page they started from', async () => {
+      const state = signState({ school: 'ALHAADIACADEMY', userId: 'u1', returnTo: '/staff-attendance', iat: Date.now() });
+      googleAuth.exchangeCode.mockResolvedValueOnce({ refreshToken: 'rt', email: 'a@b.ca' });
+      googleAuth.saveConnection.mockResolvedValueOnce({});
+
+      const res = await request(app)
+        .get(`/api/registration/google/callback?code=abc&state=${encodeURIComponent(state)}`);
+      expect(res.headers.location).toBe('https://schoolmule.ca/staff-attendance?google=connected');
+    });
+
+    it('returns a declined consent to the same page', async () => {
+      const state = signState({ school: 'ALHAADIACADEMY', userId: 'u1', returnTo: '/staff-attendance', iat: Date.now() });
+      const res = await request(app)
+        .get(`/api/registration/google/callback?error=access_denied&state=${encodeURIComponent(state)}`);
+      expect(res.headers.location).toBe('https://schoolmule.ca/staff-attendance?google=denied');
+    });
+
+    it('never redirects outside the allowlist, even from a signed state', async () => {
+      const state = signState({ school: 'ALHAADIACADEMY', userId: 'u1', returnTo: 'https://evil.example', iat: Date.now() });
+      const res = await request(app)
+        .get(`/api/registration/google/callback?error=access_denied&state=${encodeURIComponent(state)}`);
+      expect(res.headers.location).toBe('https://schoolmule.ca/admin-panel/forms/submissions?google=denied');
+    });
+  });
+
+  describe('GET /google/auth-url?returnTo=', () => {
+    it('bakes an allowlisted return path into the signed state', async () => {
+      const token = mockAdminUser();
+      await request(app).get('/api/registration/google/auth-url?returnTo=/staff-attendance')
+        .set('Authorization', `Bearer ${token}`);
+      expect(verifyState(googleAuth.buildAuthUrl.mock.calls.at(-1)[0].nonce).returnTo).toBe('/staff-attendance');
+    });
+
+    it('falls back to the forms page for anything else', async () => {
+      const token = mockAdminUser();
+      await request(app).get('/api/registration/google/auth-url?returnTo=/other')
+        .set('Authorization', `Bearer ${token}`);
+      expect(verifyState(googleAuth.buildAuthUrl.mock.calls.at(-1)[0].nonce).returnTo).toBe('/admin-panel/forms/submissions');
+    });
   });
 });

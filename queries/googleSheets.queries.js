@@ -1,7 +1,8 @@
 // queries/googleSheets.queries.js
 //
 // SQL for the Google Sheets sync: the per-school connection, each form's link
-// to a spreadsheet tab, and the outbox that drives writes.
+// to a spreadsheet tab, the school's staff-hours spreadsheet, and the outbox
+// that drives writes for both.
 //
 // Anything reached by form id is school-scoped through registration_forms, so a
 // form id from another tenant matches nothing rather than leaking a row.
@@ -105,9 +106,28 @@ const googleSheetsQueries = {
   // a live job, so a burst of edits yields one write. The EXISTS guard keeps
   // jobs from piling up for forms nobody has linked a sheet to.
   enqueueJob: `
-    INSERT INTO sheet_sync_jobs (form_id)
-    SELECT $1
+    INSERT INTO sheet_sync_jobs (kind, form_id)
+    SELECT 'form', $1
     WHERE EXISTS (SELECT 1 FROM form_sheet_links WHERE form_id = $1)
+    ON CONFLICT DO NOTHING
+    RETURNING job_id
+  `,
+
+  // Same coalescing, keyed by school: one live staff-hours job per school.
+  enqueueStaffHoursJob: `
+    INSERT INTO sheet_sync_jobs (kind, school)
+    SELECT 'staff_hours', $1
+    WHERE EXISTS (SELECT 1 FROM staff_hours_sheet_links WHERE school = $1)
+    ON CONFLICT DO NOTHING
+    RETURNING job_id
+  `,
+
+  // The nightly refresh: every school with a linked staff-hours sheet. The
+  // in-progress pay period's assumed-present hours grow each day with no
+  // database write, so nothing else would ever trigger a sync for them.
+  enqueueNightlyStaffHoursJobs: `
+    INSERT INTO sheet_sync_jobs (kind, school)
+    SELECT 'staff_hours', school FROM staff_hours_sheet_links
     ON CONFLICT DO NOTHING
     RETURNING job_id
   `,
@@ -153,9 +173,61 @@ const googleSheetsQueries = {
   selectJobForForm: `
     SELECT job_id, state, attempts, next_attempt_at, last_error
     FROM sheet_sync_jobs
-    WHERE form_id = $1
+    WHERE kind = 'form' AND form_id = $1
     ORDER BY created_at DESC
     LIMIT 1
+  `,
+
+  selectJobForStaffHours: `
+    SELECT job_id, state, attempts, next_attempt_at, last_error
+    FROM sheet_sync_jobs
+    WHERE kind = 'staff_hours' AND school = $1
+    ORDER BY created_at DESC
+    LIMIT 1
+  `,
+
+  // ─── Staff hours → sheet link (one spreadsheet per school) ────────────
+
+  selectStaffHoursLink: `
+    SELECT link_id, school, spreadsheet_id, spreadsheet_name, tab_widths,
+           last_synced_at, last_error, created_by, created_at
+    FROM staff_hours_sheet_links
+    WHERE school = $1
+  `,
+
+  // Re-linking (to the same or a different spreadsheet) starts fresh: tab
+  // widths are re-learned and any old error cleared.
+  upsertStaffHoursLink: `
+    INSERT INTO staff_hours_sheet_links (school, spreadsheet_id, spreadsheet_name, created_by)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (school) DO UPDATE
+      SET spreadsheet_id   = EXCLUDED.spreadsheet_id,
+          spreadsheet_name = EXCLUDED.spreadsheet_name,
+          created_by       = EXCLUDED.created_by,
+          tab_widths       = '{}'::jsonb,
+          last_error       = NULL,
+          last_synced_at   = NULL
+    RETURNING *
+  `,
+
+  // Unlinking only forgets the link. The spreadsheet and its contents are the
+  // school's, and are never modified or deleted by us.
+  deleteStaffHoursLink: `
+    DELETE FROM staff_hours_sheet_links WHERE school = $1 RETURNING link_id
+  `,
+
+  updateStaffHoursLinkSynced: `
+    UPDATE staff_hours_sheet_links
+    SET last_synced_at = now(), last_error = NULL, tab_widths = $2::jsonb
+    WHERE school = $1
+    RETURNING *
+  `,
+
+  updateStaffHoursLinkError: `
+    UPDATE staff_hours_sheet_links
+    SET last_error = $2
+    WHERE school = $1
+    RETURNING *
   `,
 
   // ─── Rows to write ────────────────────────────────────────────────────

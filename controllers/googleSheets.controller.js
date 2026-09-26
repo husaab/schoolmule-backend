@@ -19,6 +19,12 @@ const { buildHeaderRow } = require('../services/google/sheetReconciler');
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
+// Where the browser lands after Google's callback. An allowlist rather than a
+// free-form URL: the value rides through Google in the state parameter, and
+// an open redirect there would be an easy phishing hop.
+const RETURN_PATHS = ['/admin-panel/forms/submissions', '/staff-attendance'];
+const safeReturnTo = (path) => (RETURN_PATHS.includes(path) ? path : RETURN_PATHS[0]);
+
 function signState(payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(body).digest('base64url');
@@ -64,6 +70,14 @@ const toCamelLink = (row) => (row ? {
   lastError: row.last_error,
 } : { linked: false });
 
+/** The link, the school's connection, and the state of its latest job, as one payload. */
+const sheetStatusPayload = (link, connRow, jobRow) => ({
+  ...link,
+  connection: toCamelConnection(connRow),
+  pendingSync: jobRow ? jobRow.state !== 'failed' : false,
+  jobError: jobRow?.state === 'failed' ? jobRow.last_error : null,
+});
+
 async function loadForm(formId, school) {
   const { rows } = await db.query(registrationQueries.selectFormById, [formId, school]);
   return rows[0] || null;
@@ -92,7 +106,12 @@ const getConnectionStatus = async (req, res) => {
 const getAuthUrl = async (req, res) => {
   try {
     const url = googleAuth.buildAuthUrl({
-      nonce: signState({ school: req.user.school, userId: req.user.userId, iat: Date.now() }),
+      nonce: signState({
+        school: req.user.school,
+        userId: req.user.userId,
+        returnTo: safeReturnTo(req.query.returnTo),
+        iat: Date.now(),
+      }),
     });
     return res.status(200).json({ status: 'success', data: { url } });
   } catch (error) {
@@ -110,12 +129,14 @@ const getAuthUrl = async (req, res) => {
  */
 const oauthCallback = async (req, res) => {
   const appUrl = process.env.FRONTEND_URL || '';
-  const back = (params) => res.redirect(`${appUrl}/admin-panel/forms/submissions?${params}`);
+  // Verified before anything else so even a declined consent returns the
+  // admin to the page they started from.
+  const state = verifyState(req.query.state);
+  const back = (params) => res.redirect(`${appUrl}${safeReturnTo(state?.returnTo)}?${params}`);
 
   try {
     if (req.query.error) return back(`google=denied`);
 
-    const state = verifyState(req.query.state);
     // The school comes from the signed state, never from a query parameter, so
     // a forged callback cannot attach a Google account to another tenant.
     if (!state) return back('google=invalid_state');
@@ -161,12 +182,7 @@ const getSheetLink = async (req, res) => {
 
     return res.status(200).json({
       status: 'success',
-      data: {
-        ...toCamelLink(linkRows[0]),
-        connection: toCamelConnection(connRows[0]),
-        pendingSync: jobRows[0] ? jobRows[0].state !== 'failed' : false,
-        jobError: jobRows[0]?.state === 'failed' ? jobRows[0].last_error : null,
-      },
+      data: sheetStatusPayload(toCamelLink(linkRows[0]), connRows[0], jobRows[0]),
     });
   } catch (error) {
     logger.error({ err: error }, 'Error loading sheet link');
@@ -281,6 +297,9 @@ const syncNow = async (req, res) => {
 };
 
 module.exports = {
+  toCamelConnection,
+  sheetStatusPayload,
+  safeReturnTo,
   getConnectionStatus,
   getAuthUrl,
   oauthCallback,

@@ -1035,4 +1035,78 @@ describe('Teacher Attendance Controller', () => {
       expect(res.body.message).toBe('date must be YYYY-MM-DD');
     });
   });
+
+  // ─── Staff hours sheet: every mutation queues a refresh ─────────
+  describe('staff hours sheet sync trigger', () => {
+    const db = require('../../__mocks__/config/database');
+    const ENQUEUE = /INSERT INTO sheet_sync_jobs \(kind, school\)/;
+    const enqueued = () => db.query.mock.calls.filter(([sql]) => ENQUEUE.test(sql));
+
+    it('queues a refresh after an admin edits a day', async () => {
+      const token = mockAdminUser();
+      mockQueryResponse([buildTeacherAttendanceRow({ teacher_id: TEST_TEACHER_USER_ID, status: 'ABSENT' })]);
+      mockQueryResponse([{ job_id: 'j1' }]);
+
+      const res = await request(app)
+        .patch(`/api/teacher-attendance/${TEST_TEACHER_USER_ID}/2025-10-15`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: 'ABSENT' });
+
+      expect(res.status).toBe(200);
+      expect(enqueued()).toHaveLength(1);
+      expect(enqueued()[0][1]).toEqual([TEST_SCHOOL]);
+    });
+
+    it('queues a refresh after a teacher checks in', async () => {
+      const token = mockTeacherUser();
+      mockQueryResponse([buildTeacherAttendanceRow({ teacher_id: TEST_TEACHER_USER_ID, status: 'PRESENT' })]);
+
+      const res = await request(app)
+        .post('/api/teacher-attendance/checkin')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: 'PRESENT', date: '2025-10-15' });
+
+      expect(res.status).toBe(200);
+      expect(enqueued()).toHaveLength(1);
+    });
+
+    it('queues a refresh when the pay schedule changes', async () => {
+      const token = mockAdminUser();
+      mockQueryResponse([payScheduleRow()]);
+
+      const res = await request(app)
+        .put('/api/teacher-attendance/pay-schedule')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ frequency: 'MONTHLY', payDayOfMonth: 25, defaultHoursPerDay: 6.5 });
+
+      expect(res.status).toBe(200);
+      expect(enqueued()).toHaveLength(1);
+    });
+
+    it('does not queue anything when a delete removed nothing', async () => {
+      const token = mockAdminUser();
+      mockQueryResponse([], 0);
+
+      const res = await request(app)
+        .delete(`/api/teacher-attendance/${TEST_TEACHER_USER_ID}/2025-10-15`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.deleted).toBe(false);
+      expect(enqueued()).toHaveLength(0);
+    });
+
+    it('never fails the request because the outbox is unavailable', async () => {
+      const token = mockAdminUser();
+      mockQueryResponse([buildTeacherAttendanceRow({ teacher_id: TEST_TEACHER_USER_ID, status: 'PRESENT' })]);
+      mockQueryError(new Error('relation "sheet_sync_jobs" does not exist'));
+
+      const res = await request(app)
+        .patch(`/api/teacher-attendance/${TEST_TEACHER_USER_ID}/2025-10-15`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: 'PRESENT' });
+
+      expect(res.status).toBe(200);
+    });
+  });
 });

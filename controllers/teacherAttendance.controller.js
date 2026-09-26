@@ -5,19 +5,23 @@ const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStaffAttendanceHTML } = require("../templates/staffAttendanceTemplate");
 const payPeriods = require("../services/payPeriods");
 
-/**
- * Staff are assumed present on every open school day from this date onward
- * unless they — or an admin — recorded something else. Floored at the start of
- * the 2026-2027 year so earlier years keep exactly the records they have.
- * Combined with the calendar rule, the first assumed day for a school is its
- * first non-closed weekday: Sept 8, 2026 for Al Haadi (Sept 7 is Labour Day).
- */
-const ASSUMED_PRESENT_FROM = "2026-09-01";
+const googleSheetsQueries = require("../queries/googleSheets.queries");
+const {
+  DEFAULT_HOURS_PER_DAY,
+  DEFAULT_PROFILE,
+  torontoToday,
+  monthRange,
+  mapRecord,
+  mapSchedule,
+  loadOpenSchoolDays,
+  loadWorkDays,
+  loadPaySchedule,
+  expectedDaysFor,
+  assemblePerson,
+  buildSchoolMonth,
+  buildPayPeriod,
+} = require("../services/staffAttendance/assembly");
 
-/** Hours a work day is worth when neither the school nor the person says. */
-const DEFAULT_HOURS_PER_DAY = 7.5;
-
-const EVERY_WEEKDAY = [1, 2, 3, 4, 5];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,201 +31,18 @@ const forbid = (res) => res.status(403).json({ status: "failed", message: "Admin
 const fail = (res, code, message) => res.status(code).json({ status: "failed", message });
 const OUTSIDE_YEAR = "That date is outside the school year";
 
-/** Normalize a pg DATE (or ISO string) to a YYYY-MM-DD key without shifting timezone. */
-const dateKey = (value) => {
-  if (value instanceof Date) {
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
-    return `${value.getFullYear()}-${month}-${day}`;
+/**
+ * Queues a refresh of the school's linked staff-hours Google Sheet. Best
+ * effort by design: a sheet that briefly lags is far better than a check-in
+ * failing because the outbox is unavailable. A no-op for schools with no
+ * linked sheet, and coalesced when a job is already pending.
+ */
+const queueStaffHoursSync = async (school) => {
+  try {
+    await db.query(googleSheetsQueries.enqueueStaffHoursJob, [school]);
+  } catch (error) {
+    logger.warn({ err: error, school }, "Could not queue staff hours sheet sync");
   }
-  return String(value).substring(0, 10);
-};
-
-/** Today for every tenant (all Ontario schools), matching selectOpenSchoolDays' is_elapsed. */
-const torontoToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
-
-/** First and last day of a YYYY-MM month. */
-const monthRange = (month) => {
-  const [y, m] = month.split("-").map(Number);
-  return { start: `${month}-01`, end: payPeriods.clampedDay(y, m, 31) };
-};
-
-/** ISO weekday (Monday = 1 … Sunday = 7) of a YYYY-MM-DD key, in local time. */
-const isoWeekday = (key) => {
-  const [y, m, d] = key.split("-").map(Number);
-  const dow = new Date(y, m - 1, d).getDay();
-  return dow === 0 ? 7 : dow;
-};
-
-const mapRecord = (row) => ({
-  attendanceDate: row.attendance_date,
-  status: row.status,
-  notes: row.notes ?? null,
-  hours: row.hours === null || row.hours === undefined ? null : Number(row.hours),
-});
-
-// ─── Loaders ──────────────────────────────────────────────────────────────
-
-const loadOpenSchoolDays = async (start, end, school) => {
-  const { rows } = await db.query(teacherAttendanceQueries.selectOpenSchoolDays, [start, end, school]);
-  return rows.map((r) => ({ day: r.day, isElapsed: r.is_elapsed }));
-};
-
-/**
- * Each staff member's work profile over a range, keyed by user_id: the days
- * they work (admin override → schedule planner → every weekday) and their
- * admin-set hours per day, if any. `source` lets the UI say where days came from.
- */
-const loadWorkDays = async (start, end, school, userId = null) => {
-  const { rows } = await db.query(teacherAttendanceQueries.selectWorkDayInputs, [school, start, end, userId]);
-  const byUser = new Map();
-  for (const row of rows) {
-    const hoursPerDay = row.hours_per_day === null || row.hours_per_day === undefined ? null : Number(row.hours_per_day);
-    if (row.custom_days?.length) {
-      byUser.set(row.user_id, { days: row.custom_days.map(Number), source: "custom", hoursPerDay });
-    } else if (row.planner_days?.length) {
-      byUser.set(row.user_id, { days: row.planner_days.map(Number), source: "planner", hoursPerDay });
-    } else {
-      byUser.set(row.user_id, { days: EVERY_WEEKDAY, source: "default", hoursPerDay });
-    }
-  }
-  return byUser;
-};
-
-const DEFAULT_PROFILE = { days: EVERY_WEEKDAY, source: "default", hoursPerDay: null };
-
-const mapSchedule = (row) =>
-  row
-    ? {
-        frequency: row.frequency,
-        payDayOfMonth: row.pay_day_of_month ?? null,
-        secondPayDayOfMonth: row.second_pay_day_of_month ?? null,
-        anchorPayDate: row.anchor_pay_date ? dateKey(row.anchor_pay_date) : null,
-        defaultHoursPerDay: Number(row.default_hours_per_day),
-        // pg returns TIME as "HH:MM:SS"; the API speaks "HH:MM".
-        workDayStart: row.work_day_start ? String(row.work_day_start).substring(0, 5) : null,
-        workDayStartLabel: payPeriods.describeWorkDayStart(row.work_day_start),
-        description: payPeriods.describeSchedule({
-          frequency: row.frequency,
-          payDayOfMonth: row.pay_day_of_month,
-          secondPayDayOfMonth: row.second_pay_day_of_month,
-          anchorPayDate: row.anchor_pay_date ? dateKey(row.anchor_pay_date) : null,
-        }),
-        updatedAt: row.updated_at ?? null,
-      }
-    : null;
-
-const loadPaySchedule = async (school) => {
-  const { rows } = await db.query(teacherAttendanceQueries.selectPaySchedule, [school]);
-  return mapSchedule(rows[0]);
-};
-
-// ─── Attendance assembly ──────────────────────────────────────────────────
-
-/** Open school days this person actually works — their expected days. */
-const expectedDaysFor = (openDays, workDays) =>
-  openDays.filter((d) => workDays.days.includes(isoWeekday(d.day)));
-
-/**
- * Fill in the days a teacher never explicitly recorded. Any elapsed expected
- * day (open school day they work) on or after ASSUMED_PRESENT_FROM with no
- * record of its own reads as PRESENT — assumed and confirmed days are
- * deliberately indistinguishable. Days they don't work stay empty, but a real
- * check-in on one (covering a shift) is kept and counts.
- *
- * Nothing is written to the database, so the dashboard check-in prompt is
- * unaffected: it reads teacher_attendance directly and keeps asking until a
- * real row exists.
- */
-const withAssumedPresent = (records, expectedDays) => {
-  const recorded = new Set(records.map((r) => dateKey(r.attendanceDate)));
-
-  const assumed = expectedDays
-    .filter((d) => d.isElapsed && d.day >= ASSUMED_PRESENT_FROM && !recorded.has(d.day))
-    .map((d) => ({ attendanceDate: d.day, status: "PRESENT", notes: null, hours: null }));
-
-  return [...records, ...assumed].sort((a, b) =>
-    dateKey(a.attendanceDate).localeCompare(dateKey(b.attendanceDate))
-  );
-};
-
-/** One person's assembled range: records with assumed days, work days, hours. */
-const assemblePerson = (records, openDays, profile, schoolHoursPerDay) => {
-  const expectedDays = expectedDaysFor(openDays, profile);
-  const filled = withAssumedPresent(records, expectedDays);
-  const hoursPerDay = profile.hoursPerDay ?? schoolHoursPerDay;
-  return {
-    records: filled,
-    workDays: profile.days,
-    workDaysSource: profile.source,
-    workingDays: expectedDays.length,
-    elapsedWorkingDays: expectedDays.filter((d) => d.isElapsed).length,
-    presentDays: filled.filter((r) => r.status === "PRESENT").length,
-    absentDays: filled.filter((r) => r.status === "ABSENT").length,
-    hoursPerDay,
-    hoursPerDaySource: profile.hoursPerDay !== null ? "custom" : "school",
-    hoursWorked: payPeriods.sumHours(filled, hoursPerDay),
-  };
-};
-
-/**
- * Shared read path for the admin views, the pay-period views and the PDF:
- * every teacher at the school (or one, with userId) with their records over
- * a date range, assumed-present days included, plus work days, working-day
- * count and hours worked.
- */
-const buildSchoolRange = async (start, end, school, userId = null) => {
-  const [dataResult, openDays, profiles, schedule] = await Promise.all([
-    db.query(teacherAttendanceQueries.selectAllForSchoolRange, [start, end, school, userId]),
-    loadOpenSchoolDays(start, end, school),
-    loadWorkDays(start, end, school, userId),
-    loadPaySchedule(school),
-  ]);
-  const schoolHoursPerDay = schedule?.defaultHoursPerDay ?? DEFAULT_HOURS_PER_DAY;
-
-  const teacherMap = {};
-  dataResult.rows.forEach((row) => {
-    const tid = row.teacher_id;
-    if (!teacherMap[tid]) {
-      teacherMap[tid] = {
-        teacherId: tid,
-        firstName: row.first_name,
-        lastName: row.last_name,
-        username: row.username,
-        records: [],
-      };
-    }
-    if (row.attendance_date) teacherMap[tid].records.push(mapRecord(row));
-  });
-
-  const teachers = Object.values(teacherMap).map((t) => ({
-    ...t,
-    ...assemblePerson(t.records, openDays, profiles.get(t.teacherId) ?? DEFAULT_PROFILE, schoolHoursPerDay),
-  }));
-
-  // Top-level workingDays stays the school's open days for older clients.
-  return { teachers, workingDays: openDays.length, schedule, schoolHoursPerDay };
-};
-
-const buildSchoolMonth = (month, school) => {
-  const { start, end } = monthRange(month);
-  return buildSchoolRange(start, end, school);
-};
-
-/**
- * A pay period with everyone's hours: the range assembled for the period,
- * trimmed to what has elapsed, and labelled so a report can say "through
- * Sept 23" while the pay day is still ahead.
- */
-const buildPayPeriod = async (period, school, userId = null) => {
-  const today = torontoToday();
-  const { teachers } = await buildSchoolRange(period.startDate, period.endDate, school, userId);
-  return {
-    ...period,
-    throughDate: period.endDate < today ? period.endDate : today,
-    isComplete: period.endDate <= today,
-    teachers,
-  };
 };
 
 // ─── Self-service ─────────────────────────────────────────────────────────
@@ -277,6 +98,7 @@ const checkIn = async (req, res) => {
     const trimmedNotes = notes ? String(notes).trim() || null : null;
     const { rows } = await db.query(teacherAttendanceQueries.upsertCheckin, [userId, date, status, school, trimmedNotes]);
     if (rows.length === 0) return fail(res, 400, OUTSIDE_YEAR);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -334,6 +156,7 @@ const updateMyRecord = async (req, res) => {
     const trimmedNotes = notes ? String(notes).trim() || null : null;
     const { rows } = await db.query(teacherAttendanceQueries.updateMyRecord, [userId, date, status, school, trimmedNotes]);
     if (rows.length === 0) return fail(res, 400, OUTSIDE_YEAR);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -353,6 +176,7 @@ const deleteMyRecord = async (req, res) => {
     if (!DATE_RE.test(date)) return fail(res, 400, "date must be YYYY-MM-DD");
 
     const { rowCount } = await db.query(teacherAttendanceQueries.deleteRecord, [userId, date, school]);
+    if (rowCount > 0) await queueStaffHoursSync(school);
     return res.status(200).json({ status: "success", data: { teacherId: userId, attendanceDate: date, deleted: rowCount > 0 } });
   } catch (error) {
     logger.error(error);
@@ -442,6 +266,7 @@ const updateAnyRecord = async (req, res) => {
       hoursOverride,
     ]);
     if (rows.length === 0) return fail(res, 400, OUTSIDE_YEAR);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -465,6 +290,7 @@ const deleteAnyRecord = async (req, res) => {
     if (!DATE_RE.test(date)) return fail(res, 400, "date must be YYYY-MM-DD");
 
     const { rowCount } = await db.query(teacherAttendanceQueries.deleteRecord, [teacherId, date, req.user.school]);
+    if (rowCount > 0) await queueStaffHoursSync(req.user.school);
     return res.status(200).json({ status: "success", data: { teacherId, attendanceDate: date, deleted: rowCount > 0 } });
   } catch (error) {
     logger.error(error);
@@ -506,6 +332,7 @@ const setWorkDays = async (req, res) => {
 
     const days = [...new Set(workDays)].sort((a, b) => a - b);
     await db.query(teacherAttendanceQueries.upsertWorkSchedule, [teacherId, req.user.school, days, req.user.userId]);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -526,6 +353,7 @@ const resetWorkDays = async (req, res) => {
     if (!UUID_RE.test(teacherId)) return fail(res, 404, "Staff member not found");
     await db.query(teacherAttendanceQueries.deleteWorkScheduleIfOnlyDays, [teacherId, req.user.school]);
     await db.query(teacherAttendanceQueries.clearWorkDays, [teacherId, req.user.school, req.user.userId]);
+    await queueStaffHoursSync(req.user.school);
     return res.status(200).json({ status: "success", data: { teacherId } });
   } catch (error) {
     logger.error(error);
@@ -547,6 +375,7 @@ const setHoursPerDay = async (req, res) => {
 
     const rounded = Math.round(hours * 100) / 100;
     await db.query(teacherAttendanceQueries.upsertHoursPerDay, [teacherId, req.user.school, rounded, req.user.userId]);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -567,6 +396,7 @@ const resetHoursPerDay = async (req, res) => {
     if (!UUID_RE.test(teacherId)) return fail(res, 404, "Staff member not found");
     await db.query(teacherAttendanceQueries.deleteWorkScheduleIfOnlyHours, [teacherId, req.user.school]);
     await db.query(teacherAttendanceQueries.clearHoursPerDay, [teacherId, req.user.school, req.user.userId]);
+    await queueStaffHoursSync(req.user.school);
     return res.status(200).json({ status: "success", data: { teacherId } });
   } catch (error) {
     logger.error(error);
@@ -614,6 +444,7 @@ const savePaySchedule = async (req, res) => {
       req.user.userId,
     ]);
     const schedule = mapSchedule(rows[0]);
+    await queueStaffHoursSync(req.user.school);
 
     return res.status(200).json({
       status: "success",
@@ -630,6 +461,7 @@ const deletePaySchedule = async (req, res) => {
   try {
     if (!isAdmin(req)) return forbid(res);
     await db.query(teacherAttendanceQueries.deletePaySchedule, [req.user.school]);
+    await queueStaffHoursSync(req.user.school);
     return res.status(200).json({ status: "success", data: { schedule: null } });
   } catch (error) {
     logger.error(error);

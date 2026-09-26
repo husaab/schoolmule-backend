@@ -172,3 +172,68 @@ describe('worker lifecycle', () => {
     spy.mockRestore();
   });
 });
+
+// ─── Staff-hours jobs and the nightly refresh ────────────────────────────────
+
+jest.mock('../../../../services/google/staffHoursSyncEngine', () => ({ syncStaffHours: jest.fn() }));
+const { syncStaffHours } = require('../../../../services/google/staffHoursSyncEngine');
+
+describe('sheetSyncWorker job kinds', () => {
+  afterEach(() => worker.stopWorker());
+
+  it('routes a staff_hours job to the staff-hours engine by school', async () => {
+    mockQueryResponse([job({ kind: 'staff_hours', form_id: null, school: 'ALHAADIACADEMY' })]);
+    syncStaffHours.mockResolvedValueOnce({ synced: true });
+    mockQueryResponse([{ job_id: 'j1' }]); // completeJob
+
+    await expect(worker.drainOnce()).resolves.toBe(1);
+    expect(syncStaffHours).toHaveBeenCalledWith('ALHAADIACADEMY');
+    expect(syncForm).not.toHaveBeenCalled();
+  });
+
+  it('treats a job with no kind (queued before the migration) as a form job', async () => {
+    mockQueryResponse([job()]);
+    syncForm.mockResolvedValueOnce({ synced: true });
+    mockQueryResponse([{ job_id: 'j1' }]);
+
+    await worker.drainOnce();
+    expect(syncForm).toHaveBeenCalledWith('form-1');
+    expect(syncStaffHours).not.toHaveBeenCalled();
+  });
+
+  it('halts a staff-hours job permanently on a dead grant, like a form job', async () => {
+    mockQueryResponse([job({ kind: 'staff_hours', form_id: null, school: 'ALHAADIACADEMY' })]);
+    syncStaffHours.mockRejectedValueOnce(new NeedsReconnectError());
+    mockQueryResponse([job({ state: 'failed' })]);
+
+    await worker.drainOnce();
+    expect(db.query.mock.calls.some(([sql]) => /state = 'failed'/.test(sql))).toBe(true);
+  });
+});
+
+describe('sheetSyncWorker.enqueueNightlyIfDue', () => {
+  beforeEach(() => worker._resetNightly());
+
+  it('queues one refresh per linked school, once per day', async () => {
+    mockQueryResponse([{ job_id: 'a' }, { job_id: 'b' }]);
+    await expect(worker.enqueueNightlyIfDue('2026-09-27')).resolves.toBe(2);
+    expect(sqlsUsed().some((s) => /SELECT 'staff_hours', school FROM staff_hours_sheet_links/.test(s))).toBe(true);
+
+    const before = db.query.mock.calls.length;
+    await expect(worker.enqueueNightlyIfDue('2026-09-27')).resolves.toBe(0);
+    expect(db.query.mock.calls.length).toBe(before); // same day: no database call
+  });
+
+  it('fires again once the Toronto date changes', async () => {
+    mockQueryResponse([{ job_id: 'a' }]);
+    await worker.enqueueNightlyIfDue('2026-09-27');
+    mockQueryResponse([{ job_id: 'b' }]);
+    await expect(worker.enqueueNightlyIfDue('2026-09-28')).resolves.toBe(1);
+  });
+
+  it('does not retry on every tick after a database failure', async () => {
+    db.query.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(worker.enqueueNightlyIfDue('2026-09-27')).rejects.toThrow('connection terminated');
+    await expect(worker.enqueueNightlyIfDue('2026-09-27')).resolves.toBe(0);
+  });
+});

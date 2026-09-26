@@ -19,6 +19,7 @@ const {
   getPayPeriods,
   downloadPDF,
 } = require("../controllers/teacherAttendance.controller");
+const sheet = require("../controllers/staffHoursSheet.controller");
 
 const router = express.Router();
 
@@ -36,6 +37,13 @@ router.get("/pay-schedule", getPaySchedule);
 router.put("/pay-schedule", savePaySchedule);
 router.delete("/pay-schedule", deletePaySchedule);
 router.get("/pay-periods", getPayPeriods);
+
+// Staff hours → Google Sheet (admin). Connecting Google itself is shared with
+// the forms integration: /api/registration/google/*.
+router.get("/sheet", sheet.getSheetLink);
+router.put("/sheet", sheet.linkSheet);
+router.delete("/sheet", sheet.unlinkSheet);
+router.post("/sheet/sync", sheet.syncNow);
 
 // Per-staff work profile (admin)
 router.put("/work-days/:teacherId", setWorkDays);

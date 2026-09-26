@@ -61,10 +61,14 @@ async function getSpreadsheetMeta(auth, spreadsheetId) {
 }
 
 /** Creates a spreadsheet owned by the connected account. Accessible to us under
- *  drive.file precisely because we created it. */
-async function createSpreadsheet(auth, title) {
+ *  drive.file precisely because we created it. `firstTabTitle` names the tab
+ *  Google creates anyway, so a sheet we lay out ourselves never starts with a
+ *  stray "Sheet1". */
+async function createSpreadsheet(auth, title, { firstTabTitle } = {}) {
+  const requestBody = { properties: { title } };
+  if (firstTabTitle) requestBody.sheets = [{ properties: { title: firstTabTitle } }];
   const { data } = await sheetsApi(auth).spreadsheets.create({
-    requestBody: { properties: { title } },
+    requestBody,
     fields: 'spreadsheetId,properties.title,sheets.properties(sheetId,title)',
   });
   return {
@@ -91,6 +95,47 @@ async function addTab(auth, spreadsheetId, title) {
   return { sheetId: props.sheetId, title: props.title };
 }
 
+/**
+ * Makes sure every title has a tab, creating the missing ones in one batch.
+ * Titles in `pinFirst` are created at index 0 (leftmost); everything else is
+ * appended in the order given. Existing tabs are never moved.
+ *
+ * @returns Map<title, {sheetId, title}>
+ */
+async function ensureTabs(auth, spreadsheetId, titles, { pinFirst = [] } = {}) {
+  const meta = await getSpreadsheetMeta(auth, spreadsheetId);
+  const byTitle = new Map(meta.tabs.map((t) => [t.title, { sheetId: t.sheetId, title: t.title }]));
+
+  const requests = titles
+    .filter((title) => !byTitle.has(title))
+    .map((title) => ({
+      addSheet: { properties: pinFirst.includes(title) ? { title, index: 0 } : { title } },
+    }));
+
+  if (requests.length > 0) {
+    const { data } = await sheetsApi(auth).spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
+    });
+    for (const reply of data.replies || []) {
+      const props = reply.addSheet.properties;
+      byTitle.set(props.title, { sheetId: props.sheetId, title: props.title });
+    }
+  }
+  return byTitle;
+}
+
+/** Reads several tabs' owned blocks in one call. Same order as `tabs`. */
+async function readGrids(auth, { spreadsheetId, tabs }) {
+  if (tabs.length === 0) return [];
+  const { data } = await sheetsApi(auth).spreadsheets.values.batchGet({
+    spreadsheetId,
+    ranges: tabs.map((t) => blockRange(t.tabName, t.width)),
+    majorDimension: 'ROWS',
+  });
+  return tabs.map((_, i) => data.valueRanges?.[i]?.values || []);
+}
+
 /** Confirms we can still write, and returns the file's name for display. */
 async function getFileName(auth, fileId) {
   const { data } = await driveApi(auth).files.get({ fileId, fields: 'name' });
@@ -98,27 +143,49 @@ async function getFileName(auth, fileId) {
 }
 
 /**
- * Applies a reconciler plan in a single batch.
+ * Applies reconciler plans for one or more tabs of a spreadsheet: one
+ * batchUpdate for every column insert, then one values.batchUpdate for every
+ * cell write, whichever tab they belong to.
  *
  * Order matters: a column insert must land before any value write, or the
  * values go into the wrong columns.
+ *
+ * @param tabPlans Array<{ sheetTabId, tabName, plan }> where plan comes from
+ *                 planReconcileGrid (headerWrites) or planReconcile (headerWrite).
  */
-async function applyPlan(auth, { spreadsheetId, sheetTabId, tabName, plan }) {
+async function applyMultiTabPlan(auth, { spreadsheetId, tabPlans }) {
   const requests = [];
+  const valueData = [];
 
-  if (plan.insertColumns > 0) {
-    requests.push({
-      insertDimension: {
-        range: {
-          sheetId: sheetTabId,
-          dimension: 'COLUMNS',
-          // Insert immediately before the school's columns so their data shifts
-          // right intact rather than being overwritten.
-          startIndex: plan.ownedColumns - plan.insertColumns,
-          endIndex: plan.ownedColumns,
+  for (const { sheetTabId, tabName, plan } of tabPlans) {
+    if (plan.insertColumns > 0) {
+      requests.push({
+        insertDimension: {
+          range: {
+            sheetId: sheetTabId,
+            dimension: 'COLUMNS',
+            // Insert immediately before the school's columns so their data
+            // shifts right intact rather than being overwritten.
+            startIndex: plan.ownedColumns - plan.insertColumns,
+            endIndex: plan.ownedColumns,
+          },
+          inheritFromBefore: true,
         },
-        inheritFromBefore: true,
-      },
+      });
+    }
+
+    const headerWrites = plan.headerWrites || (plan.headerWrite ? [plan.headerWrite] : []);
+    for (const h of headerWrites) {
+      valueData.push({ range: rowRange(tabName, h.rowIndex, plan.ownedColumns), values: [h.values] });
+    }
+    for (const u of plan.updates) {
+      valueData.push({ range: rowRange(tabName, u.rowIndex, plan.ownedColumns), values: [u.values] });
+    }
+    plan.appends.forEach((row, i) => {
+      valueData.push({
+        range: rowRange(tabName, plan.appendStartRow + i, plan.ownedColumns),
+        values: [row],
+      });
     });
   }
 
@@ -126,32 +193,20 @@ async function applyPlan(auth, { spreadsheetId, sheetTabId, tabName, plan }) {
     await sheetsApi(auth).spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
   }
 
-  // Values go through values.batchUpdate, which takes A1 ranges bounded to our
-  // owned width — the mechanism that guarantees we never touch their columns.
-  const valueData = [];
-  if (plan.headerWrite) {
-    valueData.push({
-      range: rowRange(tabName, plan.headerWrite.rowIndex, plan.ownedColumns),
-      values: [plan.headerWrite.values],
-    });
-  }
-  for (const u of plan.updates) {
-    valueData.push({ range: rowRange(tabName, u.rowIndex, plan.ownedColumns), values: [u.values] });
-  }
-  plan.appends.forEach((row, i) => {
-    valueData.push({
-      range: rowRange(tabName, plan.appendStartRow + i, plan.ownedColumns),
-      values: [row],
-    });
-  });
-
   if (valueData.length === 0) return { writes: 0 };
 
+  // Values go through values.batchUpdate, which takes A1 ranges bounded to our
+  // owned width — the mechanism that guarantees we never touch their columns.
   await sheetsApi(auth).spreadsheets.values.batchUpdate({
     spreadsheetId,
     requestBody: { valueInputOption: 'RAW', data: valueData },
   });
   return { writes: valueData.length };
+}
+
+/** Applies a single tab's plan. */
+function applyPlan(auth, { spreadsheetId, sheetTabId, tabName, plan }) {
+  return applyMultiTabPlan(auth, { spreadsheetId, tabPlans: [{ sheetTabId, tabName, plan }] });
 }
 
 module.exports = {
@@ -162,6 +217,9 @@ module.exports = {
   getSpreadsheetMeta,
   createSpreadsheet,
   addTab,
+  ensureTabs,
+  readGrids,
   getFileName,
   applyPlan,
+  applyMultiTabPlan,
 };
