@@ -4,6 +4,7 @@ const controller = require('../controllers/registration.controller');
 const importController = require('../controllers/registrationImport.controller');
 const statusController = require('../controllers/registrationStatus.controller');
 const sheetsController = require('../controllers/googleSheets.controller');
+const requireAdmin = require('../middleware/requireAdmin');
 
 // ─── Forms ──────────────────────────────────────────────────────────
 router.get('/forms', controller.getForms);
@@ -38,6 +39,11 @@ router.get('/forms/:formId/sheet', sheetsController.getSheetLink);
 router.put('/forms/:formId/sheet', sheetsController.linkSheet);
 router.delete('/forms/:formId/sheet', sheetsController.unlinkSheet);
 router.post('/forms/:formId/sheet/sync', sheetsController.syncNow);
+// Sharing grants outsiders access to every submission in the spreadsheet, so
+// it is admin-only even though the rest of this router is open to all staff.
+router.get('/forms/:formId/sheet/shares', requireAdmin, sheetsController.listShares);
+router.post('/forms/:formId/sheet/shares', requireAdmin, sheetsController.addShare);
+router.delete('/forms/:formId/sheet/shares/:permissionId', requireAdmin, sheetsController.removeShare);
 
 // ─── Submission statuses ────────────────────────────────────────────
 // Shared by every form in the school, so these are not nested under a form.

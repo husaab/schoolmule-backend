@@ -109,3 +109,40 @@ describe('applyMultiTabPlan', () => {
       .toEqual([{ range: "'T'!A1:C1", values: [['a', 'b', 'c']] }]);
   });
 });
+
+describe('sharing', () => {
+  const mockPermissions = { list: jest.fn(), create: jest.fn(), delete: jest.fn() };
+  const { google } = require('googleapis');
+  beforeEach(() => {
+    Object.values(mockPermissions).forEach((fn) => fn.mockReset());
+    google.drive = () => ({ permissions: mockPermissions });
+  });
+
+  it('lists permissions in our shape', async () => {
+    mockPermissions.list.mockResolvedValue({ data: { permissions: [
+      { id: 'p1', type: 'user', role: 'owner', emailAddress: 'a@b.ca', displayName: 'A' },
+      { id: 'p2', type: 'anyone', role: 'reader' },
+    ] } });
+    await expect(sheetsClient.listPermissions(auth, 'ss-1')).resolves.toEqual([
+      { id: 'p1', type: 'user', role: 'owner', email: 'a@b.ca', displayName: 'A' },
+      { id: 'p2', type: 'anyone', role: 'reader', email: null, displayName: null },
+    ]);
+  });
+
+  it('shares with a person and lets Google send the notification', async () => {
+    mockPermissions.create.mockResolvedValue({ data: { id: 'p3', type: 'user', role: 'writer', emailAddress: 'c@d.ca' } });
+    const share = await sheetsClient.sharePermission(auth, 'ss-1', { email: 'c@d.ca', role: 'writer' });
+    expect(mockPermissions.create).toHaveBeenCalledWith(expect.objectContaining({
+      fileId: 'ss-1',
+      sendNotificationEmail: true,
+      requestBody: { type: 'user', role: 'writer', emailAddress: 'c@d.ca' },
+    }));
+    expect(share).toMatchObject({ id: 'p3', role: 'writer', email: 'c@d.ca' });
+  });
+
+  it('removes a permission by id', async () => {
+    mockPermissions.delete.mockResolvedValue({});
+    await sheetsClient.removePermission(auth, 'ss-1', 'p3');
+    expect(mockPermissions.delete).toHaveBeenCalledWith({ fileId: 'ss-1', permissionId: 'p3' });
+  });
+});

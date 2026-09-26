@@ -14,6 +14,7 @@ const queries = require('../queries/googleSheets.queries');
 const googleAuth = require('../services/google/googleAuth');
 const sheetsClient = require('../services/google/sheetsClient');
 const { sheetStatusPayload } = require('./googleSheets.controller');
+const { makeShareHandlers, connectedEmail } = require('./sheetSharing.controller');
 const { OVERVIEW_TAB } = require('../services/google/staffHoursSheetLayout');
 
 const isAdmin = (req) => req.user.role === 'ADMIN';
@@ -148,4 +149,22 @@ const syncNow = async (req, res) => {
   }
 };
 
-module.exports = { getSheetLink, linkSheet, unlinkSheet, syncNow };
+// ─── Sharing ──────────────────────────────────────────────────────────
+
+const shares = makeShareHandlers(async (req) => {
+  const { rows } = await db.query(queries.selectStaffHoursLink, [req.user.school]);
+  if (rows.length === 0) return null;
+  return { spreadsheetId: rows[0].spreadsheet_id, googleEmail: await connectedEmail(req.user.school) };
+});
+
+const adminOnly = (handler) => (req, res) => (isAdmin(req) ? handler(req, res) : forbid(res));
+
+module.exports = {
+  getSheetLink,
+  linkSheet,
+  unlinkSheet,
+  syncNow,
+  listShares: adminOnly(shares.listShares),
+  addShare: adminOnly(shares.addShare),
+  removeShare: adminOnly(shares.removeShare),
+};

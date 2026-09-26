@@ -44,6 +44,9 @@ router.get("/sheet", sheet.getSheetLink);
 router.put("/sheet", sheet.linkSheet);
 router.delete("/sheet", sheet.unlinkSheet);
 router.post("/sheet/sync", sheet.syncNow);
+router.get("/sheet/shares", sheet.listShares);
+router.post("/sheet/shares", sheet.addShare);
+router.delete("/sheet/shares/:permissionId", sheet.removeShare);
 
 // Per-staff work profile (admin)
 router.put("/work-days/:teacherId", setWorkDays);

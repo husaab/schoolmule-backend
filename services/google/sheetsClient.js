@@ -142,6 +142,46 @@ async function getFileName(auth, fileId) {
   return data.name;
 }
 
+// ─── Sharing ─────────────────────────────────────────────────────────
+// drive.file covers the Drive permissions of the files it grants, so a
+// spreadsheet we created or the admin picked can be shared on the connected
+// account's behalf — no wider scope needed.
+
+const PERMISSION_FIELDS = 'permissions(id,type,role,emailAddress,displayName)';
+
+/** Everyone the file is shared with, owner included. */
+async function listPermissions(auth, fileId) {
+  const { data } = await driveApi(auth).permissions.list({ fileId, fields: PERMISSION_FIELDS });
+  return (data.permissions || []).map((p) => ({
+    id: p.id,
+    type: p.type,
+    role: p.role,
+    email: p.emailAddress || null,
+    displayName: p.displayName || null,
+  }));
+}
+
+/** Shares the file with one person. Google sends its usual "shared with you" email. */
+async function sharePermission(auth, fileId, { email, role }) {
+  const { data } = await driveApi(auth).permissions.create({
+    fileId,
+    sendNotificationEmail: true,
+    fields: 'id,type,role,emailAddress,displayName',
+    requestBody: { type: 'user', role, emailAddress: email },
+  });
+  return {
+    id: data.id,
+    type: data.type,
+    role: data.role,
+    email: data.emailAddress || email,
+    displayName: data.displayName || null,
+  };
+}
+
+async function removePermission(auth, fileId, permissionId) {
+  await driveApi(auth).permissions.delete({ fileId, permissionId });
+}
+
 /**
  * Applies reconciler plans for one or more tabs of a spreadsheet: one
  * batchUpdate for every column insert, then one values.batchUpdate for every
@@ -222,4 +262,7 @@ module.exports = {
   getFileName,
   applyPlan,
   applyMultiTabPlan,
+  listPermissions,
+  sharePermission,
+  removePermission,
 };

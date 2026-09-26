@@ -11,6 +11,7 @@ const registrationQueries = require('../queries/registration.queries');
 const googleAuth = require('../services/google/googleAuth');
 const sheetsClient = require('../services/google/sheetsClient');
 const { buildHeaderRow } = require('../services/google/sheetReconciler');
+const { makeShareHandlers, connectedEmail } = require('./sheetSharing.controller');
 
 // ─── OAuth state nonce ────────────────────────────────────────────────
 // The `state` parameter must survive the round trip to Google and prove the
@@ -296,10 +297,22 @@ const syncNow = async (req, res) => {
   }
 };
 
+// ─── Sharing ──────────────────────────────────────────────────────────
+
+const shares = makeShareHandlers(async (req) => {
+  const school = req.user.school;
+  const { rows } = await db.query(queries.selectLinkByForm, [req.params.formId, school]);
+  if (rows.length === 0) return null;
+  return { spreadsheetId: rows[0].spreadsheet_id, googleEmail: await connectedEmail(school) };
+});
+
 module.exports = {
   toCamelConnection,
   sheetStatusPayload,
   safeReturnTo,
+  listShares: shares.listShares,
+  addShare: shares.addShare,
+  removeShare: shares.removeShare,
   getConnectionStatus,
   getAuthUrl,
   oauthCallback,
