@@ -3,7 +3,6 @@
 // HTTP surface for the Google Sheets integration: connecting a Google account,
 // linking a form to a spreadsheet tab, and reporting sync state.
 
-const crypto = require('crypto');
 const db = require('../config/database');
 const logger = require('../logger');
 const queries = require('../queries/googleSheets.queries');
@@ -15,40 +14,22 @@ const { makeShareHandlers, connectedEmail } = require('./sheetSharing.controller
 
 // ─── OAuth state nonce ────────────────────────────────────────────────
 // The `state` parameter must survive the round trip to Google and prove the
-// callback belongs to the school that started it. Signing it with the app's
-// JWT secret avoids adding a session store for a value that lives ~60 seconds.
+// callback belongs to the school that started it. Shared with the QuickBooks
+// integration in utils/oauthState.js.
 
-const STATE_TTL_MS = 10 * 60 * 1000;
+const oauthState = require('../utils/oauthState');
+
+// Every Google state carries this purpose and the callback insists on it, so a
+// state minted here can never finish the QuickBooks callback (or vice versa).
+const STATE_PURPOSE = 'google';
+const signState = (payload) => oauthState.signState({ ...payload, purpose: STATE_PURPOSE });
+const verifyState = (state) => oauthState.verifyState(state, { purpose: STATE_PURPOSE });
 
 // Where the browser lands after Google's callback. An allowlist rather than a
 // free-form URL: the value rides through Google in the state parameter, and
 // an open redirect there would be an easy phishing hop.
 const RETURN_PATHS = ['/admin-panel/forms/submissions', '/staff-attendance'];
 const safeReturnTo = (path) => (RETURN_PATHS.includes(path) ? path : RETURN_PATHS[0]);
-
-function signState(payload) {
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update(body).digest('base64url');
-  return `${body}.${sig}`;
-}
-
-function verifyState(state) {
-  const [body, sig] = String(state || '').split('.');
-  if (!body || !sig) return null;
-
-  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET).update(body).digest('base64url');
-  // timingSafeEqual throws on length mismatch, so compare lengths first.
-  if (sig.length !== expected.length) return null;
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
-
-  try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (!payload.iat || Date.now() - payload.iat > STATE_TTL_MS) return null;
-    return payload;
-  } catch {
-    return null;
-  }
-}
 
 // ─── Shaping ──────────────────────────────────────────────────────────
 

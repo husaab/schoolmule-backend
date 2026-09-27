@@ -31,6 +31,12 @@ describe('tokenCrypto', () => {
     expect(() => decryptToken(`${iv}:${otherTag}:${data}`)).toThrow();
   });
 
+  it('rejects a truncated auth tag rather than accepting a weaker one', () => {
+    const [iv, tag, data] = encryptToken('token').split(':');
+    const short = Buffer.from(tag, 'base64').subarray(0, 4).toString('base64');
+    expect(() => decryptToken(`${iv}:${short}:${data}`)).toThrow();
+  });
+
   it('rejects a malformed payload', () => {
     expect(() => decryptToken('not-a-valid-payload')).toThrow(/Malformed/);
   });
@@ -54,5 +60,34 @@ describe('tokenCrypto', () => {
   it('handles a realistically long refresh token', () => {
     const long = '1//' + 'a'.repeat(512);
     expect(decryptToken(encryptToken(long))).toBe(long);
+  });
+});
+
+describe('createTokenCrypto', () => {
+  const { createTokenCrypto } = require('../../../utils/tokenCrypto');
+  const KEY_A = Buffer.alloc(32, 3).toString('base64');
+  const KEY_B = Buffer.alloc(32, 4).toString('base64');
+
+  beforeEach(() => {
+    process.env.GOOGLE_TOKEN_ENC_KEY = KEY_A;
+    process.env.QBO_TOKEN_ENC_KEY = KEY_B;
+  });
+
+  it('round-trips with the named key', () => {
+    const qbo = createTokenCrypto('QBO_TOKEN_ENC_KEY');
+    expect(qbo.decryptToken(qbo.encryptToken('rt-123'))).toBe('rt-123');
+  });
+
+  it('keeps the two integrations cryptographically separate', () => {
+    const { encryptToken } = require('../../../utils/tokenCrypto');
+    const qbo = createTokenCrypto('QBO_TOKEN_ENC_KEY');
+    // A token encrypted under the Google key must not open with the QBO key.
+    expect(() => qbo.decryptToken(encryptToken('secret'))).toThrow();
+  });
+
+  it('names the missing variable in its error', () => {
+    delete process.env.QBO_TOKEN_ENC_KEY;
+    const qbo = createTokenCrypto('QBO_TOKEN_ENC_KEY');
+    expect(() => qbo.encryptToken('x')).toThrow(/QBO_TOKEN_ENC_KEY/);
   });
 });

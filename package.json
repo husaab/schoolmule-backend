@@ -2,6 +2,9 @@
   "name": "schoolmule-backend",
   "version": "1.0.0",
   "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "npm run test:unit ; npm run test:integration",
     "test:unit": "jest --config __tests__/jest.unit.config.js",

@@ -33,7 +33,8 @@ router.delete('/submissions/:submissionId', controller.deleteSubmission);
 // The OAuth callback is NOT here — Google sends the browser there without a
 // JWT, so it lives in googleSheetsPublic.routes.js, mounted before verifyUser.
 router.get('/google/status', sheetsController.getConnectionStatus);
-router.get('/google/auth-url', sheetsController.getAuthUrl);
+// Admin-only: the signed state this mints is what the OAuth callback trusts.
+router.get('/google/auth-url', requireAdmin, sheetsController.getAuthUrl);
 router.delete('/google/connection', sheetsController.disconnect);
 router.get('/forms/:formId/sheet', sheetsController.getSheetLink);
 router.put('/forms/:formId/sheet', sheetsController.linkSheet);
