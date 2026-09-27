@@ -33,6 +33,8 @@ const skRoutes = require("./routes/sk.routes")
 const registrationRoutes = require("./routes/registration.routes")
 const registrationPublicRoutes = require("./routes/registrationPublic.routes")
 const googleSheetsPublicRoutes = require("./routes/googleSheetsPublic.routes")
+const financePublicRoutes = require("./routes/financePublic.routes")
+const financeRoutes = require("./routes/finance.routes")
 const schedulePublicRoutes = require("./routes/schedulePublic.routes")
 const studentViewRoutes = require("./routes/studentView.routes")
 const analyticsRoutes = require("./routes/analytics.routes")
@@ -53,11 +55,17 @@ const app = express();
 const corsOptions = {
   origin: process.env.CROSS_ORIGIN_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
+  // Lets the browser read download filenames (CSV/PDF exports) across origins.
+  exposedHeaders: ['Content-Disposition'],
 };
 
 // core modules
 app.use(cors(corsOptions));
+// The finance roster import posts the whole roster JSON + customer-map CSV
+// (~150 KB for Al Haadi), above the 100 KB default. body-parser skips a body
+// it has already parsed, so the global parser below leaves this one alone.
+app.use("/api/finance/families/import", express.json({ limit: "2mb" }));
 app.use(express.json());
 
 const limiter = rateLimit({
@@ -76,6 +84,8 @@ app.use("/api/registration/public", registrationPublicRoutes);
 // be mounted ahead of verifyUser. Non-matching /google/* paths fall through to
 // the authenticated registration router below.
 app.use("/api/registration/google", googleSheetsPublicRoutes);
+// Intuit OAuth callback: no JWT on the redirect, school comes from the signed state.
+app.use("/api/finance/qbo", financePublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
@@ -119,6 +129,7 @@ app.use("/api/calendar-events", schoolCalendarRoutes);
 app.use("/api/agendas", agendaRoutes);
 app.use("/api/schedule-planner", schedulePlannerRoutes);
 app.use("/api/parent-portal", parentPortalRoutes);
+app.use("/api/finance", financeRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);
@@ -139,4 +150,5 @@ if (require.main === module) {
   // than at module load: every test suite requires this file, and a poller
   // started on import would leave timers running across the whole suite.
   require("./services/google/sheetSyncWorker").startWorker();
+  require("./services/finance/financeSyncWorker").startWorker();
 }

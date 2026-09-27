@@ -23,6 +23,13 @@ const logger = pino({
       "req.headers.authorization",
       "req.body.password",
       "req.body.newPassword",
+      // Integration credentials must never reach the logs.
+      "refresh_token",
+      "access_token",
+      "refreshToken",
+      "accessToken",
+      "*.refresh_token",
+      "*.access_token",
     ],
     censor: "[REDACTED]",
   },

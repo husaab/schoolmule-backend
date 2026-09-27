@@ -2,6 +2,19 @@ const { Pool } = require('pg');
 
 // All tables in the test schema — order doesn't matter with CASCADE
 const ALL_TABLES = [
+  'finance_sync_runs',
+  'finance_sync_jobs',
+  'qbo_payment_applications',
+  'qbo_payments',
+  'qbo_invoice_lines',
+  'qbo_invoices',
+  'qbo_customers',
+  'family_link_audit',
+  'family_contacts',
+  'family_students',
+  'family_customer_links',
+  'families',
+  'finance_qbo_connections',
   'planner_period_rules',
   'planner_schedule_sessions',
   'planner_schedules',

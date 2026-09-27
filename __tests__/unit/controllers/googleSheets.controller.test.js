@@ -90,6 +90,13 @@ describe('Google Sheets Controller', () => {
   });
 
   describe('GET /google/auth-url', () => {
+    it('is admin-only: a signed state must not be mintable by teachers or parents', async () => {
+      const { mockTeacherUser } = require('../../helpers/mockAuth');
+      const res = await request(app).get('/api/registration/google/auth-url')
+        .set('Authorization', `Bearer ${mockTeacherUser()}`);
+      expect(res.status).toBe(403);
+    });
+
     it('returns a consent URL rather than redirecting', async () => {
       const token = mockAdminUser();
       const res = await request(app).get('/api/registration/google/auth-url')

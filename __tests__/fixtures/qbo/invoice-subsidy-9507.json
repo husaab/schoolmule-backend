@@ -1,0 +1,98 @@
+{
+  "AllowIPNPayment": false,
+  "AllowOnlinePayment": false,
+  "AllowOnlineCreditCardPayment": false,
+  "AllowOnlineACHPayment": false,
+  "AllowOnlinePayPalPayment": false,
+  "AllowOnlineAffirmPayment": false,
+  "domain": "QBO",
+  "sparse": false,
+  "Id": "21312",
+  "SyncToken": "0",
+  "MetaData": {
+    "CreateTime": "2026-09-27T11:31:28-07:00",
+    "LastModifiedByRef": {
+      "value": "9130351374400316"
+    },
+    "LastUpdatedTime": "2026-09-27T11:31:28-07:00"
+  },
+  "CustomField": [],
+  "DocNumber": "9507",
+  "TxnDate": "2026-09-01",
+  "CurrencyRef": {
+    "value": "CAD",
+    "name": "Canadian Dollar"
+  },
+  "PrivateNote": "Al-Ma'arif subsidy portion - to be paid from grant transfer, do not email",
+  "LinkedTxn": [],
+  "Line": [
+    {
+      "Id": "1",
+      "LineNum": 1,
+      "Description": "Al-Ma'arif Subsidy share - Student One - Grade 4 - September 2026",
+      "Amount": 250.00,
+      "DetailType": "SalesItemLineDetail",
+      "SalesItemLineDetail": {
+        "ItemRef": {
+          "value": "4",
+          "name": "In Person Class:School Fees"
+        },
+        "UnitPrice": 250,
+        "Qty": 1,
+        "ItemAccountRef": {
+          "value": "9",
+          "name": "Other Misc Income:School Fees"
+        }
+      },
+      "CustomExtensions": []
+    },
+    {
+      "Id": "2",
+      "LineNum": 2,
+      "Description": "Al-Ma'arif Subsidy share - Student Two - Grade 7 - September 2026",
+      "Amount": 250.00,
+      "DetailType": "SalesItemLineDetail",
+      "SalesItemLineDetail": {
+        "ItemRef": {
+          "value": "4",
+          "name": "In Person Class:School Fees"
+        },
+        "UnitPrice": 250,
+        "Qty": 1,
+        "ItemAccountRef": {
+          "value": "9",
+          "name": "Other Misc Income:School Fees"
+        }
+      },
+      "CustomExtensions": []
+    },
+    {
+      "Amount": 500.00,
+      "DetailType": "SubTotalLineDetail",
+      "SubTotalLineDetail": {}
+    }
+  ],
+  "TxnTaxDetail": {
+    "TotalTax": 0
+  },
+  "CustomerRef": {
+    "value": "670",
+    "name": "Parent Customer"
+  },
+  "FreeFormAddress": false,
+  "SalesTermRef": {
+    "value": "3"
+  },
+  "DueDate": "2026-10-01",
+  "GlobalTaxCalculation": "NotApplicable",
+  "TotalAmt": 500.00,
+  "PrintStatus": "NeedToPrint",
+  "EmailStatus": "NotSet",
+  "BillEmail": {
+    "Address": "parent@example.com"
+  },
+  "Balance": 500.00,
+  "CustomerMemo": {
+    "value": "memo"
+  }
+}

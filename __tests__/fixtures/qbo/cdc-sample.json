@@ -1,0 +1,510 @@
+{
+  "CDCResponse": [
+    {
+      "QueryResponse": [
+        {
+          "Payment": [
+            {
+              "CustomerRef": {
+                "value": "938",
+                "name": "Parent Customer"
+              },
+              "DepositToAccountRef": {
+                "value": "59"
+              },
+              "TotalAmt": 500.00,
+              "UnappliedAmt": 0,
+              "ProcessPayment": false,
+              "domain": "QBO",
+              "sparse": false,
+              "Id": "19868",
+              "SyncToken": "1",
+              "MetaData": {
+                "CreateTime": "2026-06-06T11:33:50-07:00",
+                "LastUpdatedTime": "2026-09-27T11:31:36-07:00"
+              },
+              "TxnDate": "2026-06-01",
+              "CurrencyRef": {
+                "value": "CAD",
+                "name": "Canadian Dollar"
+              },
+              "Line": [
+                {
+                  "Amount": 250.00,
+                  "LinkedTxn": [
+                    {
+                      "TxnId": "19718",
+                      "TxnType": "Invoice"
+                    }
+                  ],
+                  "LineEx": {
+                    "any": [
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnId",
+                          "Value": "19718"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      },
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnOpenBalance",
+                          "Value": "250.00"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      },
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnReferenceNumber",
+                          "Value": "9274"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Amount": 250.00,
+                  "LinkedTxn": [
+                    {
+                      "TxnId": "21327",
+                      "TxnType": "Invoice"
+                    }
+                  ],
+                  "LineEx": {
+                    "any": [
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnId",
+                          "Value": "21327"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      },
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnOpenBalance",
+                          "Value": "700.00"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      },
+                      {
+                        "name": "{http://schema.intuit.com/finance/v3}NameValue",
+                        "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                        "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                        "value": {
+                          "Name": "txnReferenceNumber",
+                          "Value": "9522"
+                        },
+                        "nil": false,
+                        "globalScope": true,
+                        "typeSubstituted": false
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "startPosition": 1,
+          "maxResults": 1
+        },
+        {
+          "Invoice": [
+            {
+              "AllowIPNPayment": false,
+              "AllowOnlinePayment": false,
+              "AllowOnlineCreditCardPayment": false,
+              "AllowOnlineACHPayment": false,
+              "AllowOnlinePayPalPayment": false,
+              "AllowOnlineAffirmPayment": false,
+              "EInvoiceStatus": "Viewed",
+              "domain": "QBO",
+              "sparse": false,
+              "Id": "17535",
+              "SyncToken": "2",
+              "MetaData": {
+                "CreateTime": "2026-01-02T01:24:57-08:00",
+                "LastModifiedByRef": {
+                  "value": "9341455376470534"
+                },
+                "LastUpdatedTime": "2026-09-21T19:06:04-07:00"
+              },
+              "CustomField": [],
+              "DocNumber": "8663",
+              "TxnDate": "2026-01-05",
+              "CurrencyRef": {
+                "value": "CAD",
+                "name": "Canadian Dollar"
+              },
+              "LinkedTxn": [
+                {
+                  "TxnId": "17638",
+                  "TxnType": "Payment"
+                },
+                {
+                  "TxnId": "17639",
+                  "TxnType": "Payment"
+                }
+              ],
+              "Line": [
+                {
+                  "Id": "1",
+                  "LineNum": 1,
+                  "Description": "Student - Grade ?",
+                  "Amount": 500.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "4",
+                      "name": "In Person Class:School Fees"
+                    },
+                    "UnitPrice": 500,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "9",
+                      "name": "Other Misc Income:School Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Id": "2",
+                  "LineNum": 2,
+                  "Description": "Student - Grade ?",
+                  "Amount": 650.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "8",
+                      "name": "Kindergarten Class:School Fees"
+                    },
+                    "UnitPrice": 650,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "9",
+                      "name": "Other Misc Income:School Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Amount": 1150.00,
+                  "DetailType": "SubTotalLineDetail",
+                  "SubTotalLineDetail": {}
+                }
+              ],
+              "TxnTaxDetail": {
+                "TotalTax": 0
+              },
+              "RecurDataRef": {
+                "value": "357"
+              },
+              "CustomerRef": {
+                "value": "455",
+                "name": "Parent Customer"
+              },
+              "CustomerMemo": {
+                "value": "memo"
+              },
+              "FreeFormAddress": true,
+              "SalesTermRef": {
+                "value": "1"
+              },
+              "DueDate": "2026-01-05",
+              "GlobalTaxCalculation": "NotApplicable",
+              "TotalAmt": 1150.00,
+              "PrintStatus": "NotSet",
+              "EmailStatus": "EmailSent",
+              "BillEmail": {
+                "Address": "parent@example.com"
+              },
+              "Balance": 0
+            },
+            {
+              "AllowIPNPayment": false,
+              "AllowOnlinePayment": false,
+              "AllowOnlineCreditCardPayment": false,
+              "AllowOnlineACHPayment": false,
+              "AllowOnlinePayPalPayment": false,
+              "AllowOnlineAffirmPayment": false,
+              "EInvoiceStatus": "Sent",
+              "domain": "QBO",
+              "sparse": false,
+              "Id": "21238",
+              "SyncToken": "1",
+              "MetaData": {
+                "CreateTime": "2026-09-24T15:59:16-07:00",
+                "LastModifiedByRef": {
+                  "value": "9130351374400316"
+                },
+                "LastUpdatedTime": "2026-09-27T11:27:02-07:00"
+              },
+              "CustomField": [],
+              "DocNumber": "9480",
+              "TxnDate": "2026-09-01",
+              "CurrencyRef": {
+                "value": "CAD",
+                "name": "Canadian Dollar"
+              },
+              "LinkedTxn": [],
+              "Line": [
+                {
+                  "Id": "1",
+                  "LineNum": 1,
+                  "Description": "Student - Grade 7",
+                  "Amount": 500.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "4",
+                      "name": "In Person Class:School Fees"
+                    },
+                    "UnitPrice": 500,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "9",
+                      "name": "Other Misc Income:School Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Id": "2",
+                  "LineNum": 2,
+                  "Description": "Student - Grade 4",
+                  "Amount": 500.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "4",
+                      "name": "In Person Class:School Fees"
+                    },
+                    "UnitPrice": 500,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "9",
+                      "name": "Other Misc Income:School Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Id": "3",
+                  "LineNum": 3,
+                  "Description": "Registration Fee 2026-2027 - Student",
+                  "Amount": 200.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "16",
+                      "name": "Application Fees:Application Fees"
+                    },
+                    "UnitPrice": 200,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "63",
+                      "name": "Other Misc Income:Application Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Id": "4",
+                  "LineNum": 4,
+                  "Description": "Registration Fee 2026-2027 - Student",
+                  "Amount": 200.00,
+                  "DetailType": "SalesItemLineDetail",
+                  "SalesItemLineDetail": {
+                    "ItemRef": {
+                      "value": "16",
+                      "name": "Application Fees:Application Fees"
+                    },
+                    "UnitPrice": 200,
+                    "Qty": 1,
+                    "ItemAccountRef": {
+                      "value": "63",
+                      "name": "Other Misc Income:Application Fees"
+                    }
+                  },
+                  "CustomExtensions": []
+                },
+                {
+                  "Amount": 1400.00,
+                  "DetailType": "SubTotalLineDetail",
+                  "SubTotalLineDetail": {}
+                }
+              ],
+              "TxnTaxDetail": {
+                "TotalTax": 0
+              },
+              "CustomerRef": {
+                "value": "27",
+                "name": "Parent Customer"
+              },
+              "CustomerMemo": {
+                "value": "memo"
+              },
+              "FreeFormAddress": true,
+              "SalesTermRef": {
+                "value": "3"
+              },
+              "DueDate": "2026-10-01",
+              "GlobalTaxCalculation": "NotApplicable",
+              "TotalAmt": 1400.00,
+              "PrintStatus": "NotSet",
+              "EmailStatus": "EmailSent",
+              "BillEmail": {
+                "Address": "parent@example.com"
+              },
+              "Balance": 1400.00
+            },
+            {
+              "domain": "QBO",
+              "status": "Deleted",
+              "Id": "20181",
+              "MetaData": {
+                "LastUpdatedTime": "2026-09-27T09:15:42-07:00"
+              }
+            },
+            {
+              "domain": "QBO",
+              "status": "Deleted",
+              "Id": "20152",
+              "MetaData": {
+                "LastUpdatedTime": "2026-09-27T09:15:42-07:00"
+              }
+            },
+            {
+              "domain": "QBO",
+              "status": "Deleted",
+              "Id": "21285",
+              "MetaData": {
+                "LastUpdatedTime": "2026-09-27T11:52:14-07:00"
+              }
+            },
+            {
+              "domain": "QBO",
+              "status": "Deleted",
+              "Id": "12473",
+              "MetaData": {
+                "LastUpdatedTime": "2026-09-27T11:52:15-07:00"
+              }
+            },
+            {
+              "domain": "QBO",
+              "status": "Deleted",
+              "Id": "21237",
+              "MetaData": {
+                "LastUpdatedTime": "2026-09-27T11:52:16-07:00"
+              }
+            }
+          ],
+          "startPosition": 1,
+          "maxResults": 7,
+          "totalCount": 7
+        },
+        {
+          "Customer": [
+            {
+              "Taxable": false,
+              "Job": false,
+              "BillWithParent": false,
+              "Balance": 0,
+              "BalanceWithJobs": 1400.00,
+              "CurrencyRef": {
+                "value": "CAD",
+                "name": "Canadian Dollar"
+              },
+              "PreferredDeliveryMethod": "None",
+              "IsProject": false,
+              "ClientEntityId": "0",
+              "domain": "QBO",
+              "sparse": false,
+              "Id": "172",
+              "SyncToken": "1",
+              "MetaData": {
+                "CreateTime": "2021-09-27T07:06:05-07:00",
+                "LastUpdatedTime": "2026-09-27T11:27:02-07:00"
+              },
+              "GivenName": "Given",
+              "FamilyName": "Family",
+              "FullyQualifiedName": "Customer 172",
+              "DisplayName": "Customer 172",
+              "PrintOnCheckName": "Redacted",
+              "Active": true,
+              "V4IDPseudonym": "00208311a91809a021415085e9b824512128a6",
+              "PrimaryEmailAddr": {
+                "Address": "customer@example.com"
+              }
+            },
+            {
+              "Taxable": false,
+              "Job": true,
+              "BillWithParent": true,
+              "ParentRef": {
+                "value": "172"
+              },
+              "Level": 1,
+              "Balance": 1400.00,
+              "BalanceWithJobs": 1400.00,
+              "CurrencyRef": {
+                "value": "CAD",
+                "name": "Canadian Dollar"
+              },
+              "PreferredDeliveryMethod": "None",
+              "IsProject": false,
+              "ClientEntityId": "0",
+              "domain": "QBO",
+              "sparse": false,
+              "Id": "27",
+              "SyncToken": "3",
+              "MetaData": {
+                "CreateTime": "2021-09-14T11:45:34-07:00",
+                "LastUpdatedTime": "2026-09-27T11:27:02-07:00"
+              },
+              "GivenName": "Given",
+              "FamilyName": "Family",
+              "FullyQualifiedName": "Customer 27",
+              "CompanyName": "Redacted",
+              "DisplayName": "Customer 27",
+              "PrintOnCheckName": "Redacted",
+              "Active": true,
+              "V4IDPseudonym": "002083b2c205ff1f4e4bbf9eabdefa59faf9cf",
+              "PrimaryEmailAddr": {
+                "Address": "customer@example.com"
+              }
+            }
+          ],
+          "startPosition": 1,
+          "maxResults": 2
+        }
+      ]
+    }
+  ],
+  "time": "2026-09-27T14:17:58.297-07:00"
+}
