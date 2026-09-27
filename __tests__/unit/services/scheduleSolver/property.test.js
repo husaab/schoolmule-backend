@@ -2,7 +2,9 @@ const { generateSchedules } = require('../../../../services/scheduleSolver');
 const { validateCandidate } = require('../../../../services/scheduleSolver/validator');
 const { randomSchool } = require('./randomSchool');
 
-jest.setTimeout(60000);
+// Must exceed randomSchool's timeBudgetMs so a slow seed times out inside the
+// solver (a clear assertion failure) rather than in jest.
+jest.setTimeout(120000);
 
 // Property: for inputs that are feasible by construction, the solver must
 // find candidates and every candidate must pass the independent validator.

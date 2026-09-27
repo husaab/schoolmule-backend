@@ -78,7 +78,15 @@ function maxScaleSchool() {
   };
 }
 
-describe('perf: max-scale school', () => {
+// This is a wall-clock benchmark, and coverage instrumentation makes the
+// solver's hot loops ~4x slower (~130k nodes in 10s instead of ~570k), which
+// leaves it no chance of finding candidates inside the budget. Instrumented
+// modules register themselves on global.__coverage__ when required, so skip
+// the benchmark whenever the solver was loaded instrumented (e.g. the CI
+// coverage job) and run it only in plain `npm run test:unit`.
+const describePerf = typeof global.__coverage__ === 'undefined' ? describe : describe.skip;
+
+describePerf('perf: max-scale school', () => {
   it('returns 20 valid candidates within the 10s budget', () => {
     const input = maxScaleSchool();
     const sessionCount = input.courses.reduce((a, c) => a + c.sessionsPerWeek, 0);

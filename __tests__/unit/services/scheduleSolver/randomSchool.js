@@ -235,9 +235,12 @@ function randomSchool(seed) {
       defaultCourseDurationMinutes: 40,
       seed,
       candidateCount: 3,
-      // Generous: most seeds solve in <100ms; the budget only matters for the
-      // few hard seeds, and test environments run 2-3x slower than plain node.
-      timeBudgetMs: 8000,
+      // Generous: most seeds solve in <100ms. The budget only matters for the
+      // few hard seeds (seed 1 needs ~180k nodes, ~2s in plain node), and the
+      // search is deterministic per seed, so this is purely a wall-clock cap:
+      // coverage instrumentation slows the solver ~4x and CI runners are
+      // slower still, which is what pushed seed 1 past the old 8s budget.
+      timeBudgetMs: 60000,
     },
     days,
     fixedBlocks,
