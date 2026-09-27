@@ -117,7 +117,7 @@ function finishLedger(ledger) {
  * @param {object[]} in.applications  paymentQboId, invoiceQboId, amount, paymentDate, paymentDeleted
  * @param {object[]} in.payments      qboId, txnDate, totalAmt, unappliedAmt, deletedAt (customer-level, for credit)
  * @param {object}   in.items         { tuition, registration, discount } item ids
- * @param {object}   [in.expected]    { monthlyParent, studentCount, registrationFee } for the amount-differs check
+ * @param {object}   [in.expected]    { monthlyParent } for the amount-differs check (tuition only; registration lines are excluded)
  */
 function buildFamilyLedger({ months, today, invoices = [], applications = [], payments = [], items, expected }) {
   const streams = { parent: emptyLedger(months), grant: emptyLedger(months), schoolSubsidy: emptyLedger(months) };
@@ -176,10 +176,13 @@ function buildFamilyLedger({ months, today, invoices = [], applications = [], pa
         const activeCount = cellInvoices.filter(isActive).length;
         if (activeCount > 1) warnings.push({ code: 'TWO_PARENT_INVOICES_IN_MONTH', month, invoiceIds: cellInvoices.filter(isActive).map((e) => e.id) });
         if (expected && typeof expected.monthlyParent === 'number' && activeCount > 0) {
-          const registration = month === months[0] ? (expected.studentCount || 0) * (expected.registrationFee || 0) : 0;
-          const want = round2(expected.monthlyParent + registration);
-          if (Math.abs(cell.invoiced - want) > 0.01) {
-            warnings.push({ code: 'AMOUNT_DIFFERS', month, expected: want, actual: cell.invoiced });
+          // Compare tuition only: registration rides on the September invoice for
+          // most families but not for those who paid it in August.
+          const registration = round2(cellInvoices.filter(isActive).reduce((s, e) => s + e.breakdown.registration, 0));
+          const tuition = round2(cell.invoiced - registration);
+          const want = round2(expected.monthlyParent);
+          if (Math.abs(tuition - want) > 0.01) {
+            warnings.push({ code: 'AMOUNT_DIFFERS', month, expected: want, actual: tuition });
           }
         }
       }

@@ -450,7 +450,7 @@ const getFamily = async (req, res) => {
       applications: applications.map(toLedgerApplication),
       payments: payments.map(toLedgerPayment),
       items: settings.items,
-      expected: expectedParent === null ? undefined : { monthlyParent: expectedParent, studentCount: activeStudents, registrationFee: settings.registrationFee },
+      expected: expectedParent === null ? undefined : { monthlyParent: expectedParent },
     }) : null;
 
     const current = linkIndex.currentFor(family.family_id);

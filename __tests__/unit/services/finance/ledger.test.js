@@ -152,15 +152,27 @@ describe('buildFamilyLedger', () => {
     expect(l.warnings).toContainEqual(expect.objectContaining({ code: 'OTHER_KIND_INVOICE', invoiceId: 'trip' }));
   });
 
-  it('flags a month whose parent total differs from the expected amount', () => {
+  it('flags a month whose tuition (invoice minus registration lines) differs from the expected amount', () => {
     const l = ledger(
       [inv({ qboId: 'i2', txnDate: '2026-10-01', dueDate: '2026-10-31', totalAmt: 900, balance: 900 })],
-      [], [], { expected: { monthlyParent: 1000, studentCount: 2, registrationFee: 200 } },
+      [], [], { expected: { monthlyParent: 1000 } },
     );
     expect(l.warnings).toContainEqual(expect.objectContaining({ code: 'AMOUNT_DIFFERS', month: '2026-10', expected: 1000, actual: 900 }));
-    // September expects registration on top; 1400 = 1000 + 2×200 → no warning
-    const sept = ledger([inv({ totalAmt: 1400, balance: 1400 })], [], [], { expected: { monthlyParent: 1000, studentCount: 2, registrationFee: 200 } });
+    // September carries registration lines on top of tuition; only the tuition part is compared.
+    const regLines = [
+      { description: 'Mariam - Grade 4 - Tuition September 2026', amount: 500, itemRef: '4' },
+      { description: 'Zahraa - Grade 7 - Tuition September 2026', amount: 500, itemRef: '4' },
+      { description: 'Registration Fee 2026-2027 - Mariam', amount: 200, itemRef: '16' },
+      { description: 'Registration Fee 2026-2027 - Zahraa', amount: 200, itemRef: '16' },
+    ];
+    const sept = ledger([inv({ totalAmt: 1400, balance: 1400, lines: regLines })], [], [], { expected: { monthlyParent: 1000 } });
     expect(sept.warnings.some((w) => w.code === 'AMOUNT_DIFFERS')).toBe(false);
+    // A family that pre-paid registration in August has no registration line: still no warning.
+    const prepaid = ledger([inv({ totalAmt: 1000, balance: 1000, lines: regLines.slice(0, 2) })], [], [], { expected: { monthlyParent: 1000 } });
+    expect(prepaid.warnings.some((w) => w.code === 'AMOUNT_DIFFERS')).toBe(false);
+    // The actual reported is the tuition part, so the admin sees like for like.
+    const wrong = ledger([inv({ totalAmt: 1300, balance: 1300, lines: [...regLines.slice(0, 1), ...regLines.slice(2)] })], [], [], { expected: { monthlyParent: 1000 } });
+    expect(wrong.warnings).toContainEqual(expect.objectContaining({ code: 'AMOUNT_DIFFERS', month: '2026-09', expected: 1000, actual: 900 }));
   });
 
   it('treats sub-cent balances as paid', () => {

@@ -152,7 +152,7 @@ function assembleGrid({ year, today, settings: rawSettings, families, students, 
       applications: famApps,
       payments: famPayments,
       items: settings.items,
-      expected: expectedParent === null ? undefined : { monthlyParent: expectedParent, studentCount: activeStudents, registrationFee: settings.registrationFee },
+      expected: expectedParent === null ? undefined : { monthlyParent: expectedParent },
     });
 
     const current = linkIndex.currentFor(f.family_id);
