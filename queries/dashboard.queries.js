@@ -22,6 +22,7 @@ const dashboardQueries = {
       AND school = $1
       AND is_verified = TRUE
       AND is_verified_school = TRUE
+      AND is_archived = FALSE
   `,
 
   /**

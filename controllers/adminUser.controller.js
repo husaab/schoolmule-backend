@@ -8,6 +8,7 @@
 const db = require("../config/database");
 const logger = require("../logger");
 const adminUserQueries = require("../queries/adminUser.queries");
+const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { Resend } = require("resend");
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -26,10 +27,28 @@ const toUser = (row) => ({
   role: row.role,
   isVerified: row.is_verified,
   isVerifiedSchool: row.is_verified_school,
+  isArchived: row.is_archived,
+  archivedAt: row.archived_at,
   invitePending: row.invite_pending,
   createdAt: row.created_at,
   lastModifiedAt: row.last_modified_at,
 });
+
+const toBlockers = (row) => ({
+  classes: row?.classes ?? [],
+  homeroomStudents: row?.homeroom_students ?? 0,
+});
+
+// Archive blockers are always judged against the school's *active* year, not
+// the year the admin happens to have selected in the year switcher
+// (req.schoolYear follows the X-School-Year header).
+const loadArchiveBlockers = async (userId, role, school) => {
+  if (role === "PARENT") return toBlockers(null);
+  const { rows: years } = await db.query(schoolYearQueries.selectActiveYearBySchool, [school]);
+  if (years.length === 0) return toBlockers(null);
+  const { rows } = await db.query(adminUserQueries.selectArchiveBlockers, [userId, years[0].school_year_id]);
+  return toBlockers(rows[0]);
+};
 
 const sendInvite = async (user, invitedBy) => {
   const [{ rows: tokenRows }, { rows: schoolRows }] = await Promise.all([
@@ -78,7 +97,7 @@ const getUserDetails = async (req, res) => {
     }
     const user = rows[0];
 
-    const [classes, homeroom, staff, children] = await Promise.all([
+    const [classes, homeroom, staff, children, blockers] = await Promise.all([
       schoolYearId && user.role !== "PARENT"
         ? db.query(adminUserQueries.selectClassesForUser, [id, schoolYearId])
         : { rows: [] },
@@ -89,6 +108,7 @@ const getUserDetails = async (req, res) => {
       user.role === "PARENT"
         ? db.query(adminUserQueries.selectChildrenForParent, [id, school])
         : { rows: [] },
+      loadArchiveBlockers(id, user.role, school),
     ]);
 
     const staffRow = staff.rows[0];
@@ -124,6 +144,7 @@ const getUserDetails = async (req, res) => {
           grade: c.grade,
           relation: c.relation,
         })),
+        archiveBlockers: blockers,
       },
     });
   } catch (error) {
@@ -227,12 +248,82 @@ const updateUser = async (req, res) => {
       firstName, lastName, role, isVerifiedSchool, id, school,
     ]);
     if (rows.length === 0) {
+      // Either not ours, or archived (the update only touches active accounts).
+      const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
+      if (existing.rows[0]?.is_archived) {
+        return res.status(409).json({ status: "failed", message: "This account is archived. Restore it before editing." });
+      }
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
     return res.status(200).json({ status: "success", message: "User updated", data: toUser(rows[0]) });
   } catch (error) {
     logger.error({ err: error }, "Failed to update user");
     return res.status(500).json({ status: "failed", message: "Error updating user" });
+  }
+};
+
+// POST /api/admin/users/:id/archive
+// Keeps every record, hides them from staff lists and pickers, revokes access.
+// Refused while they still lead a class or homeroom in the active school year,
+// so nothing in the current year points at a hidden account.
+const archiveUser = async (req, res) => {
+  const { id } = req.params;
+  const { school, userId: selfId } = req.user;
+
+  if (id === selfId) {
+    return res.status(400).json({ status: "failed", message: "You can't archive your own account" });
+  }
+
+  try {
+    const { rows: existing } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
+    if (existing.length === 0) {
+      return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    if (existing[0].is_archived) {
+      return res.status(409).json({ status: "failed", message: "This account is already archived" });
+    }
+
+    const blockers = await loadArchiveBlockers(id, existing[0].role, school);
+    if (blockers.classes.length > 0 || blockers.homeroomStudents > 0) {
+      return res.status(409).json({
+        status: "failed",
+        message: "They still lead classes or homeroom students this year. Reassign those first.",
+        data: { blockers },
+      });
+    }
+
+    const [{ rows }] = await Promise.all([
+      db.query(adminUserQueries.archiveUserInSchool, [id, school, selfId]),
+      db.query(adminUserQueries.deleteTokensForUser, [id]),
+    ]);
+    if (rows.length === 0) {
+      return res.status(409).json({ status: "failed", message: "This account is already archived" });
+    }
+    return res.status(200).json({ status: "success", message: "User archived", data: toUser(rows[0]) });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to archive user");
+    return res.status(500).json({ status: "failed", message: "Error archiving user" });
+  }
+};
+
+// POST /api/admin/users/:id/unarchive
+const unarchiveUser = async (req, res) => {
+  const { id } = req.params;
+  const { school } = req.user;
+
+  try {
+    const { rows } = await db.query(adminUserQueries.unarchiveUserInSchool, [id, school]);
+    if (rows.length === 0) {
+      const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ status: "failed", message: "User not found" });
+      }
+      return res.status(409).json({ status: "failed", message: "This account isn't archived" });
+    }
+    return res.status(200).json({ status: "success", message: "User restored", data: toUser(rows[0]) });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to restore user");
+    return res.status(500).json({ status: "failed", message: "Error restoring user" });
   }
 };
 
@@ -245,6 +336,15 @@ const deleteUser = async (req, res) => {
   }
 
   try {
+    // Never let a delete cascade through a teacher's classes.
+    const { rows: lead } = await db.query(adminUserQueries.countLeadClasses, [id]);
+    if (lead[0].count > 0) {
+      return res.status(409).json({
+        status: "failed",
+        message: "This user still leads classes. Reassign those first, or archive them instead.",
+      });
+    }
+
     const result = await db.query(adminUserQueries.deleteUserInSchool, [id, req.user.school]);
     if (result.rowCount === 0) {
       return res.status(404).json({ status: "failed", message: "User not found" });
@@ -269,5 +369,7 @@ module.exports = {
   inviteUser,
   resendInvite,
   updateUser,
+  archiveUser,
+  unarchiveUser,
   deleteUser,
 };

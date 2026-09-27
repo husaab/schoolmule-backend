@@ -139,11 +139,20 @@ describe('User Controller', () => {
   describe('DELETE /api/users/:id', () => {
     it('should return 200 on successful deletion', async () => {
       mockQueryResponse([buildUserRow({ user_id: '00000000-0000-0000-0000-000000000001' })]);
+      mockQueryResponse([{ count: 0 }]); // leads no classes
       mockQueryResponse([], 1);
       const res = await authDelete('/api/users/00000000-0000-0000-0000-000000000001');
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.message).toMatch(/deleted/i);
+    });
+
+    it('should return 409 when the user still leads classes', async () => {
+      mockQueryResponse([buildUserRow({ user_id: '00000000-0000-0000-0000-000000000001' })]);
+      mockQueryResponse([{ count: 3 }]);
+      const res = await authDelete('/api/users/00000000-0000-0000-0000-000000000001');
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/archive/i);
     });
 
     it('should return 403 when the user belongs to another school', async () => {

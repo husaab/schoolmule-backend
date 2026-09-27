@@ -195,6 +195,123 @@ describe('Integration: Admin Users Routes', () => {
     });
   });
 
+  describe('POST /api/admin/users/:id/archive', () => {
+    it('archives a user: hidden flag set, school access revoked, invite tokens gone', async () => {
+      await pool.query(`INSERT INTO password_reset_tokens (user_id, expires_at) VALUES ($1, NOW() + interval '1 day')`, [TEACHER_ID]);
+
+      const res = await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/archive`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(expect.objectContaining({ isArchived: true, isVerifiedSchool: false }));
+      expect(res.body.data.archivedAt).toBeTruthy();
+
+      const { rows } = await pool.query(`SELECT is_archived, archived_by FROM users WHERE user_id = $1`, [TEACHER_ID]);
+      expect(rows[0]).toEqual({ is_archived: true, archived_by: ADMIN_ID });
+      const tokens = await pool.query(`SELECT 1 FROM password_reset_tokens WHERE user_id = $1`, [TEACHER_ID]);
+      expect(tokens.rows).toHaveLength(0);
+
+      // Still listed, flagged, and sorted after active users.
+      const list = await authenticatedRequest('get', '/api/admin/users');
+      const archived = list.body.data.find((u) => u.userId === TEACHER_ID);
+      expect(archived.isArchived).toBe(true);
+      expect(list.body.data[list.body.data.length - 1].userId).toBe(TEACHER_ID);
+    });
+
+    it('409s with the blockers while they lead a class or homeroom this year', async () => {
+      await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+         VALUES ('ALHAADIACADEMY', '3', 'Math', 'Tina Teacher', $1, $2)`,
+        [TEACHER_ID, yearId]
+      );
+      await pool.query(
+        `INSERT INTO students (name, school, grade, homeroom_teacher_id, school_year_id)
+         VALUES ('Sam Student', 'ALHAADIACADEMY', '3', $1, $2)`,
+        [TEACHER_ID, yearId]
+      );
+
+      const res = await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/archive`);
+
+      expect(res.status).toBe(409);
+      expect(res.body.data.blockers.classes).toEqual([expect.objectContaining({ grade: '3', subject: 'Math' })]);
+      expect(res.body.data.blockers.homeroomStudents).toBe(1);
+
+      const details = await authenticatedRequest('get', `/api/admin/users/${TEACHER_ID}`);
+      expect(details.body.data.archiveBlockers.classes).toHaveLength(1);
+      expect(details.body.data.archiveBlockers.homeroomStudents).toBe(1);
+
+      const { rows } = await pool.query(`SELECT is_archived FROM users WHERE user_id = $1`, [TEACHER_ID]);
+      expect(rows[0].is_archived).toBe(false);
+    });
+
+    it('ignores classes from other school years', async () => {
+      const { rows } = await pool.query(
+        `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+         SELECT 'ALHAADIACADEMY', school_id, '2019-2020', DATE '2019-09-01', DATE '2020-06-30', FALSE
+         FROM schools WHERE school_code = 'ALHAADIACADEMY' RETURNING school_year_id`
+      );
+      await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+         VALUES ('ALHAADIACADEMY', '3', 'Math', 'Tina Teacher', $1, $2)`,
+        [TEACHER_ID, rows[0].school_year_id]
+      );
+
+      const res = await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/archive`);
+      expect(res.status).toBe(200);
+    });
+
+    it('judges blockers against the active year even when another year is selected', async () => {
+      await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+         VALUES ('ALHAADIACADEMY', '3', 'Math', 'Tina Teacher', $1, $2)`,
+        [TEACHER_ID, yearId]
+      );
+      const { rows } = await pool.query(
+        `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+         SELECT 'ALHAADIACADEMY', school_id, '2019-2020', DATE '2019-09-01', DATE '2020-06-30', FALSE
+         FROM schools WHERE school_code = 'ALHAADIACADEMY' RETURNING school_year_id`
+      );
+
+      const res = await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/archive`)
+        .set('X-School-Year', rows[0].school_year_id);
+
+      expect(res.status).toBe(409);
+      expect(res.body.data.blockers.classes).toHaveLength(1);
+    });
+
+    it('refuses self-archive, already-archived, and other schools', async () => {
+      expect((await authenticatedRequest('post', `/api/admin/users/${ADMIN_ID}/archive`)).status).toBe(400);
+      expect((await authenticatedRequest('post', `/api/admin/users/${OTHER_SCHOOL_ID}/archive`)).status).toBe(404);
+      await authenticatedRequest('post', `/api/admin/users/${PARENT_ID}/archive`);
+      expect((await authenticatedRequest('post', `/api/admin/users/${PARENT_ID}/archive`)).status).toBe(409);
+    });
+
+    it('blocks editing an archived account', async () => {
+      await authenticatedRequest('post', `/api/admin/users/${PARENT_ID}/archive`);
+      const res = await authenticatedRequest('patch', `/api/admin/users/${PARENT_ID}`).send({
+        firstName: 'Paul', lastName: 'Parent', role: 'PARENT', isVerifiedSchool: true,
+      });
+      expect(res.status).toBe(409);
+    });
+  });
+
+  describe('POST /api/admin/users/:id/unarchive', () => {
+    it('restores an archived user with school access', async () => {
+      await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/archive`);
+
+      const res = await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/unarchive`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual(expect.objectContaining({ isArchived: false, isVerifiedSchool: true, archivedAt: null }));
+      const { rows } = await pool.query(`SELECT archived_by FROM users WHERE user_id = $1`, [TEACHER_ID]);
+      expect(rows[0].archived_by).toBeNull();
+    });
+
+    it('409s when not archived and 404s for other schools', async () => {
+      expect((await authenticatedRequest('post', `/api/admin/users/${TEACHER_ID}/unarchive`)).status).toBe(409);
+      expect((await authenticatedRequest('post', `/api/admin/users/${OTHER_SCHOOL_ID}/unarchive`)).status).toBe(404);
+    });
+  });
+
   describe('DELETE /api/admin/users/:id', () => {
     it('deletes a user in the school', async () => {
       const res = await authenticatedRequest('delete', `/api/admin/users/${PARENT_ID}`);

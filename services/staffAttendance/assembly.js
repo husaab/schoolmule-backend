@@ -74,7 +74,10 @@ const loadWorkDays = async (start, end, school, userId = null) => {
   const byUser = new Map();
   for (const row of rows) {
     const hoursPerDay = row.hours_per_day === null || row.hours_per_day === undefined ? null : Number(row.hours_per_day);
-    if (row.custom_days?.length) {
+    if (row.is_archived) {
+      // Archived staff work no days: nothing is assumed, only real check-ins show.
+      byUser.set(row.user_id, { days: [], source: "archived", hoursPerDay });
+    } else if (row.custom_days?.length) {
       byUser.set(row.user_id, { days: row.custom_days.map(Number), source: "custom", hoursPerDay });
     } else if (row.planner_days?.length) {
       byUser.set(row.user_id, { days: row.planner_days.map(Number), source: "planner", hoursPerDay });

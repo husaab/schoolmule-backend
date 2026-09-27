@@ -14,6 +14,7 @@ const teacherQueries = {
     FROM users
     WHERE role = 'TEACHER'
       AND school = $1
+      AND is_archived = false
     ORDER BY last_name, first_name
   `,
 

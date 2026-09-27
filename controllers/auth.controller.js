@@ -181,6 +181,11 @@ const getSchoolYearContext = async (school) => {
         throw { status: 401, message: "Invalid credentials" };
       }
 
+      // Archived accounts keep their history but can't sign in.
+      if (user.is_archived) {
+        throw { status: 403, message: "This account has been archived. Contact your school admin." };
+      }
+
       if (user.role === 'ADMIN') {
         user.is_verified = true;
         user.is_verified_school = true;
@@ -602,6 +607,14 @@ const validateSession = async (req, res) => {
     }
 
     const user = result.rows[0];
+
+    // Archived mid-session: the token is still valid, so end the session here.
+    if (user.is_archived) {
+      return res.status(401).json({
+        success: false,
+        message: 'This account has been archived'
+      });
+    }
     
     // Get active term for the user's school
     const activeTerm = await getActiveTermForSchool(user.school);

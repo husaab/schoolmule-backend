@@ -53,6 +53,17 @@ describe('Integration: Teacher Routes', () => {
       expect(res.body.data[0]).toHaveProperty('email');
     });
 
+    it('leaves archived teachers out of the picker', async () => {
+      await pool.query(`UPDATE users SET is_archived = true WHERE user_id = $1`, [TEACHER2_USER_ID]);
+
+      const res = await authenticatedRequest('get', '/api/teachers?school=ALHAADIACADEMY');
+
+      expect(res.status).toBe(200);
+      const ids = res.body.data.map((t) => t.userId);
+      expect(ids).toContain(TEACHER_USER_ID);
+      expect(ids).not.toContain(TEACHER2_USER_ID);
+    });
+
     it('uses the JWT school even without a query param', async () => {
       const res = await authenticatedRequest('get', '/api/teachers');
 

@@ -45,7 +45,9 @@ const teacherAttendanceQueries = {
   `,
 
   // Every staff member at the school with their records in a date range
-  // (inclusive). Staff with no records still appear (LEFT JOIN).
+  // (inclusive). Staff with no records still appear (LEFT JOIN). Archived staff
+  // appear only where they have real records, so past pay periods stay whole
+  // while current ones no longer list them.
   // $1 = start, $2 = end, $3 = school, $4 = one user_id or NULL for all staff
   selectAllForSchoolRange: `
     SELECT
@@ -63,6 +65,7 @@ const teacherAttendanceQueries = {
       AND ta.attendance_date BETWEEN $1::date AND $2::date
     WHERE u.school = $3
       AND u.role IN ('TEACHER', 'ADMIN')
+      AND (u.is_archived = false OR ta.attendance_date IS NOT NULL)
       AND ($4::uuid IS NULL OR u.user_id = $4)
     ORDER BY u.last_name, u.first_name, ta.attendance_date
   `,
@@ -137,6 +140,7 @@ const teacherAttendanceQueries = {
     )
     SELECT
       u.user_id,
+      u.is_archived,
       sws.work_days AS custom_days,
       sws.hours_per_day,
       (
@@ -166,7 +170,7 @@ const teacherAttendanceQueries = {
 
   selectStaffMember: `
     SELECT user_id FROM users
-    WHERE user_id = $1 AND school = $2 AND role IN ('TEACHER', 'ADMIN')
+    WHERE user_id = $1 AND school = $2 AND role IN ('TEACHER', 'ADMIN') AND is_archived = false
   `,
 
   upsertWorkSchedule: `

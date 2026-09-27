@@ -104,6 +104,15 @@ const deleteUser = async (req, res) => {
     }
     if (!isAdmin(req) || target.school !== req.user.school) return forbidden(res);
 
+    // classes.teacher_id cascades in production: never delete a lead teacher.
+    const { rows: lead } = await db.query(userQueries.countLeadClasses, [id]);
+    if (lead[0].count > 0) {
+      return res.status(409).json({
+        status: "failed",
+        message: "This user still leads classes. Reassign those first, or archive them instead.",
+      });
+    }
+
     await db.query(userQueries.deleteUser, [id]);
 
     logger.info({ status: "success", message: "User deleted" });

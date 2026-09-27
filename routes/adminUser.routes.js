@@ -21,5 +21,7 @@ router.get("/:id", controller.getUserDetails);
 router.patch("/:id", controller.updateUser);
 router.delete("/:id", controller.deleteUser);
 router.post("/:id/resend-invite", controller.resendInvite);
+router.post("/:id/archive", controller.archiveUser);
+router.post("/:id/unarchive", controller.unarchiveUser);
 
 module.exports = router;

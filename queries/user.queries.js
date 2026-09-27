@@ -9,14 +9,14 @@ const userQueries = {
   
     loginUser: `
       SELECT user_id, email, username, password, first_name, last_name,
-            school, role, email_token, is_verified, is_verified_school, 
+            school, role, email_token, is_verified, is_verified_school, is_archived,
             created_at, last_modified_at
       FROM users 
       WHERE email = $1
     `,
 
     selectById: `
-      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at
+      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, created_at, last_modified_at
       FROM users 
       WHERE user_id = $1
     `,
@@ -45,6 +45,10 @@ const userQueries = {
       RETURNING *
     `,
   
+    countLeadClasses: `
+      SELECT COUNT(*)::int AS count FROM classes WHERE teacher_id = $1
+    `,
+
     deleteUser: `
       DELETE FROM users 
       WHERE user_id = $1
@@ -103,6 +107,7 @@ const userQueries = {
           school, role, email_token, is_verified, created_at, last_modified_at
         FROM users
         WHERE school = $1
+          AND is_archived = false
         ORDER BY last_name, first_name
       `,
 

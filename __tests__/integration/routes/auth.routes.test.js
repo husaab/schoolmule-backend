@@ -123,6 +123,19 @@ describe('Integration: Auth Routes', () => {
       expect(decoded.email).toBe('admin@test.com');
     });
 
+    it('refuses archived accounts even with the right password', async () => {
+      await pool.query(`UPDATE users SET is_archived = true WHERE user_id = $1`, [TEST_USER_ID]);
+
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'admin@test.com', password: 'correctpassword' });
+
+      // Same wrapping as other login failures: the controller returns the error.
+      expect(res.status).toBe(500);
+      expect(res.body.message).toMatch(/archived/i);
+      expect(res.body.data?.token).toBeUndefined();
+    });
+
     it('returns 500 with error message for non-existent user', async () => {
       const res = await request(app)
         .post('/api/auth/login')
@@ -179,6 +192,21 @@ describe('Integration: Auth Routes', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.data.userId).toBe(TEST_USER_ID);
       expect(res.body.data.email).toBe('admin@test.com');
+    });
+
+    it('ends the session of an archived account', async () => {
+      await pool.query(
+        `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, is_archived)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, false, true)`,
+        [TEST_USER_ID, 'admin@test.com', 'Admin User', 'hashed', 'Admin', 'User', 'ALHAADIACADEMY', 'ADMIN']
+      );
+      const secret = process.env.JWT_SECRET || 'test-jwt-secret-key-for-integration-tests';
+      const token = jwt.sign({ userId: TEST_USER_ID, email: 'admin@test.com' }, secret, { expiresIn: '1h' });
+
+      const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.message).toMatch(/archived/i);
     });
 
     it('returns 401 when no token is provided', async () => {

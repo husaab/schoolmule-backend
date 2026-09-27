@@ -6,18 +6,20 @@ const adminUserQueries = {
   selectUsersBySchool: `
     SELECT
       user_id, email, username, first_name, last_name, school, role,
-      is_verified, is_verified_school, created_at, last_modified_at,
+      is_verified, is_verified_school, is_archived, archived_at,
+      created_at, last_modified_at,
       (password = '!') AS invite_pending
     FROM users
     WHERE school = $1
-    ORDER BY lower(last_name), lower(first_name)
+    ORDER BY is_archived, lower(last_name), lower(first_name)
   `,
 
   //  $1 = user_id, $2 = school
   selectUserInSchool: `
     SELECT
       user_id, email, username, first_name, last_name, school, role,
-      is_verified, is_verified_school, created_at, last_modified_at,
+      is_verified, is_verified_school, is_archived, archived_at,
+      created_at, last_modified_at,
       (password = '!') AS invite_pending
     FROM users
     WHERE user_id = $1 AND school = $2
@@ -78,7 +80,8 @@ const adminUserQueries = {
     VALUES
       (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, NOW(), NOW())
     RETURNING user_id, email, username, first_name, last_name, school, role,
-              is_verified, is_verified_school, created_at, last_modified_at,
+              is_verified, is_verified_school, is_archived, archived_at,
+              created_at, last_modified_at,
               true AS invite_pending
   `,
 
@@ -92,10 +95,68 @@ const adminUserQueries = {
         role = $3,
         is_verified_school = $4,
         last_modified_at = NOW()
-    WHERE user_id = $5 AND school = $6
+    WHERE user_id = $5 AND school = $6 AND is_archived = false
     RETURNING user_id, email, username, first_name, last_name, school, role,
-              is_verified, is_verified_school, created_at, last_modified_at,
+              is_verified, is_verified_school, is_archived, archived_at,
+              created_at, last_modified_at,
               (password = '!') AS invite_pending
+  `,
+
+  //  What stops a user being archived: classes they lead and homeroom students
+  //  in the given school year. Archiving them would leave those pointing at a
+  //  hidden account, so the admin reassigns first.
+  //  $1 = user_id, $2 = school_year_id
+  selectArchiveBlockers: `
+    SELECT
+      (SELECT COALESCE(json_agg(json_build_object(
+                'classId', class_id, 'grade', grade, 'subject', subject, 'termName', term_name)
+                ORDER BY grade, subject), '[]'::json)
+         FROM classes
+        WHERE teacher_id = $1 AND school_year_id = $2) AS classes,
+      (SELECT COUNT(*)::int
+         FROM students
+        WHERE homeroom_teacher_id = $1 AND school_year_id = $2 AND is_archived = false) AS homeroom_students
+  `,
+
+  //  Archive: hide from staff lists and pickers, and revoke school access so
+  //  the account can't sign in. Every row that references them is kept.
+  //  $1 = user_id, $2 = school, $3 = archived_by (admin user_id)
+  archiveUserInSchool: `
+    UPDATE users
+    SET is_archived = true,
+        archived_at = NOW(),
+        archived_by = $3,
+        is_verified_school = false,
+        last_modified_at = NOW()
+    WHERE user_id = $1 AND school = $2 AND is_archived = false
+    RETURNING user_id, email, username, first_name, last_name, school, role,
+              is_verified, is_verified_school, is_archived, archived_at,
+              created_at, last_modified_at,
+              (password = '!') AS invite_pending
+  `,
+
+  //  Restore: back to an ordinary active account with school access.
+  //  $1 = user_id, $2 = school
+  unarchiveUserInSchool: `
+    UPDATE users
+    SET is_archived = false,
+        archived_at = NULL,
+        archived_by = NULL,
+        is_verified_school = true,
+        last_modified_at = NOW()
+    WHERE user_id = $1 AND school = $2 AND is_archived = true
+    RETURNING user_id, email, username, first_name, last_name, school, role,
+              is_verified, is_verified_school, is_archived, archived_at,
+              created_at, last_modified_at,
+              (password = '!') AS invite_pending
+  `,
+
+  //  Classes a user leads in any year. In production classes.teacher_id is
+  //  ON DELETE CASCADE, so deleting the user would delete these classes and
+  //  every assessment and grade under them. The controller refuses instead.
+  //  $1 = user_id
+  countLeadClasses: `
+    SELECT COUNT(*)::int AS count FROM classes WHERE teacher_id = $1
   `,
 
   //  $1 = user_id, $2 = school

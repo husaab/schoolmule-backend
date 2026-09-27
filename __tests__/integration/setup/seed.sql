@@ -36,6 +36,9 @@ CREATE TABLE users (
   email_token            TEXT,
   is_verified            BOOLEAN DEFAULT FALSE,
   is_verified_school     BOOLEAN DEFAULT FALSE,
+  is_archived            BOOLEAN NOT NULL DEFAULT FALSE,
+  archived_at            TIMESTAMPTZ,
+  archived_by            UUID REFERENCES users(user_id) ON DELETE SET NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)
