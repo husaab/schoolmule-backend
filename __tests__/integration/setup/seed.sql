@@ -104,6 +104,90 @@ CREATE TABLE terms (
 
 -- ─── Tier 1: Tables referencing foundation ───────────────────
 
+-- ─── Registration forms (registration_forms_migration.sql,
+--     registration_statuses_migration.sql) ─────────────────────
+-- Declared before `students` because students.source_submission_id
+-- references registration_form_submissions (registration_import_migration.sql).
+
+CREATE TABLE registration_statuses (
+  status_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school      school NOT NULL,
+  key         VARCHAR(40) NOT NULL,
+  label       VARCHAR(60) NOT NULL,
+  color       VARCHAR(20) NOT NULL DEFAULT 'slate',
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  is_builtin  BOOLEAN NOT NULL DEFAULT false,
+  is_default  BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (school, key)
+);
+
+CREATE INDEX idx_registration_statuses_school
+  ON registration_statuses (school, sort_order);
+CREATE UNIQUE INDEX idx_registration_statuses_one_default
+  ON registration_statuses (school) WHERE is_default;
+
+CREATE TABLE registration_forms (
+  form_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school            school NOT NULL,
+  title             VARCHAR(255) NOT NULL,
+  slug              VARCHAR(255) NOT NULL,
+  description       TEXT,
+  banner_image_path TEXT,
+  status            VARCHAR(20) NOT NULL DEFAULT 'draft'
+                      CHECK (status IN ('draft', 'published', 'closed')),
+  created_by        UUID NOT NULL REFERENCES users(user_id),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  published_at      TIMESTAMPTZ,
+  closed_at         TIMESTAMPTZ,
+  UNIQUE(school, slug)
+);
+
+CREATE INDEX idx_registration_forms_school ON registration_forms(school);
+CREATE INDEX idx_registration_forms_school_slug ON registration_forms(school, slug);
+CREATE INDEX idx_registration_forms_status ON registration_forms(status);
+
+CREATE TABLE registration_form_fields (
+  field_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  form_id           UUID NOT NULL REFERENCES registration_forms(form_id) ON DELETE CASCADE,
+  field_type        VARCHAR(20) NOT NULL
+                      CHECK (field_type IN ('text', 'email', 'phone', 'date', 'select', 'radio', 'textarea')),
+  label             VARCHAR(255) NOT NULL,
+  placeholder       VARCHAR(255),
+  is_required       BOOLEAN NOT NULL DEFAULT false,
+  options           JSONB,
+  sort_order        INTEGER NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_registration_form_fields_form_id ON registration_form_fields(form_id);
+CREATE INDEX idx_registration_form_fields_sort_order ON registration_form_fields(form_id, sort_order);
+
+-- Status is a composite FK to registration_statuses (school, key) rather than
+-- a CHECK constraint (registration_statuses_migration.sql). The imported_*
+-- columns are added after `students` exists, below.
+CREATE TABLE registration_form_submissions (
+  submission_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  form_id           UUID NOT NULL REFERENCES registration_forms(form_id) ON DELETE CASCADE,
+  school            school NOT NULL,
+  answers           JSONB NOT NULL,
+  submitted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ip_address        INET,
+  status            VARCHAR(20) NOT NULL DEFAULT 'new',
+  CONSTRAINT registration_form_submissions_status_fkey
+    FOREIGN KEY (school, status)
+    REFERENCES registration_statuses (school, key)
+    ON UPDATE CASCADE
+);
+
+CREATE INDEX idx_submissions_form_id ON registration_form_submissions(form_id);
+CREATE INDEX idx_submissions_school ON registration_form_submissions(school);
+CREATE INDEX idx_submissions_submitted_at ON registration_form_submissions(submitted_at);
+CREATE INDEX idx_submissions_status ON registration_form_submissions(status);
+CREATE INDEX idx_submissions_form_status ON registration_form_submissions(form_id, status);
+
 CREATE TABLE students (
   student_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name                   TEXT NOT NULL,
@@ -118,6 +202,12 @@ CREATE TABLE students (
   father_email           TEXT,
   father_number          TEXT,
   emergency_contact      TEXT,
+  -- registration_import_migration.sql: profile fields + import back-link
+  date_of_birth          DATE,
+  medical_notes          TEXT,
+  address                TEXT,
+  health_card_number     TEXT,
+  source_submission_id   UUID REFERENCES registration_form_submissions(submission_id) ON DELETE SET NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   is_archived            BOOLEAN DEFAULT FALSE,
@@ -126,6 +216,42 @@ CREATE TABLE students (
   school_year_id         UUID REFERENCES school_years(school_year_id),
   previous_student_id    UUID REFERENCES students(student_id)
 );
+
+CREATE INDEX idx_students_source_submission
+  ON students (source_submission_id)
+  WHERE source_submission_id IS NOT NULL;
+
+-- registration_import_migration.sql: forward import tracking + field mappings
+ALTER TABLE registration_form_submissions
+  ADD COLUMN imported_student_id UUID REFERENCES students(student_id) ON DELETE SET NULL,
+  ADD COLUMN imported_at TIMESTAMPTZ,
+  ADD COLUMN imported_by UUID REFERENCES users(user_id) ON DELETE SET NULL;
+
+CREATE INDEX idx_submissions_imported_student
+  ON registration_form_submissions (imported_student_id)
+  WHERE imported_student_id IS NOT NULL;
+CREATE INDEX idx_submissions_form_not_imported
+  ON registration_form_submissions (form_id)
+  WHERE imported_student_id IS NULL;
+
+CREATE TABLE registration_field_mappings (
+  mapping_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  form_id      UUID NOT NULL REFERENCES registration_forms(form_id) ON DELETE CASCADE,
+  field_id     UUID NOT NULL REFERENCES registration_form_fields(field_id) ON DELETE CASCADE,
+  target_field VARCHAR(40) NOT NULL CHECK (target_field IN (
+    'name', 'grade', 'oen', 'dateOfBirth', 'medicalNotes', 'address',
+    'healthCardNumber', 'emergencyContact',
+    'motherName', 'motherEmail', 'motherPhone',
+    'fatherName', 'fatherEmail', 'fatherPhone'
+  )),
+  value_map    JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (form_id, field_id),
+  UNIQUE (form_id, target_field)
+);
+
+CREATE INDEX idx_field_mappings_form ON registration_field_mappings (form_id);
 
 CREATE TABLE password_reset_tokens (
   token                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
