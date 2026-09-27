@@ -174,10 +174,9 @@ describe('buildOverviewTab', () => {
     expect(tab.pinnedBottomId).toBe(layout.TOTAL_ID);
   });
 
-  it('describes how the tab should look: frozen names, hidden id, a colour per person', () => {
+  it('describes how the tab should look: frozen names, hidden id, roomy rows', () => {
     const tab = layout.buildOverviewTab([period()]);
-    expect(tab.format).toMatchObject({ frozenRows: 1, frozenColumns: 2, hiddenColumns: [0], totalId: layout.TOTAL_ID });
-    expect(tab.format.rowColours.get('t1')).toMatch(/^#[0-9A-F]{6}$/i);
+    expect(tab.format).toMatchObject({ frozenRows: 1, frozenColumns: 2, hiddenColumns: [0], totalId: layout.TOTAL_ID, dataRowHeight: layout.DATA_ROW_HEIGHT });
     const periodTab = layout.buildPeriodTab(period());
     expect(periodTab.format).toMatchObject({ frozenRows: 2, frozenColumns: 2 });
     expect(periodTab.format.columnWidths.at(-1)).toEqual({ start: 8, end: periodTab.width, pixels: 76 });
@@ -187,22 +186,5 @@ describe('buildOverviewTab', () => {
     const tab = layout.buildOverviewTab([]);
     expect(tab.width).toBe(3);
     expect(tab.rows).toEqual([{ id: layout.TOTAL_ID, values: [layout.TOTAL_ID, 'Total', 0] }]);
-  });
-});
-
-describe('assignStaffColours', () => {
-  const staff = (id) => ({ teacherId: id });
-
-  it('gives each person a stable colour from the palette', () => {
-    const a = layout.assignStaffColours([staff('aaa'), staff('bbb')]);
-    const b = layout.assignStaffColours([staff('aaa'), staff('bbb')]);
-    expect(a.get('aaa')).toBe(b.get('aaa'));
-    expect(layout.STAFF_PALETTE).toContain(a.get('aaa'));
-  });
-
-  it('never gives two neighbours the same colour', () => {
-    const ids = Array.from({ length: 60 }, (_, i) => staff(`user-${i}`));
-    const colours = [...layout.assignStaffColours(ids).values()];
-    for (let i = 1; i < colours.length; i++) expect(colours[i]).not.toBe(colours[i - 1]);
   });
 });

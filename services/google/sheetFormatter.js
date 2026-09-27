@@ -3,13 +3,14 @@
 // Turns a tab's format spec (from staffHoursSheetLayout) plus the row
 // positions the reconciler settled on into Sheets batchUpdate requests:
 // frozen header rows and name columns, a hidden ID column, column widths,
-// bold shaded headers, one colour per staff member, and a bold Total row.
+// bold shaded headers, roomier plain data rows, and a bold Total row.
 //
 // Pure: no Google calls. Every request is bounded to the owned block, so the
 // school's own columns to the right keep whatever formatting they gave them.
 
 const HEADER_BACKGROUND = '#DDE3EA';
 const TOTAL_BACKGROUND = '#C9D3DF';
+const DATA_BACKGROUND = '#FFFFFF';
 
 /** "#RRGGBB" → the Sheets API's {red, green, blue} in 0–1. */
 function colour(hex) {
@@ -93,15 +94,25 @@ function buildFormatRequests({ sheetId, tab, rowIndexById }) {
     });
   });
 
-  // One colour per person, on every tab they appear on.
-  for (const [id, hex] of format.rowColours) {
-    const rowIndex = rowIndexById[id];
-    if (rowIndex === undefined) continue;
+  // Data rows: plain white, a size up, and taller than Google's default.
+  // Explicitly white (not "unset") so a background from an earlier release
+  // is cleared rather than left behind.
+  const positions = Object.values(rowIndexById);
+  if (positions.length > 0) {
+    const first = headerRows.length;
+    const last = Math.max(...positions) + 1;
     requests.push({
       repeatCell: {
-        range: block(rowIndex, rowIndex + 1),
-        cell: cellFormat({ background: hex }),
+        range: block(first, last),
+        cell: cellFormat({ background: DATA_BACKGROUND, fontSize: 11 }),
         fields: FORMAT_FIELDS,
+      },
+    });
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'ROWS', startIndex: first, endIndex: last },
+        properties: { pixelSize: format.dataRowHeight },
+        fields: 'pixelSize',
       },
     });
   }
@@ -120,4 +131,4 @@ function buildFormatRequests({ sheetId, tab, rowIndexById }) {
   return requests;
 }
 
-module.exports = { buildFormatRequests, colour, HEADER_BACKGROUND, TOTAL_BACKGROUND };
+module.exports = { buildFormatRequests, colour, HEADER_BACKGROUND, TOTAL_BACKGROUND, DATA_BACKGROUND };

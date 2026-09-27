@@ -1,5 +1,5 @@
 
-const { buildFormatRequests, colour, HEADER_BACKGROUND, TOTAL_BACKGROUND } = require('../../../../services/google/sheetFormatter');
+const { buildFormatRequests, colour, HEADER_BACKGROUND, TOTAL_BACKGROUND, DATA_BACKGROUND } = require('../../../../services/google/sheetFormatter');
 
 const tab = {
   width: 5,
@@ -9,7 +9,7 @@ const tab = {
     frozenColumns: 2,
     hiddenColumns: [0],
     columnWidths: [{ start: 1, end: 2, pixels: 180 }, { start: 2, end: 5, pixels: 100 }, { start: 5, end: 5, pixels: 1 }],
-    rowColours: new Map([['t1', '#FDE2E2'], ['t2', '#D6EEF8'], ['gone', '#000000']]),
+    dataRowHeight: 32,
     totalId: '__total__',
   },
 };
@@ -32,8 +32,10 @@ describe('buildFormatRequests', () => {
     const dims = of('updateDimensionProperties').map((r) => r.updateDimensionProperties);
     expect(dims[0]).toMatchObject({ range: { dimension: 'COLUMNS', startIndex: 0, endIndex: 1 }, properties: { hiddenByUser: true } });
     expect(dims.filter((d) => d.properties.pixelSize && d.range.dimension === 'COLUMNS')).toHaveLength(2);
-    // Two header rows get a height each.
-    expect(dims.filter((d) => d.range.dimension === 'ROWS')).toHaveLength(2);
+    // Two header rows get a height each, plus one range for the data rows.
+    const rowDims = dims.filter((d) => d.range.dimension === 'ROWS');
+    expect(rowDims).toHaveLength(3);
+    expect(rowDims[2]).toMatchObject({ range: { startIndex: 2, endIndex: 5 }, properties: { pixelSize: 32 } });
   });
 
   it('bolds and shades the headers, the title row a size up', () => {
@@ -48,11 +50,12 @@ describe('buildFormatRequests', () => {
     expect(header.range).toMatchObject({ startColumnIndex: 0, endColumnIndex: 5 });
   });
 
-  it('colours each person\'s row where the plan put it, and skips people not on the tab', () => {
+  it('gives the data rows a plain white background and a size up, over exactly the rows in use', () => {
     const cells = of('repeatCell').map((r) => r.repeatCell);
-    const t1 = cells.find((c) => c.range.startRowIndex === 2);
-    expect(t1.cell.userEnteredFormat.backgroundColor).toEqual(colour('#FDE2E2'));
-    expect(cells.some((c) => c.cell.userEnteredFormat.backgroundColor.red === 0 && c.cell.userEnteredFormat.backgroundColor.blue === 0)).toBe(false);
+    const data = cells.find((c) => c.range.startRowIndex === 2);
+    expect(data.range).toMatchObject({ startRowIndex: 2, endRowIndex: 5, startColumnIndex: 0, endColumnIndex: 5 });
+    expect(data.cell.userEnteredFormat.backgroundColor).toEqual(colour(DATA_BACKGROUND));
+    expect(data.cell.userEnteredFormat.textFormat).toEqual({ bold: false, fontSize: 11 });
   });
 
   it('bolds the Total row', () => {

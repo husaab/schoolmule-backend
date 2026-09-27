@@ -145,7 +145,7 @@ describe('staffHoursSyncEngine.syncStaffHours', () => {
     expect(JSON.parse(call[1][1])).toEqual(WIDTHS);
   });
 
-  it('formats every tab after the values land: frozen names, headers, a colour per person', async () => {
+  it('formats every tab after the values land: frozen names, headers, roomy rows', async () => {
     primeDb();
     const order = [];
     sheetsClient.applyMultiTabPlan.mockImplementation(async () => { order.push('values'); return { writes: 3 }; });
@@ -158,9 +158,10 @@ describe('staffHoursSyncEngine.syncStaffHours', () => {
     const frozen = requests.filter((r) => r.updateSheetProperties);
     expect(frozen.map((r) => r.updateSheetProperties.properties.sheetId)).toEqual([1, 2, 3]);
     expect(frozen[1].updateSheetProperties.properties.gridProperties).toEqual({ frozenRowCount: 2, frozenColumnCount: 2 });
-    // The staff row is coloured on every tab, at the row the plan put it on.
-    const coloured = requests.filter((r) => r.repeatCell && r.repeatCell.range.startRowIndex === 2 && r.repeatCell.range.sheetId === 2);
-    expect(coloured).toHaveLength(1);
+    // The data rows on a period tab start under its two header rows.
+    const dataRows = requests.filter((r) => r.repeatCell && r.repeatCell.range.startRowIndex === 2 && r.repeatCell.range.sheetId === 2);
+    expect(dataRows).toHaveLength(1);
+    expect(requests.some((r) => r.updateDimensionProperties?.range.dimension === 'ROWS' && r.updateDimensionProperties.properties.pixelSize === 32)).toBe(true);
   });
 
   it('still formats when the values are already correct', async () => {

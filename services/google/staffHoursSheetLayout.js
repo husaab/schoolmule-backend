@@ -17,13 +17,9 @@ const OVERVIEW_TAB = 'Overview';
 const TOTAL_ID = '__total__';
 const REMOVED_SUFFIX = ' (removed)';
 
-// One colour per staff member, the same on every tab. Soft enough that black
-// text stays readable; distinct enough that neighbouring rows read as
-// different people.
-const STAFF_PALETTE = [
-  '#FDE2E2', '#FFE8D1', '#FFF4C2', '#E5F5D5', '#D5F0E8', '#D6EEF8',
-  '#DCE3FA', '#E9DDF7', '#F8DCEC', '#EDE4D9', '#E2ECE0', '#E6E6E6',
-];
+
+/** Height of a staff row in pixels — roomier than Google's 21px default. */
+const DATA_ROW_HEIGHT = 32;
 
 const FIXED_COLUMNS = [
   'Staff ID',
@@ -51,22 +47,6 @@ const periodTabTitle = (period) => `${longMonthDate(period.payDate)} Pay Day`;
 /** The title the first release used; ensureTabs renames a tab it finds under it. */
 const legacyPeriodTabTitle = (period) => `Pay day ${period.payDate}`;
 
-/** Stable colour per staff member: hashed from the id so adding someone does
- *  not recolour everyone, then nudged so two neighbours never share one. */
-const assignStaffColours = (sortedStaff) => {
-  const colours = new Map();
-  let previous = -1;
-  for (const t of sortedStaff) {
-    const id = String(t.teacherId);
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-    let index = hash % STAFF_PALETTE.length;
-    if (index === previous) index = (index + 1) % STAFF_PALETTE.length;
-    colours.set(id, STAFF_PALETTE[index]);
-    previous = index;
-  }
-  return colours;
-};
 
 /**
  * Every pay period from the school year's start through the one in progress:
@@ -183,7 +163,7 @@ function buildPeriodTab(built) {
         { start: 2, end: FIXED_COLUMNS.length, pixels: 110 },
         { start: FIXED_COLUMNS.length, end: width, pixels: 76 },
       ],
-      rowColours: assignStaffColours(teachers),
+      dataRowHeight: DATA_ROW_HEIGHT,
       totalId: TOTAL_ID,
     },
   };
@@ -234,7 +214,7 @@ function buildOverviewTab(builtPeriods) {
         { start: 1, end: 2, pixels: 180 },
         { start: 2, end: width, pixels: 190 },
       ],
-      rowColours: assignStaffColours(people),
+      dataRowHeight: DATA_ROW_HEIGHT,
       totalId: TOTAL_ID,
     },
   };
@@ -245,11 +225,10 @@ module.exports = {
   TOTAL_ID,
   REMOVED_SUFFIX,
   FIXED_COLUMNS,
-  STAFF_PALETTE,
+  DATA_ROW_HEIGHT,
   longMonthDate,
   periodTabTitle,
   legacyPeriodTabTitle,
-  assignStaffColours,
   periodsForYear,
   datesIn,
   dateHeader,
