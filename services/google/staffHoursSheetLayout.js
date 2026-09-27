@@ -17,6 +17,14 @@ const OVERVIEW_TAB = 'Overview';
 const TOTAL_ID = '__total__';
 const REMOVED_SUFFIX = ' (removed)';
 
+// One colour per staff member, the same on every tab. Soft enough that black
+// text stays readable; distinct enough that neighbouring rows read as
+// different people.
+const STAFF_PALETTE = [
+  '#FDE2E2', '#FFE8D1', '#FFF4C2', '#E5F5D5', '#D5F0E8', '#D6EEF8',
+  '#DCE3FA', '#E9DDF7', '#F8DCEC', '#EDE4D9', '#E2ECE0', '#E6E6E6',
+];
+
 const FIXED_COLUMNS = [
   'Staff ID',
   'Staff member',
@@ -31,8 +39,34 @@ const FIXED_COLUMNS = [
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
 
-/** "Pay day 2026-09-25" — sortable, and far under Google's 100-char cap. */
-const periodTabTitle = (period) => `Pay day ${period.payDate}`;
+/** "September 25, 2026" from a YYYY-MM-DD key, without any timezone shift. */
+const longMonthDate = (key) => {
+  const [y, m, d] = String(key).substring(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-CA', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+
+/** "September 25, 2026 Pay Day" — the tab name, and its column on the Overview. */
+const periodTabTitle = (period) => `${longMonthDate(period.payDate)} Pay Day`;
+
+/** The title the first release used; ensureTabs renames a tab it finds under it. */
+const legacyPeriodTabTitle = (period) => `Pay day ${period.payDate}`;
+
+/** Stable colour per staff member: hashed from the id so adding someone does
+ *  not recolour everyone, then nudged so two neighbours never share one. */
+const assignStaffColours = (sortedStaff) => {
+  const colours = new Map();
+  let previous = -1;
+  for (const t of sortedStaff) {
+    const id = String(t.teacherId);
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+    let index = hash % STAFF_PALETTE.length;
+    if (index === previous) index = (index + 1) % STAFF_PALETTE.length;
+    colours.set(id, STAFF_PALETTE[index]);
+    previous = index;
+  }
+  return colours;
+};
 
 /**
  * Every pay period from the school year's start through the one in progress:
@@ -105,7 +139,7 @@ function buildPeriodTab(built) {
     ? 'Period complete'
     : `Through ${longDate(built.throughDate)} — pay day is still ahead`;
   const infoRow = [
-    `Pay day ${longDate(built.payDate)} · ${longDate(built.startDate)} – ${longDate(built.endDate)}`,
+    `${periodTabTitle(built)} · ${longDate(built.startDate)} – ${longDate(built.endDate)}`,
     scope,
   ];
   const headerRow = [...FIXED_COLUMNS, ...dates.map(dateHeader)];
@@ -134,11 +168,24 @@ function buildPeriodTab(built) {
 
   return {
     title: periodTabTitle(built),
+    legacyTitles: [legacyPeriodTabTitle(built)],
     headerRows: [infoRow, headerRow],
     rows,
     width,
     pinnedBottomId: TOTAL_ID,
     missing: { mark: markRemoved },
+    format: {
+      frozenRows: 2,
+      frozenColumns: 2,
+      hiddenColumns: [0],
+      columnWidths: [
+        { start: 1, end: 2, pixels: 180 },
+        { start: 2, end: FIXED_COLUMNS.length, pixels: 110 },
+        { start: FIXED_COLUMNS.length, end: width, pixels: 76 },
+      ],
+      rowColours: assignStaffColours(teachers),
+      totalId: TOTAL_ID,
+    },
   };
 }
 
@@ -173,11 +220,23 @@ function buildOverviewTab(builtPeriods) {
 
   return {
     title: OVERVIEW_TAB,
+    legacyTitles: [],
     headerRows: [['Staff ID', 'Staff member', ...builtPeriods.map(periodTabTitle), 'Total']],
     rows,
     width,
     pinnedBottomId: TOTAL_ID,
     missing: { mark: markRemoved },
+    format: {
+      frozenRows: 1,
+      frozenColumns: 2,
+      hiddenColumns: [0],
+      columnWidths: [
+        { start: 1, end: 2, pixels: 180 },
+        { start: 2, end: width, pixels: 190 },
+      ],
+      rowColours: assignStaffColours(people),
+      totalId: TOTAL_ID,
+    },
   };
 }
 
@@ -186,7 +245,11 @@ module.exports = {
   TOTAL_ID,
   REMOVED_SUFFIX,
   FIXED_COLUMNS,
+  STAFF_PALETTE,
+  longMonthDate,
   periodTabTitle,
+  legacyPeriodTabTitle,
+  assignStaffColours,
   periodsForYear,
   datesIn,
   dateHeader,

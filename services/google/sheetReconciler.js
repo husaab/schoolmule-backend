@@ -95,6 +95,7 @@ function rowsEqualTo(existing, desired, width) {
  *   appends: string[][],
  *   appendStartRow: number,
  *   ownedColumns: number,
+ *   rowIndexById: Object<string, number>,  // final 0-based row of every desired row
  *   isNoop: boolean
  * }}
  */
@@ -135,7 +136,9 @@ function planReconcileGrid({
 
   const updates = [];
   const appends = [];
+  const appendIds = [];
   const seen = new Set();
+  const rowIndexById = {};
   let pinned = null;
 
   for (const row of rows) {
@@ -145,12 +148,17 @@ function planReconcileGrid({
 
     const rowIndex = idToRow.get(id);
     if (rowIndex === undefined) {
-      if (pinnedBottomId !== null && id === String(pinnedBottomId)) pinned = { rowIndex: null, values: desired };
-      else appends.push(desired);
+      if (pinnedBottomId !== null && id === String(pinnedBottomId)) {
+        pinned = { id, rowIndex: null, values: desired };
+      } else {
+        appends.push(desired);
+        appendIds.push(id);
+      }
       continue;
     }
+    rowIndexById[id] = rowIndex;
     if (pinnedBottomId !== null && id === String(pinnedBottomId)) {
-      pinned = { rowIndex, values: desired };
+      pinned = { id, rowIndex, values: desired };
       continue;
     }
     if (!rowsEqualTo(grid[rowIndex], desired, ownedColumns)) {
@@ -177,10 +185,13 @@ function planReconcileGrid({
       // last slides down past the new rows so it stays there.
       if (isLast) appendStartRow = pinned.rowIndex;
       appends.push(pinned.values);
+      appendIds.push(pinned.id);
     } else if (!rowsEqualTo(grid[pinned.rowIndex], pinned.values, ownedColumns)) {
       updates.push({ rowIndex: pinned.rowIndex, values: pinned.values });
     }
   }
+
+  appendIds.forEach((id, i) => { rowIndexById[id] = appendStartRow + i; });
 
   return {
     insertColumns,
@@ -189,6 +200,7 @@ function planReconcileGrid({
     appends,
     appendStartRow,
     ownedColumns,
+    rowIndexById,
     isNoop: headerWrites.length === 0 && updates.length === 0 && appends.length === 0 && insertColumns === 0,
   };
 }

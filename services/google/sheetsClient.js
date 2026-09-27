@@ -96,21 +96,36 @@ async function addTab(auth, spreadsheetId, title) {
 }
 
 /**
- * Makes sure every title has a tab, creating the missing ones in one batch.
+ * Makes sure every wanted tab exists, in one batch: a tab found under one of
+ * its `legacyTitles` is renamed in place, anything else missing is created.
  * Titles in `pinFirst` are created at index 0 (leftmost); everything else is
  * appended in the order given. Existing tabs are never moved.
  *
+ * @param wanted  Array<string | { title, legacyTitles? }>
  * @returns Map<title, {sheetId, title}>
  */
-async function ensureTabs(auth, spreadsheetId, titles, { pinFirst = [] } = {}) {
+async function ensureTabs(auth, spreadsheetId, wanted, { pinFirst = [] } = {}) {
   const meta = await getSpreadsheetMeta(auth, spreadsheetId);
   const byTitle = new Map(meta.tabs.map((t) => [t.title, { sheetId: t.sheetId, title: t.title }]));
 
-  const requests = titles
-    .filter((title) => !byTitle.has(title))
-    .map((title) => ({
+  const requests = [];
+  for (const item of wanted) {
+    const { title, legacyTitles = [] } = typeof item === 'string' ? { title: item } : item;
+    if (byTitle.has(title)) continue;
+
+    const old = legacyTitles.find((t) => byTitle.has(t));
+    if (old) {
+      const { sheetId } = byTitle.get(old);
+      requests.push({ updateSheetProperties: { properties: { sheetId, title }, fields: 'title' } });
+      byTitle.delete(old);
+      byTitle.set(title, { sheetId, title });
+      continue;
+    }
+
+    requests.push({
       addSheet: { properties: pinFirst.includes(title) ? { title, index: 0 } : { title } },
-    }));
+    });
+  }
 
   if (requests.length > 0) {
     const { data } = await sheetsApi(auth).spreadsheets.batchUpdate({
@@ -118,11 +133,19 @@ async function ensureTabs(auth, spreadsheetId, titles, { pinFirst = [] } = {}) {
       requestBody: { requests },
     });
     for (const reply of data.replies || []) {
+      if (!reply.addSheet) continue;
       const props = reply.addSheet.properties;
       byTitle.set(props.title, { sheetId: props.sheetId, title: props.title });
     }
   }
   return byTitle;
+}
+
+/** One batchUpdate of arbitrary requests (formatting, dimensions, …). */
+async function applyRequests(auth, spreadsheetId, requests) {
+  if (requests.length === 0) return { requests: 0 };
+  await sheetsApi(auth).spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+  return { requests: requests.length };
 }
 
 /** Reads several tabs' owned blocks in one call. Same order as `tabs`. */
@@ -259,6 +282,7 @@ module.exports = {
   addTab,
   ensureTabs,
   readGrids,
+  applyRequests,
   getFileName,
   applyPlan,
   applyMultiTabPlan,

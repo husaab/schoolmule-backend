@@ -8,6 +8,7 @@ jest.mock('../../../../services/google/sheetsClient', () => ({
   ensureTabs: jest.fn(),
   readGrids: jest.fn(),
   applyMultiTabPlan: jest.fn(),
+  applyRequests: jest.fn(),
 }));
 jest.mock('../../../../services/staffAttendance/assembly', () => {
   const actual = jest.requireActual('../../../../services/staffAttendance/assembly');
@@ -46,8 +47,10 @@ const builtPeriods = () => [
   { payDate: '2026-09-25', startDate: '2026-08-26', endDate: '2026-09-25', throughDate: '2026-09-25', isComplete: true, teachers: [teacher()] },
   { payDate: '2026-10-25', startDate: '2026-09-26', endDate: '2026-10-25', throughDate: '2026-09-26', isComplete: false, teachers: [teacher({ hoursWorked: 0, presentDays: 0, elapsedWorkingDays: 0 })] },
 ];
-const TITLES = ['Overview', 'Pay day 2026-09-25', 'Pay day 2026-10-25'];
-const WIDTHS = { Overview: 5, 'Pay day 2026-09-25': 39, 'Pay day 2026-10-25': 38 };
+const SEPT = 'September 25, 2026 Pay Day';
+const OCT = 'October 25, 2026 Pay Day';
+const TITLES = ['Overview', SEPT, OCT];
+const WIDTHS = { Overview: 5, [SEPT]: 39, [OCT]: 38 };
 
 const sqls = () => db.query.mock.calls.map((c) => c[0]);
 
@@ -65,10 +68,11 @@ beforeEach(() => {
   assembly.loadPaySchedule.mockResolvedValue(schedule);
   assembly.buildPayPeriods.mockResolvedValue(builtPeriods());
   googleAuth.getAuthorizedClient.mockResolvedValue({ mockAuth: true });
-  sheetsClient.ensureTabs.mockImplementation(async (auth, id, titles) =>
-    new Map(titles.map((t, i) => [t, { sheetId: i + 1, title: t }])));
+  sheetsClient.ensureTabs.mockImplementation(async (auth, id, wanted) =>
+    new Map(wanted.map((w, i) => [w.title, { sheetId: i + 1, title: w.title }])));
   sheetsClient.readGrids.mockImplementation(async (auth, { tabs }) => tabs.map(() => []));
   sheetsClient.applyMultiTabPlan.mockResolvedValue({ writes: 3 });
+  sheetsClient.applyRequests.mockResolvedValue({ requests: 1 });
 });
 
 describe('staffHoursSyncEngine.syncStaffHours', () => {
@@ -103,7 +107,13 @@ describe('staffHoursSyncEngine.syncStaffHours', () => {
       layout.periodsForYear(schedule, '2026-09-01', '2026-09-26'), SCHOOL,
     );
     expect(sheetsClient.ensureTabs).toHaveBeenCalledWith(
-      { mockAuth: true }, 'ss-1', TITLES, { pinFirst: ['Overview'] },
+      { mockAuth: true }, 'ss-1',
+      [
+        { title: 'Overview', legacyTitles: [] },
+        { title: SEPT, legacyTitles: ['Pay day 2026-09-25'] },
+        { title: OCT, legacyTitles: ['Pay day 2026-10-25'] },
+      ],
+      { pinFirst: ['Overview'] },
     );
   });
 
@@ -135,11 +145,50 @@ describe('staffHoursSyncEngine.syncStaffHours', () => {
     expect(JSON.parse(call[1][1])).toEqual(WIDTHS);
   });
 
-  it('reads at the widest block it ever wrote, so a shrunken period blanks its stale cells', async () => {
+  it('formats every tab after the values land: frozen names, headers, a colour per person', async () => {
+    primeDb();
+    const order = [];
+    sheetsClient.applyMultiTabPlan.mockImplementation(async () => { order.push('values'); return { writes: 3 }; });
+    sheetsClient.applyRequests.mockImplementation(async () => { order.push('format'); return { requests: 1 }; });
+
+    await syncStaffHours(SCHOOL);
+
+    expect(order).toEqual(['values', 'format']);
+    const requests = sheetsClient.applyRequests.mock.calls[0][2];
+    const frozen = requests.filter((r) => r.updateSheetProperties);
+    expect(frozen.map((r) => r.updateSheetProperties.properties.sheetId)).toEqual([1, 2, 3]);
+    expect(frozen[1].updateSheetProperties.properties.gridProperties).toEqual({ frozenRowCount: 2, frozenColumnCount: 2 });
+    // The staff row is coloured on every tab, at the row the plan put it on.
+    const coloured = requests.filter((r) => r.repeatCell && r.repeatCell.range.startRowIndex === 2 && r.repeatCell.range.sheetId === 2);
+    expect(coloured).toHaveLength(1);
+  });
+
+  it('still formats when the values are already correct', async () => {
+    primeDb({ link: linkRow({ tab_widths: WIDTHS }) });
+    const built = builtPeriods();
+    const tabs = [layout.buildOverviewTab(built), ...built.map(layout.buildPeriodTab)];
+    sheetsClient.readGrids.mockResolvedValue(tabs.map((t) => [...t.headerRows, ...t.rows.map((r) => r.values.map(String))]));
+
+    await syncStaffHours(SCHOOL);
+    expect(sheetsClient.applyMultiTabPlan).not.toHaveBeenCalled();
+    expect(sheetsClient.applyRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries a renamed tab\'s stored width over from its legacy title', async () => {
     primeDb({ link: linkRow({ tab_widths: { 'Pay day 2026-09-25': 45 } }) });
     await syncStaffHours(SCHOOL);
 
-    const read = sheetsClient.readGrids.mock.calls[0][1].tabs.find((t) => t.tabName === 'Pay day 2026-09-25');
+    const read = sheetsClient.readGrids.mock.calls[0][1].tabs.find((t) => t.tabName === SEPT);
+    expect(read.width).toBe(45);
+    const stamped = db.query.mock.calls.find(([sql]) => /last_synced_at = now\(\)/.test(sql));
+    expect(JSON.parse(stamped[1][1])[SEPT]).toBe(45);
+  });
+
+  it('reads at the widest block it ever wrote, so a shrunken period blanks its stale cells', async () => {
+    primeDb({ link: linkRow({ tab_widths: { [SEPT]: 45 } }) });
+    await syncStaffHours(SCHOOL);
+
+    const read = sheetsClient.readGrids.mock.calls[0][1].tabs.find((t) => t.tabName === SEPT);
     expect(read.width).toBe(45);
     const { tabPlans } = sheetsClient.applyMultiTabPlan.mock.calls[0][1];
     expect(tabPlans[1].plan.ownedColumns).toBe(45);

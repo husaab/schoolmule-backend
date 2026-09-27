@@ -146,3 +146,34 @@ describe('sharing', () => {
     expect(mockPermissions.delete).toHaveBeenCalledWith({ fileId: 'ss-1', permissionId: 'p3' });
   });
 });
+
+describe('ensureTabs renaming', () => {
+  it('renames a tab found under a legacy title instead of creating a duplicate', async () => {
+    mockSpreadsheets.get.mockResolvedValue({ data: { sheets: [
+      { properties: { sheetId: 7, title: 'Overview' } },
+      { properties: { sheetId: 1, title: 'Pay day 2026-09-25' } },
+    ] } });
+    mockSpreadsheets.batchUpdate.mockResolvedValue({ data: { replies: [{}] } });
+
+    const tabs = await sheetsClient.ensureTabs(auth, 'ss-1', [
+      'Overview',
+      { title: 'September 25, 2026 Pay Day', legacyTitles: ['Pay day 2026-09-25'] },
+    ]);
+
+    expect(mockSpreadsheets.batchUpdate.mock.calls[0][0].requestBody.requests).toEqual([
+      { updateSheetProperties: { properties: { sheetId: 1, title: 'September 25, 2026 Pay Day' }, fields: 'title' } },
+    ]);
+    expect(tabs.get('September 25, 2026 Pay Day')).toEqual({ sheetId: 1, title: 'September 25, 2026 Pay Day' });
+    expect(tabs.has('Pay day 2026-09-25')).toBe(false);
+  });
+});
+
+describe('applyRequests', () => {
+  it('sends the requests in one batch and skips the call when there are none', async () => {
+    mockSpreadsheets.batchUpdate.mockResolvedValue({});
+    await expect(sheetsClient.applyRequests(auth, 'ss-1', [])).resolves.toEqual({ requests: 0 });
+    expect(mockSpreadsheets.batchUpdate).not.toHaveBeenCalled();
+    await sheetsClient.applyRequests(auth, 'ss-1', [{ a: 1 }, { b: 2 }]);
+    expect(mockSpreadsheets.batchUpdate).toHaveBeenCalledWith({ spreadsheetId: 'ss-1', requestBody: { requests: [{ a: 1 }, { b: 2 }] } });
+  });
+});

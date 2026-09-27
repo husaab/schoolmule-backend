@@ -53,8 +53,10 @@ describe('periodsForYear', () => {
 });
 
 describe('date helpers', () => {
-  it('names a tab after its pay date so tabs sort chronologically', () => {
-    expect(layout.periodTabTitle(period())).toBe('Pay day 2026-09-25');
+  it('names a tab after its pay day in words, and remembers the old name for renaming', () => {
+    expect(layout.periodTabTitle(period())).toBe('September 25, 2026 Pay Day');
+    expect(layout.legacyPeriodTabTitle(period())).toBe('Pay day 2026-09-25');
+    expect(layout.longMonthDate('2026-10-05')).toBe('October 5, 2026');
   });
 
   it('lists every calendar date in the period, inclusive', () => {
@@ -98,9 +100,10 @@ describe('buildPeriodTab', () => {
       ] })],
     }));
 
-    expect(tab.title).toBe('Pay day 2026-09-25');
+    expect(tab.title).toBe('September 25, 2026 Pay Day');
+    expect(tab.legacyTitles).toEqual(['Pay day 2026-09-25']);
     expect(tab.width).toBe(8 + 31); // Aug 26 – Sept 25
-    expect(tab.headerRows[0][0]).toBe(`Pay day ${longDate('2026-09-25')} · ${longDate('2026-08-26')} – ${longDate('2026-09-25')}`);
+    expect(tab.headerRows[0][0]).toBe(`September 25, 2026 Pay Day · ${longDate('2026-08-26')} – ${longDate('2026-09-25')}`);
     expect(tab.headerRows[0][1]).toBe('Period complete');
     expect(tab.headerRows[1].slice(0, 8)).toEqual(layout.FIXED_COLUMNS);
     expect(tab.headerRows[1][8]).toBe('Wed 26 Aug');
@@ -164,16 +167,42 @@ describe('buildOverviewTab', () => {
 
     expect(tab.title).toBe(layout.OVERVIEW_TAB);
     expect(tab.width).toBe(5);
-    expect(tab.headerRows).toEqual([['Staff ID', 'Staff member', 'Pay day 2026-09-25', 'Pay day 2026-10-25', 'Total']]);
+    expect(tab.headerRows).toEqual([['Staff ID', 'Staff member', 'September 25, 2026 Pay Day', 'October 25, 2026 Pay Day', 'Total']]);
     expect(tab.rows[0].values).toEqual(['t2', 'Bilal Ahmed', 40, 0, 40]);
     expect(tab.rows[1].values).toEqual(['t1', 'Aisha Khan', 84.5, 6.5, 91]);
     expect(tab.rows[2].values).toEqual([layout.TOTAL_ID, 'Total', 124.5, 6.5, 131]);
     expect(tab.pinnedBottomId).toBe(layout.TOTAL_ID);
   });
 
+  it('describes how the tab should look: frozen names, hidden id, a colour per person', () => {
+    const tab = layout.buildOverviewTab([period()]);
+    expect(tab.format).toMatchObject({ frozenRows: 1, frozenColumns: 2, hiddenColumns: [0], totalId: layout.TOTAL_ID });
+    expect(tab.format.rowColours.get('t1')).toMatch(/^#[0-9A-F]{6}$/i);
+    const periodTab = layout.buildPeriodTab(period());
+    expect(periodTab.format).toMatchObject({ frozenRows: 2, frozenColumns: 2 });
+    expect(periodTab.format.columnWidths.at(-1)).toEqual({ start: 8, end: periodTab.width, pixels: 76 });
+  });
+
   it('handles a year with no periods yet', () => {
     const tab = layout.buildOverviewTab([]);
     expect(tab.width).toBe(3);
     expect(tab.rows).toEqual([{ id: layout.TOTAL_ID, values: [layout.TOTAL_ID, 'Total', 0] }]);
+  });
+});
+
+describe('assignStaffColours', () => {
+  const staff = (id) => ({ teacherId: id });
+
+  it('gives each person a stable colour from the palette', () => {
+    const a = layout.assignStaffColours([staff('aaa'), staff('bbb')]);
+    const b = layout.assignStaffColours([staff('aaa'), staff('bbb')]);
+    expect(a.get('aaa')).toBe(b.get('aaa'));
+    expect(layout.STAFF_PALETTE).toContain(a.get('aaa'));
+  });
+
+  it('never gives two neighbours the same colour', () => {
+    const ids = Array.from({ length: 60 }, (_, i) => staff(`user-${i}`));
+    const colours = [...layout.assignStaffColours(ids).values()];
+    for (let i = 1; i < colours.length; i++) expect(colours[i]).not.toBe(colours[i - 1]);
   });
 });

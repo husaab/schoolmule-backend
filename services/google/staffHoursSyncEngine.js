@@ -17,6 +17,7 @@ const assembly = require('../staffAttendance/assembly');
 const googleAuth = require('./googleAuth');
 const sheetsClient = require('./sheetsClient');
 const { planReconcileGrid } = require('./sheetReconciler');
+const { buildFormatRequests } = require('./sheetFormatter');
 const layout = require('./staffHoursSheetLayout');
 
 const NOT_CONFIGURED = 'Set a pay schedule and an active school year first';
@@ -54,13 +55,20 @@ async function syncStaffHours(school) {
 
     const auth = await googleAuth.getAuthorizedClient(school);
     const tabMeta = await sheetsClient.ensureTabs(
-      auth, link.spreadsheet_id, tabs.map((t) => t.title), { pinFirst: [layout.OVERVIEW_TAB] },
+      auth, link.spreadsheet_id,
+      tabs.map((t) => ({ title: t.title, legacyTitles: t.legacyTitles || [] })),
+      { pinFirst: [layout.OVERVIEW_TAB] },
     );
 
     // Read (and write) at least as wide as we ever have for each tab, so a
-    // block that shrank still gets its stale trailing cells blanked.
+    // block that shrank still gets its stale trailing cells blanked. A tab
+    // renamed from a legacy title keeps the width stored under that title.
     const stored = link.tab_widths && typeof link.tab_widths === 'object' ? link.tab_widths : {};
-    const widths = tabs.map((t) => Math.max(t.width, Number(stored[t.title]) || 0));
+    const storedWidth = (t) => {
+      const key = [t.title, ...(t.legacyTitles || [])].find((k) => stored[k] !== undefined);
+      return key === undefined ? undefined : Number(stored[key]);
+    };
+    const widths = tabs.map((t) => Math.max(t.width, storedWidth(t) || 0));
 
     const grids = await sheetsClient.readGrids(auth, {
       spreadsheetId: link.spreadsheet_id,
@@ -68,27 +76,35 @@ async function syncStaffHours(school) {
     });
 
     const tabPlans = [];
+    const formatRequests = [];
     let updates = 0;
     let appends = 0;
     tabs.forEach((t, i) => {
+      const sheetId = tabMeta.get(t.title).sheetId;
+      const previousWidth = storedWidth(t);
       const plan = planReconcileGrid({
         grid: grids[i],
         headerRows: t.headerRows,
         rows: t.rows,
         width: widths[i],
-        previousWidth: stored[t.title] === undefined ? null : Number(stored[t.title]),
+        previousWidth: previousWidth === undefined ? null : previousWidth,
         missing: t.missing,
         pinnedBottomId: t.pinnedBottomId,
       });
+      // Formatting is re-applied every sync: it is idempotent, it lands in one
+      // request, and it is what keeps a new person's row coloured on every tab.
+      formatRequests.push(...buildFormatRequests({ sheetId, tab: t, rowIndexById: plan.rowIndexById }));
       if (plan.isNoop) return;
       updates += plan.updates.length;
       appends += plan.appends.length;
-      tabPlans.push({ sheetTabId: tabMeta.get(t.title).sheetId, tabName: t.title, plan });
+      tabPlans.push({ sheetTabId: sheetId, tabName: t.title, plan });
     });
 
     if (tabPlans.length > 0) {
       await sheetsClient.applyMultiTabPlan(auth, { spreadsheetId: link.spreadsheet_id, tabPlans });
     }
+    // After the values, so column inserts have already shifted everything.
+    await sheetsClient.applyRequests(auth, link.spreadsheet_id, formatRequests);
 
     const widthsByTitle = Object.fromEntries(tabs.map((t, i) => [t.title, widths[i]]));
     await db.query(queries.updateStaffHoursLinkSynced, [school, JSON.stringify(widthsByTitle)]);

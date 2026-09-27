@@ -292,3 +292,23 @@ describe('planReconcileGrid', () => {
     expect(plan.appends[0]).toEqual(['t1', 'Aisha Khan', 84.5, '', '']);
   });
 });
+
+describe('planReconcileGrid row positions', () => {
+  const head = ['Staff ID', 'Staff member', 'Hours'];
+  const rows = [
+    { id: 't1', values: ['t1', 'Aisha Khan', 84.5] },
+    { id: 't2', values: ['t2', 'Bilal Ahmed', 40] },
+  ];
+  const total = { id: '__total__', values: ['__total__', 'Total', 124.5] };
+
+  it('reports where every row ends up, existing and appended alike', () => {
+    const grid = [head, ['t1', 'Aisha Khan', '84.5'], ['__total__', 'Total', '84.5']];
+    const plan = planReconcileGrid({ grid, headerRows: [head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.rowIndexById).toEqual({ t1: 1, t2: 2, __total__: 3 });
+  });
+
+  it('positions everything on an empty tab', () => {
+    const plan = planReconcileGrid({ grid: [], headerRows: [head], rows: [...rows, total], width: 3, pinnedBottomId: '__total__' });
+    expect(plan.rowIndexById).toEqual({ t1: 1, t2: 2, __total__: 3 });
+  });
+});
