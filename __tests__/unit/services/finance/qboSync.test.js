@@ -22,8 +22,9 @@ const connection = (over = {}) => ({
 });
 
 /** A fake QBO client: pages per entity + a canned CDC result. */
-function fakeQbo({ customers = [], invoices = [], payments = [], paymentsByCustomer = {}, cdcResult = null, updated = {} } = {}) {
+function fakeQbo({ customers = [], invoices = [], payments = [], paymentsByCustomer = {}, cdcResult = null, updated = {}, entities = {} } = {}) {
   const client = {
+    getEntity: jest.fn(async (type, id) => entities[`${type}/${id}`] || null),
     queryPages: jest.fn(async function* ({ entity, where }) {
       const byCustomer = where.find((w) => w.field === 'CustomerRef');
       const byUpdated = where.find((w) => w.field === 'MetaData.LastUpdatedTime' && w.op === '>');
@@ -40,7 +41,7 @@ function fakeQbo({ customers = [], invoices = [], payments = [], paymentsByCusto
 }
 
 /** SQL-dispatching DB double. Records every call; answers by statement shape. */
-function fakeDb(conn, { unexplainedCustomers = [] } = {}) {
+function fakeDb(conn, { unexplainedCustomers = [], cachedByCustomer = {} } = {}) {
   const calls = [];
   const answer = (sql, params) => {
     calls.push({ sql, params });
@@ -52,6 +53,8 @@ function fakeDb(conn, { unexplainedCustomers = [] } = {}) {
     }
     if (/unexplained/i.test(sql)) return { rows: unexplainedCustomers.map((id) => ({ customer_qbo_id: id })) };
     if (/UPDATE qbo_(invoices|payments|customers)\s+SET deleted_at/.test(sql)) { const ids = Array.isArray(params[1]) ? params[1] : []; return { rows: ids.map((id) => ({ qbo_id: id })), rowCount: ids.length }; }
+    if (/SELECT qbo_id FROM qbo_invoices[\s\S]*customer_qbo_id = ANY/.test(sql)) return { rows: (cachedByCustomer.invoices || []).map((id) => ({ qbo_id: id })) };
+    if (/SELECT qbo_id FROM qbo_payments[\s\S]*customer_qbo_id = ANY/.test(sql)) return { rows: (cachedByCustomer.payments || []).map((id) => ({ qbo_id: id })) };
     if (/UPDATE finance_qbo_connections/.test(sql)) return { rows: [{ consecutive_failures: (conn.consecutive_failures || 0) + 1, alerted_at: conn.alerted_at }] };
     return { rows: [], rowCount: 0 };
   };
@@ -176,6 +179,41 @@ describe('qboSync.runSync — cdc mode', () => {
     expect(out.mode).toBe('full');
     expect(out.counts.invoices).toBe(1);
     expect(d.find(/UPDATE finance_sync_runs[\s\S]*mode = 'full'/)).toHaveLength(1);
+  });
+});
+
+describe('qboSync.runSync — merged customers', () => {
+  const synced = () => connection({ cdc_cursor: '2026-09-27T14:30:00Z', backfill_completed_at: '2026-09-01T00:00:00Z' });
+
+  it('re-fetches the cached invoices and payments of a customer that was deleted or deactivated, since QBO moves them without bumping their timestamp', async () => {
+    const d = fakeDb(synced(), { cachedByCustomer: { invoices: ['20858'], payments: ['777'] } });
+    const moved = invoice({ id: '20858', customerId: '1008', lastUpdated: '2026-08-31T11:55:11-07:00' });
+    const movedPayment = payment({ id: '777', customerId: '1008', applied: [{ invoiceId: '20858', amount: 200 }] });
+    const qbo = fakeQbo({
+      cdcResult: {
+        truncated: false,
+        Invoice: { upserts: [], deleted: [] },
+        Payment: { upserts: [], deleted: [] },
+        Customer: { upserts: [customer({ id: '903', displayName: 'Jenna Alumari (deleted)', active: false })], deleted: [{ id: '904', at: 'x' }] },
+      },
+      entities: { 'Invoice/20858': moved, 'Payment/777': movedPayment },
+    });
+    const out = await sync.runSync(SCHOOL, { kind: 'cdc', now: () => NOW });
+    expect(qbo.getEntity).toHaveBeenCalledWith('Invoice', '20858');
+    expect(qbo.getEntity).toHaveBeenCalledWith('Payment', '777');
+    const lookup = d.find(/SELECT qbo_id FROM qbo_invoices[\s\S]*customer_qbo_id = ANY/)[0];
+    expect(lookup.params[1].sort()).toEqual(['903', '904']);
+    const written = JSON.parse(d.find(/INSERT INTO qbo_invoices/)[0].params[2]);
+    expect(written[0]).toMatchObject({ qbo_id: '20858', customer_qbo_id: '1008' });
+    expect(out.counts.invoices).toBe(1);
+    expect(out.counts.payments).toBe(1);
+  });
+
+  it('does nothing extra when no customer changed', async () => {
+    fakeDb(synced());
+    const qbo = fakeQbo();
+    await sync.runSync(SCHOOL, { kind: 'cdc', now: () => NOW });
+    expect(qbo.getEntity).not.toHaveBeenCalled();
   });
 });
 

@@ -414,6 +414,14 @@ const financeQueries = {
     RETURNING qbo_id
   `,
 
+  // Cached transactions still filed under given customers (used after a merge/deactivation).
+  selectInvoiceIdsForCustomers: `
+    SELECT qbo_id FROM qbo_invoices WHERE school = $1 AND customer_qbo_id = ANY($2::text[]) AND deleted_at IS NULL
+  `,
+  selectPaymentIdsForCustomers: `
+    SELECT qbo_id FROM qbo_payments WHERE school = $1 AND customer_qbo_id = ANY($2::text[]) AND deleted_at IS NULL
+  `,
+
   // After a full run: any cached invoice in the window that the run did not
   // touch no longer exists in QBO (deleted before CDC could tell us).
   // $1 school, $2 window start date, $3 run started_at

@@ -180,7 +180,37 @@ async function runCdc(ctx, counts, cursor) {
   for (const entity of CDC_ENTITIES) {
     await flagDeleted(ctx, entity, res[entity].deleted.map((d) => d.id), counts);
   }
+
+  // A merge in the QuickBooks UI re-files the old customer's transactions under
+  // the survivor WITHOUT bumping their LastUpdatedTime, so CDC never re-delivers
+  // them. Re-read whatever we still hold under a deleted or deactivated customer.
+  const gone = [
+    ...res.Customer.deleted.map((d) => d.id),
+    ...res.Customer.upserts.filter((c) => c.Active === false).map((c) => String(c.Id)),
+  ];
+  if (gone.length) await refreshTransactionsOf(ctx, [...new Set(gone)], counts);
   return false;
+}
+
+const REFRESH_CAP = 200;
+
+/** Re-fetch by id (the `>=` upsert guard accepts an unchanged timestamp) so a moved transaction lands under its new customer. */
+async function refreshTransactionsOf(ctx, customerIds, counts) {
+  const { rows: inv } = await db.query(queries.selectInvoiceIdsForCustomers, [ctx.school, customerIds]);
+  const { rows: pay } = await db.query(queries.selectPaymentIdsForCustomers, [ctx.school, customerIds]);
+  const invoices = [];
+  for (const r of inv.slice(0, REFRESH_CAP)) {
+    const e = await ctx.client.getEntity('Invoice', r.qbo_id);
+    if (e) invoices.push(e);
+  }
+  const payments = [];
+  for (const r of pay.slice(0, REFRESH_CAP)) {
+    const e = await ctx.client.getEntity('Payment', r.qbo_id);
+    if (e) payments.push(e);
+  }
+  if (invoices.length) await writeEntity(ctx, 'Invoice', invoices, counts);
+  if (payments.length) await writeEntity(ctx, 'Payment', payments, counts);
+  if (inv.length || pay.length) logger.info({ school: ctx.school, customers: customerIds.length, invoices: invoices.length, payments: payments.length }, 'Re-fetched transactions of merged/deactivated customers');
 }
 
 // ─── Entry point ───────────────────────────────────────────────────────

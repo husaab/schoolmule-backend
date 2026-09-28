@@ -211,7 +211,10 @@ const syncNow = async (req, res) => {
     const { rows: recent } = await db.query(queries.selectRecentManualRun, [school]);
     if (recent.length > 0) return fail(res, 429, 'A sync was started less than a minute ago; please wait');
 
-    const { rows } = await db.query(queries.enqueueJob, [school, 'manual', req.user.userId]);
+    // A full refresh re-reads every customer, invoice and payment in the window;
+    // the cheap default only asks QuickBooks what changed since the last run.
+    const kind = req.body?.full === true ? 'backfill' : 'manual';
+    const { rows } = await db.query(queries.enqueueJob, [school, kind, req.user.userId]);
     if (rows[0]) return ok(res, { jobId: rows[0].job_id, alreadyQueued: false }, 202);
 
     const { rows: live } = await db.query(queries.selectLatestJob, [school]);

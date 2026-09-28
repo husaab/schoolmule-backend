@@ -187,6 +187,16 @@ describe('POST /api/finance/sync', () => {
     expect(enqueue[1]).toEqual([TEST_SCHOOL, 'manual', TEST_ADMIN_USER_ID]);
   });
 
+  it('queues a full refresh when asked', async () => {
+    mockQueryResponse([connRow()]);
+    mockQueryResponse([]);
+    mockQueryResponse([{ job_id: 'j2' }]);
+    const res = await request(app).post('/api/finance/sync').set(admin()).send({ full: true });
+    expect(res.status).toBe(202);
+    const enqueue = db.query.mock.calls.find(([sql]) => /INSERT INTO finance_sync_jobs/.test(sql));
+    expect(enqueue[1]).toEqual([TEST_SCHOOL, 'backfill', TEST_ADMIN_USER_ID]);
+  });
+
   it('reports an already-live job instead of duplicating it', async () => {
     mockQueryResponse([connRow()]);
     mockQueryResponse([]);
