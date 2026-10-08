@@ -407,6 +407,24 @@ const messagingQueries = {
     GROUP BY s.student_id, s.name
     ORDER BY s.name
   `,
+  // Same guardian summary for a single student (Students page). $1 student_id
+  selectTeacherTargetStudentsOne: `
+    SELECT s.student_id, s.name,
+           COALESCE(json_agg(json_build_object(
+                      'linkId', ps.parent_student_link_id,
+                      'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
+                      'relation', ps.relation,
+                      'email', COALESCE(u.email, ps.parent_email),
+                      'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
+                      'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
+                      'invitedAt', ps.invited_at))
+                    FILTER (WHERE ps.parent_student_link_id IS NOT NULL), '[]') AS guardians
+    FROM students s
+    LEFT JOIN parent_students ps ON ps.student_id = s.student_id
+    LEFT JOIN users u ON u.user_id = ps.parent_id
+    WHERE s.student_id = $1
+    GROUP BY s.student_id, s.name
+  `,
   selectTeacherTargetAssessments: `
     SELECT assessment_id, name, date, is_published FROM assessments
     WHERE class_id = $1 AND COALESCE(is_parent, FALSE) = FALSE

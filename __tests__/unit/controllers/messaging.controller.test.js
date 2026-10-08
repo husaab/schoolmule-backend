@@ -1,3 +1,8 @@
+jest.mock('resend', () => ({
+  Resend: jest.fn(() => ({ emails: { send: (...args) => global.__mockInviteSend(...args) } })),
+}));
+global.__mockInviteSend = jest.fn().mockResolvedValue({ data: { id: 'email-1' } });
+
 const db = require('../../../config/database'); // mapped to the mock by jest.unit.config
 const supabase = require('../../../config/supabaseClient'); // mapped to the mock
 const { authenticatedRequest } = require('../../helpers/testApp');
@@ -52,10 +57,12 @@ function makeRouter(overrides = {}) {
     'WHERE message_id = ANY': [],
     'DO UPDATE SET last_read_at': [{ last_read_at: '2026-10-07T12:00:01Z' }],
   };
-  const table = { ...defaults, ...overrides };
+  // Overrides are checked before defaults so a test can pin a fragment that a
+  // default would otherwise match first (e.g. 'UNION').
+  const table = [...Object.entries(overrides), ...Object.entries(defaults).filter(([k]) => !(k in overrides))];
   const impl = (sql, params) => {
     calls.push({ sql, params });
-    for (const [frag, rows] of Object.entries(table)) {
+    for (const [frag, rows] of table) {
       if (sql.includes(frag)) return Promise.resolve({ rows: typeof rows === 'function' ? rows(params) : rows, rowCount: 1 });
     }
     return Promise.resolve({ rows: [], rowCount: 0 });
@@ -71,8 +78,171 @@ function makeRouter(overrides = {}) {
 
 const png = Buffer.from('89504e470d0a1a0a', 'hex');
 
+const HOMEROOM = '77777777-7777-4777-8777-777777777777';
+const LINK = '88888888-8888-4888-8888-888888888888';
+
 describe('messaging controller', () => {
-  beforeEach(() => { db._reset(); supabase._reset(); });
+  beforeEach(() => { db._reset(); supabase._reset(); global.__mockInviteSend.mockClear(); });
+
+  describe('general threads (phase 2)', () => {
+    const generalCtx = (over = {}) => ({
+      student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
+      teacher_school: SCHOOL, teacher_role: 'TEACHER', teacher_archived: false, teacher_name: 'Sana Rahman',
+      is_homeroom: true, class_id: null, is_guardian: true, caller_teaches: false, ...over,
+    });
+    const generalAccess = {
+      conversation_id: CONVO, school: SCHOOL, student_id: STUDENT, student_name: 'Amina Test', class_id: null,
+      class_subject: 'Homeroom', assessment_id: null, kind: 'general', teacher_id: HOMEROOM, title: 'Away Thursday', status: 'open',
+      lead_teacher_id: HOMEROOM, co_teacher_ids: [], guardian_ids: [PARENT], admin_participant_ids: [],
+      school_year_id: 'y1', last_message_at: '2026-10-07T12:00:00Z', created_at: '2026-10-07T12:00:00Z',
+    };
+
+    it('lets a guardian start a general thread with the homeroom teacher (no class row)', async () => {
+      const r = makeRouter({ 'CROSS JOIN users t': [generalCtx()], 'AS admin_participant_ids': [generalAccess], "kind, title, created_by)": [{ conversation_id: CONVO }] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'Away Thursday').field('body', 'Sara will be away');
+      expect(res.status).toBe(201);
+      const [ins] = r.ran("kind, title, created_by)");
+      expect(ins.params).toEqual([SCHOOL, STUDENT, null, HOMEROOM, 'Away Thursday', PARENT]);
+      expect(res.body.data.conversation.kind).toBe('general');
+      expect(res.body.data.context).toBeNull();
+      expect(r.ran('INSERT INTO message_email_jobs')[0].params[1]).toEqual([HOMEROOM]);
+    });
+
+    it('rejects a teacher who neither teaches the child nor is their homeroom teacher', async () => {
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null })] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'Hi').field('body', 'x');
+      expect(res.status).toBe(403);
+    });
+
+    it('requires a title between 1 and 120 characters', async () => {
+      makeRouter({ 'CROSS JOIN users t': [generalCtx()] });
+      let res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', '  ').field('body', 'x');
+      expect(res.status).toBe(400);
+      res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x'.repeat(121)).field('body', 'x');
+      expect(res.status).toBe(400);
+    });
+
+    it('a staff caller must teach the student (or be admin)', async () => {
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ caller_teaches: false, is_guardian: false })] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockTeacherUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'Planner').field('body', 'x');
+      expect(res.status).toBe(403);
+    });
+
+    it('parent targets list the teachers they may write to', async () => {
+      makeRouter({
+        'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }],
+        "'Homeroom' AS via": [{ user_id: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom' }, { user_id: TEACHER, name: 'Ahmed Khan', via: 'Math' }],
+      });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.teachers).toEqual([{ userId: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom' }, { userId: TEACHER, name: 'Ahmed Khan', via: 'Math' }]);
+    });
+
+    it('staff see a student context block and the General pill data on a general thread', async () => {
+      makeRouter({
+        'AS admin_participant_ids': [{ ...generalAccess, teacher_id: TEACHER, lead_teacher_id: TEACHER }],
+        'AS attendance_pct': [{ student_id: STUDENT, name: 'Amina Test', grade: '6', homeroom_teacher_name: 'Sana Rahman', attendance_pct: '96' }],
+      });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.context).toBeNull();
+      expect(res.body.data.student).toEqual({ studentId: STUDENT, name: 'Amina Test', grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96 });
+    });
+  });
+
+  describe('guardian invites (phase 2)', () => {
+    const unlinked = { parent_student_link_id: LINK, parent_name: 'Hana Test', parent_email: 'hana@example.com', relation: 'Mother', invited_at: null };
+    const replyAsTeacher = (extra = {}) => {
+      let req = authenticatedRequest('post', `/api/messaging/conversations/${CONVO}/messages`, mockTeacherUser()).field('body', 'Please remind Bilal about his planner.');
+      for (const [k, v] of Object.entries(extra)) req = req.field(k, v);
+      return req;
+    };
+
+    it('invites a guardian with an email but no account: creates the pending user, links the row, mints a token and emails', async () => {
+      const r = makeRouter({
+        'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked],
+        'LOWER(email) = LOWER($1)': [],
+        "true AS invite_pending": [{ user_id: 'new-user', email: 'hana@example.com', first_name: 'Hana' }],
+        'INSERT INTO password_reset_tokens': [{ token: 'tok-1' }],
+        'SET parent_id = $2': [{ parent_student_link_id: LINK }],
+        'FROM schools': [{ name: 'Al Haadi Academy' }],
+      });
+      const res = await replyAsTeacher();
+      expect(res.status).toBe(201);
+      expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT']);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'new-user', TEACHER, CONVO, true]);
+      expect(r.ran('INSERT INTO password_reset_tokens')[0].params).toEqual(['new-user']);
+      expect(global.__mockInviteSend).toHaveBeenCalledTimes(1);
+      const email = global.__mockInviteSend.mock.calls[0][0];
+      expect(email.to).toEqual(['hana@example.com']);
+      expect(email.html).toContain('reset-password?token=tok-1&amp;invite=1&amp;next=');
+      expect(email.html).toContain('Please remind Bilal');
+      expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'invited' }]);
+    });
+
+    it('links an email that already has an account instead of inviting it', async () => {
+      const r = makeRouter({
+        'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked],
+        'LOWER(email) = LOWER($1)': [{ user_id: 'existing', role: 'PARENT', password: 'hashed', is_archived: false }],
+        'SET parent_id = $2': [{ parent_student_link_id: LINK }],
+      });
+      const res = await replyAsTeacher();
+      expect(res.status).toBe(201);
+      expect(r.ran("true AS invite_pending")).toHaveLength(0);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'existing', TEACHER, CONVO, false]);
+      expect(global.__mockInviteSend).not.toHaveBeenCalled();
+      expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'linked' }]);
+    });
+
+    it('respects invite=false and omits the preview when includePreview=false', async () => {
+      makeRouter({ 'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked] });
+      let res = await replyAsTeacher({ invite: 'false' });
+      expect(res.status).toBe(201);
+      expect(global.__mockInviteSend).not.toHaveBeenCalled();
+      expect(res.body.data.invites).toEqual([]);
+
+      makeRouter({
+        'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked], 'LOWER(email) = LOWER($1)': [],
+        "true AS invite_pending": [{ user_id: 'new-user', email: 'hana@example.com', first_name: 'Hana' }],
+        'INSERT INTO password_reset_tokens': [{ token: 'tok-2' }], 'SET parent_id = $2': [{ parent_student_link_id: LINK }],
+      });
+      res = await replyAsTeacher({ includePreview: 'false' });
+      expect(res.status).toBe(201);
+      expect(global.__mockInviteSend.mock.calls[0][0].html).not.toContain('Please remind Bilal');
+    });
+
+    it('parents never trigger invites', async () => {
+      const r = makeRouter({ 'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked] });
+      await authenticatedRequest('post', `/api/messaging/conversations/${CONVO}/messages`, mockParentUser()).field('body', 'hi');
+      expect(r.ran('parent_id IS NULL AND parent_email IS NOT NULL')).toHaveLength(0);
+    });
+
+    it('resend: re-mints a token after an hour, 429 within the hour, 404 across schools', async () => {
+      const pending = { parent_student_link_id: LINK, parent_id: 'new-user', parent_name: 'Hana Test', parent_email: 'hana@example.com', relation: 'Mother', invite_conversation_id: CONVO, school: SCHOOL, student_name: 'Bilal Test', invite_pending: true, first_name: 'Hana' };
+      const r = makeRouter({
+        'WHERE ps.parent_student_link_id = $1 AND ps.school = $2': [{ ...pending, invited_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString() }],
+        'INSERT INTO password_reset_tokens': [{ token: 'tok-3' }], 'FROM schools': [{ name: 'Al Haadi Academy' }],
+      });
+      let res = await authenticatedRequest('post', `/api/messaging/conversations/invites/${LINK}/resend`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(global.__mockInviteSend).toHaveBeenCalledTimes(1);
+      expect(r.ran('SET invited_at = NOW() WHERE parent_student_link_id')).toHaveLength(1);
+
+      makeRouter({ 'WHERE ps.parent_student_link_id = $1 AND ps.school = $2': [{ ...pending, invited_at: new Date().toISOString() }] });
+      res = await authenticatedRequest('post', `/api/messaging/conversations/invites/${LINK}/resend`, mockTeacherUser());
+      expect(res.status).toBe(429);
+
+      makeRouter({ 'WHERE ps.parent_student_link_id = $1 AND ps.school = $2': [] });
+      res = await authenticatedRequest('post', `/api/messaging/conversations/invites/${LINK}/resend`, mockTeacherUser());
+      expect(res.status).toBe(404);
+      expect((await authenticatedRequest('post', `/api/messaging/conversations/invites/${LINK}/resend`, mockParentUser())).status).toBe(403);
+    });
+  });
 
   describe('POST /api/messaging/conversations', () => {
     it('lets a guardian start a thread on a published assessment and emails the teachers, not the sender', async () => {

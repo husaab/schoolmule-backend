@@ -15,6 +15,7 @@ router.get('/conversations/unread-count', c.getUnreadSummary);
 router.get('/conversations/targets', c.getTargets);
 router.get('/conversations/stubs', c.getStubs);
 router.post('/conversations', c.uploadFiles, c.createConversation);
+router.post('/conversations/invites/:linkId/resend', c.resendInvite);
 
 router.get('/conversations/:id', requireConversationAccess, c.getConversation);
 router.post('/conversations/:id/messages', requireConversationAccess, c.uploadFiles, c.postMessage);

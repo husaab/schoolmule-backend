@@ -1,4 +1,4 @@
-const { getConversationDigestEmailHTML } = require('../../../templates/emailTemplate');
+const { getConversationDigestEmailHTML, getGuardianInviteEmailHTML } = require('../../../templates/emailTemplate');
 
 describe('getConversationDigestEmailHTML', () => {
   const base = {
@@ -36,5 +36,21 @@ describe('getConversationDigestEmailHTML', () => {
     });
     expect(html).toContain('New message from Ahmed Khan');
     expect(html).not.toContain('attachment');
+  });
+});
+
+describe('getGuardianInviteEmailHTML', () => {
+  const base = { recipientFirstName: 'Hana', teacherName: 'Ahmed Khan', studentFirstName: 'Bilal', title: 'Missing homework', url: 'http://x/reset-password?token=t&invite=1&next=%2Fparent%2Fmessages', schoolName: 'Al Haadi Academy', schoolInfo: null };
+  it('names the teacher and student, quotes the preview, links the signup', () => {
+    const html = getGuardianInviteEmailHTML({ ...base, preview: 'Hi <Hana>, please…' });
+    expect(html).toContain('Ahmed Khan sent you a message about Bilal');
+    expect(html).toContain('Hi &lt;Hana&gt;, please…');
+    expect(html).toContain('token=t&amp;invite=1');
+    expect(html).toContain('Create your account');
+  });
+  it('omits the quote when there is no preview and switches to the reminder heading', () => {
+    const html = getGuardianInviteEmailHTML({ ...base, preview: null, reminder: true });
+    expect(html).toContain('Still waiting for you');
+    expect(html).not.toContain('please…');
   });
 });

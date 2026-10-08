@@ -17,7 +17,8 @@ const q = require('../queries/messaging.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
 const { getSchoolName } = require('../utils/schoolUtils');
-const { getConversationDigestEmailHTML } = require('../templates/emailTemplate');
+const { getConversationDigestEmailHTML, getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
+const adminUserQueries = require('../queries/adminUser.queries');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -28,6 +29,9 @@ const UNDEFINED_TABLE = '42P01';
 
 let timer = null;
 let draining = false;
+// Toronto date of the last reminder sweep; one sweep per day.
+let lastReminderDate = null;
+const torontoDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 // Set when the outbox table is missing: say so once and stand down.
 let disabledReason = null;
 
@@ -73,8 +77,11 @@ async function processJob(job) {
   }
 
   const readSince = Boolean(ctx.last_read_at) && new Date(ctx.last_read_at) >= new Date(ctx.last_message_at);
-  if (ctx.muted || ctx.recipient_archived || !ctx.recipient_email || readSince) {
-    const reason = ctx.muted ? 'muted' : readSince ? 'read before send' : ctx.recipient_archived ? 'recipient archived' : 'no recipient';
+  if (ctx.muted || ctx.recipient_archived || ctx.recipient_invite_pending || !ctx.recipient_email || readSince) {
+    const reason = ctx.muted ? 'muted'
+      : readSince ? 'read before send'
+        : ctx.recipient_invite_pending ? 'invite pending'
+          : ctx.recipient_archived ? 'recipient archived' : 'no recipient';
     await db.query(q.finishJob, [job.job_id, 'skipped', reason]);
     return 'skipped';
   }
@@ -141,6 +148,67 @@ async function processJob(job) {
   return 'sent';
 }
 
+/** Build the invite landing link: set a password, then land in the thread. */
+function inviteLink(token, conversationId) {
+  const base = process.env.FRONTEND_URL || '';
+  const next = encodeURIComponent(`/parent/messages?thread=${conversationId}`);
+  return `${base}/reset-password?token=${token}&invite=1&next=${next}`;
+}
+
+/**
+ * One reminder per invited guardian, three days after the invite, while the
+ * account is still pending. Runs once per Toronto day from the worker tick.
+ * @returns the number of reminders sent
+ */
+async function sendInviteReminders() {
+  const { rows } = await db.query(q.selectInviteReminderCandidates, []);
+  let sent = 0;
+  for (const link of rows) {
+    try {
+      const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [link.parent_id]);
+      let schoolInfo = null;
+      try {
+        const r = await db.query(schoolQueries.selectSchoolByCode, [link.school]);
+        schoolInfo = r.rows[0] || null;
+      } catch (e) {
+        logger.warn('School lookup failed for invite reminder:', e);
+      }
+      const schoolName = getSchoolName(link.school);
+      const studentFirstName = String(link.student_name || '').split(' ')[0];
+      const resend = new Resend(getSchoolApiKey(link.school));
+      const result = await resend.emails.send({
+        from: `messages@${getSchoolDomain(link.school)}`,
+        to: [link.email],
+        subject: `Still waiting for you: a message about ${studentFirstName}`,
+        html: getGuardianInviteEmailHTML({
+          recipientFirstName: link.first_name || link.parent_name,
+          teacherName: link.invited_by_name || 'A teacher',
+          studentFirstName,
+          title: 'Your conversation on SchoolMule',
+          preview: null,
+          url: inviteLink(tok[0].token, link.invite_conversation_id),
+          schoolName,
+          schoolInfo,
+          reminder: true,
+        }),
+      });
+      if (result?.error) throw new Error(result.error.message || 'Email sending failed');
+      await db.query(q.markInviteReminded, [link.parent_student_link_id]);
+      sent += 1;
+      await sleep(RATE_LIMIT_MS);
+    } catch (error) {
+      logger.warn({ linkId: link.parent_student_link_id, err: error.message }, 'Invite reminder failed');
+    }
+  }
+  return sent;
+}
+
+async function remindIfDue(today = torontoDate()) {
+  if (today === lastReminderDate) return 0;
+  lastReminderDate = today;
+  return sendInviteReminders();
+}
+
 /**
  * Claim and process one due job, if any.
  * @returns the number of jobs handled (0 or 1)
@@ -188,11 +256,14 @@ async function drainAll(limit = 20) {
 function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   if (timer) return;
   disabledReason = null;
+  // A restart part-way through the day must not re-run the reminder sweep.
+  lastReminderDate = torontoDate();
   timer = setInterval(async () => {
     // Skip a tick rather than overlapping runs; the next one picks up anyway.
     if (draining) return;
     draining = true;
     try {
+      if (!disabledReason) await remindIfDue();
       await drainAll();
     } catch (error) {
       // Never let a worker error take the process down.
@@ -213,4 +284,4 @@ function stopWorker() {
   }
 }
 
-module.exports = { startWorker, stopWorker, drainOnce, drainAll, processJob, MAX_ATTEMPTS };
+module.exports = { startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS };

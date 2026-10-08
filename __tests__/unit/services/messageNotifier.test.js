@@ -147,6 +147,28 @@ describe('messageNotifier', () => {
     expect(r.ran("CASE WHEN attempts >= $3 THEN 'failed'")).toHaveLength(0);
   });
 
+  it('skips an invite-pending recipient (nothing to open yet)', async () => {
+    const r = makeRouter({ 'FOR UPDATE SKIP LOCKED': [job()], 'AS recipient_email': [ctx({ recipient_invite_pending: true })] });
+    await notifier.drainOnce();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(r.ran('SET status = $2::text, last_error = $3')[0].params.slice(1)).toEqual(['skipped', 'invite pending']);
+  });
+
+  it('sends the one invite reminder and marks the row', async () => {
+    const r = makeRouter({
+      "ps.invite_reminded_at IS NULL": [{ parent_student_link_id: 'link-1', parent_id: 'u1', parent_name: 'Hana Test', school: 'ALHAADIACADEMY', invite_conversation_id: CONVO, student_name: 'Bilal Test', email: 'hana@example.com', first_name: 'Hana', invited_by_name: 'Ahmed Khan' }],
+      'INSERT INTO password_reset_tokens': [{ token: 'tok-r' }],
+      'FROM schools': [{ name: 'Al Haadi Academy' }],
+    });
+    const n = await notifier.sendInviteReminders();
+    expect(n).toBe(1);
+    const email = mockSend.mock.calls[0][0];
+    expect(email.to).toEqual(['hana@example.com']);
+    expect(email.subject).toMatch(/Still waiting/);
+    expect(email.html).toContain('token=tok-r');
+    expect(r.ran('SET invite_reminded_at = NOW()')[0].params).toEqual(['link-1']);
+  });
+
   it('requeues on a send failure and lets the retry query decide pending vs failed', async () => {
     mockSend.mockResolvedValueOnce({ error: { message: 'boom' } });
     const r = makeRouter({

@@ -27,6 +27,8 @@ const accessRowToConversation = (c) => ({
   classId: c.class_id,
   classSubject: c.class_subject,
   assessmentId: c.assessment_id,
+  kind: c.kind || 'assessment',
+  teacherId: c.teacher_id || null,
   title: c.title,
   status: c.status,
   leadTeacherId: c.lead_teacher_id,

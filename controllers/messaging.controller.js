@@ -15,6 +15,12 @@ const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
+const adminUserQueries = require('../queries/adminUser.queries');
+const schoolQueries = require('../queries/school.queries');
+const { Resend } = require('resend');
+const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { getSchoolName } = require('../utils/schoolUtils');
+const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
 
 const BUCKET = 'message-attachments';
@@ -24,6 +30,9 @@ const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const EMAIL_DELAY = '2 minutes';
 const SIGNED_URL_TTL = 3600;
+const MAX_TITLE = 120;
+const INVITE_PREVIEW_CHARS = 200;
+const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
 
 // Declared MIME must match the extension; neither alone is trusted.
 const ALLOWED = {
@@ -77,6 +86,8 @@ const toItem = (r) => ({
   classId: r.class_id,
   classSubject: r.class_subject,
   assessmentId: r.assessment_id,
+  kind: r.kind || 'assessment',
+  teacherId: r.teacher_id ?? null,
   title: r.title,
   status: r.status,
   lastMessageAt: r.last_message_at,
@@ -185,18 +196,111 @@ async function noteAdminJoin(conv, user) {
   conv.adminParticipantIds.push(user.userId);
 }
 
+const maskEmail = (email) => {
+  const [local = '', domain = ''] = String(email).split('@');
+  return `${local.slice(0, 1)}${local.length > 1 ? '…' : ''}@${domain}`;
+};
+const inviteLink = (token, conversationId) =>
+  `${process.env.FRONTEND_URL || ''}/reset-password?token=${token}&invite=1&next=${encodeURIComponent(`/parent/messages?thread=${conversationId}`)}`;
+
+async function sendGuardianInvite({ school, to, recipientFirstName, teacherName, studentName, title, preview, token, conversationId }) {
+  let schoolInfo = null;
+  try {
+    const r = await db.query(schoolQueries.selectSchoolByCode, [school]);
+    schoolInfo = r.rows[0] || null;
+  } catch (e) {
+    logger.warn('School lookup failed for invite email:', e);
+  }
+  const schoolName = getSchoolName(school);
+  const studentFirstName = String(studentName || '').split(' ')[0];
+  const resend = new Resend(getSchoolApiKey(school));
+  const result = await resend.emails.send({
+    from: `messages@${getSchoolDomain(school)}`,
+    to: [to],
+    subject: `${teacherName} sent you a message about ${studentFirstName}`,
+    html: getGuardianInviteEmailHTML({
+      recipientFirstName, teacherName, studentFirstName, title, preview,
+      url: inviteLink(token, conversationId), schoolName, schoolInfo,
+    }),
+  });
+  if (result?.error) throw new Error(result.error.message || 'Email sending failed');
+}
+
+/**
+ * Staff wrote to a student whose guardian has an email but no account.
+ * Reuses the admin invite mechanism: an invite-pending user ('!' password)
+ * linked to the guardian row, a 7-day token, and a branded email that lands
+ * in this thread. An email that already has an account is linked instead
+ * (they will get the ordinary digest). Never throws.
+ */
+async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, body }) {
+  if (user.role === 'PARENT' || invite === false) return [];
+  const results = [];
+  try {
+    const { rows: links } = await db.query(q.selectUnlinkedGuardians, [conv.studentId]);
+    for (const link of links) {
+      const email = String(link.parent_email).trim();
+      const name = (link.parent_name && link.parent_name.trim()) || email.split('@')[0];
+      try {
+        const { rows: existing } = await db.query(q.selectUserByEmailInSchool, [email, conv.school]);
+        if (existing.length) {
+          const u = existing[0];
+          if (u.role !== 'PARENT' || u.is_archived) {
+            results.push({ linkId: link.parent_student_link_id, name, status: 'skipped' });
+            continue;
+          }
+          await db.query(q.linkGuardianToUser, [link.parent_student_link_id, u.user_id, user.userId, conv.conversationId, false]);
+          conv.guardianIds.push(u.user_id);
+          results.push({ linkId: link.parent_student_link_id, name, status: 'linked' });
+          continue;
+        }
+        const [firstName, ...rest] = name.split(/\s+/);
+        const lastName = rest.join(' ') || '';
+        const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT']);
+        const newUser = created[0];
+        await db.query(q.linkGuardianToUser, [link.parent_student_link_id, newUser.user_id, user.userId, conv.conversationId, true]);
+        const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [newUser.user_id]);
+        await sendGuardianInvite({
+          school: conv.school,
+          to: email,
+          recipientFirstName: firstName,
+          teacherName: user.username,
+          studentName: conv.studentName,
+          title: conv.title,
+          preview: includePreview === false ? null : String(body || '').slice(0, INVITE_PREVIEW_CHARS),
+          token: tok[0].token,
+          conversationId: conv.conversationId,
+        });
+        results.push({ linkId: link.parent_student_link_id, name, status: 'invited' });
+      } catch (error) {
+        logger.error({ err: error, linkId: link.parent_student_link_id }, 'Guardian invite failed');
+        results.push({ linkId: link.parent_student_link_id, name, status: 'failed' });
+      }
+    }
+  } catch (error) {
+    logger.error('Guardian invite lookup failed:', error);
+  }
+  return results;
+}
+
+const flag = (v, fallback) => (v === undefined || v === null || v === '' ? fallback : !(v === false || v === 'false' || v === '0'));
+
 async function loadConversation(conversationId) {
   const { rows } = await db.query(q.selectConversationAccess, [conversationId]);
   return rows[0] ? accessRowToConversation(rows[0]) : null;
 }
 
 async function buildThread(conv, user) {
-  const [{ rows: msgRows }, { rows: parts }, { rows: stateRows }, ctxRes] = await Promise.all([
+  const isStaff = user.role !== 'PARENT';
+  const [{ rows: msgRows }, { rows: parts }, { rows: stateRows }, ctxRes, studentRes] = await Promise.all([
     db.query(q.selectMessages, [conv.conversationId]),
     db.query(q.selectParticipants, [conv.conversationId]),
     db.query(q.selectParticipantState, [conv.conversationId, user.userId]),
     conv.assessmentId
       ? db.query(q.selectAssessmentContext, [conv.assessmentId, conv.studentId])
+      : Promise.resolve({ rows: [] }),
+    isStaff && !conv.assessmentId
+      ? db.query(q.selectStudentContext, [conv.studentId])
       : Promise.resolve({ rows: [] }),
   ]);
 
@@ -228,6 +332,17 @@ async function buildThread(conv, user) {
     };
   }
 
+  const st = studentRes.rows[0];
+  const student = st
+    ? {
+        studentId: st.student_id,
+        name: st.name,
+        grade: st.grade,
+        homeroomTeacherName: st.homeroom_teacher_name || null,
+        attendancePct: st.attendance_pct == null ? null : Number(st.attendance_pct),
+      }
+    : null;
+
   const leadTeacher = parts.find((p) => p.user_id === conv.leadTeacherId);
   const state = stateRows[0] || {};
   const conversation = {
@@ -238,6 +353,8 @@ async function buildThread(conv, user) {
       class_id: conv.classId,
       class_subject: conv.classSubject,
       assessment_id: conv.assessmentId,
+      kind: conv.kind,
+      teacher_id: conv.teacherId,
       title: conv.title,
       status: conv.status,
       last_message_at: conv.lastMessageAt,
@@ -249,7 +366,8 @@ async function buildThread(conv, user) {
   return {
     conversation,
     context,
-    participants: parts.map((p) => ({ userId: p.user_id, name: p.name, role: p.role, relation: p.relation })),
+    student,
+    participants: parts.map((p) => ({ userId: p.user_id, name: p.name, role: p.role, relation: p.relation, invitePending: Boolean(p.invite_pending) })),
     messages: msgRows.map((m) => ({
       messageId: m.message_id,
       senderId: m.sender_id,
@@ -352,7 +470,11 @@ const getTargets = async (req, res) => {
     if (user.role === 'PARENT') {
       if (!studentId) return failed(res, 400, 'studentId is required');
       if (!(await parentLinked(studentId, user.userId))) return failed(res, 403, 'Not authorized for this student');
-      const { rows } = await db.query(q.selectParentTargets, [studentId, req.schoolYear?.schoolYearId ?? null]);
+      const yearId = req.schoolYear?.schoolYearId ?? null;
+      const [{ rows }, { rows: teacherRows }] = await Promise.all([
+        db.query(q.selectParentTargets, [studentId, yearId]),
+        db.query(q.selectParentTeacherTargets, [studentId, yearId]),
+      ]);
       const byClass = new Map();
       for (const r of rows) {
         if (!byClass.has(r.class_id)) {
@@ -364,7 +486,31 @@ const getTargets = async (req, res) => {
           });
         }
       }
-      return res.status(200).json({ status: 'success', data: [...byClass.values()] });
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          classes: [...byClass.values()],
+          teachers: teacherRows.map((t) => ({ userId: t.user_id, name: t.name, via: t.via })),
+        },
+      });
+    }
+
+    if (!classId && studentId) {
+      // Students page: one student, no class in hand. Staff must teach them (or be admin).
+      const { rows: srows } = await db.query(q.selectStudentForStaff, [studentId]);
+      if (!srows.length || srows[0].school !== user.school) return failed(res, 404, 'Student not found');
+      if (user.role !== 'ADMIN') {
+        const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null]);
+        if (!ctxRows.length || !ctxRows[0].caller_teaches) return failed(res, 403, 'Not authorized for this student');
+      }
+      const { rows: guardians } = await db.query(q.selectTeacherTargetStudentsOne, [studentId]);
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          students: guardians.map((s) => ({ studentId: s.student_id, name: s.name, guardians: s.guardians })),
+          assessments: [],
+        },
+      });
     }
 
     if (!classId) return failed(res, 400, 'classId is required');
@@ -419,6 +565,7 @@ const getStubs = async (req, res) => {
 
 // POST /api/messaging/conversations  (multipart: studentId, classId, assessmentId, body, files[])
 const createConversation = async (req, res) => {
+  if (req.body.teacherId && !req.body.assessmentId) return createGeneralConversation(req, res);
   const user = req.user;
   const { studentId, classId, assessmentId } = req.body;
   const files = req.files || [];
@@ -454,13 +601,87 @@ const createConversation = async (req, res) => {
     const conv = await loadConversation(conversationId);
     await noteAdminJoin(conv, user);
     await persistMessage({ conversationId, school: user.school, sender: user, body: v.text, files });
+    const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, user.userId);
 
     const thread = await buildThread(await loadConversation(conversationId), user);
-    return res.status(existing.length ? 200 : 201).json({ status: 'success', data: thread });
+    return res.status(existing.length ? 200 : 201).json({ status: 'success', data: { ...thread, invites } });
   } catch (error) {
     logger.error('Error creating conversation:', error);
     return failed(res, 500, 'Error sending message');
+  }
+};
+
+// POST /api/messaging/conversations  (general: studentId, teacherId, title, body, files[])
+const createGeneralConversation = async (req, res) => {
+  const user = req.user;
+  const { studentId, teacherId } = req.body;
+  const files = req.files || [];
+  const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
+  if (!studentId || !teacherId) return failed(res, 400, 'studentId and teacherId are required');
+  if (badId(studentId, teacherId)) return failed(res, 400, 'Invalid id');
+  if (!title || title.length > MAX_TITLE) return failed(res, 400, `Subject must be 1–${MAX_TITLE} characters`);
+  const v = validateBody(req.body.body, files.length);
+  if (v.error) return failed(res, 400, v.error);
+
+  try {
+    const { rows } = await db.query(q.selectGeneralAnchorContext, [studentId, teacherId, user.userId, req.schoolYear?.schoolYearId ?? null]);
+    const a = rows[0];
+    if (!a || a.student_school !== user.school || a.teacher_school !== user.school) return failed(res, 404, 'Student or teacher not found');
+    if (!['TEACHER', 'ADMIN'].includes(a.teacher_role) || a.teacher_archived) return failed(res, 400, 'That person cannot receive messages');
+    const teaches = Boolean(a.class_id) || a.is_homeroom;
+    if (user.role === 'PARENT') {
+      if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
+      if (!teaches) return failed(res, 403, 'That teacher does not teach this student');
+    } else if (user.role === 'TEACHER') {
+      if (!a.caller_teaches && user.userId !== teacherId) return failed(res, 403, 'Not authorized for this student');
+      if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');
+    }
+
+    const { rows: [c] } = await db.query(q.insertGeneralConversation, [user.school, studentId, a.class_id || null, teacherId, title, user.userId]);
+    const conv = await loadConversation(c.conversation_id);
+    await noteAdminJoin(conv, user);
+    await persistMessage({ conversationId: conv.conversationId, school: user.school, sender: user, body: v.text, files });
+    const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
+    await queueEmails(conv, user.userId);
+    const thread = await buildThread(await loadConversation(conv.conversationId), user);
+    return res.status(201).json({ status: 'success', data: { ...thread, invites } });
+  } catch (error) {
+    logger.error('Error creating general conversation:', error);
+    return failed(res, 500, 'Error sending message');
+  }
+};
+
+// POST /api/messaging/conversations/invites/:linkId/resend
+const resendInvite = async (req, res) => {
+  const user = req.user;
+  if (user.role === 'PARENT') return failed(res, 403, 'Staff only');
+  if (!isUuid(req.params.linkId)) return failed(res, 400, 'Invalid id');
+  try {
+    const { rows } = await db.query(q.selectLinkForInvite, [req.params.linkId, user.school]);
+    const link = rows[0];
+    if (!link || !link.parent_id || !link.invite_pending) return failed(res, 404, 'No pending invite for this guardian');
+    if (link.invited_at && Date.now() - new Date(link.invited_at).getTime() < RESEND_INVITE_COOLDOWN_MS) {
+      return failed(res, 429, 'An invite was sent less than an hour ago');
+    }
+    await db.query(adminUserQueries.deleteTokensForUser, [link.parent_id]);
+    const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [link.parent_id]);
+    await sendGuardianInvite({
+      school: user.school,
+      to: link.parent_email,
+      recipientFirstName: link.first_name || link.parent_name,
+      teacherName: user.username,
+      studentName: link.student_name,
+      title: 'Your conversation on SchoolMule',
+      preview: null,
+      token: tok[0].token,
+      conversationId: link.invite_conversation_id,
+    });
+    await db.query(q.touchInvite, [link.parent_student_link_id]);
+    return res.status(200).json({ status: 'success', data: { linkId: link.parent_student_link_id, status: 'invited' } });
+  } catch (error) {
+    logger.error('Error resending guardian invite:', error);
+    return failed(res, 500, 'Could not resend the invite');
   }
 };
 
@@ -484,9 +705,10 @@ const postMessage = async (req, res) => {
     const conv = req.conversation;
     await noteAdminJoin(conv, req.user);
     await persistMessage({ conversationId: conv.conversationId, school: conv.school, sender: req.user, body: v.text, files });
+    const invites = await inviteUnlinkedGuardians(conv, req.user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, req.user.userId);
     const thread = await buildThread(await loadConversation(conv.conversationId), req.user);
-    return res.status(201).json({ status: 'success', data: thread });
+    return res.status(201).json({ status: 'success', data: { ...thread, invites } });
   } catch (error) {
     logger.error('Error posting message:', error);
     return failed(res, 500, 'Error sending message');
@@ -606,6 +828,7 @@ module.exports = {
   getTargets,
   getStubs,
   createConversation,
+  resendInvite,
   getConversation,
   postMessage,
   editMessage,

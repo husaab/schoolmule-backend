@@ -228,6 +228,36 @@ function getConversationDigestEmailHTML({
   });
 }
 
+/**
+ * Guardian invite — a teacher wrote to a guardian who has no account yet.
+ * The link is the admin-invite "set your password" flow with `next` pointing
+ * at the thread, so they land in the conversation. `reminder` swaps the
+ * heading for the one follow-up sent three days later.
+ */
+function getGuardianInviteEmailHTML({
+  recipientFirstName, teacherName, studentFirstName, title, preview, url, schoolName, schoolInfo, reminder = false,
+}) {
+  const heading = reminder
+    ? `Still waiting for you: a message about ${studentFirstName}`
+    : `${teacherName} sent you a message about ${studentFirstName}`;
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading,
+    preheader: `${title} · ${schoolName}`,
+    content: [
+      paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
+      paragraph(
+        `${escapeHtml(studentFirstName)}'s teacher <strong>${escapeHtml(teacherName)}</strong> wrote to you on SchoolMule, ${escapeHtml(schoolName)}'s parent portal. You don't have an account yet, so the message is waiting for you.`,
+      ),
+      preview ? note(`${teacherName} · ${title}`, `“${multiline(preview)}”`) : facts([['Subject', escapeHtml(title)]]),
+      button('Create your account and read the message', url),
+      finePrint('Sign up with this email address and your child will already be linked to you. This link expires in 7 days; if it has expired, ask the school to resend it.'),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+}
+
 function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
   return renderEmail({
     brand: SCHOOLMULE_BRAND,
@@ -374,6 +404,7 @@ module.exports = {
   getContactEmailHTML,
   getTicketEmailHTML,
   getConversationDigestEmailHTML,
+  getGuardianInviteEmailHTML,
   getFeedbackEmailHTML,
   getProgressReportEmailHTML,
   getReportCardEmailHTML,
