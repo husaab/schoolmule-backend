@@ -92,6 +92,8 @@ const toItem = (r) => ({
   lastMessageAt: r.last_message_at,
   createdAt: r.created_at,
   leadTeacherName: r.lead_teacher_name ?? null,
+  termName: r.term_name ?? null,
+  guardianNames: r.guardian_names ?? [],
   unreadCount: r.unread_count ?? 0,
   lastMessage: r.last_message ?? null,
 });

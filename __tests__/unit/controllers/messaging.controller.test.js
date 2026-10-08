@@ -480,7 +480,7 @@ describe('messaging controller', () => {
         'ORDER BY c.last_message_at DESC': [{
           conversation_id: CONVO, student_id: STUDENT, student_name: 'Amina Test', class_id: CLASS, class_subject: 'Math',
           assessment_id: ASSESSMENT, title: 'Q', status: 'open', last_message_at: 'x', created_at: 'x', lead_teacher_name: 'Ahmed Khan',
-          unread_count: 2, last_real_sender_role: 'PARENT',
+          unread_count: 2, last_real_sender_role: 'PARENT', term_name: 'Term 1', guardian_names: ['Layla Test', 'Omar Test'],
           last_message: { senderId: PARENT, senderRole: 'PARENT', kind: 'message', body: 'hi', deleted: false, createdAt: 'x', senderName: 'Layla' },
         }],
       });
@@ -488,6 +488,7 @@ describe('messaging controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.data[0].needsReply).toBe(true);
       expect(res.body.data[0].unreadCount).toBe(2);
+      expect(res.body.data[0]).toMatchObject({ termName: 'Term 1', guardianNames: ['Layla Test', 'Omar Test'] });
     });
 
     it('returns the unread summary', async () => {

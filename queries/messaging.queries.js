@@ -67,6 +67,10 @@ const listBody = (scopeSql) => `
     c.last_message_at, c.created_at,
     s.name AS student_name, COALESCE(cl.subject, 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
+    cl.term_name,
+    COALESCE((SELECT ARRAY_AGG(DISTINCT COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name))
+              FROM parent_students ps LEFT JOIN users gu ON gu.user_id = ps.parent_id
+              WHERE ps.student_id = c.student_id AND COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name) IS NOT NULL), '{}')::text[] AS guardian_names,
     cp.last_read_at,
     ${UNREAD_COUNT_EXPR} AS unread_count,
     ${LAST_REAL_SENDER_SQL},
