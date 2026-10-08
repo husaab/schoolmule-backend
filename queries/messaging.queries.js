@@ -6,6 +6,15 @@
 // so a guardian linked after a thread began sees it immediately. See
 // middleware/requireConversationAccess.js.
 
+// Current-term gate for starting threads. A class belongs to the current
+// term when its term FK matches, or (legacy rows with no FK) its term_name
+// does. When no term is current ($id NULL) nothing is filtered out: the
+// picker then offers every class of the selected school year rather than an
+// empty list. Year scoping stays with the caller's query, so a "Term 1" of
+// another year can never match by name.
+const inCurrentTerm = (alias, idParam, nameParam) =>
+  `(${idParam}::uuid IS NULL OR ${alias}.term_id = ${idParam} OR (${alias}.term_id IS NULL AND ${alias}.term_name = ${nameParam}))`;
+
 // The "who can see this conversation" projection, shared by the guard and
 // the thread endpoint. $1 conversation_id
 const CONVERSATION_ACCESS_SELECT = `
@@ -99,11 +108,20 @@ const TEACHER_SCOPE = `cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT
 const messagingQueries = {
   selectConversationAccess: `${CONVERSATION_ACCESS_SELECT} WHERE c.conversation_id = $1`,
 
+  // The current term: the school's active term, provided it belongs to the
+  // selected school year. $1 school, $2 school_year_id|null
+  selectCurrentTerm: `
+    SELECT term_id, name FROM terms WHERE school = $1 AND is_active = TRUE
+      AND ($2::uuid IS NULL OR school_year_id = $2)
+    ORDER BY start_date DESC LIMIT 1
+  `,
+
   // Everything needed to validate a new thread in one round trip.
-  // $1 student_id, $2 class_id, $3 assessment_id, $4 user_id
+  // $1 student_id, $2 class_id, $3 assessment_id, $4 user_id, $5 current term_id|null, $6 current term name|null
   selectAnchorContext: `
     SELECT
       cl.class_id, cl.school, cl.subject AS class_subject, cl.teacher_id AS lead_teacher_id,
+      ${inCurrentTerm('cl', '$5', '$6')} AS in_current_term,
       s.student_id, s.name AS student_name, s.school AS student_school,
       a.assessment_id, a.name AS assessment_name, a.is_published, a.is_parent,
       (a.class_id = cl.class_id) AS assessment_in_class,
@@ -381,7 +399,8 @@ const messagingQueries = {
   `,
 
   // ── Pickers and chips ───────────────────────────────────────
-  // Parent picker. $1 student_id, $2 school_year_id|null
+  // Parent picker: the child's current-term classes. $1 student_id, $2 school_year_id|null,
+  // $3 current term_id|null, $4 current term name|null
   selectParentTargets: `
     SELECT cl.class_id, cl.subject, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name,
            a.assessment_id, a.name AS assessment_name, a.date, a.is_published,
@@ -391,7 +410,7 @@ const messagingQueries = {
     LEFT JOIN users u ON u.user_id = cl.teacher_id
     LEFT JOIN assessments a ON a.class_id = cl.class_id AND a.is_published = TRUE AND COALESCE(a.is_parent, FALSE) = FALSE
     LEFT JOIN conversations cv ON cv.student_id = cs.student_id AND cv.assessment_id = a.assessment_id
-    WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2)
+    WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND ${inCurrentTerm('cl', '$3', '$4')}
     ORDER BY cl.subject, a.sort_order NULLS LAST, a.name
   `,
   // Staff picker. $1 class_id
@@ -449,7 +468,9 @@ const messagingQueries = {
 
   // ── Phase 2: general threads ────────────────────────────────
   // Everything needed to start a general thread between a student and a
-  // teacher. $1 student_id, $2 teacher_id, $3 caller user_id, $4 school_year_id|null
+  // teacher. Class matches are current-term only; the homeroom link is not
+  // term-bound. $1 student_id, $2 teacher_id, $3 caller user_id,
+  // $4 school_year_id|null, $5 current term_id|null, $6 current term name|null
   selectGeneralAnchorContext: `
     SELECT
       s.student_id, s.name AS student_name, s.school AS student_school,
@@ -458,12 +479,12 @@ const messagingQueries = {
       TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS teacher_name,
       (s.homeroom_teacher_id = $2) AS is_homeroom,
       (SELECT cl.class_id FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
-        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4)
+        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
           AND (cl.teacher_id = $2 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $2))
         ORDER BY cl.subject LIMIT 1) AS class_id,
       EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id AND ps.parent_id = $3) AS is_guardian,
       (s.homeroom_teacher_id = $3 OR EXISTS (SELECT 1 FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
-        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4)
+        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
           AND (cl.teacher_id = $3 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $3)))) AS caller_teaches
     FROM students s
     CROSS JOIN users t
@@ -475,9 +496,11 @@ const messagingQueries = {
     VALUES ($1, $2, $3, $4, NULL, 'general', $5, $6)
     RETURNING conversation_id
   `,
-  // People a parent may write to about one child: the child's teachers, then
-  // the school's admins who carry a staff title (principal, vice principal).
-  // $1 student_id, $2 school_year_id|null
+  // People a parent may write to about one child: the homeroom teacher, the
+  // teachers of the child's current-term classes, then the school's admins
+  // who carry a staff title (principal, vice principal). Homeroom and admins
+  // are not term-bound. $1 student_id, $2 school_year_id|null,
+  // $3 current term_id|null, $4 current term name|null
   selectParentTeacherTargets: `
     SELECT user_id, name, via, role FROM (
     SELECT DISTINCT ON (user_id) user_id, name, via, role, pri FROM (
@@ -487,12 +510,12 @@ const messagingQueries = {
       UNION ALL
       SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 1
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id JOIN users u ON u.user_id = cl.teacher_id
-      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
+      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE
       UNION ALL
       SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 2
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
       JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
-      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
+      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE
       UNION ALL
       SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.staff_title, u.role, 3
       FROM students s JOIN users u ON u.school = s.school
@@ -511,14 +534,14 @@ const messagingQueries = {
     FROM students s LEFT JOIN users h ON h.user_id = s.homeroom_teacher_id
     WHERE s.student_id = $1
   `,
-  // Classes a student is in this year, with whether the caller teaches each.
-  // $1 student_id, $2 caller user_id, $3 school_year_id|null
+  // Current-term classes a student is in this year, with whether the caller teaches each.
+  // $1 student_id, $2 caller user_id, $3 school_year_id|null, $4 current term_id|null, $5 current term name|null
   selectStudentClassesForStaff: `
     SELECT cl.class_id, cl.subject, cl.grade,
            (cl.teacher_id = $2 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $2)) AS caller_teaches
     FROM class_students cs
     JOIN classes cl ON cl.class_id = cs.class_id
-    WHERE cs.student_id = $1 AND ($3::uuid IS NULL OR cl.school_year_id = $3)
+    WHERE cs.student_id = $1 AND ($3::uuid IS NULL OR cl.school_year_id = $3) AND ${inCurrentTerm('cl', '$4', '$5')}
     ORDER BY cl.subject
   `,
   // Leaf assessments for several classes. $1 class_id[]
@@ -528,10 +551,12 @@ const messagingQueries = {
     ORDER BY sort_order NULLS LAST, name
   `,
   // An explicit class for a General thread: must contain the student and be
-  // taught by the thread's teacher. $1 class_id, $2 student_id, $3 teacher_id
+  // taught by the thread's teacher. $1 class_id, $2 student_id, $3 teacher_id,
+  // $4 current term_id|null, $5 current term name|null
   selectClassAnchorForGeneral: `
     SELECT cl.class_id, cl.school,
            EXISTS (SELECT 1 FROM class_students cs WHERE cs.class_id = cl.class_id AND cs.student_id = $2) AS has_student,
+           ${inCurrentTerm('cl', '$4', '$5')} AS in_current_term,
            (cl.teacher_id = $3 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $3)) AS teacher_teaches
     FROM classes cl WHERE cl.class_id = $1
   `,

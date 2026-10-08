@@ -218,6 +218,146 @@ describe('Integration: Messaging routes', () => {
     expect(staffTargets.body.data.assessments.map((a) => a.isPublished).sort()).toEqual([false, true]);
   });
 
+  describe('current-term gate', () => {
+    const TERM2_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440008';
+    const asTerm2Teacher = { userId: TERM2_TEACHER_ID, username: 'Term Two', email: 'term2@example.com', role: 'TEACHER' };
+    let term1Id, term2Id, scienceId, sciencePublishedId, mathPublished2Id;
+
+    // Two terms in the active year. The Math class (from the outer setup) is
+    // a Term 1 class; Science is a Term 2 class with its own teacher.
+    beforeEach(async () => {
+      const t = await pool.query(
+        `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active, school_year_id) VALUES
+         ('ALHAADIACADEMY', 'Term 1', '2025-09-01', '2026-01-31', '2025-2026', TRUE, $1),
+         ('ALHAADIACADEMY', 'Term 2', '2026-02-01', '2026-06-30', '2025-2026', FALSE, $1)
+         RETURNING term_id, name`, [yearId]);
+      term1Id = t.rows.find((r) => r.name === 'Term 1').term_id;
+      term2Id = t.rows.find((r) => r.name === 'Term 2').term_id;
+      await pool.query(`UPDATE classes SET term_id = $1, term_name = 'Term 1' WHERE class_id = $2`, [term1Id, classId]);
+
+      await user(TERM2_TEACHER_ID, 'term2@example.com', 'Term Two', 'TEACHER');
+      const c = await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id, term_id, term_name)
+         VALUES ('ALHAADIACADEMY', '6', 'Science', 'Term Two', $1, $2, $3, 'Term 2') RETURNING class_id`, [TERM2_TEACHER_ID, yearId, term2Id]);
+      scienceId = c.rows[0].class_id;
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [scienceId, studentId]);
+      const a = await pool.query(
+        `INSERT INTO assessments (class_id, name, max_score, weight_points, is_published, published_at)
+         VALUES ($1, 'Lab 1', 10, 5, TRUE, NOW()) RETURNING assessment_id`, [scienceId]);
+      sciencePublishedId = a.rows[0].assessment_id;
+      const m = await pool.query(
+        `INSERT INTO assessments (class_id, name, max_score, weight_points, is_published, published_at)
+         VALUES ($1, 'Unit 4 Quiz', 20, 10, TRUE, NOW()) RETURNING assessment_id`, [classId]);
+      mathPublished2Id = m.rows[0].assessment_id;
+    });
+
+    const activate = async (termId) => {
+      await pool.query(`UPDATE terms SET is_active = FALSE WHERE school = 'ALHAADIACADEMY'`);
+      if (termId) await pool.query(`UPDATE terms SET is_active = TRUE WHERE term_id = $1`, [termId]);
+    };
+    const targets = (who) => authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, who);
+    const startOn = (who, cId, assessmentId, body = 'Hello') =>
+      authenticatedRequest('post', '/api/messaging/conversations', who)
+        .field('studentId', studentId).field('classId', cId).field('assessmentId', assessmentId).field('body', body);
+    const startGeneral = (who, teacherId, extra = {}) => {
+      let r = authenticatedRequest('post', '/api/messaging/conversations', who)
+        .field('studentId', studentId).field('teacherId', teacherId).field('title', 'Planner').field('body', 'Please check the planner.');
+      for (const [k, v] of Object.entries(extra)) r = r.field(k, v);
+      return r;
+    };
+
+    it('the parent picker follows the active term: Term 1 classes and teachers now, Term 2 once it is activated', async () => {
+      let res = await targets(asMom);
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentTerm).toEqual({ termId: term1Id, name: 'Term 1' });
+      expect(res.body.data.classes.map((c) => c.subject)).toEqual(['Math']);
+      expect(res.body.data.teachers.map((t) => [t.name, t.via])).toEqual([
+        ['Sana Rahman', 'Homeroom'], ['Teacher One', 'Math'], ['Teacher Two', 'Math'], ['Pat Principal', 'Principal'],
+      ]);
+
+      await activate(term2Id);
+      res = await targets(asMom);
+      expect(res.body.data.currentTerm).toEqual({ termId: term2Id, name: 'Term 2' });
+      expect(res.body.data.classes).toEqual([{
+        classId: scienceId, subject: 'Science', teacherName: 'Term Two',
+        assessments: [{ assessmentId: sciencePublishedId, name: 'Lab 1', date: null, conversationId: null }],
+      }]);
+      // Homeroom and the principal are not term-bound; the Term 1 Math teachers are gone.
+      expect(res.body.data.teachers.map((t) => [t.name, t.via])).toEqual([
+        ['Sana Rahman', 'Homeroom'], ['Term Two', 'Science'], ['Pat Principal', 'Principal'],
+      ]);
+    });
+
+    it('a parent cannot start a thread on a past-term class, while existing ones stay visible and replyable', async () => {
+      // Started while Term 1 was current.
+      const created = await startOn(asMom, classId, publishedId, 'About the quiz');
+      expect(created.status).toBe(201);
+      const id = created.body.data.conversation.conversationId;
+
+      await activate(term2Id);
+      // A fresh anchor in the past term is refused with a clear message...
+      const refused = await startOn(asMom, classId, mathPublished2Id);
+      expect(refused.status).toBe(400);
+      expect(refused.body.message).toMatch(/current term/i);
+      // ...but the old thread is still listed, openable and replyable by both sides.
+      const list = await authenticatedRequest('get', '/api/messaging/conversations', asMom);
+      expect(list.body.data.map((c) => c.conversationId)).toEqual([id]);
+      expect((await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asTeacher)).status).toBe(200);
+      expect((await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asMom).field('body', 'Still wondering')).status).toBe(201);
+      expect((await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'Here you go')).status).toBe(201);
+      expect((await authenticatedRequest('get', '/api/messaging/conversations', asTeacher)).body.data.map((c) => c.conversationId)).toEqual([id]);
+      // "Ask the teacher" on the same anchor lands in the existing thread instead of being refused.
+      const again = await startOn(asDad, classId, publishedId, 'Me too');
+      expect(again.status).toBe(200);
+      expect(again.body.data.conversation.conversationId).toBe(id);
+
+      // General threads: the Term 1 Math teacher no longer teaches the child this term; Term 2 and homeroom do.
+      expect((await startGeneral(asMom, TEACHER_ID)).status).toBe(403);
+      expect((await startGeneral(asMom, TERM2_TEACHER_ID)).status).toBe(201);
+      expect((await startGeneral(asMom, HOMEROOM_ID)).status).toBe(201);
+      // Naming a past-term class on a General thread is refused too.
+      expect((await startGeneral(asMom, HOMEROOM_ID, { classId })).status).toBe(400);
+      // The current-term Science thread works end to end.
+      expect((await startOn(asMom, scienceId, sciencePublishedId)).status).toBe(201);
+    });
+
+    it('teachers are held to the rule, admins are exempt, and the class picker says which term a class is in', async () => {
+      await activate(term2Id);
+      const teacher = await startOn(asTeacher, classId, draftId);
+      expect(teacher.status).toBe(400);
+      expect(teacher.body.message).toMatch(/current term/i);
+      expect((await startOn({}, classId, draftId)).status).toBe(201); // admin
+
+      const math = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${classId}`, asTeacher);
+      expect(math.body.data).toMatchObject({ inCurrentTerm: false, currentTerm: { termId: term2Id, name: 'Term 2' } });
+      const science = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${scienceId}`, asTerm2Teacher);
+      expect(science.body.data.inCurrentTerm).toBe(true);
+
+      // Students page: the Term 1 teacher no longer teaches the child this term; the Term 2 teacher sees only Science.
+      expect((await targets(asTeacher)).status).toBe(403);
+      const t2 = await targets(asTerm2Teacher);
+      expect(t2.status).toBe(200);
+      expect(t2.body.data.classes.map((c) => c.subject)).toEqual(['Science']);
+      // Teacher One writing as themselves is refused too: they do not teach the child this term.
+      expect((await startGeneral(asTeacher, TEACHER_ID)).status).toBe(403);
+      // The homeroom teacher is not term-bound.
+      expect((await startGeneral(asHomeroom, HOMEROOM_ID)).status).toBe(201);
+      // An admin can write about any class and any teacher.
+      expect((await startGeneral({}, TEACHER_ID, { classId })).status).toBe(201);
+    });
+
+    it('with no active term every class of the year is offered', async () => {
+      await activate(null);
+      const res = await targets(asMom);
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentTerm).toBeNull();
+      expect(res.body.data.classes.map((c) => c.subject).sort()).toEqual(['Math', 'Science']);
+      expect(res.body.data.teachers.map((t) => t.name).sort()).toEqual(['Pat Principal', 'Sana Rahman', 'Teacher One', 'Teacher Two', 'Term Two']);
+      expect((await startOn(asMom, classId, publishedId)).status).toBe(201);
+      expect((await startOn(asMom, scienceId, sciencePublishedId)).status).toBe(201);
+    });
+  });
+
   describe('phase 2: general threads and guardian invites', () => {
     const startGeneral = (who, teacherId, title = 'Away Thursday', body = 'Amina will be away Thursday and Friday.') =>
       authenticatedRequest('post', '/api/messaging/conversations', who)

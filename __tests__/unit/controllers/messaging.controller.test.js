@@ -29,7 +29,7 @@ function makeRouter(overrides = {}) {
       class_id: CLASS, school: SCHOOL, class_subject: 'Math', lead_teacher_id: TEACHER,
       student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
       assessment_id: ASSESSMENT, assessment_name: 'Unit 3 Quiz', is_published: true, is_parent: false,
-      assessment_in_class: true, student_in_class: true, is_guardian: true, is_co_teacher: false,
+      assessment_in_class: true, student_in_class: true, is_guardian: true, is_co_teacher: false, in_current_term: true,
     }],
     'SELECT conversation_id, status FROM conversations': [],
     'INSERT INTO conversations': [{ conversation_id: CONVO }],
@@ -272,6 +272,133 @@ describe('messaging controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.context).toBeNull();
       expect(res.body.data.student).toEqual({ studentId: STUDENT, name: 'Amina Test', grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96 });
+    });
+  });
+
+  describe('current-term gate', () => {
+    const TERM = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const activeTerm = { 'FROM terms WHERE school = $1 AND is_active': [{ term_id: TERM, name: 'Term 2' }] };
+    const linked = { 'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }] };
+    const anchor = (over = {}) => ({
+      class_id: CLASS, school: SCHOOL, class_subject: 'Math', lead_teacher_id: TEACHER,
+      student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
+      assessment_id: ASSESSMENT, assessment_name: 'Unit 3 Quiz', is_published: true, is_parent: false,
+      assessment_in_class: true, student_in_class: true, is_guardian: true, is_co_teacher: false, in_current_term: true, ...over,
+    });
+    const startAssessment = (who) => authenticatedRequest('post', '/api/messaging/conversations', who)
+      .field('studentId', STUDENT).field('classId', CLASS).field('assessmentId', ASSESSMENT).field('body', 'Hello');
+
+    it('parent targets are scoped to the active term of the selected year and say which term that is', async () => {
+      const r = makeRouter({ ...activeTerm, ...linked });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentTerm).toEqual({ termId: TERM, name: 'Term 2' });
+      expect(r.ran('FROM terms WHERE school = $1 AND is_active')[0].params).toEqual([SCHOOL, 'y1']);
+      expect(r.ran('ORDER BY cl.subject, a.sort_order')[0].params).toEqual([STUDENT, 'y1', TERM, 'Term 2']);
+      expect(r.ran("'Homeroom' AS via")[0].params).toEqual([STUDENT, 'y1', TERM, 'Term 2']);
+    });
+
+    it('with no active term the picker falls back to every class of the year', async () => {
+      const r = makeRouter({ ...linked });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentTerm).toBeNull();
+      expect(r.ran('ORDER BY cl.subject, a.sort_order')[0].params).toEqual([STUDENT, 'y1', null, null]);
+      expect(r.ran("'Homeroom' AS via")[0].params).toEqual([STUDENT, 'y1', null, null]);
+    });
+
+    it('the anchor check receives the current term', async () => {
+      const r = makeRouter({ ...activeTerm, 'CROSS JOIN students': [anchor()] });
+      const res = await startAssessment(mockParentUser());
+      expect(res.status).toBe(201);
+      expect(r.ran('CROSS JOIN students')[0].params).toEqual([STUDENT, CLASS, ASSESSMENT, PARENT, TERM, 'Term 2']);
+    });
+
+    it('a parent or teacher cannot start an assessment thread on a past-term class; an admin can', async () => {
+      makeRouter({ ...activeTerm, 'CROSS JOIN students': [anchor({ in_current_term: false })] });
+      const parent = await startAssessment(mockParentUser());
+      expect(parent.status).toBe(400);
+      expect(parent.body.message).toMatch(/current term/i);
+      expect((await startAssessment(mockTeacherUser())).status).toBe(400);
+      expect((await startAssessment(mockAdminUser())).status).toBe(201);
+    });
+
+    it('a past-term anchor that already has a thread is appended to, not refused', async () => {
+      makeRouter({
+        ...activeTerm,
+        'CROSS JOIN students': [anchor({ in_current_term: false })],
+        'SELECT conversation_id, status FROM conversations': [{ conversation_id: CONVO, status: 'open' }],
+      });
+      const res = await startAssessment(mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.conversation.conversationId).toBe(CONVO);
+    });
+
+    it('general threads: the teacher match and the named class are term-bound for parents and teachers, not admins', async () => {
+      const generalCtx = {
+        student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
+        teacher_school: SCHOOL, teacher_role: 'TEACHER', teacher_archived: false, teacher_name: 'Ahmed Khan',
+        is_homeroom: false, class_id: 'auto-class', is_guardian: true, caller_teaches: true,
+      };
+      const pastClass = { 'AS teacher_teaches\n    FROM classes cl WHERE cl.class_id = $1': [{ class_id: CLASS, school: SCHOOL, has_student: true, teacher_teaches: true, in_current_term: false }] };
+      const general = (who) => authenticatedRequest('post', '/api/messaging/conversations', who)
+        .field('studentId', STUDENT).field('teacherId', TEACHER).field('classId', CLASS).field('title', 'Planner').field('body', 'x');
+
+      const r = makeRouter({ ...activeTerm, 'CROSS JOIN users t': [generalCtx], ...pastClass });
+      const parent = await general(mockParentUser());
+      expect(parent.status).toBe(400);
+      expect(parent.body.message).toMatch(/current term/i);
+      expect(r.ran('CROSS JOIN users t')[0].params).toEqual([STUDENT, TEACHER, PARENT, 'y1', TERM, 'Term 2']);
+      expect(r.ran('AS teacher_teaches\n    FROM classes cl WHERE cl.class_id = $1')[0].params).toEqual([CLASS, STUDENT, TEACHER, TERM, 'Term 2']);
+      expect((await general(mockTeacherUser())).status).toBe(400);
+
+      makeRouter({
+        ...activeTerm, 'CROSS JOIN users t': [generalCtx], ...pastClass,
+        'AS admin_participant_ids': [{
+          conversation_id: CONVO, school: SCHOOL, student_id: STUDENT, student_name: 'Amina Test', class_id: CLASS,
+          class_subject: 'Math', assessment_id: null, kind: 'general', teacher_id: TEACHER, title: 'Planner', status: 'open',
+          lead_teacher_id: TEACHER, co_teacher_ids: [], guardian_ids: [PARENT], admin_participant_ids: [],
+          school_year_id: 'y1', last_message_at: '2026-10-07T12:00:00Z', created_at: '2026-10-07T12:00:00Z',
+        }],
+        'kind, title, created_by)': [{ conversation_id: CONVO }],
+      });
+      expect((await general(mockAdminUser())).status).toBe(201);
+    });
+
+    it('staff targets for one student scope the classes to the current term', async () => {
+      const r = makeRouter({
+        ...activeTerm,
+        'FROM students s WHERE s.student_id = $1': [{ student_id: STUDENT, name: 'Amina Test', school: SCHOOL, homeroom_teacher_id: HOMEROOM }],
+        'CROSS JOIN users t': [{ student_id: STUDENT, student_school: SCHOOL, teacher_school: SCHOOL, teacher_role: 'TEACHER', caller_teaches: true, is_homeroom: false, class_id: CLASS, is_guardian: false }],
+        'GROUP BY s.student_id, s.name': [{ student_id: STUDENT, name: 'Amina Test', guardians: [] }],
+        'AS caller_teaches\n    FROM class_students cs': [{ class_id: CLASS, subject: 'Math', grade: '6', caller_teaches: true }],
+      });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.currentTerm).toEqual({ termId: TERM, name: 'Term 2' });
+      expect(r.ran('AS caller_teaches\n    FROM class_students cs')[0].params).toEqual([STUDENT, TEACHER, 'y1', TERM, 'Term 2']);
+    });
+
+    it('staff targets for a class say whether that class is in the current term', async () => {
+      const classRow = (term_id, term_name) => ({ 'AS co FROM classes WHERE class_id = $1': [{ school: SCHOOL, teacher_id: TEACHER, co: false, term_id, term_name }] });
+      makeRouter({ ...activeTerm, ...classRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Term 1') });
+      let res = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${CLASS}`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ inCurrentTerm: false, currentTerm: { termId: TERM, name: 'Term 2' } });
+
+      makeRouter({ ...activeTerm, ...classRow(TERM, 'Term 2') });
+      res = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${CLASS}`, mockTeacherUser());
+      expect(res.body.data.inCurrentTerm).toBe(true);
+
+      // Legacy rows with no term FK fall back to the name.
+      makeRouter({ ...activeTerm, ...classRow(null, 'Term 2') });
+      res = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${CLASS}`, mockTeacherUser());
+      expect(res.body.data.inCurrentTerm).toBe(true);
+
+      // No active term: nothing is out of term.
+      makeRouter({ ...classRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Term 1') });
+      res = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${CLASS}`, mockTeacherUser());
+      expect(res.body.data).toMatchObject({ inCurrentTerm: true, currentTerm: null });
     });
   });
 

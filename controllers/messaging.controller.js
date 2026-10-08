@@ -241,6 +241,25 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
 
 const flag = (v, fallback) => (v === undefined || v === null || v === '' ? fallback : !(v === false || v === 'false' || v === '0'));
 
+const PAST_TERM_MESSAGE = 'This class is from a past term. New conversations can only be started about classes in the current term.';
+
+/**
+ * The term new threads may target: the school's active term, provided it
+ * belongs to the selected school year (X-School-Year). Returns null when no
+ * term is active (or the active term sits in another year, e.g. an admin
+ * browsing a past year): the queries then skip the term filter and offer
+ * every class of the selected year instead of an empty picker.
+ */
+async function resolveCurrentTerm(req) {
+  const { rows } = await db.query(q.selectCurrentTerm, [req.user.school, req.schoolYear?.schoolYearId ?? null]);
+  return rows[0] ? { termId: rows[0].term_id, name: rows[0].name } : null;
+}
+const termParams = (term) => [term?.termId ?? null, term?.name ?? null];
+// Teachers and parents may only start threads about current-term classes;
+// admins are exempt (they handle the office's cross-term follow-ups). With no
+// current term there is nothing to hold anyone to.
+const outOfTerm = (user, term, row) => Boolean(term) && user.role !== 'ADMIN' && !row.in_current_term;
+
 async function loadConversation(conversationId) {
   const { rows } = await db.query(q.selectConversationAccess, [conversationId]);
   return rows[0] ? accessRowToConversation(rows[0]) : null;
@@ -342,16 +361,20 @@ async function buildThread(conv, user) {
   };
 }
 
-/** Staff-side class check shared by targets and stubs. Returns an error tuple or null. */
+/** Staff-side class check shared by targets and stubs. Returns { error: [status, message] } or { cls: row }. */
 async function checkClassForStaff(classId, user) {
   const { rows } = await db.query(
-    'SELECT school, teacher_id, EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = $1 AND ct.teacher_id = $2) AS co FROM classes WHERE class_id = $1',
+    'SELECT school, teacher_id, term_id, term_name, EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = $1 AND ct.teacher_id = $2) AS co FROM classes WHERE class_id = $1',
     [classId, user.userId],
   );
-  if (!rows.length || rows[0].school !== user.school) return [404, 'Class not found'];
-  if (user.role === 'TEACHER' && rows[0].teacher_id !== user.userId && !rows[0].co) return [403, 'Not authorized for this class'];
-  return null;
+  if (!rows.length || rows[0].school !== user.school) return { error: [404, 'Class not found'] };
+  if (user.role === 'TEACHER' && rows[0].teacher_id !== user.userId && !rows[0].co) return { error: [403, 'Not authorized for this class'] };
+  return { cls: rows[0] };
 }
+
+// JS twin of the SQL inCurrentTerm predicate, for the one class row checkClassForStaff already loaded.
+const classInTerm = (cls, term) =>
+  !term || cls.term_id === term.termId || (cls.term_id == null && cls.term_name === term.name);
 
 async function parentLinked(studentId, userId) {
   const { rows } = await db.query('SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2', [studentId, userId]);
@@ -431,9 +454,10 @@ const getTargets = async (req, res) => {
       if (!studentId) return failed(res, 400, 'studentId is required');
       if (!(await parentLinked(studentId, user.userId))) return failed(res, 403, 'Not authorized for this student');
       const yearId = req.schoolYear?.schoolYearId ?? null;
+      const term = await resolveCurrentTerm(req);
       const [{ rows }, { rows: teacherRows }] = await Promise.all([
-        db.query(q.selectParentTargets, [studentId, yearId]),
-        db.query(q.selectParentTeacherTargets, [studentId, yearId]),
+        db.query(q.selectParentTargets, [studentId, yearId, ...termParams(term)]),
+        db.query(q.selectParentTeacherTargets, [studentId, yearId, ...termParams(term)]),
       ]);
       const byClass = new Map();
       for (const r of rows) {
@@ -449,6 +473,7 @@ const getTargets = async (req, res) => {
       return res.status(200).json({
         status: 'success',
         data: {
+          currentTerm: term,
           classes: [...byClass.values()],
           teachers: teacherRows.map((t) => ({ userId: t.user_id, name: t.name, via: t.via, role: t.role })),
         },
@@ -459,13 +484,14 @@ const getTargets = async (req, res) => {
       // Students page: one student, no class in hand. Staff must teach them (or be admin).
       const { rows: srows } = await db.query(q.selectStudentForStaff, [studentId]);
       if (!srows.length || srows[0].school !== user.school) return failed(res, 404, 'Student not found');
+      const term = await resolveCurrentTerm(req);
       if (user.role !== 'ADMIN') {
-        const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null]);
+        const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]);
         if (!ctxRows.length || !ctxRows[0].caller_teaches) return failed(res, 403, 'Not authorized for this student');
       }
       const [{ rows: guardians }, { rows: classRows }] = await Promise.all([
         db.query(q.selectTeacherTargetStudentsOne, [studentId]),
-        db.query(q.selectStudentClassesForStaff, [studentId, user.userId, req.schoolYear?.schoolYearId ?? null]),
+        db.query(q.selectStudentClassesForStaff, [studentId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]),
       ]);
       // A teacher only sees the classes they teach the student in; an admin sees them all.
       const classes = classRows.filter((c) => user.role === 'ADMIN' || c.caller_teaches);
@@ -475,6 +501,7 @@ const getTargets = async (req, res) => {
       return res.status(200).json({
         status: 'success',
         data: {
+          currentTerm: term,
           students: guardians.map((s) => ({ studentId: s.student_id, name: s.name, guardians: s.guardians })),
           assessments: [],
           classes: classes.map((c) => ({
@@ -489,8 +516,9 @@ const getTargets = async (req, res) => {
     }
 
     if (!classId) return failed(res, 400, 'classId is required');
-    const err = await checkClassForStaff(classId, user);
+    const { error: err, cls } = await checkClassForStaff(classId, user);
     if (err) return failed(res, err[0], err[1]);
+    const term = await resolveCurrentTerm(req);
     const [{ rows: students }, { rows: assessments }] = await Promise.all([
       db.query(q.selectTeacherTargetStudents, [classId]),
       db.query(q.selectTeacherTargetAssessments, [classId]),
@@ -498,6 +526,10 @@ const getTargets = async (req, res) => {
     return res.status(200).json({
       status: 'success',
       data: {
+        currentTerm: term,
+        // A gradebook of a past term can still open the picker; the UI warns
+        // teachers that sending will be refused (admins are exempt).
+        inCurrentTerm: classInTerm(cls, term),
         students: students.map((s) => ({ studentId: s.student_id, name: s.name, guardians: s.guardians })),
         assessments: assessments.map((a) => ({ assessmentId: a.assessment_id, name: a.name, date: a.date, isPublished: a.is_published })),
       },
@@ -519,7 +551,7 @@ const getStubs = async (req, res) => {
       if (!studentId) return failed(res, 400, 'studentId is required');
       if (!(await parentLinked(studentId, user.userId))) return failed(res, 403, 'Not authorized for this student');
     } else if (classId) {
-      const err = await checkClassForStaff(classId, user);
+      const { error: err } = await checkClassForStaff(classId, user);
       if (err) return failed(res, err[0], err[1]);
     } else if (user.role !== 'ADMIN') {
       return failed(res, 403, 'classId is required');
@@ -550,7 +582,8 @@ const createConversation = async (req, res) => {
   if (v.error) return failed(res, 400, v.error);
 
   try {
-    const { rows } = await db.query(q.selectAnchorContext, [studentId, classId, assessmentId, user.userId]);
+    const term = await resolveCurrentTerm(req);
+    const { rows } = await db.query(q.selectAnchorContext, [studentId, classId, assessmentId, user.userId, ...termParams(term)]);
     const a = rows[0];
     if (!a || a.school !== user.school || a.student_school !== user.school) return failed(res, 404, 'Class or student not found');
     if (!a.student_in_class) return failed(res, 400, 'Student is not in this class');
@@ -567,8 +600,10 @@ const createConversation = async (req, res) => {
     const { rows: existing } = await db.query(q.findConversationByAnchor, [studentId, classId, assessmentId]);
     let conversationId;
     if (existing.length) {
+      // Posting into an existing thread is a reply, so the term gate does not apply.
       conversationId = existing[0].conversation_id;
     } else {
+      if (outOfTerm(user, term, a)) return failed(res, 400, PAST_TERM_MESSAGE);
       const { rows: [c] } = await db.query(q.insertConversation, [user.school, studentId, classId, assessmentId, a.assessment_name, user.userId]);
       conversationId = c.conversation_id;
     }
@@ -604,10 +639,12 @@ const createGeneralConversation = async (req, res) => {
   if (announcementId && user.role !== 'PARENT') return failed(res, 400, 'announcementId is for parents asking about an announcement');
 
   try {
-    const { rows } = await db.query(q.selectGeneralAnchorContext, [studentId, teacherId, user.userId, req.schoolYear?.schoolYearId ?? null]);
+    const term = await resolveCurrentTerm(req);
+    const { rows } = await db.query(q.selectGeneralAnchorContext, [studentId, teacherId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]);
     const a = rows[0];
     if (!a || a.student_school !== user.school || a.teacher_school !== user.school) return failed(res, 404, 'Student or teacher not found');
     if (!['TEACHER', 'ADMIN'].includes(a.teacher_role) || a.teacher_archived) return failed(res, 400, 'That person cannot receive messages');
+    // class_id is current-term only, so a teacher who taught the child in a past term no longer "teaches" them here.
     const teaches = Boolean(a.class_id) || a.is_homeroom;
     // Admins with a staff title (principal, vice principal) are open to every parent in the school.
     const leadership = a.teacher_role === 'ADMIN' && Boolean(a.teacher_staff_title);
@@ -623,22 +660,25 @@ const createGeneralConversation = async (req, res) => {
         if (!an.is_guardian || !an.student_in_audience || an.author_id !== teacherId) return failed(res, 403, 'You can only ask the author about an announcement sent to your child');
         anchorClassId = an.scope === 'class' ? an.class_id : null;
       } else if (!teaches && !leadership) {
-        return failed(res, 403, 'That teacher does not teach this student');
+        return failed(res, 403, 'That teacher does not teach this student this term');
       }
     } else if (user.role === 'TEACHER') {
-      if (!a.caller_teaches && user.userId !== teacherId) return failed(res, 403, 'Not authorized for this student');
-      if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');
+      // Writing as yourself is no exemption: the caller must teach the student
+      // this term (or be their homeroom teacher), same as the parent-side rule.
+      if (!a.caller_teaches) return failed(res, 403, 'You do not teach this student this term');
+      if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student this term');
     }
 
     // The author may name the class (subject) the thread is about; otherwise
     // the first class the teacher teaches the student in is used, or none (homeroom).
     let classId = anchorClassId;
     if (explicitClassId) {
-      const { rows: crows } = await db.query(q.selectClassAnchorForGeneral, [explicitClassId, studentId, teacherId]);
+      const { rows: crows } = await db.query(q.selectClassAnchorForGeneral, [explicitClassId, studentId, teacherId, ...termParams(term)]);
       const cl = crows[0];
       if (!cl || cl.school !== user.school) return failed(res, 404, 'Class not found');
       if (!cl.has_student) return failed(res, 400, 'Student is not in this class');
       if (!cl.teacher_teaches) return failed(res, 400, 'That teacher does not teach this class');
+      if (outOfTerm(user, term, cl)) return failed(res, 400, PAST_TERM_MESSAGE);
       classId = cl.class_id;
     }
     const { rows: [c] } = await db.query(q.insertGeneralConversation, [user.school, studentId, classId, teacherId, title, user.userId]);
