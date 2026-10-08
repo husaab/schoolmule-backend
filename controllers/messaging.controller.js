@@ -15,6 +15,7 @@ const supabase = require('../config/supabaseClient');
 const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
+const announcementQueries = require('../queries/announcement.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
 const schoolQueries = require('../queries/school.queries');
 const { Resend } = require('resend');
@@ -401,13 +402,17 @@ const listConversations = async (req, res) => {
 const getUnreadSummary = async (req, res) => {
   const { userId, school, role } = req.user;
   try {
-    const { rows: [r] } = await db.query(q.selectUnreadSummary, [userId, school, role]);
+    const [{ rows: [r] }, { rows: [a] }] = await Promise.all([
+      db.query(q.selectUnreadSummary, [userId, school, role]),
+      db.query(announcementQueries.countUnreadAnnouncements, [userId, school, role, req.schoolYear?.schoolYearId ?? null]),
+    ]);
     return res.status(200).json({
       status: 'success',
       data: {
         unreadConversations: r?.unread_conversations ?? 0,
         unreadMessages: r?.unread_messages ?? 0,
         needsReply: r?.needs_reply ?? 0,
+        unreadAnnouncements: a?.unread_announcements ?? 0,
       },
     });
   } catch (error) {

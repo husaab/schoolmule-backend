@@ -84,6 +84,15 @@ const LINK = '88888888-8888-4888-8888-888888888888';
 describe('messaging controller', () => {
   beforeEach(() => { db._reset(); supabase._reset(); global.__mockInviteSend.mockClear(); });
 
+  it('unread-count folds in unread announcements from the announcement query', async () => {
+    makeRouter({
+      'AS unread_conversations': [{ unread_conversations: 2, unread_messages: 5, needs_reply: 1 }],
+      'AS unread_announcements': [{ unread_announcements: 3 }],
+    });
+    const res = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', mockParentUser());
+    expect(res.body.data).toEqual({ unreadConversations: 2, unreadMessages: 5, needsReply: 1, unreadAnnouncements: 3 });
+  });
+
   describe('general threads (phase 2)', () => {
     const generalCtx = (over = {}) => ({
       student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
@@ -494,7 +503,7 @@ describe('messaging controller', () => {
     it('returns the unread summary', async () => {
       makeRouter({ 'AS unread_conversations': [{ unread_conversations: 1, unread_messages: 3, needs_reply: 1 }] });
       const res = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', mockParentUser());
-      expect(res.body.data).toEqual({ unreadConversations: 1, unreadMessages: 3, needsReply: 1 });
+      expect(res.body.data).toEqual({ unreadConversations: 1, unreadMessages: 3, needsReply: 1, unreadAnnouncements: 0 });
     });
 
     it('scopes admin stubs by school and rejects malformed ids with 400', async () => {
