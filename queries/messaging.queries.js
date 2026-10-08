@@ -470,7 +470,8 @@ const messagingQueries = {
   `,
   // Teachers a parent may write to about one child. $1 student_id, $2 school_year_id|null
   selectParentTeacherTargets: `
-    SELECT DISTINCT ON (user_id) user_id, name, via FROM (
+    SELECT user_id, name, via FROM (
+    SELECT DISTINCT ON (user_id) user_id, name, via, pri FROM (
       SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, 'Homeroom' AS via, 0 AS pri
       FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
       WHERE s.student_id = $1 AND u.is_archived = FALSE
@@ -485,6 +486,8 @@ const messagingQueries = {
       WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
     ) x
     ORDER BY user_id, pri, via
+    ) y
+    ORDER BY pri, name
   `,
   // Staff context strip for a general thread. $1 student_id
   selectStudentContext: `

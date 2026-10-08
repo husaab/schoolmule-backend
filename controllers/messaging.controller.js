@@ -31,7 +31,6 @@ const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const EMAIL_DELAY = '2 minutes';
 const SIGNED_URL_TTL = 3600;
 const MAX_TITLE = 120;
-const INVITE_PREVIEW_CHARS = 200;
 const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
 
 // Declared MIME must match the extension; neither alone is trusted.
@@ -267,7 +266,8 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
           teacherName: user.username,
           studentName: conv.studentName,
           title: conv.title,
-          preview: includePreview === false ? null : String(body || '').slice(0, INVITE_PREVIEW_CHARS),
+          // The whole message, not a teaser: the guardian has no other way to read it yet.
+          preview: includePreview === false ? null : String(body || ''),
           token: tok[0].token,
           conversationId: conv.conversationId,
         });

@@ -249,7 +249,7 @@ function getGuardianInviteEmailHTML({
       paragraph(
         `${escapeHtml(studentFirstName)}'s teacher <strong>${escapeHtml(teacherName)}</strong> wrote to you on SchoolMule, ${escapeHtml(schoolName)}'s parent portal. You don't have an account yet, so the message is waiting for you.`,
       ),
-      preview ? note(`${teacherName} · ${title}`, `“${multiline(preview)}”`) : facts([['Subject', escapeHtml(title)]]),
+      preview ? note(`${teacherName} · ${title}`, multiline(preview)) : facts([['Subject', escapeHtml(title)]]),
       button('Create your account and read the message', url),
       finePrint('Sign up with this email address and your child will already be linked to you. This link expires in 7 days; if it has expired, ask the school to resend it.'),
       signOff(schoolName),
