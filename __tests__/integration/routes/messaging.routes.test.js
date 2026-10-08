@@ -113,7 +113,7 @@ describe('Integration: Messaging routes', () => {
     expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([MOM_ID, DAD_ID, CO_TEACHER_ID].sort());
 
     const unread = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', asDad);
-    expect(unread.body.data).toEqual({ unreadConversations: 1, unreadMessages: 1, needsReply: 1 });
+    expect(unread.body.data).toEqual({ unreadConversations: 1, unreadMessages: 1, needsReply: 1, unreadAnnouncements: 0 });
   });
 
   it('refuses a parent on an unpublished assessment but lets the teacher start it, hiding the score from the parent', async () => {
