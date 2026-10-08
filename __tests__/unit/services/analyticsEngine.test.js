@@ -355,6 +355,38 @@ describe('getStudentClassBreakdown', () => {
     expect(category.rollupPct).toBeNull();
   });
 
+  it('reports the class average per assessment, skipping excluded and ungraded peers', () => {
+    const rows = [
+      matrixRow({ score: 80 }),
+      matrixRow({ student_id: 's2', student_name: 'Bob', score: 60 }),
+      matrixRow({ student_id: 's3', student_name: 'Cal', score: 10, is_excluded: true }),
+      matrixRow({ student_id: 's4', student_name: 'Dee', score: null }),
+    ];
+    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
+    const quiz = breakdown.classes[0].assessmentScores.find((a) => a.assessmentId === 'a1');
+    expect(quiz.classAvgPct).toBe(70);
+
+    const ungraded = engine.getStudentClassBreakdown(matrix, 's4');
+    expect(ungraded.classes[0].assessmentScores[0].classAvgPct).toBe(70);
+  });
+
+  it('averages category rollups across peers and leaves it null when nobody is graded', () => {
+    const cat = (student_id, kidScore) => [
+      matrixRow({ student_id, assessment_id: 'cat', is_parent: true, weight_points: 100, max_score: null, score: null }),
+      matrixRow({ student_id, assessment_id: 'kid1', parent_assessment_id: 'cat', weight_points: 10, score: kidScore }),
+    ];
+    const matrix = engine.buildMatrixFromRows([...cat('s1', 90), ...cat('s2', 50)], 't1', 'null_skip');
+    const category = engine
+      .getStudentClassBreakdown(matrix, 's1')
+      .classes[0].assessmentScores.find((a) => a.assessmentId === 'cat');
+    expect(category.classAvgPct).toBe(70);
+
+    const empty = engine.buildMatrixFromRows([...cat('s1', null)], 't1', 'null_skip');
+    const none = engine.getStudentClassBreakdown(empty, 's1').classes[0].assessmentScores;
+    expect(none.every((a) => a.classAvgPct === null)).toBe(true);
+  });
+
   it('flags category rows in missingWork so the parent portal can filter them', () => {
     const rows = [
       matrixRow({

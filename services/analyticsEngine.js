@@ -260,6 +260,42 @@ function buildMatrixFromRows(rows, termId, engine, { publishedOnly = false } = {
  *
  * Returns null when the student is not in the matrix at all.
  */
+/**
+ * Class-wide average per assessment, so a parent can read a mark against the
+ * room: the mean of peers' score/max for leaves, and of peers' graded rollups
+ * for categories. Excluded and ungraded peers are skipped. Runs over the
+ * class's current rows, so on a published-only matrix unpublished peers can't
+ * leak in. Keyed by assessment_id; missing when nobody is graded.
+ */
+function classAveragesByAssessment(cls) {
+  const sums = new Map();
+  const add = (id, pct) => {
+    const s = sums.get(id) || { total: 0, n: 0 };
+    s.total += pct;
+    s.n += 1;
+    sums.set(id, s);
+  };
+
+  for (const stu of cls.students.values()) {
+    const lookup = buildScoreLookup(stu.rows);
+    for (const a of cls.assessments) {
+      const sd = lookup[a.assessment_id];
+      if (sd?.isExcluded) continue;
+      if (a.is_parent) {
+        const rollup = computeAssessmentForStudent(a, cls.assessments, lookup);
+        if (rollup && rollup.isGraded) add(a.assessment_id, rollup.pct);
+      } else {
+        const max = parseFloat(a.max_score);
+        if (sd?.score != null && max > 0) add(a.assessment_id, (parseFloat(sd.score) / max) * 100);
+      }
+    }
+  }
+
+  const averages = new Map();
+  for (const [id, { total, n }] of sums) averages.set(id, stats.round1(total / n));
+  return averages;
+}
+
 function getStudentClassBreakdown(matrix, studentId) {
   const cross = matrix.students.get(studentId);
   if (!cross) return null;
@@ -272,6 +308,7 @@ function getStudentClassBreakdown(matrix, studentId) {
     const stu = cls.students.get(studentId);
     const scoreLookup = buildScoreLookup(stu.rows);
     const byId = new Map(cls.assessments.map((a) => [a.assessment_id, a]));
+    const classAvgByAssessment = classAveragesByAssessment(cls);
 
     // Mean of the class's non-null finalPcts (null-skip aware).
     const peerPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
@@ -305,6 +342,8 @@ function getStudentClassBreakdown(matrix, studentId) {
           // Categories have no raw score — this is their weighted rollup
           // over graded children, or null when none are graded yet.
           rollupPct: rollup && rollup.isGraded ? stats.round1(rollup.pct) : null,
+          // The room's mean on this one assessment, for context next to the mark.
+          classAvgPct: classAvgByAssessment.get(r.assessment_id) ?? null,
           parentComment: r.parent_comment || null,
           publishedAt: r.published_at || null,
         };
