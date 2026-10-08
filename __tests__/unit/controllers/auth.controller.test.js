@@ -34,13 +34,9 @@ jest.mock('../../../services/approvalActions', () => {
 });
 
 const request = require('supertest');
+const jwt = require('jsonwebtoken');
 const { getApp } = require('../../helpers/testApp');
-const {
-  mockAdminUser,
-  mockUnverifiedUser,
-  TEST_ADMIN_USER_ID,
-  TEST_SCHOOL,
-} = require('../../helpers/mockAuth');
+const { mockAdminUser, mockUnverifiedUser, TEST_ADMIN_USER_ID, TEST_SCHOOL, mockUnverifiedSchoolUser, mockParentUser, TEST_PARENT_USER_ID, JWT_SECRET } = require('../../helpers/mockAuth');
 const {
   mockQueryResponse,
   mockQueryError,
@@ -450,6 +446,19 @@ describe('DELETE /api/auth/delete-user', () => {
     expect(res.status).toBe(401);
   });
 
+  it('lets a pending (school-unverified) signup delete itself from the waiting page', async () => {
+    const token = mockUnverifiedSchoolUser();
+    mockQueryResponse([], 1);
+
+    const res = await request(app)
+      .delete(url)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
   it('ignores a userId in the body and deletes only the caller', async () => {
     const token = mockAdminUser();
     const db = require('../../__mocks__/config/database');
@@ -627,6 +636,44 @@ describe('GET /api/auth/me', () => {
     expect(res.body.message).toBe('Session valid');
     expect(res.body.data).toHaveProperty('userId');
     expect(res.body.data).toHaveProperty('activeTerm');
+  });
+
+  it('reissues the token when the account was approved after sign-in', async () => {
+    const token = mockUnverifiedSchoolUser({ userId: TEST_PARENT_USER_ID, role: 'PARENT' });
+    mockQueryResponse([buildUserRow({ user_id: TEST_PARENT_USER_ID, role: 'PARENT', is_verified: true, is_verified_school: true })]);
+    mockQueryResponse([buildTermRow()]);
+
+    const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isVerifiedSchool).toBe(true);
+    expect(typeof res.body.data.token).toBe('string');
+    const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+    expect(claims).toMatchObject({ userId: TEST_PARENT_USER_ID, role: 'PARENT', isVerifiedSchool: true });
+    expect(claims.impersonator).toBeUndefined();
+  });
+
+  it('does not reissue the token when the claims still match', async () => {
+    const token = mockParentUser();
+    mockQueryResponse([buildUserRow({ user_id: TEST_PARENT_USER_ID, role: 'PARENT', is_verified: true, is_verified_school: true })]);
+    mockQueryResponse([buildTermRow()]);
+
+    const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.token).toBeUndefined();
+  });
+
+  it('never reissues a preview token, even when its claims drift', async () => {
+    const token = mockParentUser({ isVerifiedSchool: false, impersonator: { userId: TEST_ADMIN_USER_ID, username: 'admin' } });
+    mockQueryResponse([buildUserRow({ user_id: TEST_PARENT_USER_ID, role: 'PARENT', is_verified: true, is_verified_school: true })]);
+    mockQueryResponse([buildTermRow()]);
+
+    const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.token).toBeUndefined();
+    expect(res.body.data.impersonator).toEqual(expect.objectContaining({ userId: TEST_ADMIN_USER_ID }));
   });
 
   it('returns 401 when no token provided', async () => {

@@ -17,7 +17,8 @@ router.get( "/confirm-email", verifyEmail);
 router.post('/approve-school', verifyUser, requireAdmin, approveUserForSchool);
 router.get('/pending-approvals', verifyUser, requireAdmin, getPendingApprovals);
 router.post('/resend-approval-email', verifyUser, requireAdmin, verificationEmailLimiter, resendSchoolApprovalEmail);
-router.delete('/delete-user', verifyUser, deleteUserAccount);
+// Token-only: a pending signup may delete itself from the waiting page.
+router.delete('/delete-user', verifyUser.tokenOnly, deleteUserAccount);
 router.post('/decline-school', verifyUser, requireAdmin, declineUserForSchool);
 router.post('/logout', logout);
 

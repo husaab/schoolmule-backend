@@ -574,10 +574,37 @@ const validateSession = async (req, res) => {
     const activeTerm = await getActiveTermForSchool(user.school);
     const yearContext = await getSchoolYearContext(user.school);
 
+    // Approval or a role change after sign-in leaves the token's claims
+    // behind the database. Reissue so an open app recovers without a
+    // sign-out. Never for a preview token: that must stay the admin's.
+    const claimsDrifted =
+      !decoded.impersonator &&
+      (decoded.isVerified !== user.is_verified ||
+        decoded.isVerifiedSchool !== user.is_verified_school ||
+        decoded.role !== user.role);
+    const refreshedToken = claimsDrifted
+      ? jwt.sign(
+          {
+            userId: user.user_id,
+            username: user.username,
+            email: user.email,
+            school: user.school,
+            role: user.role,
+            isVerified: user.is_verified,
+            isVerifiedSchool: user.is_verified_school,
+            activeTerm: activeTerm ? activeTerm.name : null,
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: '7d' }
+        )
+      : undefined;
+
     return res.status(200).json({
       success: true,
       message: 'Session valid',
       data: {
+        // Present only when the claims drifted; the client stores it.
+        ...(refreshedToken && { token: refreshedToken }),
         userId: user.user_id,
         username: user.username,
         fullName: `${user.first_name} ${user.last_name}`,

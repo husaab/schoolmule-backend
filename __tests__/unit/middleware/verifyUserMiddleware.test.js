@@ -110,6 +110,49 @@ describe('verifyUserMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  describe('tokenOnly', () => {
+    it('lets a pending (school-unverified) token through', () => {
+      const token = jwt.sign(
+        { userId: 'pending', isVerified: true, isVerifiedSchool: false },
+        JWT_SECRET,
+        { expiresIn: '1h' }
+      );
+      req.headers.authorization = `Bearer ${token}`;
+
+      verifyUser.tokenOnly(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(req.user.userId).toBe('pending');
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
+    it('still rejects a missing or invalid token', () => {
+      verifyUser.tokenOnly(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(401);
+
+      res.status.mockClear();
+      req.headers.authorization = 'Bearer not-a-jwt';
+      verifyUser.tokenOnly(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('keeps preview tokens read-only', () => {
+      const token = jwt.sign(
+        { userId: 'x', isVerified: true, isVerifiedSchool: true, impersonator: { userId: 'admin' } },
+        JWT_SECRET,
+        { expiresIn: '1h' }
+      );
+      req.headers.authorization = `Bearer ${token}`;
+      req.method = 'DELETE';
+
+      verifyUser.tokenOnly(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'IMPERSONATION_READ_ONLY' }));
+    });
+  });
+
   it('calls next() and attaches req.user when token is valid and fully verified', () => {
     const payload = {
       userId: 'user-123',

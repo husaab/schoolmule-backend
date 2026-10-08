@@ -7,7 +7,9 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const isImpersonation = (decoded) => Boolean(decoded && decoded.impersonator);
 
-const verifyUser = (req, res, next) => {
+// requireVerified=false checks only that the token is valid: for the few
+// self-service routes a pending account must still reach (delete account).
+const createVerifier = ({ requireVerified }) => (req, res, next) => {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -28,7 +30,7 @@ const verifyUser = (req, res, next) => {
 
     // Not fully verified (email and school). A token minted before approval
     // keeps the old claims, so the client keys off `code` to sign out.
-    if (!decoded.isVerified || !decoded.isVerifiedSchool) {
+    if (requireVerified && (!decoded.isVerified || !decoded.isVerifiedSchool)) {
       return res.status(403).json({
         success: false,
         code: 'ACCOUNT_NOT_VERIFIED',
@@ -68,5 +70,8 @@ const verifyUser = (req, res, next) => {
     }
   }
 };
+
+const verifyUser = createVerifier({ requireVerified: true });
+verifyUser.tokenOnly = createVerifier({ requireVerified: false });
 
 module.exports = verifyUser;
