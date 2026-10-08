@@ -16,7 +16,7 @@ const CONVERSATION_ACCESS_SELECT = `
     c.last_message_at, c.created_at,
     s.name          AS student_name,
     s.school_year_id,
-    COALESCE(cl.subject, 'Homeroom') AS class_subject,
+    COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     COALESCE(cl.teacher_id, c.teacher_id) AS lead_teacher_id,
     COALESCE((SELECT ARRAY_AGG(ct.teacher_id) FROM class_teachers ct WHERE ct.class_id = c.class_id), '{}')::uuid[] AS co_teacher_ids,
     COALESCE((SELECT ARRAY_AGG(ps.parent_id) FROM parent_students ps
@@ -27,6 +27,7 @@ const CONVERSATION_ACCESS_SELECT = `
   FROM conversations c
   JOIN students s  ON s.student_id = c.student_id
   LEFT JOIN classes cl ON cl.class_id = c.class_id
+  LEFT JOIN users lt ON lt.user_id = c.teacher_id
 `;
 
 // Unread = messages from someone else, not deleted, newer than my last read.
@@ -65,7 +66,7 @@ const listBody = (scopeSql) => `
   SELECT
     c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.kind, c.teacher_id, c.title, c.status,
     c.last_message_at, c.created_at,
-    s.name AS student_name, COALESCE(cl.subject, 'Homeroom') AS class_subject,
+    s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     cl.term_name,
     COALESCE((SELECT ARRAY_AGG(DISTINCT COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name))
@@ -85,7 +86,7 @@ const listBody = (scopeSql) => `
     AND ($4::text IS NULL OR c.status = $4 OR ($4::text = 'open' AND ${UNREAD_COUNT_EXPR} > 0))
     AND ($5::uuid IS NULL OR c.class_id = $5)
     AND ($6::uuid IS NULL OR c.student_id = $6)
-    AND ($7::text IS NULL OR s.name ILIKE '%' || $7 || '%' OR c.title ILIKE '%' || $7 || '%' OR cl.subject ILIKE '%' || $7 || '%')
+    AND ($7::text IS NULL OR s.name ILIKE '%' || $7 || '%' OR c.title ILIKE '%' || $7 || '%' OR cl.subject ILIKE '%' || $7 || '%' OR lt.staff_title ILIKE '%' || $7 || '%')
     AND ($9::boolean IS FALSE OR ${UNREAD_COUNT_EXPR} > 0)
     AND (${scopeSql})
   ORDER BY c.last_message_at DESC
@@ -335,13 +336,14 @@ const messagingQueries = {
       u.email AS recipient_email, u.first_name AS recipient_first_name, u.role AS recipient_role, u.is_archived AS recipient_archived,
       (u.password = '!') AS recipient_invite_pending,
       c.title, c.assessment_id, c.kind, c.student_id, c.last_message_at,
-      s.name AS student_name, COALESCE(cl.subject, 'Homeroom') AS class_subject,
+      s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
       cp.last_read_at, cp.last_emailed_at, COALESCE(cp.muted, FALSE) AS muted
     FROM message_email_jobs j
     JOIN users u ON u.user_id = j.recipient_id
     JOIN conversations c ON c.conversation_id = j.conversation_id
     JOIN students s ON s.student_id = c.student_id
     LEFT JOIN classes cl ON cl.class_id = c.class_id
+    LEFT JOIN users lt ON lt.user_id = c.teacher_id
     LEFT JOIN conversation_participants cp ON cp.conversation_id = j.conversation_id AND cp.user_id = j.recipient_id
     WHERE j.job_id = $1
   `,
@@ -452,6 +454,7 @@ const messagingQueries = {
     SELECT
       s.student_id, s.name AS student_name, s.school AS student_school,
       t.school AS teacher_school, t.role AS teacher_role, t.is_archived AS teacher_archived,
+      NULLIF(t.staff_title, '') AS teacher_staff_title,
       TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS teacher_name,
       (s.homeroom_teacher_id = $2) AS is_homeroom,
       (SELECT cl.class_id FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
@@ -472,22 +475,28 @@ const messagingQueries = {
     VALUES ($1, $2, $3, $4, NULL, 'general', $5, $6)
     RETURNING conversation_id
   `,
-  // Teachers a parent may write to about one child. $1 student_id, $2 school_year_id|null
+  // People a parent may write to about one child: the child's teachers, then
+  // the school's admins who carry a staff title (principal, vice principal).
+  // $1 student_id, $2 school_year_id|null
   selectParentTeacherTargets: `
-    SELECT user_id, name, via FROM (
-    SELECT DISTINCT ON (user_id) user_id, name, via, pri FROM (
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, 'Homeroom' AS via, 0 AS pri
+    SELECT user_id, name, via, role FROM (
+    SELECT DISTINCT ON (user_id) user_id, name, via, role, pri FROM (
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, 'Homeroom' AS via, u.role, 0 AS pri
       FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
       WHERE s.student_id = $1 AND u.is_archived = FALSE
       UNION ALL
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, 1
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 1
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id JOIN users u ON u.user_id = cl.teacher_id
       WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
       UNION ALL
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, 2
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 2
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
       JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
       WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
+      UNION ALL
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.staff_title, u.role, 3
+      FROM students s JOIN users u ON u.school = s.school
+      WHERE s.student_id = $1 AND u.role = 'ADMIN' AND NULLIF(u.staff_title, '') IS NOT NULL AND u.is_archived = FALSE
     ) x
     ORDER BY user_id, pri, via
     ) y

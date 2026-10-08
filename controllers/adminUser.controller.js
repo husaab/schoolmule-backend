@@ -217,13 +217,16 @@ const resendInvite = async (req, res) => {
   }
 };
 
-// PATCH /api/admin/users/:id  { firstName, lastName, role, isVerifiedSchool }
+// PATCH /api/admin/users/:id  { firstName, lastName, role, isVerifiedSchool, staffTitle? }
+const MAX_STAFF_TITLE = 60;
 const updateUser = async (req, res) => {
   const { id } = req.params;
   const { school, userId: selfId } = req.user;
   const firstName = req.body?.firstName?.trim();
   const lastName = req.body?.lastName?.trim();
   const { role, isVerifiedSchool } = req.body ?? {};
+  const rawTitle = req.body?.staffTitle;
+  const staffTitle = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : null;
 
   if (!firstName || !lastName || !role || typeof isVerifiedSchool !== "boolean") {
     return res.status(400).json({ status: "failed", message: "First name, last name, role and access are required" });
@@ -231,13 +234,19 @@ const updateUser = async (req, res) => {
   if (!ROLES.includes(role)) {
     return res.status(400).json({ status: "failed", message: "Invalid role" });
   }
+  if (rawTitle != null && typeof rawTitle !== "string") {
+    return res.status(400).json({ status: "failed", message: "Invalid title" });
+  }
+  if (staffTitle && staffTitle.length > MAX_STAFF_TITLE) {
+    return res.status(400).json({ status: "failed", message: `Title must be ${MAX_STAFF_TITLE} characters or fewer` });
+  }
   if (id === selfId && (role !== "ADMIN" || !isVerifiedSchool)) {
     return res.status(400).json({ status: "failed", message: "You can't remove your own admin role or access" });
   }
 
   try {
     const { rows } = await db.query(adminUserQueries.updateUserInSchool, [
-      firstName, lastName, role, isVerifiedSchool, id, school,
+      firstName, lastName, role, isVerifiedSchool, id, school, staffTitle,
     ]);
     if (rows.length === 0) {
       // Either not ours, or archived (the update only touches active accounts).

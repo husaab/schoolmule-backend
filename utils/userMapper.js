@@ -11,6 +11,8 @@ const toUser = (row) => ({
   email: row.email,
   school: row.school,
   role: row.role,
+  /** Admins only: shown to parents as the role they can message (e.g. Principal). */
+  staffTitle: row.staff_title ?? null,
   isVerified: row.is_verified,
   isVerifiedSchool: row.is_verified_school,
   isArchived: row.is_archived,

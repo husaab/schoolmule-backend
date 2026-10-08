@@ -4,8 +4,6 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
-const termQueries = require('../queries/term.queries');
-const schoolYearQueries = require('../queries/schoolYear.queries');
 const logger = require("../logger");
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML,
   getResetEmailHTML } = require('../templates/emailTemplate');
@@ -14,40 +12,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const approvalActions = require('../services/approvalActions');
 const { SIGNUP_ROLES } = approvalActions;
 
-// Helper function to get active term for a school
-const getActiveTermForSchool = async (school) => {
-  try {
-    const result = await db.query(termQueries.selectActiveTermBySchool, [school]);
-    return result.rows.length > 0 ? result.rows[0] : null;
-  } catch (error) {
-    logger.error({ err: error }, 'Error fetching active term');
-    return null;
-  }
-};
-
-// Year context for the login/session payload (NOT for the JWT).
-const getSchoolYearContext = async (school) => {
-  try {
-    const years = await db.query(schoolYearQueries.selectYearsBySchool, [school]);
-    const active = years.rows.find((y) => y.is_active) || null;
-    return {
-      activeSchoolYear: active ? { schoolYearId: active.school_year_id, label: active.label } : null,
-      schoolYears: years.rows.map((y) => ({
-        schoolYearId: y.school_year_id,
-        school: y.school,
-        schoolId: y.school_id,
-        label: y.label,
-        startDate: y.start_date,
-        endDate: y.end_date,
-        isActive: y.is_active,
-        createdFromYearId: y.created_from_year_id,
-      })),
-    };
-  } catch (error) {
-    logger.error({ err: error }, 'Error fetching school years');
-    return { activeSchoolYear: null, schoolYears: [] };
-  }
-};
+const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessionContext');
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -615,7 +580,10 @@ const validateSession = async (req, res) => {
         lastModifiedAt: user.last_modified_at,
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
-        schoolYears: yearContext.schoolYears
+        schoolYears: yearContext.schoolYears,
+        // Present only on an admin "view as" preview token (see adminUser.controller
+        // impersonateUser) so a page reload can restore the preview banner.
+        impersonator: decoded.impersonator ?? null
       }
     });
   } catch (error) {

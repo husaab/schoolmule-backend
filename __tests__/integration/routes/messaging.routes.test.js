@@ -21,6 +21,8 @@ const asDad = { userId: DAD_ID, username: 'Dad Test', email: 'dad@example.com', 
 const asStranger = { userId: STRANGER_ID, username: 'Other Parent', email: 'other@example.com', role: 'PARENT' };
 const HOMEROOM_ID = '550e8400-e29b-41d4-a716-446655440006';
 const asHomeroom = { userId: HOMEROOM_ID, username: 'Sana Rahman', email: 'homeroom@example.com', role: 'TEACHER' };
+const PRINCIPAL_ID = '550e8400-e29b-41d4-a716-446655440007';
+const asPrincipal = { userId: PRINCIPAL_ID, username: 'Pat Principal', email: 'principal@example.com', role: 'ADMIN' };
 
 describe('Integration: Messaging routes', () => {
   let pool;
@@ -45,6 +47,8 @@ describe('Integration: Messaging routes', () => {
     await user(DAD_ID, 'dad@example.com', 'Dad Test', 'PARENT');
     await user(STRANGER_ID, 'other@example.com', 'Other Parent', 'PARENT');
     await user(HOMEROOM_ID, 'homeroom@example.com', 'Sana Rahman', 'TEACHER');
+    await user(PRINCIPAL_ID, 'principal@example.com', 'Pat Principal', 'ADMIN');
+    await pool.query(`UPDATE users SET staff_title = 'Principal' WHERE user_id = $1`, [PRINCIPAL_ID]);
 
     const c = await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
@@ -262,11 +266,30 @@ describe('Integration: Messaging routes', () => {
       expect((await startGeneral(asMom, rows[0].user_id)).status).toBe(403);
     });
 
-    it('parent targets include the teachers to write to', async () => {
+    it('parent targets include the teachers to write to, then admins with a staff title', async () => {
       const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asDad);
       expect(res.status).toBe(200);
       expect(res.body.data.classes).toHaveLength(1);
-      expect(res.body.data.teachers.map((t) => [t.name, t.via]).sort()).toEqual([['Sana Rahman', 'Homeroom'], ['Teacher One', 'Math'], ['Teacher Two', 'Math']]);
+      expect(res.body.data.teachers.map((t) => [t.name, t.via, t.role])).toEqual([
+        ['Sana Rahman', 'Homeroom', 'TEACHER'], ['Teacher One', 'Math', 'TEACHER'], ['Teacher Two', 'Math', 'TEACHER'], ['Pat Principal', 'Principal', 'ADMIN'],
+      ]);
+      // The plain admin has no title, so parents never see them as a recipient.
+      expect(res.body.data.teachers.map((t) => t.userId)).not.toContain(ADMIN_ID);
+    });
+
+    it('a parent can write to the principal; the thread is labelled by their title and the principal is emailed', async () => {
+      const res = await startGeneral(asMom, PRINCIPAL_ID, 'Bus pass');
+      expect(res.status).toBe(201);
+      expect(res.body.data.conversation).toMatchObject({ kind: 'general', classId: null, teacherId: PRINCIPAL_ID, classSubject: 'Principal', leadTeacherName: 'Pat Principal' });
+      const { rows: jobs } = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1`, [res.body.data.conversation.conversationId]);
+      expect(jobs.map((j) => j.recipient_id).sort()).toEqual([DAD_ID, PRINCIPAL_ID].sort());
+
+      const list = await authenticatedRequest('get', '/api/messaging/conversations', asPrincipal);
+      expect(list.body.data.map((c) => c.conversationId)).toContain(res.body.data.conversation.conversationId);
+      expect(list.body.data.find((c) => c.conversationId === res.body.data.conversation.conversationId).classSubject).toBe('Principal');
+
+      // An admin without a title is not a recipient parents may pick.
+      expect((await startGeneral(asMom, ADMIN_ID)).status).toBe(403);
     });
 
     it('a teacher writing about a student with an unlinked guardian invites them once, and the invite lands in the thread', async () => {

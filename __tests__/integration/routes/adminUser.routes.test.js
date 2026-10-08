@@ -177,6 +177,24 @@ describe('Integration: Admin Users Routes', () => {
       }));
     });
 
+    it('saves and clears a staff title shown to parents', async () => {
+      const set = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
+        firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: '  Vice Principal ',
+      });
+      expect(set.status).toBe(200);
+      expect(set.body.data.staffTitle).toBe('Vice Principal');
+
+      const cleared = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
+        firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: '',
+      });
+      expect(cleared.body.data.staffTitle).toBeNull();
+
+      const tooLong = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
+        firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: 'x'.repeat(61),
+      });
+      expect(tooLong.status).toBe(400);
+    });
+
     it('stops an admin demoting themselves', async () => {
       const res = await authenticatedRequest('patch', `/api/admin/users/${ADMIN_ID}`).send({
         firstName: 'Admin', lastName: 'User', role: 'TEACHER', isVerifiedSchool: true,

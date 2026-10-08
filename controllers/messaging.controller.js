@@ -492,7 +492,7 @@ const getTargets = async (req, res) => {
         status: 'success',
         data: {
           classes: [...byClass.values()],
-          teachers: teacherRows.map((t) => ({ userId: t.user_id, name: t.name, via: t.via })),
+          teachers: teacherRows.map((t) => ({ userId: t.user_id, name: t.name, via: t.via, role: t.role })),
         },
       });
     }
@@ -648,9 +648,11 @@ const createGeneralConversation = async (req, res) => {
     if (!a || a.student_school !== user.school || a.teacher_school !== user.school) return failed(res, 404, 'Student or teacher not found');
     if (!['TEACHER', 'ADMIN'].includes(a.teacher_role) || a.teacher_archived) return failed(res, 400, 'That person cannot receive messages');
     const teaches = Boolean(a.class_id) || a.is_homeroom;
+    // Admins with a staff title (principal, vice principal) are open to every parent in the school.
+    const leadership = a.teacher_role === 'ADMIN' && Boolean(a.teacher_staff_title);
     if (user.role === 'PARENT') {
       if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
-      if (!teaches) return failed(res, 403, 'That teacher does not teach this student');
+      if (!teaches && !leadership) return failed(res, 403, 'That teacher does not teach this student');
     } else if (user.role === 'TEACHER') {
       if (!a.caller_teaches && user.userId !== teacherId) return failed(res, 403, 'Not authorized for this student');
       if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');

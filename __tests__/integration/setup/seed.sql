@@ -40,6 +40,7 @@ CREATE TABLE users (
   archived_at            TIMESTAMPTZ,
   archived_by            UUID REFERENCES users(user_id) ON DELETE SET NULL,
   declined_at            TIMESTAMPTZ,
+  staff_title            TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)

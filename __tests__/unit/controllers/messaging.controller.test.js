@@ -80,6 +80,7 @@ const png = Buffer.from('89504e470d0a1a0a', 'hex');
 
 const HOMEROOM = '77777777-7777-4777-8777-777777777777';
 const LINK = '88888888-8888-4888-8888-888888888888';
+const ADMIN = '99999999-9999-4999-8999-999999999999';
 
 describe('messaging controller', () => {
   beforeEach(() => { db._reset(); supabase._reset(); global.__mockInviteSend.mockClear(); });
@@ -174,11 +175,35 @@ describe('messaging controller', () => {
     it('parent targets list the teachers they may write to', async () => {
       makeRouter({
         'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }],
-        "'Homeroom' AS via": [{ user_id: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom' }, { user_id: TEACHER, name: 'Ahmed Khan', via: 'Math' }],
+        "'Homeroom' AS via": [
+          { user_id: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom', role: 'TEACHER' },
+          { user_id: TEACHER, name: 'Ahmed Khan', via: 'Math', role: 'TEACHER' },
+          { user_id: ADMIN, name: 'Pat Principal', via: 'Principal', role: 'ADMIN' },
+        ],
       });
       const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockParentUser());
       expect(res.status).toBe(200);
-      expect(res.body.data.teachers).toEqual([{ userId: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom' }, { userId: TEACHER, name: 'Ahmed Khan', via: 'Math' }]);
+      expect(res.body.data.teachers).toEqual([
+        { userId: HOMEROOM, name: 'Sana Rahman', via: 'Homeroom', role: 'TEACHER' },
+        { userId: TEACHER, name: 'Ahmed Khan', via: 'Math', role: 'TEACHER' },
+        { userId: ADMIN, name: 'Pat Principal', via: 'Principal', role: 'ADMIN' },
+      ]);
+    });
+
+    it('a parent may write to an admin with a staff title, never to one without', async () => {
+      makeRouter({
+        'CROSS JOIN users t': [generalCtx({ teacher_role: 'ADMIN', teacher_staff_title: 'Principal', is_homeroom: false, class_id: null, is_guardian: true })],
+      });
+      const ok = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', ADMIN).field('title', 'Bus pass').field('body', 'x');
+      expect(ok.status).toBe(201);
+
+      makeRouter({
+        'CROSS JOIN users t': [generalCtx({ teacher_role: 'ADMIN', teacher_staff_title: null, is_homeroom: false, class_id: null, is_guardian: true })],
+      });
+      const bad = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', ADMIN).field('title', 'Bus pass').field('body', 'x');
+      expect(bad.status).toBe(403);
     });
 
     it('staff see a student context block and the General pill data on a general thread', async () => {

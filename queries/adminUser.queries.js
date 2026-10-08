@@ -5,7 +5,7 @@ const adminUserQueries = {
   //  $1 = school
   selectUsersBySchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role,
+      user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
       created_at, last_modified_at,
       (password = '!') AS invite_pending
@@ -17,7 +17,7 @@ const adminUserQueries = {
   //  $1 = user_id, $2 = school
   selectUserInSchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role,
+      user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
       created_at, last_modified_at,
       (password = '!') AS invite_pending
@@ -79,14 +79,14 @@ const adminUserQueries = {
        is_verified, is_verified_school, created_at, last_modified_at)
     VALUES
       (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, NOW(), NOW())
-    RETURNING user_id, email, username, first_name, last_name, school, role,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               true AS invite_pending
   `,
 
   //  $1 = first_name, $2 = last_name, $3 = role, $4 = is_verified_school,
-  //  $5 = user_id, $6 = school
+  //  $5 = user_id, $6 = school, $7 = staff_title|null (admins only; shown to parents)
   updateUserInSchool: `
     UPDATE users
     SET first_name = $1,
@@ -94,9 +94,10 @@ const adminUserQueries = {
         username = trim($1 || ' ' || $2),
         role = $3,
         is_verified_school = $4,
+        staff_title = CASE WHEN $3 = 'ADMIN' THEN $7 ELSE NULL END,
         last_modified_at = NOW()
     WHERE user_id = $5 AND school = $6 AND is_archived = false
-    RETURNING user_id, email, username, first_name, last_name, school, role,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending
@@ -129,7 +130,7 @@ const adminUserQueries = {
         is_verified_school = false,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = false
-    RETURNING user_id, email, username, first_name, last_name, school, role,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending
@@ -146,7 +147,7 @@ const adminUserQueries = {
         is_verified_school = true,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = true
-    RETURNING user_id, email, username, first_name, last_name, school, role,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending
