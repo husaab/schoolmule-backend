@@ -148,3 +148,57 @@ describe('verifyUserMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 });
+
+describe('verifyUser: admin "view as" preview tokens are read-only', () => {
+  const jwt = require('jsonwebtoken');
+  const SECRET = process.env.JWT_SECRET;
+  const previewToken = jwt.sign(
+    {
+      userId: 'teacher-1',
+      role: 'TEACHER',
+      school: 'ALHAADIACADEMY',
+      isVerified: true,
+      isVerifiedSchool: true,
+      impersonator: { userId: 'admin-1', username: 'amira', fullName: 'Amira Admin' },
+    },
+    SECRET,
+    { expiresIn: '1h' }
+  );
+
+  const run = (method) => {
+    const verifyUser = require('../../../middleware/verifyUserMiddleware');
+    const req = { method, headers: { authorization: `Bearer ${previewToken}` } };
+    const res = { statusCode: null, body: null };
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    const next = jest.fn();
+    verifyUser(req, res, next);
+    return { req, res, next };
+  };
+
+  it.each(['GET', 'HEAD', 'OPTIONS'])('lets %s through and exposes the impersonator on req.user', (method) => {
+    const { req, next } = run(method);
+    expect(next).toHaveBeenCalledWith();
+    expect(req.user.impersonator.userId).toBe('admin-1');
+    expect(req.user.role).toBe('TEACHER');
+  });
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])('blocks %s with 403 IMPERSONATION_READ_ONLY', (method) => {
+    const { res, next } = run(method);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(res.body.code).toBe('IMPERSONATION_READ_ONLY');
+  });
+
+  it('does not block writes for a normal token', () => {
+    const verifyUser = require('../../../middleware/verifyUserMiddleware');
+    const token = jwt.sign(
+      { userId: 'admin-1', role: 'ADMIN', isVerified: true, isVerifiedSchool: true },
+      SECRET,
+      { expiresIn: '1h' }
+    );
+    const next = jest.fn();
+    verifyUser({ method: 'POST', headers: { authorization: `Bearer ${token}` } }, {}, next);
+    expect(next).toHaveBeenCalledWith();
+  });
+});

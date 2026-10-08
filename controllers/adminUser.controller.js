@@ -6,14 +6,22 @@
 */
 
 const db = require("../config/database");
+const jwt = require("jsonwebtoken");
 const logger = require("../logger");
 const adminUserQueries = require("../queries/adminUser.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
+const { getActiveTermForSchool, getSchoolYearContext } = require("../utils/sessionContext");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { Resend } = require("resend");
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
+// Roles an admin may preview. Previewing another admin shows the same UI the
+// admin already has, so it is not offered.
+const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT"];
+// Preview sessions are short: long enough to click through every page, short
+// enough that a forgotten tab does not stay signed in as someone else.
+const IMPERSONATION_TTL = "2h";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const toUser = (row) => ({
@@ -363,6 +371,102 @@ const deleteUser = async (req, res) => {
   }
 };
 
+// POST /api/admin/users/:id/impersonate
+// "View as": issues a short-lived, read-only token for a teacher or parent in
+// the admin's school so the admin can see exactly what that user sees. The
+// token is the target's normal session payload plus `impersonator`, which
+// verifyUser uses to refuse every non-GET request and /auth/me echoes back so
+// the preview banner survives a reload. The response mirrors /auth/login so
+// the frontend can hydrate its stores the same way.
+const impersonateUser = async (req, res) => {
+  const { id } = req.params;
+  const admin = req.user;
+
+  // A preview token can't reach here: verifyUser refuses every non-GET
+  // request that carries one, and requireAdmin rejects its TEACHER/PARENT role.
+  if (id === admin.userId) {
+    return res.status(400).json({ status: "failed", message: "You're already signed in as yourself" });
+  }
+
+  try {
+    const { rows } = await db.query(adminUserQueries.selectUserInSchool, [id, admin.school]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    const user = rows[0];
+
+    if (!IMPERSONATABLE_ROLES.includes(user.role)) {
+      return res.status(400).json({ status: "failed", message: "Only teachers and parents can be previewed" });
+    }
+    if (user.is_archived) {
+      return res.status(409).json({ status: "failed", message: "Archived users can't be previewed. Restore them first." });
+    }
+    if (!user.is_verified || !user.is_verified_school) {
+      return res.status(409).json({
+        status: "failed",
+        message: "This account can't sign in yet, so there is nothing to preview. Give it school access first.",
+      });
+    }
+
+    const [{ rows: adminRows }, activeTerm, yearContext] = await Promise.all([
+      db.query(adminUserQueries.selectUserInSchool, [admin.userId, admin.school]),
+      getActiveTermForSchool(user.school),
+      getSchoolYearContext(user.school),
+    ]);
+    const target = toUser(user);
+    const adminRow = adminRows[0];
+    const impersonator = {
+      userId: admin.userId,
+      username: adminRow?.username ?? admin.username,
+      fullName: adminRow ? toUser(adminRow).fullName : admin.username,
+    };
+
+    const token = jwt.sign(
+      {
+        userId: user.user_id,
+        username: user.username,
+        email: user.email,
+        school: user.school,
+        role: user.role,
+        isVerified: user.is_verified,
+        isVerifiedSchool: user.is_verified_school,
+        activeTerm: activeTerm ? activeTerm.name : false,
+        impersonator,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: IMPERSONATION_TTL }
+    );
+
+    logger.info(
+      { adminUserId: admin.userId, targetUserId: user.user_id, targetRole: user.role, school: admin.school },
+      "Admin started a view-as preview"
+    );
+
+    return res.status(200).json({
+      status: "success",
+      message: `Previewing as ${target.fullName}`,
+      data: {
+        userId: target.userId,
+        username: target.username,
+        fullName: target.fullName,
+        email: target.email,
+        school: target.school,
+        role: target.role,
+        isVerified: target.isVerified,
+        isVerifiedSchool: target.isVerifiedSchool,
+        activeTerm: activeTerm ? activeTerm.name : false,
+        activeSchoolYear: yearContext.activeSchoolYear,
+        schoolYears: yearContext.schoolYears,
+        impersonator,
+        token,
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to start view-as preview");
+    return res.status(500).json({ status: "failed", message: "Error starting preview" });
+  }
+};
+
 module.exports = {
   listUsers,
   getUserDetails,
@@ -372,4 +476,5 @@ module.exports = {
   archiveUser,
   unarchiveUser,
   deleteUser,
+  impersonateUser,
 };

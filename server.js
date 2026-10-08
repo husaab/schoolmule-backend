@@ -52,8 +52,16 @@ const errorHandler = require("./middleware/errorHandler")
 // instantiating
 const app = express();
 
+// Local dev is reachable as both localhost and 127.0.0.1; the browser treats
+// them as different origins, so allow the twin too. No effect in production.
+const allowedOrigins = [
+  ...new Set(
+    [process.env.CROSS_ORIGIN_URL, process.env.CROSS_ORIGIN_URL?.replace('localhost', '127.0.0.1')].filter(Boolean)
+  ),
+];
+
 const corsOptions = {
-  origin: process.env.CROSS_ORIGIN_URL,
+  origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
   // Lets the browser read download filenames (CSV/PDF exports) across origins.
