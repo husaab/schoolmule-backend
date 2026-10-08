@@ -63,6 +63,10 @@ const uploadFiles = (req, res, next) =>
   });
 
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
+// A malformed id in a query string is a client mistake, not a server error.
+const badId = (...values) => values.some((v) => v != null && v !== '' && !isUuid(v));
 const pctOf = (score, max) => (score == null || !max ? null : Math.round((Number(score) / Number(max)) * 1000) / 10);
 const side = (role) => (role === 'PARENT' ? 'parent' : 'staff');
 
@@ -82,9 +86,10 @@ const toItem = (r) => ({
   lastMessage: r.last_message ?? null,
 });
 
-// "Needs reply" = the last real message came from the other side of the table.
-const needsReplyFor = (role, lastMessage) =>
-  Boolean(lastMessage && lastMessage.kind === 'message' && side(lastMessage.senderRole) !== side(role));
+// "Needs reply" = the last real (not removed, not system) message came from the
+// other side of the table and the thread is still open.
+const needsReplyFor = (role, row) =>
+  row.status === 'open' && Boolean(row.last_real_sender_role) && side(row.last_real_sender_role) !== side(role);
 
 function validateBody(body, fileCount) {
   const text = typeof body === 'string' ? body.trim() : '';
@@ -93,20 +98,24 @@ function validateBody(body, fileCount) {
   return { text };
 }
 
+// One storage call per thread fetch, not one per attachment.
 async function signAttachments(rows) {
-  return Promise.all(
-    rows.map(async (a) => {
-      const { data } = await supabase.storage.from(BUCKET).createSignedUrl(a.file_path, SIGNED_URL_TTL);
-      return {
-        attachmentId: a.attachment_id,
-        messageId: a.message_id,
-        fileName: a.file_name,
-        mimeType: a.mime_type,
-        sizeBytes: a.size_bytes,
-        url: data?.signedUrl ?? null,
-      };
-    }),
-  );
+  if (rows.length === 0) return [];
+  let byPath = new Map();
+  try {
+    const { data } = await supabase.storage.from(BUCKET).createSignedUrls(rows.map((a) => a.file_path), SIGNED_URL_TTL);
+    byPath = new Map((data || []).map((d) => [d.path, d.signedUrl || null]));
+  } catch (error) {
+    logger.warn('Signing attachments failed:', error);
+  }
+  return rows.map((a) => ({
+    attachmentId: a.attachment_id,
+    messageId: a.message_id,
+    fileName: a.file_name,
+    mimeType: a.mime_type,
+    sizeBytes: a.size_bytes,
+    url: byPath.get(a.file_path) ?? null,
+  }));
 }
 
 /**
@@ -208,9 +217,9 @@ async function buildThread(conv, user) {
     context = {
       assessmentId: c.assessment_id,
       name: c.name,
-      date: c.date,
-      weightPoints: c.weight_points == null ? null : Number(c.weight_points),
-      maxScore: c.max_score == null ? null : Number(c.max_score),
+      date: hideScore ? null : c.date,
+      weightPoints: hideScore || c.weight_points == null ? null : Number(c.weight_points),
+      maxScore: hideScore || c.max_score == null ? null : Number(c.max_score),
       score: hideScore || c.score == null ? null : Number(c.score),
       pct: hideScore ? null : pctOf(c.score, c.max_score),
       isPublished: Boolean(c.is_published),
@@ -283,6 +292,7 @@ const listConversations = async (req, res) => {
   const status = req.query.status === 'all' ? null : req.query.status === 'resolved' ? 'resolved' : 'open';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const sql = role === 'PARENT' ? q.listForParent : role === 'ADMIN' ? q.listForAdmin : q.listForTeacher;
+  if (badId(req.query.classId, req.query.studentId)) return failed(res, 400, 'Invalid id');
   try {
     const { rows } = await db.query(sql, [
       userId,
@@ -304,7 +314,7 @@ const listConversations = async (req, res) => {
 
     const items = rows.map((r) => ({
       ...toItem(r),
-      needsReply: needsReplyFor(role, r.last_message),
+      needsReply: needsReplyFor(role, r),
       ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id) } : {}),
     }));
     return res.status(200).json({ status: 'success', data: items });
@@ -337,6 +347,7 @@ const getUnreadSummary = async (req, res) => {
 const getTargets = async (req, res) => {
   const user = req.user;
   const { studentId, classId } = req.query;
+  if (badId(studentId, classId)) return failed(res, 400, 'Invalid id');
   try {
     if (user.role === 'PARENT') {
       if (!studentId) return failed(res, 400, 'studentId is required');
@@ -381,6 +392,7 @@ const getStubs = async (req, res) => {
   const user = req.user;
   const { classId, studentId } = req.query;
   if (!classId && !studentId) return failed(res, 400, 'classId or studentId is required');
+  if (badId(classId, studentId)) return failed(res, 400, 'Invalid id');
   try {
     if (user.role === 'PARENT') {
       if (!studentId) return failed(res, 400, 'studentId is required');
@@ -391,7 +403,7 @@ const getStubs = async (req, res) => {
     } else if (user.role !== 'ADMIN') {
       return failed(res, 403, 'classId is required');
     }
-    const { rows } = await db.query(q.selectStubs, [user.userId, classId || null, studentId || null]);
+    const { rows } = await db.query(q.selectStubs, [user.userId, classId || null, studentId || null, user.school]);
     return res.status(200).json({
       status: 'success',
       data: rows.map((r) => ({
@@ -411,6 +423,7 @@ const createConversation = async (req, res) => {
   const { studentId, classId, assessmentId } = req.body;
   const files = req.files || [];
   if (!studentId || !classId || !assessmentId) return failed(res, 400, 'studentId, classId and assessmentId are required');
+  if (badId(studentId, classId, assessmentId)) return failed(res, 400, 'Invalid id');
   const v = validateBody(req.body.body, files.length);
   if (v.error) return failed(res, 400, v.error);
 

@@ -3,6 +3,8 @@
 const mockUpload = jest.fn().mockResolvedValue({ data: { path: 'mock-path' }, error: null });
 const mockRemove = jest.fn().mockResolvedValue({ data: {}, error: null });
 const mockCreateSignedUrl = jest.fn().mockResolvedValue({ data: { signedUrl: 'https://mock-signed-url.com' }, error: null });
+const signedUrlsImpl = (paths) => Promise.resolve({ data: paths.map((p) => ({ path: p, signedUrl: `https://mock-signed-url.com/${p}`, error: null })), error: null });
+const mockCreateSignedUrls = jest.fn(signedUrlsImpl);
 const mockDownload = jest.fn().mockResolvedValue({ data: null, error: { message: 'Not configured' } });
 const mockCopy = jest.fn().mockResolvedValue({ data: { path: 'mock-copy-path' }, error: null });
 const mockGetPublicUrl = jest.fn().mockReturnValue({ data: { publicUrl: 'https://mock-public-url.com' } });
@@ -12,6 +14,7 @@ const mockBucket = {
   upload: mockUpload,
   remove: mockRemove,
   createSignedUrl: mockCreateSignedUrl,
+  createSignedUrls: mockCreateSignedUrls,
   download: mockDownload,
   copy: mockCopy,
   getPublicUrl: mockGetPublicUrl,
@@ -27,6 +30,7 @@ const supabase = {
     mockUpload.mockReset().mockResolvedValue({ data: { path: 'mock-path' }, error: null });
     mockRemove.mockReset().mockResolvedValue({ data: {}, error: null });
     mockCreateSignedUrl.mockReset().mockResolvedValue({ data: { signedUrl: 'https://mock-signed-url.com' }, error: null });
+    mockCreateSignedUrls.mockReset().mockImplementation(signedUrlsImpl);
     mockDownload.mockReset().mockResolvedValue({ data: null, error: { message: 'Not configured' } });
     mockCopy.mockReset().mockResolvedValue({ data: { path: 'mock-copy-path' }, error: null });
     mockGetPublicUrl.mockReset().mockReturnValue({ data: { publicUrl: 'https://mock-public-url.com' } });

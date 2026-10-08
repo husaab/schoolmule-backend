@@ -38,6 +38,13 @@ const UNREAD_COUNT_EXPR = `
      AND m.created_at > COALESCE(cp.last_read_at, '-infinity'::timestamptz))::int
 `;
 
+// Who spoke last, ignoring removed and system lines — what "needs reply" means.
+const LAST_REAL_SENDER_SQL = `
+  (SELECT lr.sender_role FROM messages lr
+   WHERE lr.conversation_id = c.conversation_id AND lr.kind = 'message' AND lr.deleted_at IS NULL
+   ORDER BY lr.created_at DESC LIMIT 1) AS last_real_sender_role
+`;
+
 const LAST_MESSAGE_SQL = `
   (SELECT jsonb_build_object(
       'senderId', lm.sender_id, 'senderRole', lm.sender_role, 'kind', lm.kind,
@@ -61,6 +68,7 @@ const listBody = (scopeSql) => `
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     cp.last_read_at,
     ${UNREAD_COUNT_EXPR} AS unread_count,
+    ${LAST_REAL_SENDER_SQL},
     ${LAST_MESSAGE_SQL}
   FROM conversations c
   JOIN students s  ON s.student_id = c.student_id
@@ -69,7 +77,7 @@ const listBody = (scopeSql) => `
   LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
   WHERE c.school = $2
     AND ($3::uuid IS NULL OR s.school_year_id = $3)
-    AND ($4::text IS NULL OR c.status = $4)
+    AND ($4::text IS NULL OR c.status = $4 OR ($4::text = 'open' AND ${UNREAD_COUNT_EXPR} > 0))
     AND ($5::uuid IS NULL OR c.class_id = $5)
     AND ($6::uuid IS NULL OR c.student_id = $6)
     AND ($7::text IS NULL OR s.name ILIKE '%' || $7 || '%' OR c.title ILIKE '%' || $7 || '%' OR cl.subject ILIKE '%' || $7 || '%')
@@ -109,9 +117,13 @@ const messagingQueries = {
   `,
 
   // $1 school, $2 student_id, $3 class_id, $4 assessment_id, $5 title, $6 created_by
+  // Upsert on the anchor: two guardians pressing "Ask the teacher" at the same
+  // moment both land in one thread instead of the second hitting the unique index.
   insertConversation: `
     INSERT INTO conversations (school, student_id, class_id, assessment_id, title, created_by)
     VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (student_id, class_id, assessment_id) WHERE assessment_id IS NOT NULL
+      DO UPDATE SET title = conversations.title
     RETURNING conversation_id
   `,
 
@@ -153,11 +165,11 @@ const messagingQueries = {
   // Badge. $1 user_id, $2 school, $3 role
   selectUnreadSummary: `
     WITH mine AS (
-      SELECT c.conversation_id, cp.last_read_at
+      SELECT c.conversation_id, c.status, cp.last_read_at
       FROM conversations c
       JOIN classes cl ON cl.class_id = c.class_id
       LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
-      WHERE c.school = $2 AND c.status = 'open' AND (
+      WHERE c.school = $2 AND (
         ($3 = 'PARENT' AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1))
         OR ($3 = 'TEACHER' AND (cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)))
         OR ($3 = 'ADMIN' AND (cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)
@@ -169,9 +181,9 @@ const messagingQueries = {
         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = mine.conversation_id AND m.kind = 'message'
            AND m.deleted_at IS NULL AND m.sender_id IS DISTINCT FROM $1
            AND m.created_at > COALESCE(mine.last_read_at, '-infinity'::timestamptz)) AS unread,
-        (SELECT CASE WHEN $3 = 'PARENT' THEN lm.sender_role <> 'PARENT' ELSE lm.sender_role = 'PARENT' END
+        (mine.status = 'open' AND COALESCE((SELECT CASE WHEN $3 = 'PARENT' THEN lm.sender_role <> 'PARENT' ELSE lm.sender_role = 'PARENT' END
            FROM messages lm WHERE lm.conversation_id = mine.conversation_id AND lm.kind = 'message' AND lm.deleted_at IS NULL
-           ORDER BY lm.created_at DESC LIMIT 1) AS needs_reply
+           ORDER BY lm.created_at DESC LIMIT 1), FALSE)) AS needs_reply
       FROM mine
     )
     SELECT
@@ -351,11 +363,12 @@ const messagingQueries = {
         send_after = NOW() + (attempts * interval '5 minutes')
     WHERE job_id = $1
   `,
-  // $1 conversation_id, $2 recipient_id
+  // $1 conversation_id, $2 recipient_id, $3 created_at of the last message in the digest.
+  // Never NOW(): a message posted while the email was being sent would be skipped forever.
   markEmailed: `
     INSERT INTO conversation_participants (conversation_id, user_id, last_emailed_at)
-    VALUES ($1, $2, NOW())
-    ON CONFLICT (conversation_id, user_id) DO UPDATE SET last_emailed_at = NOW()
+    VALUES ($1, $2, $3::timestamptz)
+    ON CONFLICT (conversation_id, user_id) DO UPDATE SET last_emailed_at = GREATEST(conversation_participants.last_emailed_at, EXCLUDED.last_emailed_at)
   `,
 
   // ── Pickers and chips ───────────────────────────────────────
@@ -394,13 +407,13 @@ const messagingQueries = {
     ORDER BY sort_order NULLS LAST, name
   `,
 
-  // Chips. $1 user_id, $2 class_id|null, $3 student_id|null
+  // Chips. $1 user_id, $2 class_id|null, $3 student_id|null, $4 school
   selectStubs: `
     SELECT c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.status,
            ${UNREAD_COUNT_EXPR} AS unread_count
     FROM conversations c
     LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
-    WHERE ($2::uuid IS NULL OR c.class_id = $2) AND ($3::uuid IS NULL OR c.student_id = $3)
+    WHERE c.school = $4 AND ($2::uuid IS NULL OR c.class_id = $2) AND ($3::uuid IS NULL OR c.student_id = $3)
   `,
 
   // Admin oversight: threads with a failed email. $1 conversation_id[]

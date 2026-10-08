@@ -329,6 +329,7 @@ describe('POST /api/parent-students', () => {
 // ─── PATCH /api/parent-students/:id ─────────────────────────────
 describe('PATCH /api/parent-students/:id', () => {
   it('updates a parent-student relation', async () => {
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     const updated = buildParentStudentRow({ relation: 'FATHER' });
     mockQueryResponse([updated], 1);
 
@@ -367,6 +368,7 @@ describe('PATCH /api/parent-students/:id', () => {
   });
 
   it('updates with parentId when no duplicate relation exists', async () => {
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     // checkExistingRelationExcludingLink returns no existing
     mockQueryResponse([]);
     const updated = buildParentStudentRow({ relation: 'FATHER' });
@@ -383,6 +385,7 @@ describe('PATCH /api/parent-students/:id', () => {
   });
 
   it('returns 409 when another link already relates the parent to the student', async () => {
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     // checkExistingRelationExcludingLink returns existing
     mockQueryResponse([buildParentStudentRow()]);
 
@@ -397,6 +400,7 @@ describe('PATCH /api/parent-students/:id', () => {
   });
 
   it('skips the duplicate check when parentId is null', async () => {
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     const updated = buildParentStudentRow({ parent_id: null });
     mockQueryResponse([updated], 1);
 
@@ -413,6 +417,7 @@ describe('PATCH /api/parent-students/:id', () => {
 // ─── DELETE /api/parent-students/:id ────────────────────────────
 describe('DELETE /api/parent-students/:id', () => {
   it('deletes a parent-student relation', async () => {
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     mockQueryResponse([], 1);
 
     const res = await request(app)

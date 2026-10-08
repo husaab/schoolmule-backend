@@ -151,6 +151,23 @@ describe('Integration: Messaging routes', () => {
     expect(row.rows[0]).toEqual({ status: 'open', resolved_by: null });
   });
 
+  it('a resolved thread with an unread reply still counts and shows in the default list', async () => {
+    const id = (await start(asMom, publishedId)).body.data.conversation.conversationId;
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'Here is why, and I am closing this.');
+    await authenticatedRequest('patch', `/api/messaging/conversations/${id}`, asTeacher).send({ status: 'resolved' });
+
+    const unread = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', asMom);
+    expect(unread.body.data).toMatchObject({ unreadConversations: 1, unreadMessages: 1, needsReply: 0 });
+    const list = await authenticatedRequest('get', '/api/messaging/conversations', asMom);
+    expect(list.body.data.map((c) => c.conversationId)).toEqual([id]);
+    expect(list.body.data[0]).toMatchObject({ status: 'resolved', unreadCount: 1, needsReply: false });
+
+    // Once read, the resolved thread leaves the default (open) list.
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/read`, asMom);
+    expect((await authenticatedRequest('get', '/api/messaging/conversations', asMom)).body.data).toEqual([]);
+    expect((await authenticatedRequest('get', '/api/messaging/conversations?status=resolved', asMom)).body.data).toHaveLength(1);
+  });
+
   it('an admin joining is announced once; edit and delete follow the rules', async () => {
     const id = (await start(asMom, publishedId, 'Original')).body.data.conversation.conversationId;
     const msgId = (await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asMom)).body.data.messages[0].messageId;

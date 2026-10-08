@@ -25,6 +25,16 @@ describe('parent link routes are staff-only except a parent reading their own ch
     expect((await authenticatedRequest('delete', `/api/parent-students/${OTHER}`, mockParentUser())).status).toBe(403);
   });
 
+  it('404s staff reading, editing or deleting a link row from another school', async () => {
+    const other = { parent_student_link_id: OTHER, school: 'PLAYGROUND', student_id: 's', parent_id: null, relation: 'Mother' };
+    db.query.mockResolvedValueOnce({ rows: [other] });
+    expect((await authenticatedRequest('get', `/api/parent-students/${OTHER}`, mockTeacherUser())).status).toBe(404);
+    db.query.mockResolvedValueOnce({ rows: [other] });
+    expect((await authenticatedRequest('patch', `/api/parent-students/${OTHER}`, mockTeacherUser()).send({ relation: 'x' })).status).toBe(404);
+    db.query.mockResolvedValueOnce({ rows: [other] });
+    expect((await authenticatedRequest('delete', `/api/parent-students/${OTHER}`, mockTeacherUser())).status).toBe(404);
+  });
+
   it('blocks a parent listing parent accounts, allows staff', async () => {
     expect((await authenticatedRequest('get', '/api/parents', mockParentUser())).status).toBe(403);
     db.query.mockResolvedValueOnce({ rows: [] });

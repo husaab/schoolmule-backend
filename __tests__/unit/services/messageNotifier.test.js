@@ -118,6 +118,35 @@ describe('messageNotifier', () => {
     expect(mockSend.mock.calls[0][0].html).not.toContain('14/20');
   });
 
+  it('a message posted during the send is still emailed: last_emailed_at is the last rendered message and a new job is queued', async () => {
+    let calls = 0;
+    const r = makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx()],
+      'AS attachment_count': () => (++calls === 1 ? [msg({ created_at: '2026-10-07T12:00:00Z' })] : [msg({ message_id: 'm2', body: 'posted mid-send', created_at: '2026-10-07T12:00:05Z' })]),
+      'AS class_avg_pct': [],
+    });
+    await notifier.drainOnce();
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [emailed] = r.ran('DO UPDATE SET last_emailed_at');
+    expect(emailed.params[2]).toBe('2026-10-07T12:00:00.000Z');
+    const [requeue] = r.ran('INSERT INTO message_email_jobs');
+    expect(requeue.params.slice(0, 3)).toEqual([CONVO, [RECIPIENT], 'ALHAADIACADEMY']);
+  });
+
+  it('marks sent before the participant update, so a bookkeeping failure never resends', async () => {
+    const r = makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx()],
+      'AS attachment_count': [msg()],
+      'DO UPDATE SET last_emailed_at': () => { throw new Error('db hiccup'); },
+    });
+    await notifier.drainOnce();
+    const order = r.calls.map((c) => (c.sql.includes("SET status = $2::text, last_error = $3") ? 'finish' : c.sql.includes('DO UPDATE SET last_emailed_at') ? 'emailed' : null)).filter(Boolean);
+    expect(order).toEqual(['finish', 'emailed']);
+    expect(r.ran("CASE WHEN attempts >= $3 THEN 'failed'")).toHaveLength(0);
+  });
+
   it('requeues on a send failure and lets the retry query decide pending vs failed', async () => {
     mockSend.mockResolvedValueOnce({ error: { message: 'boom' } });
     const r = makeRouter({

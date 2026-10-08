@@ -22,6 +22,7 @@ const { getConversationDigestEmailHTML } = require('../templates/emailTemplate')
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
 const RATE_LIMIT_MS = 600;
+const EMAIL_DELAY = '2 minutes';
 // Postgres: relation does not exist.
 const UNDEFINED_TABLE = '42P01';
 
@@ -73,7 +74,7 @@ async function processJob(job) {
 
   const readSince = Boolean(ctx.last_read_at) && new Date(ctx.last_read_at) >= new Date(ctx.last_message_at);
   if (ctx.muted || ctx.recipient_archived || !ctx.recipient_email || readSince) {
-    const reason = ctx.muted ? 'muted' : readSince ? 'read before send' : 'no recipient';
+    const reason = ctx.muted ? 'muted' : readSince ? 'read before send' : ctx.recipient_archived ? 'recipient archived' : 'no recipient';
     await db.query(q.finishJob, [job.job_id, 'skipped', reason]);
     return 'skipped';
   }
@@ -123,8 +124,20 @@ async function processJob(job) {
   });
   if (result?.error) throw new Error(result.error.message || 'Email sending failed');
 
+  // Resend accepted it: record that FIRST so a bookkeeping hiccup can never resend.
   await db.query(q.finishJob, [job.job_id, 'sent', null]);
-  await db.query(q.markEmailed, [job.conversation_id, job.recipient_id]);
+  const lastRendered = new Date(msgs[msgs.length - 1].created_at).toISOString();
+  try {
+    await db.query(q.markEmailed, [job.conversation_id, job.recipient_id, lastRendered]);
+    // A message posted while we were sending has no job of its own (the
+    // pending row swallowed its enqueue); give it one now.
+    const { rows: newer } = await db.query(q.selectMessagesForEmail, [job.conversation_id, job.recipient_id, lastRendered]);
+    if (newer.length) {
+      await db.query(q.enqueueEmailJobs, [job.conversation_id, [job.recipient_id], job.school, EMAIL_DELAY]);
+    }
+  } catch (error) {
+    logger.warn({ jobId: job.job_id, err: error.message }, 'Sent digest but failed to update participant state');
+  }
   return 'sent';
 }
 

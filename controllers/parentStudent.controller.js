@@ -2,6 +2,17 @@ const db = require("../config/database");
 const parentStudentQueries = require("../queries/parentStudent.queries");
 const logger = require("../logger");
 
+// Link rows belong to a school; a staff member may only touch their own.
+// Answer 404 (not 403) so ids cannot be probed across tenants.
+const NOT_FOUND = (id) => ({ status: "failed", message: `Parent-student relation with id ${id} not found` });
+const linkInSchool = async (id, school) => {
+  const { rows } = await db.query(
+    "SELECT parent_student_link_id, school FROM parent_students WHERE parent_student_link_id = $1",
+    [id],
+  );
+  return rows.length > 0 && rows[0].school === school;
+};
+
 // GET /parent-students?school=X - Get all parent-student relations by school
 const getAllParentStudents = async (req, res) => {
   try {
@@ -48,11 +59,8 @@ const getParentStudentById = async (req, res) => {
     const { id } = req.params;
     const { rows } = await db.query(parentStudentQueries.selectParentStudentById, [id]);
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        status: "failed",
-        message: `Parent-student relation with id ${id} not found`,
-      });
+    if (rows.length === 0 || rows[0].school !== req.user.school) {
+      return res.status(404).json(NOT_FOUND(id));
     }
 
     const ps = rows[0];
@@ -248,6 +256,10 @@ const updateParentStudent = async (req, res) => {
       relation
     } = req.body;
 
+    if (!(await linkInSchool(id, req.user.school))) {
+      return res.status(404).json(NOT_FOUND(id));
+    }
+
     // Prevent duplicating an existing parent-student link (excluding this row)
     if (parentId) {
       const { rows: existingRows } = await db.query(
@@ -309,6 +321,9 @@ const updateParentStudent = async (req, res) => {
 const deleteParentStudent = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!(await linkInSchool(id, req.user.school))) {
+      return res.status(404).json(NOT_FOUND(id));
+    }
     const result = await db.query(parentStudentQueries.deleteParentStudent, [id]);
 
     if (result.rowCount === 0) {

@@ -151,6 +151,22 @@ describe('messaging controller', () => {
       expect(res.body.data.context.pct).toBeNull();
       expect(res.body.data.context.parentComment).toBeNull();
       expect(res.body.data.context.classAvgPct).toBeNull();
+      // Spec: name only until published.
+      expect(res.body.data.context.maxScore).toBeNull();
+      expect(res.body.data.context.weightPoints).toBeNull();
+      expect(res.body.data.context.date).toBeNull();
+    });
+
+    it('signs all attachments in one batched call', async () => {
+      makeRouter({ 'WHERE message_id = ANY': [
+        { attachment_id: 'at1', message_id: MESSAGE, file_path: 'p/1.png', file_name: '1.png', mime_type: 'image/png', size_bytes: 10 },
+        { attachment_id: 'at2', message_id: MESSAGE, file_path: 'p/2.pdf', file_name: '2.pdf', mime_type: 'application/pdf', size_bytes: 10 },
+      ] });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(supabase._mockStorage.createSignedUrls).toHaveBeenCalledTimes(1);
+      expect(supabase._mockStorage.createSignedUrls.mock.calls[0][0]).toEqual(['p/1.png', 'p/2.pdf']);
+      expect(res.body.data.messages[0].attachments.map((a) => a.url)).toEqual(['https://mock-signed-url.com/p/1.png', 'https://mock-signed-url.com/p/2.pdf']);
     });
 
     it('gives staff the class average', async () => {
@@ -256,7 +272,8 @@ describe('messaging controller', () => {
         'ORDER BY c.last_message_at DESC': [{
           conversation_id: CONVO, student_id: STUDENT, student_name: 'Amina Test', class_id: CLASS, class_subject: 'Math',
           assessment_id: ASSESSMENT, title: 'Q', status: 'open', last_message_at: 'x', created_at: 'x', lead_teacher_name: 'Ahmed Khan',
-          unread_count: 2, last_message: { senderId: PARENT, senderRole: 'PARENT', kind: 'message', body: 'hi', deleted: false, createdAt: 'x', senderName: 'Layla' },
+          unread_count: 2, last_real_sender_role: 'PARENT',
+          last_message: { senderId: PARENT, senderRole: 'PARENT', kind: 'message', body: 'hi', deleted: false, createdAt: 'x', senderName: 'Layla' },
         }],
       });
       const res = await authenticatedRequest('get', '/api/messaging/conversations', mockTeacherUser());
@@ -269,6 +286,39 @@ describe('messaging controller', () => {
       makeRouter({ 'AS unread_conversations': [{ unread_conversations: 1, unread_messages: 3, needs_reply: 1 }] });
       const res = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', mockParentUser());
       expect(res.body.data).toEqual({ unreadConversations: 1, unreadMessages: 3, needsReply: 1 });
+    });
+
+    it('scopes admin stubs by school and rejects malformed ids with 400', async () => {
+      const r = makeRouter();
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/stubs?studentId=${STUDENT}`, mockAdminUser());
+      expect(res.status).toBe(200);
+      const [stubs] = r.ran('FROM conversations c') .filter((c) => c.sql.includes('AS unread_count') && c.params.length === 4);
+      expect(stubs.params[3]).toBe(SCHOOL);
+      expect((await authenticatedRequest('get', '/api/messaging/conversations?classId=not-a-uuid', mockTeacherUser())).status).toBe(400);
+      expect((await authenticatedRequest('get', '/api/messaging/conversations/stubs?classId=nope', mockTeacherUser())).status).toBe(400);
+      const bad = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', 'nope').field('classId', CLASS).field('assessmentId', ASSESSMENT).field('body', 'x');
+      expect(bad.status).toBe(400);
+    });
+
+    it('creates the conversation with an upsert on the anchor so concurrent starts cannot 500', async () => {
+      const r = makeRouter();
+      await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('classId', CLASS).field('assessmentId', ASSESSMENT).field('body', 'Hello');
+      expect(r.ran('INSERT INTO conversations')[0].sql).toMatch(/ON CONFLICT \(student_id, class_id, assessment_id\)/);
+    });
+
+    it('needsReply ignores deleted and system messages', async () => {
+      makeRouter({
+        'ORDER BY c.last_message_at DESC': [{
+          conversation_id: CONVO, student_id: STUDENT, student_name: 'Amina Test', class_id: CLASS, class_subject: 'Math',
+          assessment_id: ASSESSMENT, title: 'Q', status: 'open', last_message_at: 'x', created_at: 'x', lead_teacher_name: 'Ahmed Khan',
+          unread_count: 0, last_real_sender_role: 'TEACHER',
+          last_message: { senderId: PARENT, senderRole: 'PARENT', kind: 'message', body: null, deleted: true, createdAt: 'x', senderName: 'Layla' },
+        }],
+      });
+      const res = await authenticatedRequest('get', '/api/messaging/conversations', mockTeacherUser());
+      expect(res.body.data[0].needsReply).toBe(false);
     });
 
     it('parent targets require a link to the student', async () => {
