@@ -258,6 +258,57 @@ function getGuardianInviteEmailHTML({
   });
 }
 
+/**
+ * Announcement — one post to every guardian in a class, grade or school.
+ * `kind` picks the call to action: 'account' → read in the portal,
+ * 'invite' → finish the pending account (fresh invite link),
+ * 'signup' → create an account on the school's parent sign-up page.
+ * childNames: the recipient's children in the audience (empty for school-wide).
+ */
+function getAnnouncementEmailHTML({
+  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, link, kind = 'account', schoolName, schoolInfo,
+}) {
+  const children = childNames.filter(Boolean).map(escapeHtml);
+  const whose = children.length === 0 ? '' : children.length === 1 ? `, ${children[0]}'s class` : `, ${children.join(' and ')}'s classes`;
+  const attach = attachmentCount > 0
+    ? `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'} — ${kind === 'account' ? 'open in SchoolMule to download' : 'available once you sign in'}</div>`
+    : '';
+  const cta = kind === 'account'
+    ? [
+        button('Read in SchoolMule', link),
+        finePrint(`Have a question? Open the announcement and choose “Ask about this” to start a private conversation with ${escapeHtml(authorName)}.`),
+      ]
+    : kind === 'invite'
+      ? [
+          paragraph('Your SchoolMule account is waiting to be set up. Choose a password and this announcement will be the first thing you see.'),
+          button('Set up your account', link),
+          finePrint('This link expires in 7 days; if it has expired, ask the school to resend it.'),
+        ]
+      : [
+          paragraph("You don't have a SchoolMule account yet. Create one with this email address and your child will already be linked to you, so attachments, grades and messages are all in one place."),
+          button('Create your account', link),
+          finePrint('Sign up with the email address this message was sent to. The school office approves new parent accounts.'),
+        ];
+
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: title,
+    preheader: `${scopeLabel} · ${schoolName}`,
+    content: [
+      paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
+      paragraph(`<strong>${escapeHtml(authorName)}</strong> posted an announcement to <strong>${escapeHtml(scopeLabel)}</strong>${whose}.`),
+      facts([
+        ['For', escapeHtml(scopeLabel) + (children.length ? ` · ${children.join(', ')}` : '')],
+        ['Posted by', escapeHtml(authorName)],
+      ]),
+      note(authorName, `${multiline(body)}${attach}`),
+      ...cta,
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+}
+
 function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
   return renderEmail({
     brand: SCHOOLMULE_BRAND,
@@ -405,6 +456,7 @@ module.exports = {
   getTicketEmailHTML,
   getConversationDigestEmailHTML,
   getGuardianInviteEmailHTML,
+  getAnnouncementEmailHTML,
   getFeedbackEmailHTML,
   getProgressReportEmailHTML,
   getReportCardEmailHTML,
