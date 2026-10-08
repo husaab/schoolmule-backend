@@ -168,21 +168,63 @@ function getTicketEmailHTML({ username, school, issueType, description, contactE
 // ─── Messages & feedback ───────────────────────────────────────────────────
 
 /**
- * New message notification template
- * @param {string} fromName – sender’s name
- * @param {string} subject – message subject
- * @param {string} link – URL users click to read the full message
+ * Messaging digest — every unread message in one thread for one recipient.
+ * Sent by services/messageNotifier.js once a thread has been quiet for the
+ * coalescing window, so a burst of replies arrives as one email.
+ *
+ * messages: [{ senderName, body, sentAtLabel, attachmentCount }]
+ * contextLine: e.g. "14/20 (70%)" — null when the score must not be shown.
  */
-function getNewMessageEmailHTML({ fromName, subject, body, link }) {
+function getConversationDigestEmailHTML({
+  recipientFirstName,
+  studentName,
+  className,
+  title,
+  contextLine,
+  messages,
+  link,
+  schoolName,
+  schoolInfo,
+}) {
+  const first = messages[0];
+  const heading =
+    messages.length === 1
+      ? `New message from ${first.senderName}`
+      : `${messages.length} new messages about ${studentName}`;
+
+  const blocks = messages
+    .map((m) => {
+      const meta = `${m.senderName} · ${m.sentAtLabel}`;
+      const attach =
+        m.attachmentCount > 0
+          ? `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${m.attachmentCount} attachment${m.attachmentCount === 1 ? '' : 's'} — open in SchoolMule to view</div>`
+          : '';
+      return note(meta, `${multiline(m.body)}${attach}`);
+    })
+    .join('');
+
+  const assessmentFact = escapeHtml(title) + (contextLine ? ` · ${escapeHtml(contextLine)}` : '');
+
   return renderEmail({
-    brand: SCHOOLMULE_BRAND,
-    heading: `New message from ${fromName}`,
-    preheader: subject || 'You have a new message in SchoolMule.',
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading,
+    preheader: `${title} · ${className}`,
     content: [
-      facts([['Subject', subject ? escapeHtml(subject) : '<em>(No subject)</em>']]),
-      note('Message', multiline(body)),
-      button('Read message', link),
+      paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
+      paragraph(
+        `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in the conversation about <strong>${escapeHtml(studentName)}</strong>'s <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
+      ),
+      facts([
+        ['Student', escapeHtml(studentName)],
+        ['Assessment', assessmentFact],
+        ['Class', escapeHtml(className)],
+      ]),
+      blocks,
+      button('Reply in SchoolMule', link),
+      finePrint("Attachments stay inside SchoolMule so only the student's guardians and teachers can open them."),
+      signOff(schoolName),
     ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
   });
 }
 
@@ -331,7 +373,7 @@ module.exports = {
   getInviteEmailHTML,
   getContactEmailHTML,
   getTicketEmailHTML,
-  getNewMessageEmailHTML,
+  getConversationDigestEmailHTML,
   getFeedbackEmailHTML,
   getProgressReportEmailHTML,
   getReportCardEmailHTML,
