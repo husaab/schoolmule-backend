@@ -19,6 +19,7 @@ router.get("/", controller.listApprovals);
 router.get("/:id/children", controller.getChildCandidates);
 router.post("/:id/approve", controller.approve);
 router.patch("/:id/role", controller.changeRole);
+router.patch("/:id/name", controller.rename);
 router.post("/:id/decline", controller.decline);
 router.post("/:id/restore", controller.restore);
 

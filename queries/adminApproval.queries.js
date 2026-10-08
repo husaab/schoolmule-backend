@@ -76,6 +76,20 @@ const adminApprovalQueries = {
     RETURNING ${USER_COLUMNS}
   `,
 
+  //  Fix the name on a pending signup. Parents sometimes register under their
+  //  child's name; username is what greets them, so it tracks the full name.
+  //  $1 = first_name, $2 = last_name, $3 = user_id, $4 = school
+  updatePendingName: `
+    UPDATE users
+    SET first_name = $1,
+        last_name = $2,
+        username = trim($1 || ' ' || $2),
+        last_modified_at = NOW()
+    WHERE user_id = $3 AND school = $4
+      AND is_verified = true AND is_verified_school = false AND is_archived = false
+    RETURNING ${USER_COLUMNS}
+  `,
+
   //  Decline: archive the account (can't sign in, hidden from pending) and
   //  stamp declined_at so it shows under "Declined" rather than with staff who
   //  were archived from the Users page.

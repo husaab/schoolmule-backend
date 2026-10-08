@@ -76,6 +76,21 @@ const changeRole = async (req, res) => {
   }
 };
 
+// PATCH /api/admin/approvals/:id/name  { firstName, lastName }
+const rename = async (req, res) => {
+  try {
+    const data = await actions.renamePendingSignup({
+      school: req.user.school,
+      userId: req.params.id,
+      firstName: req.body?.firstName,
+      lastName: req.body?.lastName,
+    });
+    return res.status(200).json({ status: "success", message: "Name updated", data });
+  } catch (error) {
+    return fail(res, error, "Error updating name");
+  }
+};
+
 // POST /api/admin/approvals/:id/decline  { sendEmail? }
 const decline = async (req, res) => {
   const sendEmail = req.body?.sendEmail !== false;
@@ -107,4 +122,4 @@ const restore = async (req, res) => {
   }
 };
 
-module.exports = { listApprovals, getChildCandidates, approve, changeRole, decline, restore };
+module.exports = { listApprovals, getChildCandidates, approve, changeRole, rename, decline, restore };

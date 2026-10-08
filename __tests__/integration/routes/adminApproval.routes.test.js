@@ -248,6 +248,29 @@ describe('Integration: Admin Approvals Routes', () => {
     });
   });
 
+  describe('PATCH /api/admin/approvals/:id/name', () => {
+    it('renames a pending signup and keeps username in step', async () => {
+      const res = await authenticatedRequest('patch', `/api/admin/approvals/${PENDING_PARENT_ID}/name`)
+        .send({ firstName: '  Parent  ', lastName: 'Renamed' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user).toMatchObject({ firstName: 'Parent', lastName: 'Renamed', fullName: 'Parent Renamed', isVerifiedSchool: false });
+      const row = await userRow(getTestPool(), PENDING_PARENT_ID);
+      expect(row.username).toBe('Parent Renamed');
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('allows a single name, requires a first name, and refuses non-pending users', async () => {
+      const single = await authenticatedRequest('patch', `/api/admin/approvals/${PENDING_PARENT_ID}/name`).send({ firstName: 'Mononym', lastName: '' });
+      expect(single.status).toBe(200);
+      expect((await userRow(getTestPool(), PENDING_PARENT_ID)).username).toBe('Mononym');
+
+      expect((await authenticatedRequest('patch', `/api/admin/approvals/${PENDING_PARENT_ID}/name`).send({ firstName: ' ', lastName: 'X' })).status).toBe(400);
+      expect((await authenticatedRequest('patch', `/api/admin/approvals/${APPROVED_TEACHER_ID}/name`).send({ firstName: 'A', lastName: 'B' })).status).toBe(409);
+      expect((await authenticatedRequest('patch', `/api/admin/approvals/${OTHER_SCHOOL_PENDING_ID}/name`).send({ firstName: 'A', lastName: 'B' })).status).toBe(404);
+    });
+  });
+
   describe('POST /api/admin/approvals/:id/decline', () => {
     it('archives, stamps declined_at, emails by default and hides them from the legacy pending list', async () => {
       const res = await authenticatedRequest('post', `/api/admin/approvals/${PENDING_TEACHER_ID}/decline`).send({});

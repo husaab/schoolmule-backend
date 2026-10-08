@@ -192,6 +192,25 @@ const changePendingRole = async ({ school, userId, role }) => {
   return { user: toUser(user) };
 };
 
+const NAME_MAX = 60;
+
+/** Correct the name on a pending signup (e.g. a parent who typed their child's name). */
+const renamePendingSignup = async ({ school, userId, firstName, lastName }) => {
+  const first = typeof firstName === "string" ? firstName.trim() : "";
+  const last = typeof lastName === "string" ? lastName.trim() : "";
+  if (!first) throw new ApprovalError(400, "First name is required");
+  if (first.length > NAME_MAX || last.length > NAME_MAX) {
+    throw new ApprovalError(400, `Names must be ${NAME_MAX} characters or fewer`);
+  }
+  const user = await withTransaction(async (client) => {
+    const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
+    expectState(rows[0], "pending", "rename");
+    const { rows: updated } = await client.query(queries.updatePendingName, [first, last, userId, school]);
+    return updated[0];
+  });
+  return { user: toUser(user) };
+};
+
 /** Decline a pending signup: archive it and, optionally, tell them. */
 const declineSignup = async ({ school, userId, adminId, sendEmail = true }) => {
   const user = await withTransaction(async (client) => {
@@ -259,6 +278,7 @@ module.exports = {
   SIGNUP_ROLES,
   approveSignup,
   changePendingRole,
+  renamePendingSignup,
   declineSignup,
   restoreSignup,
   childCandidates,
