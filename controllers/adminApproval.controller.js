@@ -42,12 +42,13 @@ const getChildCandidates = async (req, res) => {
 
 // POST /api/admin/approvals/:id/approve  { role?, children?: [{studentId, relation}], sendEmail? }
 const approve = async (req, res) => {
-  const { role, children, sendEmail } = req.body ?? {};
+  const { role, children, sendEmail, firstName, lastName } = req.body ?? {};
   try {
     const data = await actions.approveSignup({
       school: req.user.school,
       userId: req.params.id,
       role,
+      name: firstName !== undefined || lastName !== undefined ? { firstName, lastName } : undefined,
       children: children ?? [],
       sendEmail: sendEmail !== false,
     });

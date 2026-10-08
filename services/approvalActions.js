@@ -134,14 +134,34 @@ const linkChildren = async (client, user, children) => {
  * @param {Array}  [opts.children] [{studentId, relation}] for parents
  * @param {boolean} [opts.sendEmail=true]
  */
-const approveSignup = async ({ school, userId, role, children = [], sendEmail = true }) => {
+const NAME_MAX = 60;
+
+/** Trim and validate a corrected name. Last name may be empty (single-name users). */
+const cleanName = ({ firstName, lastName }) => {
+  const first = typeof firstName === "string" ? firstName.trim() : "";
+  const last = typeof lastName === "string" ? lastName.trim() : "";
+  if (!first) throw new ApprovalError(400, "First name is required");
+  if (first.length > NAME_MAX || last.length > NAME_MAX) {
+    throw new ApprovalError(400, `Names must be ${NAME_MAX} characters or fewer`);
+  }
+  return { first, last };
+};
+
+const approveSignup = async ({ school, userId, role, name, children = [], sendEmail = true }) => {
   if (role !== undefined && !SIGNUP_ROLES.includes(role)) {
     throw new ApprovalError(400, "Role must be Teacher or Parent");
   }
+  const fixedName = name ? cleanName(name) : null;
 
   const result = await withTransaction(async (client) => {
     const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
     expectState(rows[0], "pending", "approve");
+
+    // Fix the name first, while still pending, so the approval email and
+    // every later greeting use it.
+    if (fixedName) {
+      await client.query(queries.updatePendingName, [fixedName.first, fixedName.last, userId, school]);
+    }
 
     const finalRole = role ?? rows[0].role;
     const wanted = normaliseChildren(children);
@@ -186,16 +206,9 @@ const changePendingRole = async ({ school, userId, role }) => {
   return { user: toUser(user) };
 };
 
-const NAME_MAX = 60;
-
 /** Correct the name on a pending signup (e.g. a parent who typed their child's name). */
 const renamePendingSignup = async ({ school, userId, firstName, lastName }) => {
-  const first = typeof firstName === "string" ? firstName.trim() : "";
-  const last = typeof lastName === "string" ? lastName.trim() : "";
-  if (!first) throw new ApprovalError(400, "First name is required");
-  if (first.length > NAME_MAX || last.length > NAME_MAX) {
-    throw new ApprovalError(400, `Names must be ${NAME_MAX} characters or fewer`);
-  }
+  const { first, last } = cleanName({ firstName, lastName });
   const user = await withTransaction(async (client) => {
     const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
     expectState(rows[0], "pending", "rename");

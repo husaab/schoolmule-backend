@@ -166,6 +166,21 @@ describe('Integration: Admin Approvals Routes', () => {
       ]);
     });
 
+    it('can correct the name on the way in, and the email greets the new name', async () => {
+      const res = await authenticatedRequest('post', `/api/admin/approvals/${PENDING_PARENT_ID}/approve`)
+        .send({ firstName: 'Sonia', lastName: 'Example' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user).toMatchObject({ firstName: 'Sonia', lastName: 'Example', fullName: 'Sonia Example', isVerifiedSchool: true });
+      expect((await userRow(getTestPool(), PENDING_PARENT_ID)).username).toBe('Sonia Example');
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(mockSend.mock.calls[0][0].html).toContain('Sonia');
+
+      const blank = await authenticatedRequest('post', `/api/admin/approvals/${PENDING_TEACHER_ID}/approve`).send({ firstName: '  ' });
+      expect(blank.status).toBe(400);
+      expect((await userRow(getTestPool(), PENDING_TEACHER_ID)).is_verified_school).toBe(false);
+    });
+
     it('claims a hand-typed contact row for the same email instead of duplicating it', async () => {
       const kid = await insertStudent(pool, { name: 'Kid Claim', yearId });
       await pool.query(

@@ -27,10 +27,10 @@ CREATE TABLE schools (
 CREATE TABLE users (
   user_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email                  TEXT NOT NULL,
-  username               TEXT NOT NULL,
+  username               VARCHAR NOT NULL,
   password               TEXT NOT NULL,
-  first_name             TEXT NOT NULL,
-  last_name              TEXT NOT NULL,
+  first_name             VARCHAR NOT NULL,
+  last_name              VARCHAR NOT NULL,
   school                 school NOT NULL,
   role                   TEXT NOT NULL,
   email_token            TEXT,

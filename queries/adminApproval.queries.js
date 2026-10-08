@@ -81,9 +81,9 @@ const adminApprovalQueries = {
   //  $1 = first_name, $2 = last_name, $3 = user_id, $4 = school
   updatePendingName: `
     UPDATE users
-    SET first_name = $1,
-        last_name = $2,
-        username = trim($1 || ' ' || $2),
+    SET first_name = $1::text,
+        last_name = $2::text,
+        username = trim($1::text || ' ' || $2::text),
         last_modified_at = NOW()
     WHERE user_id = $3 AND school = $4
       AND is_verified = true AND is_verified_school = false AND is_archived = false

@@ -89,9 +89,9 @@ const adminUserQueries = {
   //  $5 = user_id, $6 = school, $7 = staff_title|null (admins only; shown to parents)
   updateUserInSchool: `
     UPDATE users
-    SET first_name = $1,
-        last_name = $2,
-        username = trim($1 || ' ' || $2),
+    SET first_name = $1::text,
+        last_name = $2::text,
+        username = trim($1::text || ' ' || $2::text),
         role = $3,
         is_verified_school = $4,
         staff_title = CASE WHEN $3 = 'ADMIN' THEN $7 ELSE NULL END,
