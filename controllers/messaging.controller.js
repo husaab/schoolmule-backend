@@ -10,9 +10,9 @@
 
 const path = require('path');
 const crypto = require('crypto');
-const multer = require('multer');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
+const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
@@ -23,52 +23,11 @@ const { getSchoolName } = require('../utils/schoolUtils');
 const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
 
-const BUCKET = 'message-attachments';
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const EMAIL_DELAY = '2 minutes';
-const SIGNED_URL_TTL = 3600;
 const MAX_TITLE = 120;
 const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
-
-// Declared MIME must match the extension; neither alone is trusted.
-const ALLOWED = {
-  '.jpg': ['image/jpeg'],
-  '.jpeg': ['image/jpeg'],
-  '.png': ['image/png'],
-  '.gif': ['image/gif'],
-  '.webp': ['image/webp'],
-  '.pdf': ['application/pdf'],
-  '.doc': ['application/msword'],
-  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-};
-
-const fileFilter = (req, file, cb) => {
-  const ext = path.extname(file.originalname || '').toLowerCase();
-  if (ALLOWED[ext] && ALLOWED[ext].includes(file.mimetype)) return cb(null, true);
-  const err = new Error('Only images (JPEG, PNG, GIF, WebP), PDF and Word documents are allowed');
-  err.code = 'UNSUPPORTED_FILE';
-  return cb(err);
-};
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES },
-  fileFilter,
-});
-
-// Multer errors become 400s in our envelope instead of reaching errorHandler.
-const uploadFiles = (req, res, next) =>
-  upload.array('files', MAX_FILES)(req, res, (err) => {
-    if (!err) return next();
-    const message =
-      err.code === 'LIMIT_FILE_SIZE' ? 'Each file must be 10 MB or smaller'
-        : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? `At most ${MAX_FILES} files per message`
-          : err.message;
-    return res.status(400).json({ status: 'failed', message });
-  });
 
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -113,13 +72,7 @@ function validateBody(body, fileCount) {
 // One storage call per thread fetch, not one per attachment.
 async function signAttachments(rows) {
   if (rows.length === 0) return [];
-  let byPath = new Map();
-  try {
-    const { data } = await supabase.storage.from(BUCKET).createSignedUrls(rows.map((a) => a.file_path), SIGNED_URL_TTL);
-    byPath = new Map((data || []).map((d) => [d.path, d.signedUrl || null]));
-  } catch (error) {
-    logger.warn('Signing attachments failed:', error);
-  }
+  const byPath = await signedUrlMap(rows.map((a) => a.file_path));
   return rows.map((a) => ({
     attachmentId: a.attachment_id,
     messageId: a.message_id,
