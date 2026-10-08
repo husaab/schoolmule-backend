@@ -307,7 +307,9 @@ const get = async (req, res) => {
 const update = async (req, res) => {
   const ann = req.announcement;
   if (!canMutate(ann, req.user)) return failed(res, 403, 'Only the author or an admin can edit this announcement');
-  const v = validateFields(req.body, { partial: true });
+  // An unchanged pin (even one that has expired) is not a new date in the past.
+  const pinUnchanged = req.body.pinnedUntil !== undefined && String(req.body.pinnedUntil) === String(ann.pinnedUntil ?? '');
+  const v = validateFields(pinUnchanged ? { ...req.body, pinnedUntil: undefined } : req.body, { partial: true });
   if (v.error) return failed(res, 400, v.error);
   const removeIds = [].concat(req.body.removeAttachmentIds ?? []).filter(Boolean);
   if (badId(...removeIds)) return failed(res, 400, 'Invalid id');

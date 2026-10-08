@@ -153,6 +153,15 @@ describe('announcement controller', () => {
       expect(res.status).toBe(403);
     });
 
+    it('PATCH keeps an unchanged (even expired) pin, but refuses a new date in the past', async () => {
+      const r = makeRouter({ 'AS is_class_teacher': [accessRow({ pinned_until: '2020-01-01' })], 'UPDATE announcements SET title': [{ edited_at: '2026-10-08T12:10:00Z' }] });
+      let res = await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser()).field('title', 'Typo fixed').field('pinnedUntil', '2020-01-01');
+      expect(res.status).toBe(200);
+      expect(r.ran('UPDATE announcements SET title')[0].params[3]).toBe('2020-01-01');
+      res = await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser()).field('title', 'Typo fixed').field('pinnedUntil', '2021-01-01');
+      expect(res.status).toBe(400);
+    });
+
     it('DELETE soft-deletes, cancels pending jobs, removes objects; admin may delete anyone’s', async () => {
       const r = makeRouter({
         'AS is_class_teacher': [accessRow({ is_author: false })],

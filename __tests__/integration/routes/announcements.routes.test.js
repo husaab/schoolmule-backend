@@ -88,6 +88,8 @@ describe('Integration: Announcements', () => {
     expect(mom.body.data).toHaveLength(1);
     expect(mom.body.data[0].children.map((c) => c.name).sort()).toEqual(['Amina Test', 'Bilal Test']);
     expect(mom.body.data[0].read).toBe(false);
+    // The author has not opened their own post, but it is theirs: never unread.
+    expect((await authenticatedRequest('get', '/api/announcements', asTeacher)).body.data[0].read).toBe(true);
     expect((await authenticatedRequest('get', '/api/announcements', asStranger)).body.data).toHaveLength(0);
     expect((await authenticatedRequest('get', `/api/announcements/${id}`, asStranger)).status).toBe(403);
     expect((await authenticatedRequest('get', '/api/announcements', asCo)).body.data).toHaveLength(1);
@@ -132,6 +134,8 @@ describe('Integration: Announcements', () => {
     const list = (await authenticatedRequest('get', '/api/announcements', asMom)).body.data;
     expect(list.map((x) => x.announcementId)).toEqual([c, b, a]);
     expect(list[2].isPinned).toBe(false);
+    expect(list[0].pinnedUntil).toBe('2099-01-01');
+    expect(list[2].pinnedUntil).toBe('2020-01-01');
   });
 
   it('edit does not re-email; delete cancels jobs, hides the row and answers 410 on GET', async () => {

@@ -42,7 +42,8 @@ const IS_PINNED = `(a.pinned_until IS NOT NULL AND a.pinned_until >= (NOW() AT T
 
 const BASE_COLUMNS = `
   a.announcement_id, a.school, a.school_year_id, a.scope, a.class_id, a.grade, a.title, a.body,
-  a.author_id, a.author_role, a.published_at, a.pinned_until, a.edited_at, a.deleted_at, a.created_at,
+  a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at,
+  TO_CHAR(a.pinned_until, 'YYYY-MM-DD') AS pinned_until,  -- DATE as the YYYY-MM-DD the API promises, not a JS Date
   cl.subject AS class_subject, cl.grade AS class_grade,
   TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
   ${IS_PINNED} AS is_pinned,
@@ -68,7 +69,7 @@ const announcementQueries = {
   // $7 grade|null, $8 author_id|null, $9 mine, $10 unread_only, $11 q|null, $12 student_id|null, $13 limit
   listAnnouncements: `
     SELECT ${BASE_COLUMNS},
-      (r.user_id IS NOT NULL) AS read,
+      (r.user_id IS NOT NULL OR a.author_id = $1) AS read,  -- your own post is never unread
       ${AUDIENCE_COUNT} AS audience_count,
       ${SEEN_COUNT} AS seen_count,
       (SELECT COALESCE(json_agg(json_build_object('studentId', s.student_id, 'name', s.name) ORDER BY s.name), '[]')
