@@ -51,17 +51,34 @@ function getConfirmedEmailHTML({ name }) {
   });
 }
 
-const getApprovalEmailHTML = ({ name }) =>
-  renderEmail({
+const ROLE_WORDS = { TEACHER: 'teacher', PARENT: 'parent', ADMIN: 'admin' };
+
+// `role` and `school` are optional so older callers keep working; when the
+// admin fixed the role at approval time, the email is where the person learns it.
+const getApprovalEmailHTML = ({ name, role, school, childCount }) => {
+  const roleWord = ROLE_WORDS[role];
+  const where = school ? ` at <strong>${escapeHtml(schoolDisplayName(school))}</strong>` : '';
+  const what = roleWord ? `your <strong>${roleWord}</strong> account` : 'your SchoolMule account';
+  const children =
+    role === 'PARENT' && Number(childCount) > 0
+      ? paragraph(
+          childCount === 1
+            ? 'Your child is already linked, so their grades and attendance will be waiting when you sign in.'
+            : `Your ${childCount} children are already linked, so their grades and attendance will be waiting when you sign in.`,
+        )
+      : '';
+  return renderEmail({
     brand: SCHOOLMULE_BRAND,
     heading: 'Your account is approved',
     preheader: 'You can sign in to SchoolMule now.',
     content: [
       paragraph(`Hi ${escapeHtml(name)},`),
-      paragraph('An administrator at your school approved your SchoolMule account. You can sign in now.'),
+      paragraph(`An administrator${where} approved ${what}. You can sign in now.`),
+      children,
       button('Sign in', appUrl('/login')),
     ].join(''),
   });
+};
 
 const getAdminNotifyEmailHTML = ({ new_user, school }) =>
   renderEmail({

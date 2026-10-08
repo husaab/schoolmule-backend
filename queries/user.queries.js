@@ -69,18 +69,10 @@ const userQueries = {
       RETURNING user_id, email, username, is_verified, school
     `,
 
-    approveUserSchool: `
-      UPDATE users 
-      SET is_verified_school = true,
-          last_modified_at = NOW()
-      WHERE user_id = $1 AND school = $2
-      RETURNING user_id, email, username, is_verified_school
-    `,
-
     getPendingSchoolApprovals: `
       SELECT user_id, email, username, first_name, last_name, role, school, created_at
       FROM users
-      WHERE is_verified = true AND is_verified_school = false AND school = $1
+      WHERE is_verified = true AND is_verified_school = false AND is_archived = false AND school = $1
     `,
 
     resendSchoolApprovalEmail: `
@@ -93,12 +85,6 @@ const userQueries = {
       SELECT email, first_name
       FROM users
       WHERE school = $1 AND role = 'ADMIN'
-    `,
-
-    declineUserFromSchool: `
-      UPDATE users
-      SET is_verified_school = false, last_modified_at = NOW()
-      WHERE user_id = $1
     `,
 
       selectUsersBySchool: `

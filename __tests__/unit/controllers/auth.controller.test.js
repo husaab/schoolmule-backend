@@ -13,6 +13,26 @@ jest.mock('uuid', () => ({
   v4: jest.fn(() => 'mock-uuid-1234'),
 }));
 
+// The legacy approve/decline routes delegate to the approvals service, which
+// runs real transactions. Unit-test the controller's adapter only.
+jest.mock('../../../services/approvalActions', () => {
+  const actual = jest.requireActual('../../../services/approvalActions');
+  const notFound = (userId) => {
+    if (userId === 'nonexistent-id') throw new actual.ApprovalError(404, 'User not found');
+  };
+  return {
+    ...actual,
+    approveSignup: jest.fn(async ({ userId }) => {
+      notFound(userId);
+      return { user: { userId }, linkedCount: 0, emailSent: true };
+    }),
+    declineSignup: jest.fn(async ({ userId }) => {
+      notFound(userId);
+      return { user: { userId }, emailSent: true };
+    }),
+  };
+});
+
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const {
@@ -292,7 +312,7 @@ describe('POST /api/auth/approve-school', () => {
 
   it('approves a user for school', async () => {
     const token = mockAdminUser();
-    const user = buildUserRow({ is_verified_school: true });
+    const user = buildUserRow({ user_id: '550e8400-e29b-41d4-a716-446655440123', is_verified_school: true });
     mockQueryResponse([user]);
 
     const res = await request(app)
@@ -367,7 +387,7 @@ describe('POST /api/auth/decline-school', () => {
 
   it('declines a user for school', async () => {
     const token = mockAdminUser();
-    const user = buildUserRow();
+    const user = buildUserRow({ user_id: '550e8400-e29b-41d4-a716-446655440124' });
     mockQueryResponse([user]);
 
     const res = await request(app)

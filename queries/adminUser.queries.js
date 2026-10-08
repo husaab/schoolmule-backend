@@ -142,6 +142,7 @@ const adminUserQueries = {
     SET is_archived = false,
         archived_at = NULL,
         archived_by = NULL,
+        declined_at = NULL,
         is_verified_school = true,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = true

@@ -13,6 +13,7 @@ const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getActiveTermForSchool, getSchoolYearContext } = require("../utils/sessionContext");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { Resend } = require("resend");
+const { toUser } = require("../utils/userMapper");
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
@@ -24,23 +25,6 @@ const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT"];
 const IMPERSONATION_TTL = "2h";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const toUser = (row) => ({
-  userId: row.user_id,
-  username: row.username,
-  fullName: `${row.first_name} ${row.last_name}`.trim(),
-  firstName: row.first_name,
-  lastName: row.last_name,
-  email: row.email,
-  school: row.school,
-  role: row.role,
-  isVerified: row.is_verified,
-  isVerifiedSchool: row.is_verified_school,
-  isArchived: row.is_archived,
-  archivedAt: row.archived_at,
-  invitePending: row.invite_pending,
-  createdAt: row.created_at,
-  lastModifiedAt: row.last_modified_at,
-});
 
 const toBlockers = (row) => ({
   classes: row?.classes ?? [],

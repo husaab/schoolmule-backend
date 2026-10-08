@@ -7,11 +7,12 @@ const passwordQueries = require('../queries/password.queries');
 const termQueries = require('../queries/term.queries');
 const schoolYearQueries = require('../queries/schoolYear.queries');
 const logger = require("../logger");
-const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML, getDeclineEmailHTML
-  , getResetEmailHTML
- } = require('../templates/emailTemplate');
+const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML,
+  getResetEmailHTML } = require('../templates/emailTemplate');
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
+const approvalActions = require('../services/approvalActions');
+const { SIGNUP_ROLES } = approvalActions;
 
 // Helper function to get active term for a school
 const getActiveTermForSchool = async (school) => {
@@ -59,6 +60,14 @@ const getSchoolYearContext = async (school) => {
 
       if (!username || !email || !password || !school || !role) {
         throw { status: 400, message: "Missing required fields" };
+      }
+
+      // Public signup can only ask for a teacher or parent account. Admins
+      // skip the approval queue at login, so letting a request pick ADMIN
+      // would hand out full access to anyone who finds this endpoint.
+      if (!SIGNUP_ROLES.includes(role)) {
+        await client.query('ROLLBACK');
+        return { status: 400, message: "Please sign up as a teacher or a parent." };
       }
 
       const hashedPassword = await bcrypt.hash(password, saltRounds);
@@ -133,7 +142,6 @@ const getSchoolYearContext = async (school) => {
           role: user.role,
           isVerified: user.is_verified,
           isVerifiedSchool: user.is_verified_school,
-          emailToken: user.email_token,
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
           activeTerm: activeTerm ? activeTerm.name : null,
@@ -342,38 +350,34 @@ const getSchoolYearContext = async (school) => {
     }
   };
 
-const approveUserForSchool = async (req, res) => {
-  const { userId } = req.body;
+// The old Approvals page called these two; they now run the same actions as
+// POST /api/admin/approvals/:id/approve|decline and keep the {success} shape.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const legacyApprovalRoute = (verb, run) => async (req, res) => {
+  const { userId } = req.body ?? {};
+  if (typeof userId !== 'string' || !UUID_RE.test(userId)) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
   try {
-    const result = await db.query(userQueries.approveUserSchool, [userId, req.user.school]);
-
-    if (result.rows.length === 0) {
-      throw { status: 404, message: "User not found or already approved" };
-    }
-
-    const user = result.rows[0];
-    const html = getApprovalEmailHTML({ name: user.username });
-
-    await resend.emails.send({
-      from: 'verify@schoolmule.ca',
-      to: user.email,
-      subject: 'Your School Mule Account Has Been Approved',
-      html,
-    });
-
+    const result = await run(req, userId);
     return res.status(200).json({
       success: true,
-      message: "User approved and email sent",
+      message: result.emailSent ? `User ${verb} and email sent` : `User ${verb}, but the email could not be sent`,
+      emailSent: result.emailSent,
     });
-
   } catch (error) {
-    logger.error({ err: error }, "Failed to approve user for school");
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || "Failed to approve user",
-    });
+    if (error instanceof approvalActions.ApprovalError) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+    logger.error({ err: error }, `Failed to run legacy ${verb} route`);
+    return res.status(500).json({ success: false, message: `Failed to ${verb === 'approved' ? 'approve' : 'decline'} user` });
   }
 };
+
+const approveUserForSchool = legacyApprovalRoute('approved', (req, userId) =>
+  approvalActions.approveSignup({ school: req.user.school, userId })
+);
 
 const getPendingApprovals = async (req, res) => {
   // Always the admin's own school; a ?school= param is ignored.
@@ -465,34 +469,9 @@ const deleteUserAccount = async (req, res) => {
   }
 };
 
-const declineUserForSchool = async (req, res) => {
-  const { userId } = req.body;
-
-  try {
-    const result = await db.query(userQueries.selectById, [userId]);
-    if (result.rows.length === 0 || result.rows[0].school !== req.user.school) {
-      throw { status: 404, message: "User not found" };
-    }
-
-    const user = result.rows[0];
-    const html = getDeclineEmailHTML({ name: user.first_name, school: user.school });
-
-    await resend.emails.send({
-      from: 'verify@schoolmule.ca',
-      to: user.email,
-      subject: 'Your School Mule Account Was Declined',
-      html,
-    });
-
-    return res.status(200).json({ success: true, message: 'User declined and email sent.' });
-  } catch (error) {
-    logger.error({ err: error }, "Failed to decline user for school");
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || "Failed to decline user",
-    });
-  }
-};
+const declineUserForSchool = legacyApprovalRoute('declined', (req, userId) =>
+  approvalActions.declineSignup({ school: req.user.school, userId, adminId: req.user.userId })
+);
 
 const logout = async (req, res) => {
   res.clearCookie('user_id');
