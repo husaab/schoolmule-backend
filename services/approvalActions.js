@@ -16,6 +16,7 @@ const queries = require("../queries/adminApproval.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getApprovalEmailHTML, getDeclineEmailHTML } = require("../templates/emailTemplate");
 const { toUser } = require("../utils/userMapper");
+const { sendSafely: sendSafelyWith } = require("../utils/emailUtils");
 const { Resend } = require("resend");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -33,15 +34,8 @@ class ApprovalError extends Error {
   }
 }
 
-const sendSafely = async (payload, context) => {
-  try {
-    await resend.emails.send(payload);
-    return true;
-  } catch (error) {
-    logger.error({ err: error, ...context }, "Approval email failed to send");
-    return false;
-  }
-};
+const sendSafely = (payload, context) =>
+  sendSafelyWith(resend, payload, "Approval email failed to send", context);
 
 const withTransaction = async (work) => {
   const client = await db.connect();

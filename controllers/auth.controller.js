@@ -13,6 +13,7 @@ const approvalActions = require('../services/approvalActions');
 const { SIGNUP_ROLES } = approvalActions;
 
 const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessionContext');
+const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -68,12 +69,15 @@ const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessi
         url: verificationUrl
       });
 
-      await resend.emails.send({
+      // The account is committed either way. A rejected email must not turn a
+      // successful signup into a 500 (the next attempt would hit "email already
+      // exists"); the verify-email page offers a resend.
+      const emailSent = await sendSafely(resend, {
         from: 'verify@schoolmule.ca',
         to: user.email,
         subject: 'Verify your email at School Mule',
         html
-      });
+      }, "Signup verification email failed to send", { userId: user.user_id });
 
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
@@ -97,8 +101,11 @@ const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessi
 
       return {
         status: 200,
-        message: "User registered successfully. A verification email has been sent.",
+        message: emailSent
+          ? "User registered successfully. A verification email has been sent."
+          : "User registered, but the verification email could not be sent. Use \"Resend verification email\" to try again.",
         data: {
+          emailSent,
           userId: user.user_id,
           username: user.username,
           fullName: `${user.first_name} ${user.last_name}`,
@@ -239,13 +246,13 @@ const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessi
         url: verificationUrl
       });
 
-      await resend.emails.send({
+      await sendOrThrow(resend, {
         from: 'verify@schoolmule.ca',
         to: email,
         subject: 'Verify your email at School Mule',
         html
       });
-  
+
       return res.status(200).json({
         success: true,
         message: "Verification email sent successfully"
@@ -272,14 +279,17 @@ const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessi
   
       const user = result.rows[0];
 
+      // The token was consumed above, so the verification itself succeeded.
+      // Neither courtesy email below may fail the request: a retry would only
+      // see "Invalid or expired token". Log and carry on.
       const html = getConfirmedEmailHTML({ name: user.username });
 
-      await resend.emails.send({
+      await sendSafely(resend, {
         from: 'verify@schoolmule.ca',
         to: user.email,
         subject: 'Your Email Has Been Verified at School Mule',
         html,
-      });
+      }, "Email-verified confirmation failed to send", { userId: user.user_id });
 
       const admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
 
@@ -292,12 +302,12 @@ const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessi
       });
 
       logger.info({ recipientCount: recipients.length }, "Notifying admins");
-      await resend.emails.send({
+      await sendSafely(resend, {
         from: 'notification@schoolmule.ca',
         to: recipients,
         subject: 'New User Awaiting School Approval',
         html: adminHtml,
-      });
+      }, "Admin approval notification failed to send", { school: user.school, userId: user.user_id });
 
       return res.status(200).json({
         success: true,
@@ -383,7 +393,7 @@ const resendSchoolApprovalEmail = async (req, res) => {
     const user = result.rows[0];
     const html = getApprovalEmailHTML({ name: user.username });
 
-    await resend.emails.send({
+    await sendOrThrow(resend, {
       from: 'verify@schoolmule.ca',
       to: user.email,
       subject: 'Reminder: Your School Mule Account Was Approved',
@@ -476,7 +486,7 @@ const requestPasswordReset = async (req, res) => {
 
 const sendResetEmail = async (to, url) => {
   const html = getResetEmailHTML({ name: 'there', url }); // you can customize name later
-  await resend.emails.send({
+  await sendOrThrow(resend, {
     from: 'reset@schoolmule.ca',
     to,
     subject: 'Reset your password',

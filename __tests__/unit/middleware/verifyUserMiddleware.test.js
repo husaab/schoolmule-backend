@@ -85,6 +85,7 @@ describe('verifyUserMiddleware', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
+      code: 'ACCOUNT_NOT_VERIFIED',
       message: 'Access denied: account not fully verified.',
     });
     expect(next).not.toHaveBeenCalled();
@@ -103,6 +104,7 @@ describe('verifyUserMiddleware', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
+      code: 'ACCOUNT_NOT_VERIFIED',
       message: 'Access denied: account not fully verified.',
     });
     expect(next).not.toHaveBeenCalled();

@@ -14,6 +14,7 @@ const { getActiveTermForSchool, getSchoolYearContext } = require("../utils/sessi
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { Resend } = require("resend");
 const { toUser } = require("../utils/userMapper");
+const { sendOrThrow } = require("../utils/emailUtils");
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
@@ -57,7 +58,8 @@ const sendInvite = async (user, invitedBy) => {
     url,
   });
 
-  await resend.emails.send({
+  // Throws when Resend rejects the email, so inviteUser/resendInvite report it.
+  await sendOrThrow(resend, {
     from: "verify@schoolmule.ca",
     to: user.email,
     subject: "You're invited to School Mule",

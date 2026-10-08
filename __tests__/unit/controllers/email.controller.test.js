@@ -1,7 +1,10 @@
+// Hoisted handle so tests can make one send fail; clearAllMocks keeps the
+// implementation, so the default success stays in place between tests.
+const mockSend = jest.fn().mockResolvedValue({ data: { id: 'email-123' }, error: null });
 jest.mock('resend', () => ({
   Resend: jest.fn(() => ({
     emails: {
-      send: jest.fn().mockResolvedValue({ data: { id: 'email-123' }, error: null }),
+      send: (...args) => mockSend(...args),
     },
   })),
 }));
@@ -128,6 +131,28 @@ describe('Email Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.message).toBe('Support ticket submitted');
+    });
+
+    // The contact route is rate-limited to 5 requests per test run, so the
+    // Resend-rejection path is exercised here; both handlers share it.
+    it('returns 500 when Resend rejects the email instead of throwing', async () => {
+      mockSend.mockResolvedValueOnce({ data: null, error: { message: 'from not verified', statusCode: 403 } });
+      const token = mockAdminUser();
+
+      const res = await request(app)
+        .post(url)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          username: 'Admin User',
+          school: 'ALHAADIACADEMY',
+          issueType: 'Bug Report',
+          description: 'Still broken.',
+          contactEmail: 'admin@test.com',
+        });
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.message).toMatch(/could not be sent/i);
     });
 
     it('should return 400 when username is missing', async () => {

@@ -26,10 +26,12 @@ const verifyUser = (req, res, next) => {
     // Add user info to request object for downstream use
     req.user = decoded;
 
-    // Check if user is fully verified (both email and school)
+    // Not fully verified (email and school). A token minted before approval
+    // keeps the old claims, so the client keys off `code` to sign out.
     if (!decoded.isVerified || !decoded.isVerifiedSchool) {
       return res.status(403).json({
         success: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
         message: 'Access denied: account not fully verified.',
       });
     }

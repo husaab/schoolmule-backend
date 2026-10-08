@@ -45,4 +45,13 @@ describe('alerts.notifySyncFailure', () => {
     Resend.mockImplementationOnce(() => ({ emails: { send: jest.fn().mockRejectedValue(new Error('resend down')) } }));
     await expect(notifySyncFailure(base)).resolves.toBe(false);
   });
+
+  it('treats a Resend { error } result as a failure and does not start the cooldown', async () => {
+    process.env.FINANCE_ALERT_EMAIL = 'ops@schoolmule.ca';
+    Resend.mockImplementationOnce(() => ({
+      emails: { send: jest.fn().mockResolvedValue({ data: null, error: { message: 'from not verified', statusCode: 403 } }) },
+    }));
+    await expect(notifySyncFailure(base)).resolves.toBe(false);
+    expect(db.query.mock.calls.some(([sql]) => /alerted_at = now\(\)/.test(sql))).toBe(false);
+  });
 });

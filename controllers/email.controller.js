@@ -1,7 +1,9 @@
 // src/controllers/email.controller.js
 const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
+const logger = require('../logger');
 const { getContactEmailHTML, getTicketEmailHTML } = require('../templates/emailTemplate');
+const { sendOrThrow } = require('../utils/emailUtils');
 
 async function sendContactEmail(req, res) {
   const { name, email, message } = req.body;
@@ -11,12 +13,18 @@ async function sendContactEmail(req, res) {
 
   const html = getContactEmailHTML({ name, email, message });
 
-  await resend.emails.send({
-    from: 'contact@schoolmule.ca',
-    to: process.env.SUPPORT_EMAIL,
-    subject: `School Mule Contact Form: ${name}`,
-    html
-  });
+  try {
+    await sendOrThrow(resend, {
+      from: 'contact@schoolmule.ca',
+      to: process.env.SUPPORT_EMAIL,
+      subject: `School Mule Contact Form: ${name}`,
+      html
+    });
+  } catch (error) {
+    // A visitor's message is lost if this fails, so make the failure visible.
+    logger.error({ err: error, email }, 'Contact form email failed to send');
+    return res.status(500).json({ success:false, message:'Your message could not be sent. Please try again in a moment.' });
+  }
 
   return res.status(200).json({ success:true, message:'Contact email sent' });
 }
@@ -40,12 +48,17 @@ async function sendTicketEmail(req, res) {
     contactEmail
   });
 
-  await resend.emails.send({
-    from: `support@${process.env.MAIL_DOMAIN}`,
-    to: process.env.SUPPORT_EMAIL,
-    subject: `Ticket: ${issueType} (from ${username} , school: ${school})`,
-    html
-  });
+  try {
+    await sendOrThrow(resend, {
+      from: `support@${process.env.MAIL_DOMAIN}`,
+      to: process.env.SUPPORT_EMAIL,
+      subject: `Ticket: ${issueType} (from ${username} , school: ${school})`,
+      html
+    });
+  } catch (error) {
+    logger.error({ err: error, school, username }, 'Support ticket email failed to send');
+    return res.status(500).json({ success:false, message:'Your ticket could not be sent. Please try again in a moment.' });
+  }
 
   return res.status(200).json({ success:true, message:'Support ticket submitted' });
 }

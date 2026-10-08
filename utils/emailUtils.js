@@ -1,9 +1,7 @@
 // utils/emailUtils.js
 //
-// Shared helpers for the parent-facing email flows (report cards,
-// progress reports, and Student View certificates). Extracted from
-// reportEmails.controller.js so the certificate flow can reuse the
-// exact same recipient-cleaning, API-key, and domain logic.
+// Shared helpers for every Resend send: recipient cleaning, per-school API
+// key and domain, and the send wrappers that make a rejected email visible.
 
 const logger = require('../logger');
 
@@ -53,8 +51,37 @@ const getSchoolDomain = (school) => {
   }
 };
 
+// Resend's SDK resolves with { error } on API failures (403/422/429) instead
+// of throwing. Throw so callers' existing catch blocks see a rejected email.
+// Resend's statusCode is deliberately not copied to err.status, or the error
+// handler would answer the client with Resend's HTTP status.
+const sendOrThrow = async (resend, payload) => {
+  const result = await resend.emails.send(payload);
+  if (result?.error) {
+    const err = new Error(result.error.message || 'Email sending failed');
+    err.name = 'ResendError';
+    err.resend = result.error;
+    throw err;
+  }
+  return result;
+};
+
+// Send, log any failure with `context`, and report success as a boolean. For
+// courtesy emails that must never fail the request they ride on.
+const sendSafely = async (resend, payload, message, context = {}) => {
+  try {
+    await sendOrThrow(resend, payload);
+    return true;
+  } catch (err) {
+    logger.error({ err, ...context }, message);
+    return false;
+  }
+};
+
 module.exports = {
   cleanEmailArray,
   getSchoolApiKey,
   getSchoolDomain,
+  sendOrThrow,
+  sendSafely,
 };
