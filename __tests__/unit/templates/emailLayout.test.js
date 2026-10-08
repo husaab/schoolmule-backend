@@ -70,7 +70,11 @@ describe('emailTemplate – every template uses the shared layout', () => {
     getInviteEmailHTML: { name: 'Test User', schoolName: 'Test School', invitedBy: 'Admin User', role: 'TEACHER', url: 'https://example.com/i' },
     getContactEmailHTML: { name: 'Test User', email: 'test@example.com', message: 'Line 1\nLine 2' },
     getTicketEmailHTML: { username: 'testuser', school: 'Test School', issueType: 'Bug', description: 'Broken', contactEmail: 'test@example.com' },
-    getNewMessageEmailHTML: { fromName: 'Test Teacher', subject: '', body: 'Hi', link: 'https://example.com/m' },
+    getConversationDigestEmailHTML: {
+      recipientFirstName: 'Test', studentName: 'Test Student', className: 'Math', title: 'Quiz 1', contextLine: null,
+      messages: [{ senderName: 'Test Teacher', body: 'Hi', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 0 }],
+      link: 'https://example.com/m', schoolName: 'Al Haadi Academy', schoolInfo: school,
+    },
     getFeedbackEmailHTML: { childName: 'Test Student', assessmentName: 'Quiz 1', courseName: 'Math', link: 'https://example.com/f' },
     getProgressReportEmailHTML: { studentName: 'Test Student', term: 'Term 1', schoolName: 'Al Haadi Academy', schoolInfo: school },
     getReportCardEmailHTML: { studentName: 'Test Student', term: 'Term 1', schoolName: 'Al Haadi Academy', schoolInfo: school },
