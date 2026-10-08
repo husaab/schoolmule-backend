@@ -1360,3 +1360,79 @@ CREATE TABLE IF NOT EXISTS finance_sync_runs (
 CREATE INDEX IF NOT EXISTS idx_finance_sync_runs_school ON finance_sync_runs (school, started_at DESC);
 
 
+
+-- messaging_migration.sql: parent–teacher conversations + email outbox
+--
+--
+
+
+CREATE TABLE IF NOT EXISTS conversations (
+  conversation_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school           school NOT NULL,
+  student_id       UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  class_id         UUID NOT NULL REFERENCES classes(class_id) ON DELETE CASCADE,
+  assessment_id    UUID REFERENCES assessments(assessment_id) ON DELETE SET NULL,
+  title            TEXT NOT NULL,                 -- snapshot of the assessment name
+  status           VARCHAR(10) NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+  created_by       UUID REFERENCES users(user_id),
+  resolved_by      UUID REFERENCES users(user_id),
+  resolved_at      TIMESTAMPTZ,
+  last_message_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversations_anchor
+  ON conversations(student_id, class_id, assessment_id) WHERE assessment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_class   ON conversations(class_id, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_student ON conversations(student_id, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_school  ON conversations(school, last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  message_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id  UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+  sender_id        UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  sender_role      VARCHAR(10) NOT NULL,          -- PARENT | TEACHER | ADMIN, snapshot
+  kind             VARCHAR(10) NOT NULL DEFAULT 'message' CHECK (kind IN ('message','system')),
+  body             TEXT NOT NULL,                 -- plain text; system lines are English text
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  edited_at        TIMESTAMPTZ,
+  deleted_at       TIMESTAMPTZ,
+  deleted_by       UUID REFERENCES users(user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS message_attachments (
+  attachment_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id       UUID NOT NULL REFERENCES messages(message_id) ON DELETE CASCADE,
+  file_path        TEXT NOT NULL,                 -- <SCHOOL>/<conversation_id>/<message_id>/<uuid>.<ext>
+  file_name        TEXT NOT NULL,                 -- original name, for display
+  mime_type        TEXT NOT NULL,
+  size_bytes       INTEGER NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_message ON message_attachments(message_id);
+
+CREATE TABLE IF NOT EXISTS conversation_participants (
+  conversation_id  UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+  user_id          UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  last_read_at     TIMESTAMPTZ,
+  last_emailed_at  TIMESTAMPTZ,
+  muted            BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_email_jobs (
+  job_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id  UUID NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+  recipient_id     UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  school           school NOT NULL,
+  send_after       TIMESTAMPTZ NOT NULL,
+  status           VARCHAR(10) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','skipped','failed')),
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  last_error       TEXT,
+  sent_at          TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_email_jobs_pending
+  ON message_email_jobs(conversation_id, recipient_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_message_email_jobs_due ON message_email_jobs(send_after) WHERE status = 'pending';
+
