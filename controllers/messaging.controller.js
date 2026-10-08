@@ -599,6 +599,9 @@ const createGeneralConversation = async (req, res) => {
   if (!title || title.length > MAX_TITLE) return failed(res, 400, `Subject must be 1–${MAX_TITLE} characters`);
   const v = validateBody(req.body.body, files.length);
   if (v.error) return failed(res, 400, v.error);
+  const announcementId = req.body.announcementId || null;
+  if (badId(announcementId)) return failed(res, 400, 'Invalid id');
+  if (announcementId && user.role !== 'PARENT') return failed(res, 400, 'announcementId is for parents asking about an announcement');
 
   try {
     const { rows } = await db.query(q.selectGeneralAnchorContext, [studentId, teacherId, user.userId, req.schoolYear?.schoolYearId ?? null]);
@@ -606,9 +609,20 @@ const createGeneralConversation = async (req, res) => {
     if (!a || a.student_school !== user.school || a.teacher_school !== user.school) return failed(res, 404, 'Student or teacher not found');
     if (!['TEACHER', 'ADMIN'].includes(a.teacher_role) || a.teacher_archived) return failed(res, 400, 'That person cannot receive messages');
     const teaches = Boolean(a.class_id) || a.is_homeroom;
+    let anchorClassId = a.class_id || null;
     if (user.role === 'PARENT') {
       if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
-      if (!teaches) return failed(res, 403, 'That teacher does not teach this student');
+      if (announcementId) {
+        // "Ask about this": the author of an announcement the family received
+        // may be written to even when they teach none of this parent's children.
+        const { rows: arows } = await db.query(announcementQueries.selectParentAnnouncementContext, [announcementId, user.userId, studentId]);
+        const an = arows[0];
+        if (!an || an.school !== user.school || an.deleted_at) return failed(res, 404, 'Announcement not found');
+        if (!an.is_guardian || !an.student_in_audience || an.author_id !== teacherId) return failed(res, 403, 'You can only ask the author about an announcement sent to your child');
+        anchorClassId = an.scope === 'class' ? an.class_id : null;
+      } else if (!teaches) {
+        return failed(res, 403, 'That teacher does not teach this student');
+      }
     } else if (user.role === 'TEACHER') {
       if (!a.caller_teaches && user.userId !== teacherId) return failed(res, 403, 'Not authorized for this student');
       if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');
@@ -616,7 +630,7 @@ const createGeneralConversation = async (req, res) => {
 
     // The author may name the class (subject) the thread is about; otherwise
     // the first class the teacher teaches the student in is used, or none (homeroom).
-    let classId = a.class_id || null;
+    let classId = anchorClassId;
     if (explicitClassId) {
       const { rows: crows } = await db.query(q.selectClassAnchorForGeneral, [explicitClassId, studentId, teacherId]);
       const cl = crows[0];

@@ -180,6 +180,54 @@ describe('messaging controller', () => {
       expect(bad.status).toBe(400);
     });
 
+    const ANN = '99999999-9999-4999-8999-999999999991';
+    const annCtx = (over = {}) => ({ announcement_id: ANN, author_id: HOMEROOM, scope: 'school', class_id: null, school: SCHOOL, deleted_at: null, student_in_audience: true, is_guardian: true, ...over });
+
+    it('a parent may ask the author of a school-wide announcement even though they teach none of their children', async () => {
+      const r = makeRouter({
+        'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null, teacher_role: 'ADMIN' })],
+        'AS student_in_audience': [annCtx()],
+        'AS admin_participant_ids': [generalAccess],
+        'kind, title, created_by)': [{ conversation_id: CONVO }],
+      });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'Re: PA Day').field('body', 'Is care open?').field('announcementId', ANN);
+      expect(res.status).toBe(201);
+      expect(r.ran('AS student_in_audience')[0].params).toEqual([ANN, PARENT, STUDENT]);
+      expect(r.ran('kind, title, created_by)')[0].params[2]).toBeNull();
+    });
+
+    it('refuses when the teacher is not the author, the child is outside the audience, or the announcement was removed', async () => {
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null })], 'AS student_in_audience': [annCtx({ author_id: TEACHER })] });
+      let res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x').field('body', 'x').field('announcementId', ANN);
+      expect(res.status).toBe(403);
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null })], 'AS student_in_audience': [annCtx({ student_in_audience: false })] });
+      res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x').field('body', 'x').field('announcementId', ANN);
+      expect(res.status).toBe(403);
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null })], 'AS student_in_audience': [annCtx({ deleted_at: '2026-10-08T00:00:00Z' })] });
+      res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x').field('body', 'x').field('announcementId', ANN);
+      expect(res.status).toBe(404);
+    });
+
+    it('a class announcement anchors the thread to that class; staff callers may not pass announcementId', async () => {
+      const r = makeRouter({
+        'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: null })],
+        'AS student_in_audience': [annCtx({ scope: 'class', class_id: CLASS })],
+        'AS admin_participant_ids': [generalAccess], 'kind, title, created_by)': [{ conversation_id: CONVO }],
+      });
+      let res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x').field('body', 'x').field('announcementId', ANN);
+      expect(res.status).toBe(201);
+      expect(r.ran('kind, title, created_by)')[0].params[2]).toBe(CLASS);
+      makeRouter({ 'CROSS JOIN users t': [generalCtx({ caller_teaches: true })] });
+      res = await authenticatedRequest('post', '/api/messaging/conversations', mockTeacherUser())
+        .field('studentId', STUDENT).field('teacherId', HOMEROOM).field('title', 'x').field('body', 'x').field('announcementId', ANN);
+      expect(res.status).toBe(400);
+    });
+
     it('parent targets list the teachers they may write to', async () => {
       makeRouter({
         'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }],
