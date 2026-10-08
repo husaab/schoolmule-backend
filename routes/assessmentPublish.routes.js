@@ -15,6 +15,7 @@ const requireClassOwnership = require('../middleware/requireClassOwnership');
 const {
   getPublicationState,
   previewPublish,
+  previewPublishEmail,
   publishAssessments,
   unpublishAssessments,
   updateAssessmentComment,
@@ -26,6 +27,7 @@ const router = express.Router();
 router.get('/classes/:classId', requireClassOwnership, getPublicationState);
 router.get('/classes/:classId/history', requireClassOwnership, getPublicationHistory);
 router.post('/classes/:classId/preview', requireClassOwnership, previewPublish);
+router.post('/classes/:classId/preview-email', requireClassOwnership, previewPublishEmail);
 router.post('/classes/:classId/publish', requireClassOwnership, publishAssessments);
 router.post('/classes/:classId/unpublish', requireClassOwnership, unpublishAssessments);
 router.patch(

@@ -1,3 +1,6 @@
+const mockSend = jest.fn().mockResolvedValue({ data: { id: 'email_1' } });
+jest.mock('resend', () => ({ Resend: jest.fn(() => ({ emails: { send: mockSend } })) }));
+
 const db = require('../../../config/database'); // mapped to the mock by jest.unit.config
 const supabase = require('../../../config/supabaseClient'); // mapped to the mock
 const { authenticatedRequest } = require('../../helpers/testApp');
@@ -116,6 +119,40 @@ describe('announcement controller', () => {
       res = await post(mockAdminUser()).field('scope', 'school').field('title', 't').field('body', 'b').attach('files', png, { filename: 'a.png', contentType: 'image/png' });
       expect(res.status).toBe(500);
       expect(db._mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+    });
+  });
+
+  describe('POST /preview-email', () => {
+    beforeEach(() => mockSend.mockClear());
+
+    it('emails the author one copy as a parent would get it; nothing is posted', async () => {
+      const r = makeRouter();
+      const res = await authenticatedRequest('post', '/api/announcements/preview-email', mockTeacherUser())
+        .send({ scope: 'class', classId: CLASS, title: 'Forms due Friday', body: 'Please return the form.', attachmentCount: 1 });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ sentTo: 'teacher@test.com' });
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const msg = mockSend.mock.calls[0][0];
+      expect(msg.to).toEqual(['teacher@test.com']);
+      expect(msg.subject).toBe('[Preview] Gr 6 Math: Forms due Friday');
+      expect(msg.html).toContain('Please return the form.');
+      expect(msg.html).toContain('1 attachment');
+      expect(msg.html).toContain('Gr 6 Math');
+
+      expect(r.ran('INSERT INTO announcements')).toHaveLength(0);
+      expect(r.ran('INSERT INTO announcement_email_jobs')).toHaveLength(0);
+    });
+
+    it('validates like a real post and keeps the scope rules', async () => {
+      makeRouter();
+      const t = mockTeacherUser();
+      expect((await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ scope: 'class', classId: CLASS, title: '', body: 'x' })).status).toBe(400);
+      expect((await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ scope: 'school', title: 'T', body: 'x' })).status).toBe(403);
+      expect((await authenticatedRequest('post', '/api/announcements/preview-email', mockParentUser()).send({ scope: 'class', classId: CLASS, title: 'T', body: 'x' })).status).toBe(403);
+      makeRouter({ 'FROM classes cl WHERE cl.class_id = $1': [{ school: SCHOOL, subject: 'Math', grade: '6', allowed: false }] });
+      expect((await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ scope: 'class', classId: CLASS, title: 'T', body: 'x' })).status).toBe(403);
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 

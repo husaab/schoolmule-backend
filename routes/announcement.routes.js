@@ -15,6 +15,7 @@ router.get('/', c.list);
 router.get('/unread-count', c.unreadCount);
 router.get('/targets', requireStaff, c.targets);
 router.get('/preview', requireStaff, c.preview);
+router.post('/preview-email', requireStaff, c.previewEmail);
 router.post('/', requireStaff, uploadFiles, c.create);
 
 router.get('/:id', requireAnnouncementAccess, c.get);

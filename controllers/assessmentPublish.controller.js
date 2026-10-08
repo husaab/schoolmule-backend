@@ -435,10 +435,8 @@ const publishAssessments = async (req, res) => {
  * A guardian with two children in this class receives two emails, one per
  * child — no cross-child data ever shares a template render.
  */
-async function sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment }) {
-  const summary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
-  if (!tasks || tasks.length === 0) return summary;
-
+/** Class subject and school letterhead for the email; soft-fails to generic copy. */
+async function loadEmailContext(classId, school) {
   let className = 'your child\'s class';
   let schoolInfo = null;
   try {
@@ -453,7 +451,90 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
   } catch (lookupError) {
     logger.warn('Could not resolve class/school info for publish email:', lookupError);
   }
+  return { className, schoolInfo };
+}
 
+// ────────────────────────────────────────────────────────────────────
+// POST /api/assessment-publications/classes/:classId/preview-email
+//
+// Emails the caller one digest exactly as a parent will receive it, for the
+// first graded student in the selection. Unsaved per-assessment notes from
+// the modal are overlaid so the preview matches what Publish will send.
+// Nothing is published, no audit row is written.
+// ────────────────────────────────────────────────────────────────────
+const previewPublishEmail = async (req, res) => {
+  const { classId, school } = req.class;
+  const { assessmentIds, batchComment, assessmentComments } = req.body;
+
+  if (!Array.isArray(assessmentIds) || assessmentIds.length === 0) {
+    return res.status(400).json({ status: 'failed', message: 'assessmentIds is required' });
+  }
+  if (!req.user.email) {
+    return res.status(400).json({ status: 'failed', message: 'Your account has no email address to send the preview to' });
+  }
+
+  try {
+    const resolved = await resolveSelection(classId, assessmentIds);
+    if (resolved.error) {
+      return res.status(400).json({ status: 'failed', message: resolved.error, data: resolved.data });
+    }
+
+    const comments = assessmentComments && typeof assessmentComments === 'object' ? assessmentComments : {};
+    const allAssessments = resolved.allAssessments.map((a) => {
+      const draft = comments[a.assessment_id];
+      return typeof draft === 'string' && draft.trim() ? { ...a, parent_comment: draft.trim() } : a;
+    });
+    const cascade = expandCascade(resolved.requested, allAssessments, resolved.scoreRowsByStudent);
+    const tasks = buildEmailTasks(cascade.finalIds, allAssessments, resolved.scoreRowsByStudent);
+    if (tasks.length === 0) {
+      return res.status(400).json({ status: 'failed', message: 'Nobody has a score for this selection yet, so there is no email to preview' });
+    }
+
+    const [recipients, { className, schoolInfo }] = await Promise.all([
+      resolveRecipients(tasks),
+      loadEmailContext(classId, school),
+    ]);
+    const sample = tasks[0];
+    const trimmedBatchComment = typeof batchComment === 'string' && batchComment.trim() ? batchComment.trim() : null;
+
+    const resend = new Resend(getSchoolApiKey(school));
+    const result = await resend.emails.send({
+      from: `reports@${getSchoolDomain(school)}`,
+      to: [req.user.email],
+      subject: `[Preview] ${sample.studentName} — New Grades Posted (${className})`,
+      html: getAssessmentPublishedEmailHTML({
+        studentName: sample.studentName,
+        className,
+        assessments: sample.lines,
+        batchComment: trimmedBatchComment,
+        schoolName: getSchoolName(school),
+        schoolInfo,
+        portalUrl: `${process.env.FRONTEND_URL}/parent/grades`,
+      }),
+    });
+    if (result?.error) {
+      throw new Error(result.error.message || 'Email sending failed');
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        sentTo: req.user.email,
+        sampleStudentName: sample.studentName,
+        recipientCount: new Set(recipients.flatMap((r) => r.emails)).size,
+      },
+    });
+  } catch (error) {
+    logger.error('Error sending publish preview email:', error);
+    return res.status(500).json({ status: 'failed', message: 'Could not send the preview email' });
+  }
+};
+
+async function sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment }) {
+  const summary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
+  if (!tasks || tasks.length === 0) return summary;
+
+  const { className, schoolInfo } = await loadEmailContext(classId, school);
   const schoolName = getSchoolName(school);
   const schoolDomain = getSchoolDomain(school);
   const resend = new Resend(getSchoolApiKey(school));
@@ -692,6 +773,7 @@ const getPublicationHistory = async (req, res) => {
 module.exports = {
   getPublicationState,
   previewPublish,
+  previewPublishEmail,
   publishAssessments,
   unpublishAssessments,
   updateAssessmentComment,

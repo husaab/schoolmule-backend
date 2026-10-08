@@ -8,10 +8,15 @@
 
 const path = require('path');
 const crypto = require('crypto');
+const { Resend } = require('resend');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/announcement.queries');
+const schoolQueries = require('../queries/school.queries');
+const { getAnnouncementEmailHTML } = require('../templates/emailTemplate');
+const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { getSchoolName } = require('../utils/schoolUtils');
 const { BUCKET, SIGNED_URL_TTL, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 const { scopeLabel } = require('../utils/announcementScope');
 const { canMutate } = require('../middleware/requireAnnouncementAccess');
@@ -210,6 +215,53 @@ const preview = async (req, res) => {
   }
 };
 
+// POST /api/announcements/preview-email  { scope, classId?, grade?, title, body, attachmentCount? }
+// Emails the author one copy exactly as a guardian with an account will get
+// it. Same validation and scope rules as posting; nothing is stored or queued.
+const previewEmail = async (req, res) => {
+  const { scope, classId, grade } = req.body;
+  if (!SCOPES.includes(scope)) return failed(res, 400, 'Invalid scope');
+  if (scope === 'class' && !isUuid(classId)) return failed(res, 400, 'classId is required');
+  if (scope === 'grade' && !grade) return failed(res, 400, 'grade is required');
+  const v = validateFields({ title: req.body.title, body: req.body.body });
+  if (v.error) return failed(res, 400, v.error);
+  if (!req.user.email) return failed(res, 400, 'Your account has no email address to send the preview to');
+  const attachmentCount = Math.max(0, Math.min(20, Number.parseInt(req.body.attachmentCount, 10) || 0));
+
+  try {
+    const check = await checkScope(req.user, scope, classId, grade, yearOf(req));
+    if (check.error) return failed(res, check.error[0], check.error[1]);
+    const label = scopeLabel({ scope, grade, class_subject: check.classSubject, class_grade: check.classGrade });
+    const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [req.user.school]);
+    const authorName = req.user.username || 'SchoolMule';
+    const html = getAnnouncementEmailHTML({
+      recipientFirstName: authorName.split(' ')[0],
+      authorName,
+      scopeLabel: label,
+      childNames: [],
+      title: v.title,
+      body: v.body,
+      attachmentCount,
+      link: `${process.env.FRONTEND_URL || ''}/messages?tab=announcements`,
+      kind: 'account',
+      schoolName: getSchoolName(req.user.school),
+      schoolInfo: schoolRows[0] || null,
+    });
+    const resend = new Resend(getSchoolApiKey(req.user.school));
+    const result = await resend.emails.send({
+      from: `messages@${getSchoolDomain(req.user.school)}`,
+      to: [req.user.email],
+      subject: `[Preview] ${label}: ${v.title}`,
+      html,
+    });
+    if (result?.error) throw new Error(result.error.message || 'Email sending failed');
+    return res.status(200).json({ status: 'success', data: { sentTo: req.user.email } });
+  } catch (error) {
+    logger.error('Error sending announcement preview email:', error);
+    return failed(res, 500, 'Could not send the preview email');
+  }
+};
+
 // POST /api/announcements  (multipart: scope, classId?, grade?, title, body, pinnedUntil?, files[])
 const create = async (req, res) => {
   const user = req.user;
@@ -399,4 +451,4 @@ const attachmentUrl = async (req, res) => {
   }
 };
 
-module.exports = { list, unreadCount, targets, preview, create, get, update, remove, markRead, retryEmails, attachmentUrl, validateFields, toItem };
+module.exports = { list, unreadCount, targets, preview, previewEmail, create, get, update, remove, markRead, retryEmails, attachmentUrl, validateFields, toItem };
