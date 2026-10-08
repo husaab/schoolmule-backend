@@ -11,6 +11,7 @@ const db = require('../../config/database');
 const logger = require('../../logger');
 const queries = require('../../queries/finance.queries');
 const { getSchoolApiKey, getSchoolDomain } = require('../../utils/emailUtils');
+const { SCHOOLMULE_BRAND, renderEmail, paragraph, note, button } = require('../../templates/emailLayout');
 
 const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
@@ -46,13 +47,21 @@ async function notifySyncFailure({ school, consecutiveFailures, needsReconnect, 
       ? `[SchoolMule] QuickBooks needs to be reconnected (${school})`
       : `[SchoolMule] QuickBooks sync failing for ${school}`;
     const appUrl = process.env.FRONTEND_URL || '';
-    const lines = [error, ...recentErrors].filter(Boolean).slice(0, 3).map((e) => `<li>${esc(e)}</li>`).join('');
-    const html = `
-      <p>${needsReconnect
-        ? 'QuickBooks rejected the stored authorization. An admin needs to open Finance → Tuition and click <b>Connect QuickBooks</b> again.'
-        : `The QuickBooks sync has failed ${consecutiveFailures} times in a row. The Tuition page is showing stale data until it recovers.`}</p>
-      ${lines ? `<p>Recent errors:</p><ul>${lines}</ul>` : ''}
-      <p><a href="${esc(appUrl)}/finance/tuition">Open Finance → Tuition</a></p>`;
+    const errors = [error, ...recentErrors].filter(Boolean).slice(0, 3);
+    const html = renderEmail({
+      brand: SCHOOLMULE_BRAND,
+      heading: needsReconnect ? 'Reconnect QuickBooks' : 'QuickBooks sync is failing',
+      preheader: needsReconnect
+        ? 'QuickBooks rejected the stored authorization.'
+        : `The sync has failed ${consecutiveFailures} times in a row.`,
+      content: [
+        paragraph(needsReconnect
+          ? 'QuickBooks rejected the stored authorization. An admin needs to open Finance → Tuition and click <b>Connect QuickBooks</b> again.'
+          : `The QuickBooks sync has failed ${consecutiveFailures} times in a row. The Tuition page is showing stale data until it recovers.`),
+        errors.length ? note('Recent errors', errors.map(esc).join('<br>')) : '',
+        button('Open Finance → Tuition', `${appUrl}/finance/tuition`),
+      ].join(''),
+    });
 
     const resend = new Resend(getSchoolApiKey(school));
     await resend.emails.send({ from: `finance@${getSchoolDomain(school)}`, to, subject, html });

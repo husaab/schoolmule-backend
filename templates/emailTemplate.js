@@ -1,125 +1,154 @@
-function getVerificationEmailHTML({ name, url }) {
-    return `
-      <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-        <h2 style="color: #00ACC1;">Welcome to School Mule 👋</h2>
-        <p>Hello <strong>${name}</strong>,</p>
-        <p>Thanks for signing up. Please confirm your email address to activate your account:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${url}" 
-            style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-            Verify Email
-          </a>
-        </div>
-        <p>If you didn't create this account, you can safely ignore this email.</p>
-        <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-      </div>
-    `;
-  }
+// templates/emailTemplate.js
+//
+// Every email body SchoolMule sends. Layout, colours and logos live in
+// emailLayout.js; this file only decides each email's words and blocks.
 
-  function getConfirmedEmailHTML({ name }) {
-    return `
-      <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-        <h2 style="color: #00ACC1;">Email Verified ✅</h2>
-        <p>Hello <strong>${name}</strong>,</p>
-        <p>We're excited to let you know that your email has been successfully verified at <strong>School Mule</strong>!</p>
-        <p>You are now awaiting approval from a school admin.</p>
-        <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-      </div>
-    `;
+const {
+  SCHOOLMULE_BRAND,
+  schoolBrand,
+  schoolDisplayName,
+  escapeHtml,
+  multiline,
+  paragraph,
+  finePrint,
+  button,
+  note,
+  facts,
+  signOff,
+  schoolContact,
+  renderEmail,
+  COLORS,
+  FONT_BODY,
+} = require('./emailLayout');
+
+const appUrl = (path) => `${process.env.FRONTEND_URL || ''}${path}`;
+
+// ─── Account & sign-in ─────────────────────────────────────────────────────
+
+function getVerificationEmailHTML({ name, url }) {
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'Confirm your email',
+    preheader: 'One step left to activate your SchoolMule account.',
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph('Thanks for signing up for SchoolMule. Confirm your email address so your school admin can approve your account.'),
+      button('Verify email', url),
+      finePrint("If you didn't create this account, you can ignore this email."),
+    ].join(''),
+  });
 }
 
-const getApprovalEmailHTML = ({ name }) => `
-  <div>
-    <p>Hi ${name},</p>
-    <p>Your account has been approved by the school administrator! You can now access School Mule.</p>
-    <p><a href="${process.env.FRONTEND_URL}/login">Login here</a></p>
-  </div>
-`;
+function getConfirmedEmailHTML({ name }) {
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'Your email is verified',
+    preheader: 'Your school admin will review your account next.',
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph("Thanks for confirming your email address. A school admin will review your account next, and we'll email you as soon as it's approved."),
+    ].join(''),
+  });
+}
 
-const getAdminNotifyEmailHTML = ({ new_user, school }) => `
-  <div>
-    <p>Hello ${school} Admins,</p>
-    <p>A new user by the name of ${new_user} has verified their email and is requesting access to School Mule for <strong>${school}</strong>.</p>
-    <p>Please log in and approve their account if appropriate.</p>
-    <p><a href="${process.env.FRONTEND_URL}/admin-panel/approvals">Review pending approvals</a></p>
-  </div>
-`;
+const getApprovalEmailHTML = ({ name }) =>
+  renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'Your account is approved',
+    preheader: 'You can sign in to SchoolMule now.',
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph('An administrator at your school approved your SchoolMule account. You can sign in now.'),
+      button('Sign in', appUrl('/login')),
+    ].join(''),
+  });
 
-const getDeclineEmailHTML = ({ name, school }) => `
-  <div>
-    <p>Hi ${name},</p>
-    <p>Your registration with <strong>${school}</strong> on School Mule was reviewed and unfortunately declined.</p>
-    <p>If you believe this was in error, please contact your school administrator directly.</p>
-    <p>— School Mule Team</p>
-  </div>
-`;
+const getAdminNotifyEmailHTML = ({ new_user, school }) =>
+  renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'New account to review',
+    preheader: `${new_user} is asking to join ${schoolDisplayName(school)}.`,
+    content: [
+      paragraph(`Hello ${escapeHtml(schoolDisplayName(school))} admins,`),
+      paragraph(`<strong>${escapeHtml(new_user)}</strong> verified their email and is asking to join SchoolMule at <strong>${escapeHtml(schoolDisplayName(school))}</strong>. Review the request to approve or decline it.`),
+      button('Review pending approvals', appUrl('/admin-panel/approvals')),
+    ].join(''),
+  });
 
-const getResetEmailHTML = ({ name, url }) => `
-  <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-    <h2 style="color: #00ACC1;">Reset Your Password 🔐</h2>
-    <p>Hello <strong>${name}</strong>,</p>
-    <p>We received a request to reset your password for your School Mule account. If you made this request, click the button below:</p>
-    <div style="text-align: center; margin: 30px 0;">
-      <a href="${url}" 
-        style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-        Reset Password
-      </a>
-    </div>
-    <p>This link will expire in 15 minutes. If you didn't request a password reset, please ignore this email.</p>
-    <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-  </div>
-`;
+const getDeclineEmailHTML = ({ name, school }) =>
+  renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: "Your registration wasn't approved",
+    preheader: `An administrator at ${schoolDisplayName(school)} reviewed your registration.`,
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph(`An administrator at <strong>${escapeHtml(schoolDisplayName(school))}</strong> reviewed your SchoolMule registration and declined it.`),
+      paragraph('If you think this is a mistake, contact your school administrator directly.'),
+    ].join(''),
+  });
 
-const escapeInviteText = (value) =>
-  String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const getResetEmailHTML = ({ name, url }) =>
+  renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'Reset your password',
+    preheader: 'Use this link within 15 minutes to choose a new password.',
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph('We received a request to reset your SchoolMule password. Use the button below to choose a new one.'),
+      button('Reset password', url),
+      finePrint("This link expires in 15 minutes. If you didn't ask to reset your password, you can ignore this email and your password won't change."),
+    ].join(''),
+  });
 
 // Sent when an admin creates an account from the Users page.
-const getInviteEmailHTML = ({ name, schoolName, invitedBy, role, url }) => `
-  <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto; background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-    <h2 style="color: #00ACC1;">You're invited to School Mule 👋</h2>
-    <p>Hello <strong>${escapeInviteText(name)}</strong>,</p>
-    <p>${escapeInviteText(invitedBy)} has created a <strong>${escapeInviteText(role.toLowerCase())}</strong> account for you at <strong>${escapeInviteText(schoolName)}</strong>. Set a password to get started:</p>
-    <div style="text-align: center; margin: 30px 0;">
-      <a href="${url}"
-        style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-        Set Your Password
-      </a>
-    </div>
-    <p>This link expires in 7 days. If it has expired, ask your school administrator to resend the invite, or use "Forgot password" on the login page.</p>
-    <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-  </div>
-`;
+const getInviteEmailHTML = ({ name, schoolName, invitedBy, role, url }) =>
+  renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: "You're invited to SchoolMule",
+    preheader: `${invitedBy} created an account for you at ${schoolName}.`,
+    content: [
+      paragraph(`Hi ${escapeHtml(name)},`),
+      paragraph(`${escapeHtml(invitedBy)} created a <strong>${escapeHtml(String(role ?? '').toLowerCase())}</strong> account for you at <strong>${escapeHtml(schoolName)}</strong>. Set a password to get started.`),
+      button('Set your password', url),
+      finePrint('This link expires in 7 days. If it has expired, ask your school administrator to resend the invite, or use "Forgot password" on the sign-in page.'),
+    ].join(''),
+  });
 
-// src/controllers/emailTemplates.js
+// ─── To the SchoolMule team ────────────────────────────────────────────────
+
 function getContactEmailHTML({ name, email, message }) {
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">New Contact Form Submission</h2>
-      <p><strong>Name:</strong> ${name}</p>
-      <p><strong>Email:</strong> ${email}</p>
-      <p><strong>Message:</strong></p>
-      <p>${message.replace(/\n/g, '<br>')}</p>
-      <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-    </div>
-  `;
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'New contact form message',
+    preheader: `From ${name} (${email})`,
+    content: [
+      facts([
+        ['Name', escapeHtml(name)],
+        ['Email', escapeHtml(email)],
+      ]),
+      note('Message', multiline(message)),
+    ].join(''),
+  });
 }
 
 function getTicketEmailHTML({ username, school, issueType, description, contactEmail }) {
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">New Support Ticket</h2>
-      <p><strong>Username:</strong> ${username}</p>
-      <p><strong>School:</strong> ${school}</p>
-      <p><strong>Contact Email:</strong> ${contactEmail}</p>
-      <p><strong>Issue Type:</strong> ${issueType}</p>
-      <p><strong>Description:</strong></p>
-      <p>${description.replace(/\n/g, '<br>')}</p>
-      <p style="color: #888; font-size: 12px;">— School Mule Team</p>
-    </div>
-  `;
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'New support ticket',
+    preheader: `${issueType} from ${username} (${school})`,
+    content: [
+      facts([
+        ['From', escapeHtml(username)],
+        ['School', escapeHtml(school)],
+        ['Contact email', escapeHtml(contactEmail)],
+        ['Issue type', escapeHtml(issueType)],
+      ]),
+      note('Description', multiline(description)),
+    ].join(''),
+  });
 }
+
+// ─── Messages & feedback ───────────────────────────────────────────────────
 
 /**
  * New message notification template
@@ -128,64 +157,31 @@ function getTicketEmailHTML({ username, school, issueType, description, contactE
  * @param {string} link – URL users click to read the full message
  */
 function getNewMessageEmailHTML({ fromName, subject, body, link }) {
-  // preserve line breaks by converting \n to <br>
-  const formattedBody = body
-    .split('\n')
-    .map(line => `<p style="margin:0 0 8px;">${line}</p>`)
-    .join('');
-
-  return `
-    <div style="font-family:Arial,sans-serif;padding:20px;max-width:600px;margin:auto;
-                background:#f9f9f9;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-      <h2 style="color:#00ACC1;margin-bottom:16px;">You’ve Got a New Message 📬</h2>
-      <p style="margin-bottom:8px;"><strong>From:</strong> ${fromName}</p>
-      <p style="margin-bottom:8px;"><strong>Subject:</strong> ${subject || '<em>(No subject)</em>'}</p>
-      <div style="margin:16px 0;padding:12px;background:#fff;border-radius:4px;border:1px solid #e0e0e0;">
-        <h3 style="margin-top:0;margin-bottom:8px;font-weight:600;">Message:</h3>
-        ${formattedBody}
-      </div>
-      <div style="text-align:center;margin:30px 0;">
-        <a href="${link}"
-           style="background-color:#00ACC1;color:white;padding:12px 24px;
-                  text-decoration:none;border-radius:5px;font-weight:bold;display:inline-block;">
-          Read Message in Communication Inbox
-        </a>
-      </div>
-      <p style="color:#888;font-size:12px;margin-top:16px;">— School Mule Team</p>
-    </div>
-  `;
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: `New message from ${fromName}`,
+    preheader: subject || 'You have a new message in SchoolMule.',
+    content: [
+      facts([['Subject', subject ? escapeHtml(subject) : '<em>(No subject)</em>']]),
+      note('Message', multiline(body)),
+      button('Read message', link),
+    ].join(''),
+  });
 }
 
-// at the bottom of src/utils/emailTemplate.js
 function getFeedbackEmailHTML({ childName, assessmentName, courseName, link }) {
-  return `
-    <div style="font-family: Arial, sans-serif; padding:20px; max-width:600px; margin:auto;
-                background-color:#f9f9f9; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-      <h2 style="color:#00ACC1;">New Feedback for ${childName} 📝</h2>
-      <p>Your child, <strong>${childName}</strong>, has received feedback for <strong>${assessmentName}</strong> in ${courseName}.</p>
-      <p>Log in to view the full comments and details:</p>
-      <div style="text-align:center; margin: 30px 0;">
-        <a href="${link}"
-           style="background-color:#00ACC1; color:white; padding:12px 24px; text-decoration:none;
-                  border-radius:5px; font-weight:bold; display:inline-block;">
-          View Feedback
-        </a>
-      </div>
-      <p style="color:#888; font-size:12px;">— School Mule Team</p>
-    </div>
-  `;
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: `New feedback for ${childName}`,
+    preheader: `${assessmentName} in ${courseName}`,
+    content: [
+      paragraph(`<strong>${escapeHtml(childName)}</strong> received feedback on <strong>${escapeHtml(assessmentName)}</strong> in ${escapeHtml(courseName)}. Sign in to read the full comments.`),
+      button('View feedback', link),
+    ].join(''),
+  });
 }
 
-// Escape user-authored text before it is interpolated into report-email HTML.
-// Kept local to this template module (same shape as certificateTemplate.js).
-function escapeHtml(s) {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+// ─── Report cards, progress reports, certificates ──────────────────────────
 
 // Canonical default body for each report type. Used when the teacher leaves the
 // message empty, so an empty message reproduces the previous email wording.
@@ -213,156 +209,48 @@ function resolveEmailBody({ customMessage, reportType, studentName, term }) {
     .replace(/\n/g, '<br>');
 }
 
-function getProgressReportEmailHTML({ studentName, term, customMessage, schoolName, customHeader, schoolInfo }) {
-  const subject = customHeader || `${studentName} - Progress Report (Term ${term})`;
-  
-  // Create dynamic footer based on available school information
-  const createSchoolFooter = (school) => {
-    if (!school) {
-      return `
-        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">
-        <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
-          Powered by School Mule
-        </p>
-      `;
-    }
-
-    let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">`;
-    footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
-    footer += `<p style="margin: 0 0 4px 0;"><strong>${school.name || schoolName}</strong></p>`;
-    
-    // Address on its own line if available
-    if (school.address) {
-      footer += `<p style="margin: 0 0 2px 0;">${school.address}</p>`;
-    }
-    
-    // Phone and email on same line if both available
-    if (school.phone && school.email) {
-      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}  |  📧 ${school.email}</p>`;
-    } else if (school.phone) {
-      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}</p>`;
-    } else if (school.email) {
-      footer += `<p style="margin: 0 0 2px 0;">📧 ${school.email}</p>`;
-    }
-    
-    footer += `</div>`;
-    
-    return footer;
-  };
-  
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">${subject}</h2>
-      <div style="line-height: 1.5;">${resolveEmailBody({ customMessage, reportType: 'progress_report', studentName, term })}</div>
-      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
-      ${createSchoolFooter(schoolInfo)}
-    </div>
-  `;
+function reportEmailHTML({ reportType, label, studentName, term, customMessage, schoolName, customHeader, schoolInfo }) {
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: customHeader || `${studentName} - ${label} (${term})`,
+    preheader: `${label} for ${studentName} is attached.`,
+    content: [
+      facts([
+        ['Student', `<strong>${escapeHtml(studentName)}</strong>`],
+        ['Term', escapeHtml(term)],
+      ]),
+      paragraph(resolveEmailBody({ customMessage, reportType, studentName, term })),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
 }
 
-function getReportCardEmailHTML({ studentName, term, customMessage, schoolName, customHeader }) {
-  const subject = customHeader || `${studentName} - Report Card (Term ${term})`;
-  
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">${subject} 🎓</h2>
-      <div style="line-height: 1.5;">${resolveEmailBody({ customMessage, reportType: 'report_card', studentName, term })}</div>
-      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
-    </div>
-  `;
+function getProgressReportEmailHTML(data) {
+  return reportEmailHTML({ ...data, reportType: 'progress_report', label: 'Progress Report' });
+}
+
+function getReportCardEmailHTML(data) {
+  return reportEmailHTML({ ...data, reportType: 'report_card', label: 'Report Card' });
 }
 
 // Certificate award email — sent from a Student View with the child's
-// certificate PDF attached. Mirrors the report-card/progress-report
-// templates: customHeader is the whole subject, customMessage is an
-// optional shared "Message" block. No per-student merge tags.
+// certificate PDF attached. customHeader is the whole subject, customMessage
+// is an optional shared "Message" block. No per-student merge tags.
 function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolName, customHeader, schoolInfo }) {
-  const subject = customHeader || `${studentName} — ${viewName}`;
-
-  // Same dynamic footer the progress-report template uses.
-  const createSchoolFooter = (school) => {
-    if (!school) {
-      return `
-        <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">
-        <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
-          Powered by School Mule
-        </p>
-      `;
-    }
-
-    let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0 20px 0;">`;
-    footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
-    footer += `<p style="margin: 0 0 4px 0;"><strong>${school.name || schoolName}</strong></p>`;
-
-    if (school.address) {
-      footer += `<p style="margin: 0 0 2px 0;">${school.address}</p>`;
-    }
-
-    if (school.phone && school.email) {
-      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}  |  📧 ${school.email}</p>`;
-    } else if (school.phone) {
-      footer += `<p style="margin: 0 0 2px 0;">📞 ${school.phone}</p>`;
-    } else if (school.email) {
-      footer += `<p style="margin: 0 0 2px 0;">📧 ${school.email}</p>`;
-    }
-
-    footer += `</div>`;
-
-    return footer;
-  };
-
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">${subject} 🏆</h2>
-      <p>Dear Parent/Guardian,</p>
-      <p>Congratulations! <strong>${studentName}</strong> has been recognized for
-         <strong>${viewName}</strong>. Please find the attached certificate celebrating this achievement.</p>
-      ${customMessage ? `
-        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
-          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Message:</h3>
-          <p style="margin-bottom: 0; line-height: 1.5;">${customMessage.replace(/\n/g, '<br>')}</p>
-        </div>
-      ` : ''}
-      <p>We're proud of your child's hard work and accomplishment.</p>
-      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
-      ${createSchoolFooter(schoolInfo)}
-    </div>
-  `;
-}
-
-// Shared school footer. The progress-report and certificate templates each
-// carry their own inline copy of this; new templates use this one rather
-// than adding a third.
-function schoolFooterHTML(schoolInfo, schoolName) {
-  if (!schoolInfo) {
-    return `
-      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-      <p style="font-style: italic; color: #999; font-size: 11px; text-align: center; margin: 0;">
-        Powered by School Mule
-      </p>
-    `;
-  }
-
-  let footer = `<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">`;
-  footer += `<div style="font-style: italic; color: #666; font-size: 12px; line-height: 1.4;">`;
-  footer += `<p style="margin: 0 0 4px 0;"><strong>${schoolInfo.name || schoolName}</strong></p>`;
-
-  if (schoolInfo.address) {
-    footer += `<p style="margin: 0 0 2px 0;">${schoolInfo.address}</p>`;
-  }
-  if (schoolInfo.phone && schoolInfo.email) {
-    footer += `<p style="margin: 0 0 2px 0;">📞 ${schoolInfo.phone}  |  📧 ${schoolInfo.email}</p>`;
-  } else if (schoolInfo.phone) {
-    footer += `<p style="margin: 0 0 2px 0;">📞 ${schoolInfo.phone}</p>`;
-  } else if (schoolInfo.email) {
-    footer += `<p style="margin: 0 0 2px 0;">📧 ${schoolInfo.email}</p>`;
-  }
-
-  footer += `</div>`;
-  return footer;
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: customHeader || `${studentName} — ${viewName}`,
+    preheader: `${studentName} has been recognized for ${viewName}.`,
+    content: [
+      paragraph('Dear Parent/Guardian,'),
+      paragraph(`Congratulations! <strong>${escapeHtml(studentName)}</strong> has been recognized for <strong>${escapeHtml(viewName)}</strong>. Their certificate is attached.`),
+      customMessage ? note('Message', multiline(customMessage)) : '',
+      paragraph("We're proud of your child's hard work and accomplishment."),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
 }
 
 /**
@@ -381,54 +269,39 @@ function getAssessmentPublishedEmailHTML({
   schoolInfo,
   portalUrl,
 }) {
+  const cell = `font-family:${FONT_BODY};padding:12px 0;border-top:1px solid ${COLORS.divider};vertical-align:top;`;
   const rows = assessments
     .map(
-      (a) => `
+      (a, i) => `
     <tr>
-      <td style="padding: 10px 8px; border-bottom: 1px solid #eee;">
-        <strong>${escapeHtml(a.name)}</strong>
-        ${a.comment
-          ? `<div style="color: #666; font-size: 13px; margin-top: 4px;">${escapeHtml(a.comment).replace(/\n/g, '<br>')}</div>`
-          : ''}
+      <td style="${cell}${i === assessments.length - 1 ? `border-bottom:1px solid ${COLORS.divider};` : ''}">
+        <div style="font-size:15px;font-weight:500;line-height:1.4;color:${COLORS.heading};">${escapeHtml(a.name)}</div>
+        ${a.comment ? `<div style="font-size:13px;line-height:1.5;color:${COLORS.muted};margin-top:2px;">${multiline(a.comment)}</div>` : ''}
       </td>
-      <td style="padding: 10px 8px; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap;">
-        ${a.scoreLabel ? `${escapeHtml(a.scoreLabel)} ` : ''}<span style="color: #888;">${escapeHtml(a.pctLabel)}</span>
+      <td align="right" style="${cell}${i === assessments.length - 1 ? `border-bottom:1px solid ${COLORS.divider};` : ''}padding-left:16px;text-align:right;white-space:nowrap;">
+        ${a.scoreLabel ? `<div style="font-size:15px;font-weight:500;color:${COLORS.heading};">${escapeHtml(a.scoreLabel)}</div>` : ''}
+        <div style="font-size:13px;font-weight:700;color:${COLORS.button};">${escapeHtml(a.pctLabel)}</div>
       </td>
     </tr>`,
     )
     .join('');
 
-  const plural = assessments.length > 1 ? 'assessments have' : 'assessment has';
+  const count = assessments.length === 1 ? 'One assessment' : `${assessments.length} assessments`;
 
-  return `
-    <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: auto;
-                background-color: #f9f9f9; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-      <h2 style="color: #00ACC1;">New Grades for ${escapeHtml(studentName)} 📊</h2>
-      <p>Dear Parent/Guardian,</p>
-      <p>The following ${plural} been graded and shared with you in
-         <strong>${escapeHtml(className)}</strong>:</p>
-      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-        ${rows}
-      </table>
-      ${batchComment
-        ? `
-        <div style="padding: 15px; background: #fff; border-radius: 5px; margin: 20px 0; border-left: 4px solid #00ACC1;">
-          <h3 style="margin-top: 0; color: #333; font-size: 16px;">Message from the teacher:</h3>
-          <p style="margin-bottom: 0; line-height: 1.5;">${escapeHtml(batchComment).replace(/\n/g, '<br>')}</p>
-        </div>
-      `
-        : ''}
-      <div style="text-align: center; margin: 30px 0;">
-        <a href="${portalUrl}"
-           style="background-color: #00ACC1; color: white; padding: 14px 28px; text-decoration: none;
-                  border-radius: 5px; font-weight: bold; display: inline-block;">
-          View in Parent Portal
-        </a>
-      </div>
-      <p style="margin-top: 20px;">Best regards,<br><strong>${schoolName}</strong></p>
-      ${schoolFooterHTML(schoolInfo, schoolName)}
-    </div>
-  `;
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: `New grades for ${studentName}`,
+    preheader: `${count} in ${className} graded and shared with you.`,
+    content: [
+      paragraph('Dear Parent/Guardian,'),
+      paragraph(`${count} in <strong>${escapeHtml(className)}</strong> ${assessments.length === 1 ? 'was' : 'were'} graded and shared with you.`),
+      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`,
+      batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
+      button('View in Parent Portal', portalUrl),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
 }
 
 module.exports = {
