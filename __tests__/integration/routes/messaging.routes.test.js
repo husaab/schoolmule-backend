@@ -237,6 +237,24 @@ describe('Integration: Messaging routes', () => {
       expect(view.body.data.student).toMatchObject({ studentId, name: 'Amina Test', homeroomTeacherName: 'Sana Rahman' });
     });
 
+    it('staff targets for one student list classes with assessments; a General thread can name its class', async () => {
+      const targets = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asTeacher);
+      expect(targets.status).toBe(200);
+      expect(targets.body.data.classes).toEqual([
+        { classId, subject: 'Math', assessments: expect.arrayContaining([expect.objectContaining({ assessmentId: publishedId, isPublished: true }), expect.objectContaining({ assessmentId: draftId, isPublished: false })]) },
+      ]);
+      // The homeroom teacher teaches no class of Amina's: no classes, still her guardians.
+      const hr = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asHomeroom);
+      expect(hr.body.data.classes).toEqual([]);
+
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+        .field('studentId', studentId).field('teacherId', TEACHER_ID).field('classId', classId).field('title', 'Planner').field('body', 'Please check the planner.');
+      expect(res.status).toBe(201);
+      expect(res.body.data.conversation).toMatchObject({ kind: 'general', classId, classSubject: 'Math' });
+      // The co-teacher of that class is in, because the thread is anchored to it.
+      expect(res.body.data.participants.map((p) => p.userId)).toEqual(expect.arrayContaining([CO_TEACHER_ID]));
+    });
+
     it('a parent may only write to teachers of the child', async () => {
       expect((await startGeneral(asMom, STRANGER_ID)).status).toBe(400); // a parent account cannot receive messages
       const { rows } = await pool.query(`INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)

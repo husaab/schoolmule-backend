@@ -503,12 +503,27 @@ const getTargets = async (req, res) => {
         const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null]);
         if (!ctxRows.length || !ctxRows[0].caller_teaches) return failed(res, 403, 'Not authorized for this student');
       }
-      const { rows: guardians } = await db.query(q.selectTeacherTargetStudentsOne, [studentId]);
+      const [{ rows: guardians }, { rows: classRows }] = await Promise.all([
+        db.query(q.selectTeacherTargetStudentsOne, [studentId]),
+        db.query(q.selectStudentClassesForStaff, [studentId, user.userId, req.schoolYear?.schoolYearId ?? null]),
+      ]);
+      // A teacher only sees the classes they teach the student in; an admin sees them all.
+      const classes = classRows.filter((c) => user.role === 'ADMIN' || c.caller_teaches);
+      const { rows: assessmentRows } = classes.length
+        ? await db.query(q.selectAssessmentsForClasses, [classes.map((c) => c.class_id)])
+        : { rows: [] };
       return res.status(200).json({
         status: 'success',
         data: {
           students: guardians.map((s) => ({ studentId: s.student_id, name: s.name, guardians: s.guardians })),
           assessments: [],
+          classes: classes.map((c) => ({
+            classId: c.class_id,
+            subject: c.subject,
+            assessments: assessmentRows
+              .filter((a) => a.class_id === c.class_id)
+              .map((a) => ({ assessmentId: a.assessment_id, name: a.name, date: a.date, isPublished: a.is_published })),
+          })),
         },
       });
     }
@@ -616,10 +631,11 @@ const createConversation = async (req, res) => {
 const createGeneralConversation = async (req, res) => {
   const user = req.user;
   const { studentId, teacherId } = req.body;
+  const explicitClassId = req.body.classId || null;
   const files = req.files || [];
   const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
   if (!studentId || !teacherId) return failed(res, 400, 'studentId and teacherId are required');
-  if (badId(studentId, teacherId)) return failed(res, 400, 'Invalid id');
+  if (badId(studentId, teacherId, explicitClassId)) return failed(res, 400, 'Invalid id');
   if (!title || title.length > MAX_TITLE) return failed(res, 400, `Subject must be 1–${MAX_TITLE} characters`);
   const v = validateBody(req.body.body, files.length);
   if (v.error) return failed(res, 400, v.error);
@@ -638,7 +654,18 @@ const createGeneralConversation = async (req, res) => {
       if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');
     }
 
-    const { rows: [c] } = await db.query(q.insertGeneralConversation, [user.school, studentId, a.class_id || null, teacherId, title, user.userId]);
+    // The author may name the class (subject) the thread is about; otherwise
+    // the first class the teacher teaches the student in is used, or none (homeroom).
+    let classId = a.class_id || null;
+    if (explicitClassId) {
+      const { rows: crows } = await db.query(q.selectClassAnchorForGeneral, [explicitClassId, studentId, teacherId]);
+      const cl = crows[0];
+      if (!cl || cl.school !== user.school) return failed(res, 404, 'Class not found');
+      if (!cl.has_student) return failed(res, 400, 'Student is not in this class');
+      if (!cl.teacher_teaches) return failed(res, 400, 'That teacher does not teach this class');
+      classId = cl.class_id;
+    }
+    const { rows: [c] } = await db.query(q.insertGeneralConversation, [user.school, studentId, classId, teacherId, title, user.userId]);
     const conv = await loadConversation(c.conversation_id);
     await noteAdminJoin(conv, user);
     await persistMessage({ conversationId: conv.conversationId, school: user.school, sender: user, body: v.text, files });

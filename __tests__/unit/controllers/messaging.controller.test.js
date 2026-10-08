@@ -133,6 +133,44 @@ describe('messaging controller', () => {
       expect(res.status).toBe(403);
     });
 
+    it('staff targets for one student list the classes the caller teaches, each with its assessments', async () => {
+      const r = makeRouter({
+        'FROM students s WHERE s.student_id = $1': [{ student_id: STUDENT, name: 'Amina Test', school: SCHOOL, homeroom_teacher_id: HOMEROOM }],
+        'CROSS JOIN users t': [generalCtx({ caller_teaches: true })],
+        'GROUP BY s.student_id, s.name': [{ student_id: STUDENT, name: 'Amina Test', guardians: [] }],
+        'AS caller_teaches\n    FROM class_students cs': [
+          { class_id: CLASS, subject: 'Math', grade: '6', caller_teaches: true },
+          { class_id: 'other-class', subject: 'Science', grade: '6', caller_teaches: false },
+        ],
+        'WHERE class_id = ANY($1::uuid[])': [{ class_id: CLASS, assessment_id: ASSESSMENT, name: 'Unit 3 Quiz', date: null, is_published: true }],
+      });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.classes).toEqual([{ classId: CLASS, subject: 'Math', assessments: [{ assessmentId: ASSESSMENT, name: 'Unit 3 Quiz', date: null, isPublished: true }] }]);
+      expect(r.ran('WHERE class_id = ANY($1::uuid[])')[0].params).toEqual([[CLASS]]);
+    });
+
+    it('a General thread may name the class it is about, validated against the student and teacher', async () => {
+      const r = makeRouter({
+        'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: 'auto-class', caller_teaches: true })],
+        'AS teacher_teaches\n    FROM classes cl WHERE cl.class_id = $1': [{ class_id: CLASS, school: SCHOOL, has_student: true, teacher_teaches: true }],
+        'AS admin_participant_ids': [{ ...generalAccess, class_id: CLASS, class_subject: 'Math', teacher_id: TEACHER, lead_teacher_id: TEACHER }],
+        "kind, title, created_by)": [{ conversation_id: CONVO }],
+      });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockTeacherUser())
+        .field('studentId', STUDENT).field('teacherId', TEACHER).field('classId', CLASS).field('title', 'Planner').field('body', 'x');
+      expect(res.status).toBe(201);
+      expect(r.ran("kind, title, created_by)")[0].params[2]).toBe(CLASS);
+
+      makeRouter({
+        'CROSS JOIN users t': [generalCtx({ is_homeroom: false, class_id: 'auto-class', caller_teaches: true })],
+        'AS teacher_teaches\n    FROM classes cl WHERE cl.class_id = $1': [{ class_id: CLASS, school: SCHOOL, has_student: false, teacher_teaches: true }],
+      });
+      const bad = await authenticatedRequest('post', '/api/messaging/conversations', mockTeacherUser())
+        .field('studentId', STUDENT).field('teacherId', TEACHER).field('classId', CLASS).field('title', 'Planner').field('body', 'x');
+      expect(bad.status).toBe(400);
+    });
+
     it('parent targets list the teachers they may write to', async () => {
       makeRouter({
         'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }],

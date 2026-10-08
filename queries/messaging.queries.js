@@ -498,6 +498,30 @@ const messagingQueries = {
     FROM students s LEFT JOIN users h ON h.user_id = s.homeroom_teacher_id
     WHERE s.student_id = $1
   `,
+  // Classes a student is in this year, with whether the caller teaches each.
+  // $1 student_id, $2 caller user_id, $3 school_year_id|null
+  selectStudentClassesForStaff: `
+    SELECT cl.class_id, cl.subject, cl.grade,
+           (cl.teacher_id = $2 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $2)) AS caller_teaches
+    FROM class_students cs
+    JOIN classes cl ON cl.class_id = cs.class_id
+    WHERE cs.student_id = $1 AND ($3::uuid IS NULL OR cl.school_year_id = $3)
+    ORDER BY cl.subject
+  `,
+  // Leaf assessments for several classes. $1 class_id[]
+  selectAssessmentsForClasses: `
+    SELECT class_id, assessment_id, name, date, is_published FROM assessments
+    WHERE class_id = ANY($1::uuid[]) AND COALESCE(is_parent, FALSE) = FALSE
+    ORDER BY sort_order NULLS LAST, name
+  `,
+  // An explicit class for a General thread: must contain the student and be
+  // taught by the thread's teacher. $1 class_id, $2 student_id, $3 teacher_id
+  selectClassAnchorForGeneral: `
+    SELECT cl.class_id, cl.school,
+           EXISTS (SELECT 1 FROM class_students cs WHERE cs.class_id = cl.class_id AND cs.student_id = $2) AS has_student,
+           (cl.teacher_id = $3 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $3)) AS teacher_teaches
+    FROM classes cl WHERE cl.class_id = $1
+  `,
   // Staff opening the picker for one student (Students page). $1 student_id
   selectStudentForStaff: `
     SELECT s.student_id, s.name, s.school, s.homeroom_teacher_id
