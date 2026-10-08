@@ -3,3 +3,4 @@ node_modules/
 
 # git worktrees (local scratch)
 .worktrees/
+.superpowers/

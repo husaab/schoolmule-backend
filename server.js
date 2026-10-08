@@ -44,6 +44,7 @@ const agendaRoutes = require("./routes/agenda.routes")
 const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
 const parentPortalRoutes = require("./routes/parentPortal.routes")
 const messagingRoutes = require("./routes/messaging.routes")
+const announcementRoutes = require("./routes/announcement.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 
@@ -141,6 +142,7 @@ app.use("/api/agendas", agendaRoutes);
 app.use("/api/schedule-planner", schedulePlannerRoutes);
 app.use("/api/parent-portal", parentPortalRoutes);
 app.use("/api/messaging", messagingRoutes);
+app.use("/api/announcements", announcementRoutes);
 app.use("/api/finance", financeRoutes);
 
 // Global error handler — must be after all routes

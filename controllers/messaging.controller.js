@@ -10,11 +10,12 @@
 
 const path = require('path');
 const crypto = require('crypto');
-const multer = require('multer');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
+const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
+const announcementQueries = require('../queries/announcement.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
 const schoolQueries = require('../queries/school.queries');
 const { Resend } = require('resend');
@@ -23,52 +24,11 @@ const { getSchoolName } = require('../utils/schoolUtils');
 const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
 
-const BUCKET = 'message-attachments';
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const EMAIL_DELAY = '2 minutes';
-const SIGNED_URL_TTL = 3600;
 const MAX_TITLE = 120;
 const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
-
-// Declared MIME must match the extension; neither alone is trusted.
-const ALLOWED = {
-  '.jpg': ['image/jpeg'],
-  '.jpeg': ['image/jpeg'],
-  '.png': ['image/png'],
-  '.gif': ['image/gif'],
-  '.webp': ['image/webp'],
-  '.pdf': ['application/pdf'],
-  '.doc': ['application/msword'],
-  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-};
-
-const fileFilter = (req, file, cb) => {
-  const ext = path.extname(file.originalname || '').toLowerCase();
-  if (ALLOWED[ext] && ALLOWED[ext].includes(file.mimetype)) return cb(null, true);
-  const err = new Error('Only images (JPEG, PNG, GIF, WebP), PDF and Word documents are allowed');
-  err.code = 'UNSUPPORTED_FILE';
-  return cb(err);
-};
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES },
-  fileFilter,
-});
-
-// Multer errors become 400s in our envelope instead of reaching errorHandler.
-const uploadFiles = (req, res, next) =>
-  upload.array('files', MAX_FILES)(req, res, (err) => {
-    if (!err) return next();
-    const message =
-      err.code === 'LIMIT_FILE_SIZE' ? 'Each file must be 10 MB or smaller'
-        : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? `At most ${MAX_FILES} files per message`
-          : err.message;
-    return res.status(400).json({ status: 'failed', message });
-  });
 
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -113,13 +73,7 @@ function validateBody(body, fileCount) {
 // One storage call per thread fetch, not one per attachment.
 async function signAttachments(rows) {
   if (rows.length === 0) return [];
-  let byPath = new Map();
-  try {
-    const { data } = await supabase.storage.from(BUCKET).createSignedUrls(rows.map((a) => a.file_path), SIGNED_URL_TTL);
-    byPath = new Map((data || []).map((d) => [d.path, d.signedUrl || null]));
-  } catch (error) {
-    logger.warn('Signing attachments failed:', error);
-  }
+  const byPath = await signedUrlMap(rows.map((a) => a.file_path));
   return rows.map((a) => ({
     attachmentId: a.attachment_id,
     messageId: a.message_id,
@@ -448,13 +402,17 @@ const listConversations = async (req, res) => {
 const getUnreadSummary = async (req, res) => {
   const { userId, school, role } = req.user;
   try {
-    const { rows: [r] } = await db.query(q.selectUnreadSummary, [userId, school, role]);
+    const [{ rows: [r] }, { rows: [a] }] = await Promise.all([
+      db.query(q.selectUnreadSummary, [userId, school, role]),
+      db.query(announcementQueries.countUnreadAnnouncements, [userId, school, role, req.schoolYear?.schoolYearId ?? null]),
+    ]);
     return res.status(200).json({
       status: 'success',
       data: {
         unreadConversations: r?.unread_conversations ?? 0,
         unreadMessages: r?.unread_messages ?? 0,
         needsReply: r?.needs_reply ?? 0,
+        unreadAnnouncements: a?.unread_announcements ?? 0,
       },
     });
   } catch (error) {
@@ -641,6 +599,9 @@ const createGeneralConversation = async (req, res) => {
   if (!title || title.length > MAX_TITLE) return failed(res, 400, `Subject must be 1–${MAX_TITLE} characters`);
   const v = validateBody(req.body.body, files.length);
   if (v.error) return failed(res, 400, v.error);
+  const announcementId = req.body.announcementId || null;
+  if (badId(announcementId)) return failed(res, 400, 'Invalid id');
+  if (announcementId && user.role !== 'PARENT') return failed(res, 400, 'announcementId is for parents asking about an announcement');
 
   try {
     const { rows } = await db.query(q.selectGeneralAnchorContext, [studentId, teacherId, user.userId, req.schoolYear?.schoolYearId ?? null]);
@@ -650,9 +611,20 @@ const createGeneralConversation = async (req, res) => {
     const teaches = Boolean(a.class_id) || a.is_homeroom;
     // Admins with a staff title (principal, vice principal) are open to every parent in the school.
     const leadership = a.teacher_role === 'ADMIN' && Boolean(a.teacher_staff_title);
+    let anchorClassId = a.class_id || null;
     if (user.role === 'PARENT') {
       if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
-      if (!teaches && !leadership) return failed(res, 403, 'That teacher does not teach this student');
+      if (announcementId) {
+        // "Ask about this": the author of an announcement the family received
+        // may be written to even when they teach none of this parent's children.
+        const { rows: arows } = await db.query(announcementQueries.selectParentAnnouncementContext, [announcementId, user.userId, studentId]);
+        const an = arows[0];
+        if (!an || an.school !== user.school || an.deleted_at) return failed(res, 404, 'Announcement not found');
+        if (!an.is_guardian || !an.student_in_audience || an.author_id !== teacherId) return failed(res, 403, 'You can only ask the author about an announcement sent to your child');
+        anchorClassId = an.scope === 'class' ? an.class_id : null;
+      } else if (!teaches && !leadership) {
+        return failed(res, 403, 'That teacher does not teach this student');
+      }
     } else if (user.role === 'TEACHER') {
       if (!a.caller_teaches && user.userId !== teacherId) return failed(res, 403, 'Not authorized for this student');
       if (!teaches && user.userId !== teacherId) return failed(res, 403, 'That teacher does not teach this student');
@@ -660,7 +632,7 @@ const createGeneralConversation = async (req, res) => {
 
     // The author may name the class (subject) the thread is about; otherwise
     // the first class the teacher teaches the student in is used, or none (homeroom).
-    let classId = a.class_id || null;
+    let classId = anchorClassId;
     if (explicitClassId) {
       const { rows: crows } = await db.query(q.selectClassAnchorForGeneral, [explicitClassId, studentId, teacherId]);
       const cl = crows[0];
