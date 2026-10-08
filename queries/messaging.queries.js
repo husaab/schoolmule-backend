@@ -11,12 +11,13 @@
 const CONVERSATION_ACCESS_SELECT = `
   SELECT
     c.conversation_id, c.school, c.student_id, c.class_id, c.assessment_id,
+    c.kind, c.teacher_id,
     c.title, c.status, c.created_by, c.resolved_by, c.resolved_at,
     c.last_message_at, c.created_at,
     s.name          AS student_name,
     s.school_year_id,
-    cl.subject      AS class_subject,
-    cl.teacher_id   AS lead_teacher_id,
+    COALESCE(cl.subject, 'Homeroom') AS class_subject,
+    COALESCE(cl.teacher_id, c.teacher_id) AS lead_teacher_id,
     COALESCE((SELECT ARRAY_AGG(ct.teacher_id) FROM class_teachers ct WHERE ct.class_id = c.class_id), '{}')::uuid[] AS co_teacher_ids,
     COALESCE((SELECT ARRAY_AGG(ps.parent_id) FROM parent_students ps
               WHERE ps.student_id = c.student_id AND ps.parent_id IS NOT NULL), '{}')::uuid[] AS guardian_ids,
@@ -25,7 +26,7 @@ const CONVERSATION_ACCESS_SELECT = `
               WHERE cp.conversation_id = c.conversation_id AND u.role = 'ADMIN'), '{}')::uuid[] AS admin_participant_ids
   FROM conversations c
   JOIN students s  ON s.student_id = c.student_id
-  JOIN classes  cl ON cl.class_id  = c.class_id
+  LEFT JOIN classes cl ON cl.class_id = c.class_id
 `;
 
 // Unread = messages from someone else, not deleted, newer than my last read.
@@ -62,9 +63,9 @@ const LAST_MESSAGE_SQL = `
 // $7 search|null, $8 limit, $9 unread_only boolean
 const listBody = (scopeSql) => `
   SELECT
-    c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.title, c.status,
+    c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.kind, c.teacher_id, c.title, c.status,
     c.last_message_at, c.created_at,
-    s.name AS student_name, cl.subject AS class_subject,
+    s.name AS student_name, COALESCE(cl.subject, 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     cp.last_read_at,
     ${UNREAD_COUNT_EXPR} AS unread_count,
@@ -72,8 +73,8 @@ const listBody = (scopeSql) => `
     ${LAST_MESSAGE_SQL}
   FROM conversations c
   JOIN students s  ON s.student_id = c.student_id
-  JOIN classes  cl ON cl.class_id  = c.class_id
-  LEFT JOIN users lt ON lt.user_id = cl.teacher_id
+  LEFT JOIN classes cl ON cl.class_id = c.class_id
+  LEFT JOIN users lt ON lt.user_id = COALESCE(cl.teacher_id, c.teacher_id)
   LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
   WHERE c.school = $2
     AND ($3::uuid IS NULL OR s.school_year_id = $3)
@@ -88,7 +89,7 @@ const listBody = (scopeSql) => `
 `;
 
 const PARENT_SCOPE = `EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1)`;
-const TEACHER_SCOPE = `cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)`;
+const TEACHER_SCOPE = `cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)`;
 
 const messagingQueries = {
   selectConversationAccess: `${CONVERSATION_ACCESS_SELECT} WHERE c.conversation_id = $1`,
@@ -167,12 +168,12 @@ const messagingQueries = {
     WITH mine AS (
       SELECT c.conversation_id, c.status, cp.last_read_at
       FROM conversations c
-      JOIN classes cl ON cl.class_id = c.class_id
+      LEFT JOIN classes cl ON cl.class_id = c.class_id
       LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
       WHERE c.school = $2 AND (
         ($3 = 'PARENT' AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1))
-        OR ($3 = 'TEACHER' AND (cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)))
-        OR ($3 = 'ADMIN' AND (cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)
+        OR ($3 = 'TEACHER' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)))
+        OR ($3 = 'ADMIN' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)
                               OR EXISTS (SELECT 1 FROM conversation_participants cp2 WHERE cp2.conversation_id = c.conversation_id AND cp2.user_id = $1)))
       )
     ),
@@ -327,14 +328,15 @@ const messagingQueries = {
     SELECT
       j.job_id, j.conversation_id, j.recipient_id, j.school, j.attempts,
       u.email AS recipient_email, u.first_name AS recipient_first_name, u.role AS recipient_role, u.is_archived AS recipient_archived,
-      c.title, c.assessment_id, c.student_id, c.last_message_at,
-      s.name AS student_name, cl.subject AS class_subject,
+      (u.password = '!') AS recipient_invite_pending,
+      c.title, c.assessment_id, c.kind, c.student_id, c.last_message_at,
+      s.name AS student_name, COALESCE(cl.subject, 'Homeroom') AS class_subject,
       cp.last_read_at, cp.last_emailed_at, COALESCE(cp.muted, FALSE) AS muted
     FROM message_email_jobs j
     JOIN users u ON u.user_id = j.recipient_id
     JOIN conversations c ON c.conversation_id = j.conversation_id
     JOIN students s ON s.student_id = c.student_id
-    JOIN classes cl ON cl.class_id = c.class_id
+    LEFT JOIN classes cl ON cl.class_id = c.class_id
     LEFT JOIN conversation_participants cp ON cp.conversation_id = j.conversation_id AND cp.user_id = j.recipient_id
     WHERE j.job_id = $1
   `,
@@ -389,9 +391,13 @@ const messagingQueries = {
   selectTeacherTargetStudents: `
     SELECT s.student_id, s.name,
            COALESCE(json_agg(json_build_object(
+                      'linkId', ps.parent_student_link_id,
                       'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
                       'relation', ps.relation,
-                      'hasAccount', ps.parent_id IS NOT NULL))
+                      'email', COALESCE(u.email, ps.parent_email),
+                      'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
+                      'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
+                      'invitedAt', ps.invited_at))
                     FILTER (WHERE ps.parent_student_link_id IS NOT NULL), '[]') AS guardians
     FROM class_students cs
     JOIN students s ON s.student_id = cs.student_id
@@ -414,6 +420,120 @@ const messagingQueries = {
     FROM conversations c
     LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
     WHERE c.school = $4 AND ($2::uuid IS NULL OR c.class_id = $2) AND ($3::uuid IS NULL OR c.student_id = $3)
+  `,
+
+  // ── Phase 2: general threads ────────────────────────────────
+  // Everything needed to start a general thread between a student and a
+  // teacher. $1 student_id, $2 teacher_id, $3 caller user_id, $4 school_year_id|null
+  selectGeneralAnchorContext: `
+    SELECT
+      s.student_id, s.name AS student_name, s.school AS student_school,
+      t.school AS teacher_school, t.role AS teacher_role, t.is_archived AS teacher_archived,
+      TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS teacher_name,
+      (s.homeroom_teacher_id = $2) AS is_homeroom,
+      (SELECT cl.class_id FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4)
+          AND (cl.teacher_id = $2 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $2))
+        ORDER BY cl.subject LIMIT 1) AS class_id,
+      EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id AND ps.parent_id = $3) AS is_guardian,
+      (s.homeroom_teacher_id = $3 OR EXISTS (SELECT 1 FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+        WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4)
+          AND (cl.teacher_id = $3 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $3)))) AS caller_teaches
+    FROM students s
+    CROSS JOIN users t
+    WHERE s.student_id = $1 AND t.user_id = $2
+  `,
+  // $1 school, $2 student_id, $3 class_id|null, $4 teacher_id, $5 title, $6 created_by
+  insertGeneralConversation: `
+    INSERT INTO conversations (school, student_id, class_id, teacher_id, assessment_id, kind, title, created_by)
+    VALUES ($1, $2, $3, $4, NULL, 'general', $5, $6)
+    RETURNING conversation_id
+  `,
+  // Teachers a parent may write to about one child. $1 student_id, $2 school_year_id|null
+  selectParentTeacherTargets: `
+    SELECT DISTINCT ON (user_id) user_id, name, via FROM (
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, 'Homeroom' AS via, 0 AS pri
+      FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
+      WHERE s.student_id = $1 AND u.is_archived = FALSE
+      UNION ALL
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, 1
+      FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id JOIN users u ON u.user_id = cl.teacher_id
+      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
+      UNION ALL
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, 2
+      FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+      JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
+      WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND u.is_archived = FALSE
+    ) x
+    ORDER BY user_id, pri, via
+  `,
+  // Staff context strip for a general thread. $1 student_id
+  selectStudentContext: `
+    SELECT s.student_id, s.name, s.grade,
+           TRIM(CONCAT(h.first_name, ' ', h.last_name)) AS homeroom_teacher_name,
+           (SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE ga.status = 'PRESENT') / NULLIF(COUNT(*), 0), 0)
+              FROM general_attendance ga WHERE ga.student_id = s.student_id AND ga.attendance_date >= CURRENT_DATE - 60) AS attendance_pct
+    FROM students s LEFT JOIN users h ON h.user_id = s.homeroom_teacher_id
+    WHERE s.student_id = $1
+  `,
+  // Staff opening the picker for one student (Students page). $1 student_id
+  selectStudentForStaff: `
+    SELECT s.student_id, s.name, s.school, s.homeroom_teacher_id
+    FROM students s WHERE s.student_id = $1
+  `,
+
+  // ── Phase 2: guardian invites ───────────────────────────────
+  // Link rows that have an email but no account. $1 student_id
+  selectUnlinkedGuardians: `
+    SELECT parent_student_link_id, parent_name, parent_email, relation, invited_at
+    FROM parent_students
+    WHERE student_id = $1 AND parent_id IS NULL AND parent_email IS NOT NULL AND TRIM(parent_email) <> ''
+  `,
+  // $1 email, $2 school
+  selectUserByEmailInSchool: `
+    SELECT user_id, role, password, is_archived FROM users
+    WHERE LOWER(email) = LOWER($1) AND school = $2
+    LIMIT 1
+  `,
+  // $1 link_id, $2 user_id, $3 invited_by, $4 conversation_id, $5 record_invite boolean
+  linkGuardianToUser: `
+    UPDATE parent_students
+    SET parent_id = $2,
+        invited_at = CASE WHEN $5::boolean THEN NOW() ELSE invited_at END,
+        invited_by = CASE WHEN $5::boolean THEN $3::uuid ELSE invited_by END,
+        invite_conversation_id = CASE WHEN $5::boolean THEN $4::uuid ELSE invite_conversation_id END
+    WHERE parent_student_link_id = $1
+    RETURNING parent_student_link_id
+  `,
+  // $1 link_id, $2 school
+  selectLinkForInvite: `
+    SELECT ps.parent_student_link_id, ps.parent_id, ps.parent_name, ps.parent_email, ps.relation, ps.invited_at,
+           ps.invite_conversation_id, ps.school, s.name AS student_name,
+           u.password = '!' AS invite_pending, u.first_name
+    FROM parent_students ps
+    JOIN students s ON s.student_id = ps.student_id
+    LEFT JOIN users u ON u.user_id = ps.parent_id
+    WHERE ps.parent_student_link_id = $1 AND ps.school = $2
+  `,
+  // $1 link_id
+  touchInvite: `
+    UPDATE parent_students SET invited_at = NOW() WHERE parent_student_link_id = $1
+  `,
+  // One reminder, three days after the invite, while still pending.
+  selectInviteReminderCandidates: `
+    SELECT ps.parent_student_link_id, ps.parent_id, ps.parent_name, ps.school, ps.invite_conversation_id,
+           s.name AS student_name, u.email, u.first_name,
+           TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS invited_by_name
+    FROM parent_students ps
+    JOIN users u ON u.user_id = ps.parent_id AND u.password = '!'
+    JOIN students s ON s.student_id = ps.student_id
+    LEFT JOIN users t ON t.user_id = ps.invited_by
+    WHERE ps.invited_at IS NOT NULL AND ps.invited_at < NOW() - interval '3 days' AND ps.invite_reminded_at IS NULL
+    LIMIT 50
+  `,
+  // $1 link_id
+  markInviteReminded: `
+    UPDATE parent_students SET invite_reminded_at = NOW() WHERE parent_student_link_id = $1
   `,
 
   // Admin oversight: threads with a failed email. $1 conversation_id[]
