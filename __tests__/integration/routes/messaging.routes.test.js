@@ -19,6 +19,8 @@ const asCoTeacher = { userId: CO_TEACHER_ID, username: 'Teacher Two', email: 'co
 const asMom = { userId: MOM_ID, username: 'Mom Test', email: 'mom@example.com', role: 'PARENT' };
 const asDad = { userId: DAD_ID, username: 'Dad Test', email: 'dad@example.com', role: 'PARENT' };
 const asStranger = { userId: STRANGER_ID, username: 'Other Parent', email: 'other@example.com', role: 'PARENT' };
+const HOMEROOM_ID = '550e8400-e29b-41d4-a716-446655440006';
+const asHomeroom = { userId: HOMEROOM_ID, username: 'Sana Rahman', email: 'homeroom@example.com', role: 'TEACHER' };
 
 describe('Integration: Messaging routes', () => {
   let pool;
@@ -42,6 +44,7 @@ describe('Integration: Messaging routes', () => {
     await user(MOM_ID, 'mom@example.com', 'Mom Test', 'PARENT');
     await user(DAD_ID, 'dad@example.com', 'Dad Test', 'PARENT');
     await user(STRANGER_ID, 'other@example.com', 'Other Parent', 'PARENT');
+    await user(HOMEROOM_ID, 'homeroom@example.com', 'Sana Rahman', 'TEACHER');
 
     const c = await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
@@ -50,7 +53,7 @@ describe('Integration: Messaging routes', () => {
     await pool.query(`INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2)`, [classId, CO_TEACHER_ID]);
 
     const s = await pool.query(
-      `INSERT INTO students (name, grade, school, school_year_id) VALUES ('Amina Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);
+      `INSERT INTO students (name, grade, school, school_year_id, homeroom_teacher_id) VALUES ('Amina Test', '6', 'ALHAADIACADEMY', $1, $2) RETURNING student_id`, [yearId, HOMEROOM_ID]);
     studentId = s.rows[0].student_id;
     await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, studentId]);
     await pool.query(
@@ -199,7 +202,7 @@ describe('Integration: Messaging routes', () => {
 
     const parentTargets = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asDad);
     expect(parentTargets.status).toBe(200);
-    expect(parentTargets.body.data).toEqual([{
+    expect(parentTargets.body.data.classes).toEqual([{
       classId, subject: 'Math', teacherName: 'Teacher One',
       assessments: [{ assessmentId: publishedId, name: 'Unit 3 Quiz', date: null, conversationId: id }],
     }]);
@@ -209,5 +212,103 @@ describe('Integration: Messaging routes', () => {
     expect(staffTargets.body.data.students[0]).toMatchObject({ studentId, name: 'Amina Test' });
     expect(staffTargets.body.data.students[0].guardians.map((g) => g.hasAccount)).toEqual([true, true]);
     expect(staffTargets.body.data.assessments.map((a) => a.isPublished).sort()).toEqual([false, true]);
+  });
+
+  describe('phase 2: general threads and guardian invites', () => {
+    const startGeneral = (who, teacherId, title = 'Away Thursday', body = 'Amina will be away Thursday and Friday.') =>
+      authenticatedRequest('post', '/api/messaging/conversations', who)
+        .field('studentId', studentId).field('teacherId', teacherId).field('title', title).field('body', body);
+
+    it('a parent writes to the homeroom teacher with no class row; the teacher sees it, the Math teacher does not', async () => {
+      const res = await startGeneral(asMom, HOMEROOM_ID);
+      expect(res.status).toBe(201);
+      expect(res.body.data.conversation).toMatchObject({ kind: 'general', classId: null, teacherId: HOMEROOM_ID, title: 'Away Thursday', classSubject: 'Homeroom' });
+      expect(res.body.data.context).toBeNull();
+      const id = res.body.data.conversation.conversationId;
+      expect((await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asHomeroom)).status).toBe(200);
+      expect((await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asTeacher)).status).toBe(403);
+      const homeroomList = await authenticatedRequest('get', '/api/messaging/conversations', asHomeroom);
+      expect(homeroomList.body.data.map((c) => c.conversationId)).toEqual([id]);
+      // The homeroom teacher and the other guardian are emailed; no class, so no co-teachers.
+      const jobs = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [id]);
+      expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([HOMEROOM_ID, DAD_ID].sort());
+      // Staff get the student block.
+      const view = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asHomeroom);
+      expect(view.body.data.student).toMatchObject({ studentId, name: 'Amina Test', homeroomTeacherName: 'Sana Rahman' });
+    });
+
+    it('a parent may only write to teachers of the child', async () => {
+      expect((await startGeneral(asMom, STRANGER_ID)).status).toBe(400); // a parent account cannot receive messages
+      const { rows } = await pool.query(`INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+        VALUES (gen_random_uuid(), 'other-teacher@example.com', 'Other Teacher', 'x', 'Other', 'Teacher', 'ALHAADIACADEMY', 'TEACHER', true, true) RETURNING user_id`);
+      expect((await startGeneral(asMom, rows[0].user_id)).status).toBe(403);
+    });
+
+    it('parent targets include the teachers to write to', async () => {
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asDad);
+      expect(res.status).toBe(200);
+      expect(res.body.data.classes).toHaveLength(1);
+      expect(res.body.data.teachers.map((t) => [t.name, t.via]).sort()).toEqual([['Sana Rahman', 'Homeroom'], ['Teacher One', 'Math'], ['Teacher Two', 'Math']]);
+    });
+
+    it('a teacher writing about a student with an unlinked guardian invites them once, and the invite lands in the thread', async () => {
+      // Bilal: one guardian with an email and no account.
+      const b = await pool.query(`INSERT INTO students (name, grade, school, school_year_id) VALUES ('Bilal Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);
+      const bilal = b.rows[0].student_id;
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, bilal]);
+      await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Hana Test', 'hana@example.com', 'Mother', 'ALHAADIACADEMY')`, [bilal]);
+
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+        .field('studentId', bilal).field('teacherId', TEACHER_ID).field('title', 'Missing homework').field('body', 'Please remind Bilal about his planner.');
+      expect(res.status).toBe(201);
+      expect(res.body.data.invites).toEqual([expect.objectContaining({ name: 'Hana Test', status: 'invited' })]);
+      const id = res.body.data.conversation.conversationId;
+
+      const link = await pool.query(`SELECT ps.parent_id, ps.invited_at, ps.invited_by, ps.invite_conversation_id, u.password, u.role, u.email
+        FROM parent_students ps JOIN users u ON u.user_id = ps.parent_id WHERE ps.student_id = $1`, [bilal]);
+      expect(link.rows).toHaveLength(1);
+      expect(link.rows[0]).toMatchObject({ password: '!', role: 'PARENT', email: 'hana@example.com', invited_by: TEACHER_ID, invite_conversation_id: id });
+      expect(link.rows[0].invited_at).not.toBeNull();
+      const tokens = await pool.query(`SELECT COUNT(*)::int AS n FROM password_reset_tokens WHERE user_id = $1`, [link.rows[0].parent_id]);
+      expect(tokens.rows[0].n).toBe(1);
+
+      // The pending guardian is a participant, flagged, and gets no digest job yet.
+      const view = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asTeacher);
+      expect(view.body.data.participants.find((p) => p.name === 'Hana Test')).toMatchObject({ role: 'PARENT', invitePending: true });
+
+      // A second message does not re-invite.
+      const again = await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'One more thing.');
+      expect(again.status).toBe(201);
+      expect(again.body.data.invites).toEqual([]);
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM password_reset_tokens WHERE user_id = $1`, [link.rows[0].parent_id])).rows[0].n).toBe(1);
+
+      // Resend is rate-limited for an hour.
+      const linkId = (await pool.query(`SELECT parent_student_link_id FROM parent_students WHERE student_id = $1`, [bilal])).rows[0].parent_student_link_id;
+      expect((await authenticatedRequest('post', `/api/messaging/conversations/invites/${linkId}/resend`, asTeacher)).status).toBe(429);
+
+      // Once she sets a password (simulated), she can open the thread as a normal guardian.
+      await pool.query(`UPDATE users SET password = 'hashed' WHERE user_id = $1`, [link.rows[0].parent_id]);
+      const asHana = { userId: link.rows[0].parent_id, username: 'Hana Test', email: 'hana@example.com', role: 'PARENT' };
+      const hanaView = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asHana);
+      expect(hanaView.status).toBe(200);
+      expect(hanaView.body.data.messages).toHaveLength(2);
+    });
+
+    it('an email that already has a parent account is linked, not invited', async () => {
+      const b = await pool.query(`INSERT INTO students (name, grade, school, school_year_id) VALUES ('Zayd Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);
+      const zayd = b.rows[0].student_id;
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, zayd]);
+      // Mom already has an account (MOM_ID, mom@example.com) but this link row is free-text only.
+      await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Layla Test', 'MOM@example.com', 'Mother', 'ALHAADIACADEMY')`, [zayd]);
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+        .field('studentId', zayd).field('teacherId', TEACHER_ID).field('title', 'Welcome').field('body', 'Hello!');
+      expect(res.status).toBe(201);
+      expect(res.body.data.invites).toEqual([expect.objectContaining({ status: 'linked' })]);
+      const link = await pool.query(`SELECT parent_id, invited_at FROM parent_students WHERE student_id = $1`, [zayd]);
+      expect(link.rows[0]).toEqual({ parent_id: MOM_ID, invited_at: null });
+      // She is a normal participant and gets a digest job (so does the class co-teacher).
+      const jobs = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [res.body.data.conversation.conversationId]);
+      expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([MOM_ID, CO_TEACHER_ID].sort());
+    });
   });
 });
