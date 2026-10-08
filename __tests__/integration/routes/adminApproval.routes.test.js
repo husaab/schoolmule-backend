@@ -58,8 +58,14 @@ describe('Integration: Admin Approvals Routes', () => {
   });
 
   describe('GET /api/admin/approvals', () => {
-    it('lists pending signups for the admin school only', async () => {
+    it('lists pending signups for the admin school only, with children on file', async () => {
+      const kid = await insertStudent(pool, { name: 'Kid Listed', yearId, motherEmail: 'pending.parent@test.com' });
+      await insertStudent(pool, { name: 'Kid Elsewhere', school: 'PLAYGROUND', yearId: otherYearId, motherEmail: 'pending.parent@test.com' });
       const res = await authenticatedRequest('get', '/api/admin/approvals');
+
+      const parent = res.body.data.find((u) => u.userId === PENDING_PARENT_ID);
+      expect(parent.matchedChildren).toEqual([expect.objectContaining({ studentId: kid, name: 'Kid Listed', grade: '3' })]);
+      expect(res.body.data.find((u) => u.userId === PENDING_TEACHER_ID).matchedChildren).toEqual([]);
 
       expect(res.status).toBe(200);
       const ids = res.body.data.map((u) => u.userId);

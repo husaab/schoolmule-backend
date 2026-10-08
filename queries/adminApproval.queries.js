@@ -12,9 +12,20 @@ const USER_COLUMNS = `
 
 const adminApprovalQueries = {
   //  Pending signups plus declined ones, in one trip. The page splits them.
+  //  Each row carries the active-year students whose family email matches the
+  //  signup's email, so the queue shows "children on file" before review.
   //  $1 = school
   selectApprovalUsers: `
-    SELECT ${USER_COLUMNS}
+    SELECT ${USER_COLUMNS},
+      COALESCE((
+        SELECT json_agg(json_build_object('studentId', s.student_id, 'name', s.name, 'grade', s.grade)
+                        ORDER BY s.grade, s.name)
+        FROM students s
+        WHERE s.school = users.school
+          AND s.is_archived = false
+          AND s.school_year_id = (SELECT school_year_id FROM school_years WHERE school = $1 AND is_active LIMIT 1)
+          AND (lower(s.mother_email) = lower(users.email) OR lower(s.father_email) = lower(users.email))
+      ), '[]'::json) AS matched_children
     FROM users
     WHERE school = $1
       AND is_verified = true

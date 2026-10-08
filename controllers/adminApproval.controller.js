@@ -23,7 +23,8 @@ const fail = (res, error, fallback) => {
 const listApprovals = async (req, res) => {
   try {
     const { rows } = await db.query(queries.selectApprovalUsers, [req.user.school]);
-    return res.status(200).json({ status: "success", data: rows.map(toUser) });
+    const data = rows.map((row) => ({ ...toUser(row), matchedChildren: row.matched_children ?? [] }));
+    return res.status(200).json({ status: "success", data });
   } catch (error) {
     return fail(res, error, "Error fetching approvals");
   }
