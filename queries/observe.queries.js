@@ -104,6 +104,25 @@ const observeQueries = {
     SELECT fingerprint, date_bin($3::interval, ts, $1::timestamptz) AS ts, COUNT(*)::int AS count
     FROM all_errors WHERE fingerprint = ANY($4::text[]) GROUP BY 1, 2`,
 
+  // $3 bucket — one row per bucket with server/client counts, zero-filled
+  errorSeriesBySource: `
+    WITH ${BUCKETS},
+    all_errors AS (${ALL_ERRORS}),
+    agg AS (
+      SELECT date_bin($3::interval, ts, $1::timestamptz) AS b,
+             COUNT(*) FILTER (WHERE source = 'server')::int AS server,
+             COUNT(*) FILTER (WHERE source = 'client')::int AS client
+      FROM all_errors GROUP BY 1)
+    SELECT buckets.b AS ts, COALESCE(server, 0) AS server, COALESCE(client, 0) AS client
+    FROM buckets LEFT JOIN agg ON agg.b = buckets.b ORDER BY buckets.b`,
+
+  // $1 from, $2 to, $3 limit — every error in a slice, with stacks, newest first
+  errorsInRange: `
+    WITH all_errors AS (${ALL_ERRORS})
+    SELECT e.ts, e.source, e.fingerprint, e.location, e.message, e.stack, e.status, e.request_id, e.user_id, ${USER_COLS}
+    FROM all_errors e LEFT JOIN users u ON u.user_id = e.user_id
+    ORDER BY e.ts DESC LIMIT $3`,
+
   // $3 limit, $4 optional user_id
   recentErrors: `
     WITH all_errors AS (${ALL_ERRORS})

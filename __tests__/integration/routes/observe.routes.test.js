@@ -162,6 +162,29 @@ describe('Integration: /api/observe', () => {
     expect(recent[0].user).toEqual(expect.objectContaining({ name: 'Pa Rent', role: 'PARENT' }));
   });
 
+  it('GET /errors carries a per-bucket series split by source', async () => {
+    const res = await get('/api/observe/errors?window=24h');
+    const { series } = res.body.data;
+    expect(series).toHaveLength(96);
+    expect(series.reduce((n, p) => n + p.server, 0)).toBe(2);
+    expect(series.reduce((n, p) => n + p.client, 0)).toBe(1);
+    expect(series[0]).toEqual(expect.objectContaining({ ts: expect.any(String), server: 0, client: 0 }));
+  });
+
+  it('GET /errors/range drills into one time slice with stacks and group counts', async () => {
+    const from = ago(7).toISOString();
+    const to = ago(2.5).toISOString();
+    const res = await get(`/api/observe/errors/range?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+    expect(d.from).toBe(new Date(from).toISOString());
+    expect(d.errors).toHaveLength(2);
+    expect(d.errors[0]).toEqual(expect.objectContaining({ fingerprint: 'fp1', stack: expect.stringContaining('Error: x'), user: expect.objectContaining({ name: 'Tee Cher' }) }));
+    expect(d.groups).toEqual([expect.objectContaining({ fingerprint: 'fp1', count: 2, source: 'server' })]);
+    expect((await get('/api/observe/errors/range?from=nope&to=2026-01-01')).status).toBe(400);
+    expect((await get(`/api/observe/errors/range?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`)).status).toBe(400);
+  });
+
   it('GET /errors/:fingerprint returns occurrences and affected users', async () => {
     const res = await get('/api/observe/errors/fp1?window=24h');
     expect(res.status).toBe(200);

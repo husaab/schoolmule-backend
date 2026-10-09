@@ -263,6 +263,7 @@ const getErrors = async (req, res) => {
     const data = await withTimedClient(async (run) => {
       const groups = await run(q.errorGroups, [...winArgs(w), 50]);
       const recent = await run(q.recentErrors, [...winArgs(w), 100, null]);
+      const bySource = await run(q.errorSeriesBySource, [...winArgs(w), w.bucket]);
       const fps = groups.rows.map((g) => g.fingerprint);
       const sparks = fps.length ? await run(q.errorGroupSeries, [...winArgs(w), w.bucket, fps]) : { rows: [] };
       const { n, index } = bucketIndex(w);
@@ -275,11 +276,46 @@ const getErrors = async (req, res) => {
         window: windowOut(w),
         groups: groups.rows.map((g) => ({ ...groupRow(g), spark: sparkByFp.get(g.fingerprint) })),
         recent: recent.rows.map(errorRow),
+        series: bySource.rows.map((r) => ({ ts: iso(r.ts), server: num(r.server), client: num(r.client) })),
       };
     });
     return res.json({ status: 'success', data });
   } catch (err) {
     return fail(res, err, 'errors');
+  }
+};
+
+// One slice of the error chart: every error between from and to (max 12 h),
+// with stacks, plus per-group counts so a spike reads as "what broke".
+const RANGE_MAX_MS = 12 * 60 * 60 * 1000;
+const getErrorsRange = async (req, res) => {
+  const from = new Date(String(req.query.from || ''));
+  const to = new Date(String(req.query.to || ''));
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) {
+    return res.status(400).json({ status: 'failed', message: 'from and to must be ISO timestamps with from < to' });
+  }
+  if (to.getTime() - from.getTime() > RANGE_MAX_MS) {
+    return res.status(400).json({ status: 'failed', message: 'Range too wide (max 12 hours)' });
+  }
+  try {
+    const data = await withTimedClient(async (run) => {
+      const { rows } = await run(q.errorsInRange, [from, to, 200]);
+      const byFp = new Map();
+      for (const r of rows) {
+        const g = byFp.get(r.fingerprint) || { fingerprint: r.fingerprint, source: r.source, location: r.location, message: r.message, count: 0 };
+        g.count += 1;
+        byFp.set(r.fingerprint, g);
+      }
+      return {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        errors: rows.map((r) => ({ ...errorRow(r), stack: r.stack || null })),
+        groups: [...byFp.values()].sort((a, b) => b.count - a.count),
+      };
+    });
+    return res.json({ status: 'success', data });
+  } catch (err) {
+    return fail(res, err, 'error range');
   }
 };
 
@@ -348,4 +384,4 @@ const getInfra = async (req, res) => {
   }
 };
 
-module.exports = { getOverview, getActivity, getUsers, getUser, getFeatures, getErrors, getErrorGroup, getLogins, getInfra };
+module.exports = { getOverview, getActivity, getUsers, getUser, getFeatures, getErrors, getErrorsRange, getErrorGroup, getLogins, getInfra };

@@ -10,6 +10,7 @@ router.get('/users', c.getUsers);
 router.get('/users/:id', c.getUser);
 router.get('/features', c.getFeatures);
 router.get('/errors', c.getErrors);
+router.get('/errors/range', c.getErrorsRange); // before :fingerprint
 router.get('/errors/:fingerprint', c.getErrorGroup);
 router.get('/logins', c.getLogins);
 router.get('/infra', c.getInfra);
