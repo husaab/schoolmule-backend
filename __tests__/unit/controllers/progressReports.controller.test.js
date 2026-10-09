@@ -486,6 +486,7 @@ describe('Progress Reports Controller', () => {
 
     it('should return a signed URL', async () => {
       const token = mockAdminUser();
+      mockQueryResponse([{ ok: 1 }]); // ownership: path is a report row of the admin's school
 
       const res = await request(app)
         .get(url)

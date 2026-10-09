@@ -945,12 +945,14 @@ const getGeneratedReportCards = async (req, res) => {
 };
 
 const getGeneratedReportCardsByStudentId = async (req, res) => {
-  const { studentId, term, school } = req.query;
+  const { studentId, term } = req.query;
+  // The school comes from the session, never the query string.
+  const school = req.user.school;
 
-  if (!studentId || !term || !school) {
+  if (!studentId || !term) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing query parameters: studentId, term, and school are required'
+      message: 'Missing query parameters: studentId and term are required'
     });
   }
 
