@@ -61,11 +61,17 @@ const adminUserQueries = {
   `,
 
   //  $1 = parent user_id, $2 = school
+  //  Scoped to the school's active year, the same rule as
+  //  parentStudent.queries.hasActiveYearLinks: the Users page uses this list
+  //  to say "also a parent" and to offer the parent-portal preview, so it
+  //  must agree with what the session and the preview endpoint grant.
   selectChildrenForParent: `
     SELECT s.student_id, s.name, s.grade, ps.relation
     FROM parent_students ps
     JOIN students s ON s.student_id = ps.student_id
+    JOIN school_years sy ON sy.school_year_id = s.school_year_id
     WHERE ps.parent_id = $1 AND ps.school = $2
+      AND sy.is_active = TRUE
       AND s.is_archived = false
     ORDER BY s.name
   `,

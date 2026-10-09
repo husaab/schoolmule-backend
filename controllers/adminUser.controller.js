@@ -10,7 +10,7 @@ const jwt = require("jsonwebtoken");
 const logger = require("../logger");
 const adminUserQueries = require("../queries/adminUser.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
-const { getActiveTermForSchool, getSchoolYearContext } = require("../utils/sessionContext");
+const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = require("../utils/sessionContext");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { Resend } = require("resend");
 const { toUser } = require("../utils/userMapper");
@@ -21,6 +21,9 @@ const ROLES = ["ADMIN", "TEACHER", "PARENT"];
 // Roles an admin may preview. Previewing another admin shows the same UI the
 // admin already has, so it is not offered.
 const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT"];
+// The portals a preview can open in. A dual-role teacher (also a parent) may
+// be previewed in either; the view is one the target actually holds.
+const PREVIEW_VIEWS = ["TEACHER", "PARENT"];
 // Preview sessions are short: long enough to click through every page, short
 // enough that a forgotten tab does not stay signed in as someone else.
 const IMPERSONATION_TTL = "2h";
@@ -365,16 +368,25 @@ const deleteUser = async (req, res) => {
   }
 };
 
-// POST /api/admin/users/:id/impersonate
+// POST /api/admin/users/:id/impersonate  { view? }
 // "View as": issues a short-lived, read-only token for a teacher or parent in
 // the admin's school so the admin can see exactly what that user sees. The
 // token is the target's normal session payload plus `impersonator`, which
 // verifyUser uses to refuse every non-GET request and /auth/me echoes back so
 // the preview banner survives a reload. The response mirrors /auth/login so
 // the frontend can hydrate its stores the same way.
+//
+// `view` picks the portal for a dual-role target (a teacher who is also a
+// parent): PARENT opens their parent portal, otherwise the database role. The
+// view switcher stays hidden inside a preview, so the choice is made here.
 const impersonateUser = async (req, res) => {
   const { id } = req.params;
   const admin = req.user;
+  const requestedView = req.body?.view;
+
+  if (requestedView !== undefined && !PREVIEW_VIEWS.includes(requestedView)) {
+    return res.status(400).json({ status: "failed", message: "Choose the teacher or the parent view to preview" });
+  }
 
   // A preview token can't reach here: verifyUser refuses every non-GET
   // request that carries one, and requireAdmin rejects its TEACHER/PARENT role.
@@ -407,6 +419,15 @@ const impersonateUser = async (req, res) => {
       getActiveTermForSchool(user.school),
       getSchoolYearContext(user.school),
     ]);
+    const roles = await getRolesForUser(user);
+    const view = requestedView ?? user.role;
+    if (!roles.includes(view)) {
+      return res.status(400).json({
+        status: "failed",
+        message: "This account has no parent view: it isn't linked to a student this year",
+      });
+    }
+
     const target = toUser(user);
     const adminRow = adminRows[0];
     const impersonator = {
@@ -421,7 +442,9 @@ const impersonateUser = async (req, res) => {
         username: user.username,
         email: user.email,
         school: user.school,
-        role: user.role,
+        role: view,
+        baseRole: user.role,
+        roles,
         isVerified: user.is_verified,
         isVerifiedSchool: user.is_verified_school,
         activeTerm: activeTerm ? activeTerm.name : false,
@@ -432,7 +455,7 @@ const impersonateUser = async (req, res) => {
     );
 
     logger.info(
-      { adminUserId: admin.userId, targetUserId: user.user_id, targetRole: user.role, school: admin.school },
+      { adminUserId: admin.userId, targetUserId: user.user_id, targetRole: user.role, view, school: admin.school },
       "Admin started a view-as preview"
     );
 
@@ -445,7 +468,9 @@ const impersonateUser = async (req, res) => {
         fullName: target.fullName,
         email: target.email,
         school: target.school,
-        role: target.role,
+        role: view,
+        baseRole: user.role,
+        roles,
         isVerified: target.isVerified,
         isVerifiedSchool: target.isVerifiedSchool,
         activeTerm: activeTerm ? activeTerm.name : false,

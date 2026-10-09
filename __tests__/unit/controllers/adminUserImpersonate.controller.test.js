@@ -82,6 +82,53 @@ describe('POST /api/admin/users/:id/impersonate', () => {
     expect(res.body.data.role).toBe('PARENT');
   });
 
+  describe('choosing the view for a dual-role teacher', () => {
+    // Query order: target, admin, active term, then the parent-link check.
+    const mockTeacherWithChildren = () => {
+      mockHappyPath(teacherRow());
+      mockQueryResponse([{ '?column?': 1 }]); // hasActiveYearLinks
+    };
+
+    it('previews the parent portal when asked, keeping the preview read-only', async () => {
+      mockTeacherWithChildren();
+      const res = await post(TEST_TEACHER_USER_ID).send({ view: 'PARENT' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.role).toBe('PARENT');
+      expect(res.body.data.baseRole).toBe('TEACHER');
+      expect(res.body.data.roles).toEqual(['TEACHER', 'PARENT']);
+
+      const decoded = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(decoded.role).toBe('PARENT');
+      expect(decoded.baseRole).toBe('TEACHER');
+      expect(decoded.roles).toEqual(['TEACHER', 'PARENT']);
+      expect(decoded.impersonator.userId).toBe(TEST_ADMIN_USER_ID);
+    });
+
+    it('defaults to the database role and still reports every view held', async () => {
+      mockTeacherWithChildren();
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(200);
+      expect(res.body.data.role).toBe('TEACHER');
+      expect(res.body.data.roles).toEqual(['TEACHER', 'PARENT']);
+      expect(jwt.verify(res.body.data.token, JWT_SECRET).roles).toEqual(['TEACHER', 'PARENT']);
+    });
+
+    it('refuses the parent view for a teacher with no linked children', async () => {
+      mockHappyPath(teacherRow());
+      mockQueryResponse([]); // no links
+      const res = await post(TEST_TEACHER_USER_ID).send({ view: 'PARENT' });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/parent view/i);
+    });
+
+    it('refuses a view that is not a portal', async () => {
+      mockHappyPath(teacherRow());
+      const res = await post(TEST_TEACHER_USER_ID).send({ view: 'ADMIN' });
+      expect(res.status).toBe(400);
+    });
+  });
+
   it('still works for an invited user who has not set a password yet', async () => {
     mockHappyPath(teacherRow({ password: '!' }));
     const res = await post(TEST_TEACHER_USER_ID);
