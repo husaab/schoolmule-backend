@@ -23,3 +23,25 @@ describe('normalizeLogArgs', () => {
     expect(normalizeLogArgs([{ err: other }, 'msg', boom])).toEqual([{ err: other }, 'msg']);
   });
 });
+
+describe('normalizeLogArgs with non-Error failure objects', () => {
+  it('wraps a thrown { status, message } object into an Error with the original as cause', () => {
+    const thrown = { status: 404, message: 'User not found' };
+    const [first, msg] = normalizeLogArgs(['Login failed:', thrown]);
+    expect(msg).toBe('Login failed:');
+    expect(first.err).toBeInstanceOf(Error);
+    expect(first.err.message).toBe('User not found');
+    expect(first.err.cause).toBe(thrown);
+  });
+  it('wraps a Supabase-style { error: { message } } result', () => {
+    const result = { error: { message: 'Bucket not found', statusCode: '404' }, data: null };
+    const [first] = normalizeLogArgs(['Upload failed:', result]);
+    expect(first.err).toBeInstanceOf(Error);
+    expect(first.err.message).toBe('Bucket not found');
+    expect(first.err.cause).toBe(result.error);
+  });
+  it('leaves ordinary objects without a message alone', () => {
+    expect(normalizeLogArgs(['stats', { count: 3 }])).toEqual(['stats', { count: 3 }]);
+    expect(normalizeLogArgs(['msg', null])).toEqual(['msg', null]);
+  });
+});
