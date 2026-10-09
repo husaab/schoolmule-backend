@@ -47,6 +47,10 @@ const messagingRoutes = require("./routes/messaging.routes")
 const announcementRoutes = require("./routes/announcement.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
+const observeRoutes = require("./routes/observe.routes");
+const healthRoutes = require("./routes/health.routes");
+const observeRequest = require("./middleware/observeRequest");
+const requirePlatformOwner = require("./middleware/requirePlatformOwner");
 
 const logger = require('./logger')
 const httpLogger = require("./middleware/httpLogger")
@@ -54,6 +58,10 @@ const errorHandler = require("./middleware/errorHandler")
 
 // instantiating
 const app = express();
+
+// Railway terminates TLS and proxies to us: without this req.ip is the
+// proxy and every user shares one rate-limit bucket.
+app.set('trust proxy', 1);
 
 // Local dev is reachable as both localhost and 127.0.0.1; the browser treats
 // them as different origins, so allow the twin too. No effect in production.
@@ -68,7 +76,7 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
   // Lets the browser read download filenames (CSV/PDF exports) across origins.
-  exposedHeaders: ['Content-Disposition'],
+  exposedHeaders: ['Content-Disposition', 'X-Request-Id'],
 };
 
 // core modules
@@ -88,6 +96,7 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(httpLogger);
 
+app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/email", emailRoutes);
 app.use("/api/registration/public", registrationPublicRoutes);
@@ -100,6 +109,9 @@ app.use("/api/finance/qbo", financePublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
+app.use(observeRequest);
+// Cross-school by design: mounted before resolveSchoolYear.
+app.use("/api/observe", requirePlatformOwner, observeRoutes);
 
 app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no year context
 // School entities themselves are also exempt: creating a school is a
@@ -166,4 +178,15 @@ if (require.main === module) {
   require("./services/google/sheetSyncWorker").startWorker();
   require("./services/finance/financeSyncWorker").startWorker();
   require("./services/messageNotifier").startWorker();
+  require("./services/observe/eventBuffer").start();
+  require("./services/observe/retentionWorker").startWorker();
+
+  // A crash should leave a trace in error_events before Railway restarts us.
+  process.on("unhandledRejection", (reason) => {
+    logger.error({ err: reason instanceof Error ? reason : new Error(String(reason)), source: "process" }, "Unhandled promise rejection");
+  });
+  process.on("uncaughtException", (err) => {
+    logger.fatal({ err, source: "process" }, "Uncaught exception; exiting");
+    require("./services/observe/eventBuffer").flushNow().finally(() => process.exit(1));
+  });
 }

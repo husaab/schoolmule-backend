@@ -23,6 +23,8 @@ function touchLastSeen(userId) {
 const stripQuery = (url) => String(url || '').split('?')[0];
 
 function observeRequest(req, res, next) {
+  // Same switch as the buffer: tests (and an emergency) turn capture off.
+  if (process.env.OBSERVE_DISABLED === 'true') return next();
   const startedAt = process.hrtime.bigint();
   const user = req.user || {};
   const ctx = {

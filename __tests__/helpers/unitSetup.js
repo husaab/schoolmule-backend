@@ -8,6 +8,9 @@ process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://mock.supabase.co
 process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'mock-service-role-key';
 process.env.SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'test@test.com';
 process.env.MAIL_DOMAIN = process.env.MAIL_DOMAIN || 'test.com';
+// Observe capture is off in unit tests: its fire-and-forget last_seen UPDATE
+// would otherwise consume a response another test queued for its controller.
+process.env.OBSERVE_DISABLED = 'true';
 process.env.ALHAADIACADEMY_RESEND_API_KEY = process.env.ALHAADIACADEMY_RESEND_API_KEY || 'test_resend_key_2';
 
 // Global afterEach for unit tests - resets all mocks between tests

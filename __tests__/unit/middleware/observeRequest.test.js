@@ -26,11 +26,23 @@ function makeRes() {
 }
 
 beforeEach(() => {
+  delete process.env.OBSERVE_DISABLED;
   observeRequest._resetLastSeen();
   buffer.push.mockClear();
 });
 
+afterAll(() => { process.env.OBSERVE_DISABLED = 'true'; });
+
 describe('observeRequest', () => {
+  it('is a pass-through when OBSERVE_DISABLED=true', () => {
+    process.env.OBSERVE_DISABLED = 'true';
+    const next = jest.fn(); const res = makeRes();
+    observeRequest(makeReq(), res, next);
+    res.emit('finish');
+    expect(next).toHaveBeenCalled();
+    expect(buffer.push).not.toHaveBeenCalled();
+  });
+
   it('records a request_events row on finish with the route template', () => {
     const req = makeReq(); const res = makeRes();
     observeRequest(req, res, () => {});
