@@ -146,6 +146,21 @@ const parentStudentQueries = {
     WHERE parent_student_link_id = $1
   `,
 
+  // Does this user guard at least one current student? Decides whether a
+  // staff account also holds the PARENT view (see utils/sessionContext).
+  // Scoped to the school's active year: a teacher whose child graduated
+  // loses the switcher instead of keeping an empty parent portal.
+  hasActiveYearLinks: `
+    SELECT 1
+    FROM parent_students ps
+    JOIN students s ON s.student_id = ps.student_id
+    JOIN school_years sy ON sy.school_year_id = s.school_year_id
+    WHERE ps.parent_id = $1
+      AND sy.is_active = TRUE
+      AND s.is_archived = FALSE
+    LIMIT 1
+  `,
+
   // Check if parent-student relation already exists
   checkExistingRelation: `
     SELECT parent_student_link_id

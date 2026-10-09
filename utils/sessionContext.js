@@ -10,6 +10,24 @@ const db = require("../config/database");
 const logger = require("../logger");
 const termQueries = require("../queries/term.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
+const parentStudentQueries = require("../queries/parentStudent.queries");
+
+// Every view a user may act in. The database role always comes first; a
+// staff member (teacher or admin) linked to a current student also holds
+// PARENT. A parent account is only ever a parent, so no lookup is made.
+// The result is the `roles` claim; the token's `role` is one of these.
+const getRolesForUser = async (user) => {
+  const base = user.role;
+  if (base === 'PARENT') return ['PARENT'];
+  try {
+    const { rows } = await db.query(parentStudentQueries.hasActiveYearLinks, [user.user_id]);
+    return rows.length > 0 ? [base, 'PARENT'] : [base];
+  } catch (error) {
+    // A lookup failure must not break sign-in; the user keeps their base view.
+    logger.error({ err: error, userId: user.user_id }, "Error resolving dual-role views");
+    return [base];
+  }
+};
 
 const getActiveTermForSchool = async (school) => {
   try {
@@ -44,4 +62,4 @@ const getSchoolYearContext = async (school) => {
   }
 };
 
-module.exports = { getActiveTermForSchool, getSchoolYearContext };
+module.exports = { getActiveTermForSchool, getSchoolYearContext, getRolesForUser };

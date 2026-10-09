@@ -37,6 +37,8 @@ const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 const badId = (...values) => values.some((v) => v != null && v !== '' && !isUuid(v));
 const pctOf = (score, max) => (score == null || !max ? null : Math.round((Number(score) / Number(max)) * 1000) / 10);
 const side = (role) => (role === 'PARENT' ? 'parent' : 'staff');
+// A staff member in their parent view may not open a thread with themself.
+const SELF_THREAD_MESSAGE = "You teach this class, so there's no one to ask. Switch to Teacher view to see it there.";
 
 const toItem = (r) => ({
   conversationId: r.conversation_id,
@@ -200,7 +202,9 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
         const { rows: existing } = await db.query(q.selectUserByEmailInSchool, [email, conv.school]);
         if (existing.length) {
           const u = existing[0];
-          if (u.role !== 'PARENT' || u.is_archived) {
+          // Any live account may be the guardian, staff included: a teacher
+          // linked to their own child reads the thread in their parent view.
+          if (u.is_archived) {
             results.push({ linkId: link.parent_student_link_id, name, status: 'skipped' });
             continue;
           }
@@ -475,7 +479,10 @@ const getTargets = async (req, res) => {
         data: {
           currentTerm: term,
           classes: [...byClass.values()],
-          teachers: teacherRows.map((t) => ({ userId: t.user_id, name: t.name, via: t.via, role: t.role })),
+          // A parent who teaches their own child is never offered themself.
+          teachers: teacherRows
+            .filter((t) => t.user_id !== user.userId)
+            .map((t) => ({ userId: t.user_id, name: t.name, via: t.via, role: t.role })),
         },
       });
     }
@@ -592,6 +599,9 @@ const createConversation = async (req, res) => {
     if (user.role === 'PARENT') {
       if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
       if (!a.is_published) return failed(res, 403, 'This assessment has not been shared yet');
+      // A teacher in their parent view asking about a class they teach would
+      // be writing to themself.
+      if (a.lead_teacher_id === user.userId || a.is_co_teacher) return failed(res, 403, SELF_THREAD_MESSAGE);
     } else if (user.role === 'TEACHER' && a.lead_teacher_id !== user.userId && !a.is_co_teacher) {
       return failed(res, 403, 'Not authorized for this class');
     }
@@ -651,6 +661,7 @@ const createGeneralConversation = async (req, res) => {
     let anchorClassId = a.class_id || null;
     if (user.role === 'PARENT') {
       if (!a.is_guardian) return failed(res, 403, 'Not authorized for this student');
+      if (teacherId === user.userId) return failed(res, 403, SELF_THREAD_MESSAGE);
       if (announcementId) {
         // "Ask about this": the author of an announcement the family received
         // may be written to even when they teach none of this parent's children.

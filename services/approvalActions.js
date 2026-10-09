@@ -164,11 +164,10 @@ const approveSignup = async ({ school, userId, role, name, children = [], sendEm
       await client.query(queries.updatePendingName, [fixedName.first, fixedName.last, userId, school]);
     }
 
+    // Teachers may be linked too: a staff member who guards a student gets
+    // the parent view on the same account (utils/sessionContext.getRolesForUser).
     const finalRole = role ?? rows[0].role;
     const wanted = normaliseChildren(children);
-    if (wanted.size > 0 && finalRole !== "PARENT") {
-      throw new ApprovalError(400, "Only parents can be linked to students");
-    }
 
     const { rows: updated } = await client.query(queries.approveUser, [finalRole, userId, school]);
     const linkedCount = await linkChildren(client, updated[0], wanted);

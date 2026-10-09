@@ -11,6 +11,8 @@ const toParent = u => ({
   fullName:  [u.first_name, u.last_name].filter(Boolean).join(' '),
   email:     u.email,
   school:    u.school,
+  // PARENT for a parent account; TEACHER/ADMIN for staff who are also parents.
+  role:      u.role,
   createdAt: u.created_at,
 });
 

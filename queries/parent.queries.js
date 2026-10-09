@@ -1,4 +1,8 @@
 // src/queries/parent.queries.js
+//
+// Accounts a student can be linked to. Any active account in the school
+// qualifies: parents, and staff who are also parents (they get the parent
+// view on their staff account). `role` lets the picker mark the staff ones.
 const parentQueries = {
   // GET /api/parents?school=X
   selectParentsBySchool: `
@@ -8,11 +12,12 @@ const parentQueries = {
       last_name,
       email,
       school,
+      role,
       created_at
     FROM users
-    WHERE role = 'PARENT'
-      AND school = $1
-    ORDER BY last_name, first_name
+    WHERE school = $1
+      AND is_archived = FALSE
+    ORDER BY (role <> 'PARENT'), last_name, first_name
   `,
   // GET /api/parents/:id
   selectParentById: `
@@ -22,10 +27,10 @@ const parentQueries = {
       last_name,
       email,
       school,
+      role,
       created_at
     FROM users
-    WHERE role = 'PARENT'
-      AND user_id = $1
+    WHERE user_id = $1
   `,
 };
 

@@ -53,6 +53,13 @@ describe('Parent Controller', () => {
       expect(res.body.data[0].fullName).toBe('Parent');
     });
 
+    it('includes the account role so the link picker can mark staff who are also parents', async () => {
+      mockQueryResponse([buildUserRow({ role: 'TEACHER', first_name: 'Beenish', last_name: 'Fatima' })]);
+      const res = await authGet('/api/parents');
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].role).toBe('TEACHER');
+    });
+
     it('should return 200 with empty array when no parents', async () => {
       mockQueryResponse([]);
       const res = await authGet(`/api/parents?school=${TEST_SCHOOL}`);

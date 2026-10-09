@@ -38,9 +38,12 @@ const AUDIENCE_COUNT = `
      JOIN parent_students ps ON ps.student_id = s.student_id AND ps.parent_id IS NOT NULL
      JOIN users u ON u.user_id = ps.parent_id AND u.is_archived = FALSE AND u.password <> '!'
    WHERE ${IN_AUDIENCE('s')})::int`;
+// Reads by guardians (any role: a teacher linked to their child counts), so
+// the seen/audience ratio stays honest for dual-role accounts.
 const SEEN_COUNT = `
-  (SELECT COUNT(*) FROM announcement_reads r JOIN users ru ON ru.user_id = r.user_id AND ru.role = 'PARENT'
-   WHERE r.announcement_id = a.announcement_id)::int`;
+  (SELECT COUNT(*) FROM announcement_reads r
+   WHERE r.announcement_id = a.announcement_id
+     AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = r.user_id))::int`;
 
 const IS_PINNED = `(a.pinned_until IS NOT NULL AND a.pinned_until >= (NOW() AT TIME ZONE 'America/Toronto')::date)`;
 

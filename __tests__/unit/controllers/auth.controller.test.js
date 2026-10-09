@@ -39,7 +39,7 @@ jest.mock('../../../services/approvalActions', () => {
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 const { getApp } = require('../../helpers/testApp');
-const { mockAdminUser, mockUnverifiedUser, TEST_ADMIN_USER_ID, TEST_SCHOOL, mockUnverifiedSchoolUser, mockParentUser, TEST_PARENT_USER_ID, JWT_SECRET } = require('../../helpers/mockAuth');
+const { mockAdminUser, mockTeacherUser, mockUnverifiedUser, TEST_ADMIN_USER_ID, TEST_TEACHER_USER_ID, TEST_SCHOOL, mockUnverifiedSchoolUser, mockParentUser, TEST_PARENT_USER_ID, JWT_SECRET } = require('../../helpers/mockAuth');
 const {
   mockQueryResponse,
   mockQueryError,
@@ -765,5 +765,206 @@ describe('GET /api/auth/me', () => {
 
     expect(res.status).toBe(401);
     expect(res.body.message).toContain('user not found');
+  });
+});
+
+// ─── Dual-role views (staff who are also parents) ─────────────────
+// A staff member linked to a student through parent_students may hold a
+// second "view". The token's `role` is the active view; `baseRole` is the
+// database role and `roles` lists every view the user may switch to.
+describe('dual-role views', () => {
+  const linked = () => mockQueryResponse([{ '?column?': 1 }]);
+  const unlinked = () => mockQueryResponse([]);
+  const teacherRow = (over = {}) =>
+    buildUserRow({ user_id: TEST_TEACHER_USER_ID, role: 'TEACHER', email: 'teacher@test.com', is_verified: true, is_verified_school: true, ...over });
+
+  describe('POST /api/auth/login', () => {
+    const url = '/api/auth/login';
+
+    it('lists PARENT as an extra view for a teacher who is linked to a student', async () => {
+      const body = buildLoginBody({ email: 'teacher@test.com' });
+      mockQueryResponse([teacherRow()]); // loginUser
+      mockQueryResponse([]); // touchLastLogin
+      mockQueryResponse([buildTermRow()]); // active term
+      linked(); // parent_students lookup
+
+      const res = await request(app).post(url).send(body);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.role).toBe('TEACHER');
+      expect(res.body.data.baseRole).toBe('TEACHER');
+      expect(res.body.data.roles).toEqual(['TEACHER', 'PARENT']);
+      const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(claims).toMatchObject({ role: 'TEACHER', baseRole: 'TEACHER', roles: ['TEACHER', 'PARENT'] });
+    });
+
+    it('gives an unlinked teacher only the TEACHER view', async () => {
+      mockQueryResponse([teacherRow()]); // loginUser
+      mockQueryResponse([]); // touchLastLogin
+      mockQueryResponse([buildTermRow()]);
+      unlinked();
+
+      const res = await request(app).post(url).send(buildLoginBody({ email: 'teacher@test.com' }));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.roles).toEqual(['TEACHER']);
+    });
+
+    it('never looks up links for a parent account: PARENT is its only view', async () => {
+      mockQueryResponse([buildUserRow({ user_id: TEST_PARENT_USER_ID, role: 'PARENT', email: 'parent@test.com' })]);
+      mockQueryResponse([buildTermRow()]);
+
+      const res = await request(app).post(url).send(buildLoginBody({ email: 'parent@test.com' }));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.roles).toEqual(['PARENT']);
+      expect(res.body.data.baseRole).toBe('PARENT');
+      expect(callsTo(require('../../../queries/parentStudent.queries').hasActiveYearLinks)).toHaveLength(0);
+    });
+  });
+
+  describe('GET /api/auth/me', () => {
+    const url = '/api/auth/me';
+    const parentViewToken = (over = {}) =>
+      mockTeacherUser({ role: 'PARENT', baseRole: 'TEACHER', roles: ['TEACHER', 'PARENT'], ...over });
+
+    it('keeps a parent-view token for a teacher who is still linked', async () => {
+      mockQueryResponse([teacherRow()]); // selectById
+      mockQueryResponse([buildTermRow()]);
+      linked();
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${parentViewToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.token).toBeUndefined();
+      expect(res.body.data.role).toBe('PARENT');
+      expect(res.body.data.baseRole).toBe('TEACHER');
+      expect(res.body.data.roles).toEqual(['TEACHER', 'PARENT']);
+    });
+
+    it('reverts a parent-view token to the staff view once the last link is gone', async () => {
+      mockQueryResponse([teacherRow()]);
+      mockQueryResponse([buildTermRow()]);
+      unlinked();
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${parentViewToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.role).toBe('TEACHER');
+      expect(res.body.data.roles).toEqual(['TEACHER']);
+      const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(claims).toMatchObject({ role: 'TEACHER', baseRole: 'TEACHER', roles: ['TEACHER'] });
+    });
+
+    it('reissues when the database role changed under a parent-view token', async () => {
+      mockQueryResponse([teacherRow({ role: 'ADMIN' })]);
+      mockQueryResponse([buildTermRow()]);
+      linked();
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${parentViewToken()}`);
+
+      expect(res.status).toBe(200);
+      // Still linked, so the parent view survives; the base role catches up.
+      const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(claims).toMatchObject({ role: 'PARENT', baseRole: 'ADMIN', roles: ['ADMIN', 'PARENT'] });
+    });
+
+    it('reports the extra view to a staff token minted before the link existed', async () => {
+      mockQueryResponse([teacherRow()]);
+      mockQueryResponse([buildTermRow()]);
+      linked();
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${mockTeacherUser()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.roles).toEqual(['TEACHER', 'PARENT']);
+      expect(res.body.data.token).toBeUndefined();
+    });
+  });
+
+  describe('POST /api/auth/view', () => {
+    const url = '/api/auth/view';
+
+    it('mints a parent-view token for a linked teacher', async () => {
+      mockQueryResponse([teacherRow()]); // selectById
+      mockQueryResponse([buildTermRow()]);
+      linked();
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${mockTeacherUser()}`).send({ view: 'PARENT' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ userId: TEST_TEACHER_USER_ID, role: 'PARENT', baseRole: 'TEACHER', roles: ['TEACHER', 'PARENT'] });
+      expect(res.body.data).toHaveProperty('schoolYears');
+      const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(claims).toMatchObject({ userId: TEST_TEACHER_USER_ID, role: 'PARENT', baseRole: 'TEACHER', roles: ['TEACHER', 'PARENT'], isVerified: true });
+      expect(claims.impersonator).toBeUndefined();
+      // Same lifetime as a sign-in, not the short preview TTL.
+      expect(claims.exp - claims.iat).toBe(7 * 24 * 60 * 60);
+    });
+
+    it('switches a parent-view token back to the staff view', async () => {
+      mockQueryResponse([teacherRow()]);
+      mockQueryResponse([buildTermRow()]);
+      linked();
+      const token = mockTeacherUser({ role: 'PARENT', baseRole: 'TEACHER', roles: ['TEACHER', 'PARENT'] });
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${token}`).send({ view: 'TEACHER' });
+
+      expect(res.status).toBe(200);
+      expect(jwt.verify(res.body.data.token, JWT_SECRET)).toMatchObject({ role: 'TEACHER', baseRole: 'TEACHER' });
+    });
+
+    it('returns an admin from parent view to the ADMIN view under its own name', async () => {
+      mockQueryResponse([teacherRow({ role: 'ADMIN' })]);
+      mockQueryResponse([buildTermRow()]);
+      linked();
+      const token = mockTeacherUser({ role: 'PARENT', baseRole: 'ADMIN', roles: ['ADMIN', 'PARENT'] });
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${token}`).send({ view: 'ADMIN' });
+
+      expect(res.status).toBe(200);
+      expect(jwt.verify(res.body.data.token, JWT_SECRET)).toMatchObject({ role: 'ADMIN', baseRole: 'ADMIN', roles: ['ADMIN', 'PARENT'] });
+    });
+
+    it('never lets a teacher ask for the ADMIN view', async () => {
+      mockQueryResponse([teacherRow()]);
+      mockQueryResponse([buildTermRow()]);
+      linked();
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${mockTeacherUser()}`).send({ view: 'ADMIN' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('refuses a view the user does not hold', async () => {
+      mockQueryResponse([teacherRow()]);
+      mockQueryResponse([buildTermRow()]);
+      unlinked();
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${mockTeacherUser()}`).send({ view: 'PARENT' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.status).toBe('failed');
+    });
+
+    it('refuses an unknown view before touching the database', async () => {
+      const res = await request(app).post(url).set('Authorization', `Bearer ${mockTeacherUser()}`).send({ view: 'OWNER' });
+
+      expect(res.status).toBe(400);
+      expect(db.query).not.toHaveBeenCalledWith(userQueries.selectById, expect.anything());
+    });
+
+    it('refuses an admin preview token', async () => {
+      const token = mockTeacherUser({ impersonator: { userId: TEST_ADMIN_USER_ID, username: 'admin' }, roles: ['TEACHER', 'PARENT'] });
+
+      const res = await request(app).post(url).set('Authorization', `Bearer ${token}`).send({ view: 'PARENT' });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 401 without a token', async () => {
+      const res = await request(app).post(url).send({ view: 'PARENT' });
+      expect(res.status).toBe(401);
+    });
   });
 });

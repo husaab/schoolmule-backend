@@ -18,6 +18,8 @@ const progressReportQueries = require('../queries/progressReports.queries');
 const schoolCalendarQueries = require('../queries/schoolCalendar.queries');
 const aiWeeklySummary = require('../services/aiWeeklySummary.service');
 const { academicYearToRange } = require('../utils/agendaCalendar');
+const analyticsQueries = require('../queries/analytics.queries');
+const { markTaughtByViewer } = require('../utils/parentPortalView');
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -223,6 +225,11 @@ const getStudentGrades = async (req, res) => {
 
     const att = attendance.get(studentId) || null;
 
+    // A teacher looking at their own child flips to the parent view with the
+    // same user id, so their classes can be marked (no "Ask the teacher").
+    const { rows: taughtRows } = await db.query(analyticsQueries.selectClassIdsForTeacher, [req.user.userId]);
+    const classes = markTaughtByViewer(breakdown.classes, taughtRows.map((r) => r.class_id));
+
     return res.status(200).json({
       status: 'success',
       data: {
@@ -239,7 +246,7 @@ const getStudentGrades = async (req, res) => {
           classCount: breakdown.classes.length,
           missingCount: breakdown.missingWork.length,
         },
-        classes: breakdown.classes,
+        classes,
         missingWork: breakdown.missingWork,
       },
     });

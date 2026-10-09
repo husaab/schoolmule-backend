@@ -745,4 +745,69 @@ describe('messaging controller', () => {
       expect(res.status).toBe(403);
     });
   });
+
+  // A staff member linked to their own child acts in the parent view with a
+  // PARENT token. Writing to yourself is never useful, so both anchors refuse
+  // it and the picker never offers it.
+  describe('dual-role: a parent who is also the teacher', () => {
+    const selfTaught = (over = {}) => ({
+      class_id: CLASS, school: SCHOOL, class_subject: 'Math', lead_teacher_id: PARENT,
+      student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
+      assessment_id: ASSESSMENT, assessment_name: 'Unit 3 Quiz', is_published: true, is_parent: false,
+      assessment_in_class: true, student_in_class: true, is_guardian: true, is_co_teacher: false, in_current_term: true, ...over,
+    });
+
+    it('refuses an assessment thread when the parent leads the class', async () => {
+      const r = makeRouter({ 'CROSS JOIN students': [selfTaught()] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('classId', CLASS).field('assessmentId', ASSESSMENT).field('body', 'Hello me');
+      expect(res.status).toBe(403);
+      expect(r.ran('INSERT INTO conversations')).toHaveLength(0);
+    });
+
+    it('refuses an assessment thread when the parent co-teaches the class', async () => {
+      makeRouter({ 'CROSS JOIN students': [selfTaught({ lead_teacher_id: TEACHER, is_co_teacher: true })] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('classId', CLASS).field('assessmentId', ASSESSMENT).field('body', 'Hello me');
+      expect(res.status).toBe(403);
+    });
+
+    it('refuses a general thread addressed to the parent themself', async () => {
+      makeRouter({ 'CROSS JOIN users t': [{
+        student_id: STUDENT, student_name: 'Amina Test', student_school: SCHOOL,
+        teacher_school: SCHOOL, teacher_role: 'TEACHER', teacher_archived: false, teacher_name: 'Me',
+        is_homeroom: true, class_id: null, is_guardian: true, caller_teaches: true,
+      }] });
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())
+        .field('studentId', STUDENT).field('teacherId', PARENT).field('title', 'Note to self').field('body', 'x');
+      expect(res.status).toBe(403);
+    });
+
+    it('leaves the parent out of their own teacher targets', async () => {
+      makeRouter({
+        'SELECT 1 FROM parent_students WHERE student_id = $1 AND parent_id = $2': [{ ok: 1 }],
+        "'Homeroom' AS via": [
+          { user_id: PARENT, name: 'Me Myself', via: 'Homeroom', role: 'TEACHER' },
+          { user_id: TEACHER, name: 'Ahmed Khan', via: 'Math', role: 'TEACHER' },
+        ],
+      });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${STUDENT}`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.teachers).toEqual([{ userId: TEACHER, name: 'Ahmed Khan', via: 'Math', role: 'TEACHER' }]);
+    });
+
+    it('links a guardian email that belongs to a staff account instead of skipping it', async () => {
+      const unlinked = { parent_student_link_id: LINK, parent_name: 'Hana Test', parent_email: 'hana@example.com', relation: 'Mother', invited_at: null };
+      const r = makeRouter({
+        'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked],
+        'LOWER(email) = LOWER($1)': [{ user_id: 'staff-guardian', role: 'TEACHER', password: 'hashed', is_archived: false }],
+        'SET parent_id = $2': [{ parent_student_link_id: LINK }],
+      });
+      const res = await authenticatedRequest('post', `/api/messaging/conversations/${CONVO}/messages`, mockTeacherUser()).field('body', 'Reminder');
+      expect(res.status).toBe(201);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'staff-guardian', TEACHER, CONVO, false]);
+      expect(global.__mockInviteSend).not.toHaveBeenCalled();
+      expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'linked' }]);
+    });
+  });
 });

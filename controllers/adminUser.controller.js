@@ -99,9 +99,8 @@ const getUserDetails = async (req, res) => {
         ? db.query(adminUserQueries.selectHomeroomForUser, [id, schoolYearId])
         : { rows: [] },
       db.query(adminUserQueries.selectStaffByEmail, [user.email, school]),
-      user.role === "PARENT"
-        ? db.query(adminUserQueries.selectChildrenForParent, [id, school])
-        : { rows: [] },
+      // Every role: a teacher or admin linked to a student is also a parent.
+      db.query(adminUserQueries.selectChildrenForParent, [id, school]),
       loadArchiveBlockers(id, user.role, school),
     ]);
 

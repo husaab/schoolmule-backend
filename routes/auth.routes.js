@@ -1,7 +1,7 @@
 const express = require("express");
 const { registerUser, login, sendVerificationEmail, verifyEmail, approveUserForSchool,
 getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserForSchool, logout, requestPasswordReset,
-validateResetToken, resetPassword, validateSession} = require("../controllers/auth.controller");
+validateResetToken, resetPassword, validateSession, switchView} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -29,5 +29,9 @@ router.post("/reset-password", resetPassword);
 
 // Session validation
 router.get("/me", validateSession);
+
+// Dual-role view switch (staff who are also parents). verifyUser already
+// refuses a POST from an admin "view as" preview token.
+router.post("/view", verifyUser, switchView);
 
 module.exports = router;

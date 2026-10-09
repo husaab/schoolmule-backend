@@ -12,10 +12,53 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const approvalActions = require('../services/approvalActions');
 const { SIGNUP_ROLES } = approvalActions;
 
-const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessionContext');
+const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = require('../utils/sessionContext');
 const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
 const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
+
+const SESSION_TTL = '7d';
+
+// The session JWT. `role` is the view the user is acting in and is what every
+// guard reads; `baseRole` is the database role and `roles` every view the
+// user may switch to (utils/sessionContext.getRolesForUser). For most users
+// all three say the same thing. A staff member who is also a parent carries
+// roles [TEACHER, PARENT] and flips `role` through POST /auth/view.
+const signSessionToken = ({ user, role, roles, activeTerm }) =>
+  jwt.sign(
+    {
+      userId: user.user_id,
+      username: user.username,
+      email: user.email,
+      school: user.school,
+      role,
+      baseRole: user.role,
+      roles,
+      isVerified: user.is_verified,
+      isVerifiedSchool: user.is_verified_school,
+      activeTerm: activeTerm ? activeTerm.name : false,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: SESSION_TTL }
+  );
+
+// The identity half of a session response, shared by login, /me and /view so
+// the client hydrates its stores the same way whichever one it called.
+const sessionIdentity = (user, role, roles) => ({
+  userId: user.user_id,
+  username: user.username,
+  fullName: `${user.first_name} ${user.last_name}`,
+  email: user.email,
+  school: user.school,
+  role,
+  baseRole: user.role,
+  roles,
+  isVerified: user.is_verified,
+  isVerifiedSchool: user.is_verified_school,
+  isPlatformOwner: isPlatformOwner(user.email),
+  createdAt: user.created_at,
+  lastModifiedAt: user.last_modified_at,
+});
 
 // Every sign-in attempt, however it ends, becomes a login_events row.
 const recordLogin = (req, { email, user, outcome }) => {
@@ -202,38 +245,16 @@ const recordLogin = (req, { email, user, outcome }) => {
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
       const yearContext = await getSchoolYearContext(user.school);
+      // Sign-in always starts in the database role; the parent view is a switch away.
+      const roles = await getRolesForUser(user);
 
-      // Create JWT token with user data
-      const tokenPayload = {
-        userId: user.user_id,
-        username: user.username,
-        email: user.email,
-        school: user.school,
-        role: user.role,
-        isVerified: user.is_verified,
-        isVerifiedSchool: user.is_verified_school,
-        activeTerm: activeTerm ? activeTerm.name : false
-      };
-
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
-        expiresIn: '7d'
-      });
+      const token = signSessionToken({ user, role: user.role, roles, activeTerm });
 
       return {
         status: 200,
         message: "User login successful",
         data: {
-          userId: user.user_id,
-          username: user.username,
-          fullName: `${user.first_name} ${user.last_name}`,
-          email: user.email,
-          school: user.school,
-          role: user.role,
-          isVerified: user.is_verified,
-          isVerifiedSchool: user.is_verified_school,
-          isPlatformOwner: isPlatformOwner(user.email),
-          createdAt: user.created_at,
-          lastModifiedAt: user.last_modified_at,
+          ...sessionIdentity(user, user.role, roles),
           activeTerm: activeTerm ? activeTerm.name : false,
           activeSchoolYear: yearContext.activeSchoolYear,
           schoolYears: yearContext.schoolYears,
@@ -628,31 +649,23 @@ const validateSession = async (req, res) => {
     // Get active term for the user's school
     const activeTerm = await getActiveTermForSchool(user.school);
     const yearContext = await getSchoolYearContext(user.school);
+    const roles = await getRolesForUser(user);
 
-    // Approval or a role change after sign-in leaves the token's claims
-    // behind the database. Reissue so an open app recovers without a
-    // sign-out. Never for a preview token: that must stay the admin's.
+    // Approval, a role change, or a parent link removed after sign-in leaves
+    // the token's claims behind the database. Reissue so an open app recovers
+    // without a sign-out. The active view survives a reissue as long as the
+    // user still holds it (a teacher in parent view stays in parent view);
+    // otherwise they land back in the database role. Never for a preview
+    // token: that must stay the admin's.
+    const viewStillHeld = roles.includes(decoded.role);
     const claimsDrifted =
       !decoded.impersonator &&
       (decoded.isVerified !== user.is_verified ||
         decoded.isVerifiedSchool !== user.is_verified_school ||
-        decoded.role !== user.role);
-    const refreshedToken = claimsDrifted
-      ? jwt.sign(
-          {
-            userId: user.user_id,
-            username: user.username,
-            email: user.email,
-            school: user.school,
-            role: user.role,
-            isVerified: user.is_verified,
-            isVerifiedSchool: user.is_verified_school,
-            activeTerm: activeTerm ? activeTerm.name : null,
-          },
-          process.env.JWT_SECRET,
-          { expiresIn: '7d' }
-        )
-      : undefined;
+        !viewStillHeld ||
+        (decoded.baseRole ?? decoded.role) !== user.role);
+    const role = viewStillHeld ? decoded.role : user.role;
+    const refreshedToken = claimsDrifted ? signSessionToken({ user, role, roles, activeTerm }) : undefined;
 
     return res.status(200).json({
       success: true,
@@ -660,17 +673,7 @@ const validateSession = async (req, res) => {
       data: {
         // Present only when the claims drifted; the client stores it.
         ...(refreshedToken && { token: refreshedToken }),
-        userId: user.user_id,
-        username: user.username,
-        fullName: `${user.first_name} ${user.last_name}`,
-        email: user.email,
-        school: user.school,
-        role: user.role,
-        isVerified: user.is_verified,
-        isVerifiedSchool: user.is_verified_school,
-        isPlatformOwner: isPlatformOwner(user.email),
-        createdAt: user.created_at,
-        lastModifiedAt: user.last_modified_at,
+        ...sessionIdentity(user, role, roles),
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,
@@ -700,9 +703,60 @@ const validateSession = async (req, res) => {
   }
 };
 
+const KNOWN_VIEWS = ['ADMIN', 'TEACHER', 'PARENT'];
+
+// POST /api/auth/view  { view: 'ADMIN' | 'TEACHER' | 'PARENT' }
+// Reissues the caller's session token with `role` set to the requested view.
+// The check is server-side and current: a view is granted only if
+// getRolesForUser lists it right now, so a stale or edited `roles` claim buys
+// nothing. The database role is always listed, which is how an admin or
+// teacher leaves the parent view; nobody is ever granted ADMIN by this route
+// unless ADMIN is already their database role. Preview tokens never get here
+// (verifyUser refuses their POSTs). Mirrors /auth/login so the client can
+// hydrate its stores the same way.
+const switchView = async (req, res) => {
+  const view = req.body?.view;
+  if (!KNOWN_VIEWS.includes(view)) {
+    return res.status(400).json({ status: 'failed', message: 'Choose a view to switch to' });
+  }
+
+  try {
+    const { rows } = await db.query(userQueries.selectById, [req.user.userId]);
+    const user = rows[0];
+    if (!user || user.is_archived) {
+      return res.status(401).json({ status: 'failed', message: 'Session is no longer valid' });
+    }
+
+    const activeTerm = await getActiveTermForSchool(user.school);
+    const yearContext = await getSchoolYearContext(user.school);
+    const roles = await getRolesForUser(user);
+    if (!roles.includes(view)) {
+      return res.status(403).json({ status: 'failed', message: "You don't have that view on this account" });
+    }
+
+    logger.info({ userId: user.user_id, school: user.school, from: req.user.role, to: view }, 'User switched view');
+
+    return res.status(200).json({
+      status: 'success',
+      message: view === 'PARENT' ? "You're now in Parent view" : `You're back in ${view === 'ADMIN' ? 'Administrator' : 'Teacher'} view`,
+      data: {
+        ...sessionIdentity(user, view, roles),
+        activeTerm: activeTerm ? activeTerm.name : false,
+        activeSchoolYear: yearContext.activeSchoolYear,
+        schoolYears: yearContext.schoolYears,
+        token: signSessionToken({ user, role: view, roles, activeTerm }),
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to switch view');
+    return res.status(500).json({ status: 'failed', message: 'Error switching view' });
+  }
+};
+
 module.exports = {
     registerUser,
     login,
+    switchView,
     sendVerificationEmail,
     verifyEmail,
     approveUserForSchool,
