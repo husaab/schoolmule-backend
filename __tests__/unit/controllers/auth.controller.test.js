@@ -108,10 +108,10 @@ describe('POST /api/auth/register', () => {
       .post(url)
       .send({ email: 'test@test.com' }); // missing fields
 
-    // Controller catches the error and RETURNS it (not throws),
-    // so responseParser wraps it as success: true with the error status
+    // Controller catches the error and RETURNS it (not throws);
+    // responseParser keeps the status and reports success by it.
     expect(res.status).toBe(500);
-    expect(res.body.success).toBe(true);
+    expect(res.body.success).toBe(false);
   });
 
   it('returns 400 when email already exists (23505)', async () => {
@@ -159,19 +159,18 @@ describe('POST /api/auth/login', () => {
     expect(res.body.data.email).toBe(body.email);
   });
 
-  it('returns 500 (wrapping 404) when user not found', async () => {
+  it('returns 404 when user not found', async () => {
     const body = buildLoginBody();
     mockQueryResponse([]); // no user found
 
     const res = await request(app).post(url).send(body);
 
-    // Controller catches its own error and RETURNS it, so responseParser
-    // wraps it as success: true with the returned status
-    expect(res.status).toBe(500);
-    expect(res.body.success).toBe(true);
+    // The controller's thrown { status } is the verdict, not a crash.
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
   });
 
-  it('returns 500 (wrapping 401) when password is invalid', async () => {
+  it('returns 401 when password is invalid', async () => {
     const body = buildLoginBody();
     const user = buildUserRow({ email: body.email });
     mockQueryResponse([user]);
@@ -180,8 +179,8 @@ describe('POST /api/auth/login', () => {
 
     const res = await request(app).post(url).send(body);
 
-    expect(res.status).toBe(500);
-    expect(res.body.success).toBe(true);
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
   });
 
   it('auto-verifies admin users on login', async () => {

@@ -15,6 +15,8 @@ const userQueries = {
       WHERE email = $1
     `,
 
+    touchLastLogin: `UPDATE users SET last_login_at = NOW() WHERE user_id = $1`,
+
     selectById: `
       SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, created_at, last_modified_at
       FROM users 

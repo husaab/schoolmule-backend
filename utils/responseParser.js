@@ -5,8 +5,9 @@ const responseHandler = (controller) => {
         try {
             const result = await controller(req, res, next);
             if (result) {
-                return res.status(result.status || 200).json({
-                    success: true,
+                const status = result.status || 200;
+                return res.status(status).json({
+                    success: status < 400,
                     message: result.message || "Request successful",
                     data: result.data || null,
                     ...(result.pagination && { pagination: result.pagination }),

@@ -14,6 +14,20 @@ const { SIGNUP_ROLES } = approvalActions;
 
 const { getActiveTermForSchool, getSchoolYearContext } = require('../utils/sessionContext');
 const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
+const observeBuffer = require('../services/observe/eventBuffer');
+const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
+
+// Every sign-in attempt, however it ends, becomes a login_events row.
+const recordLogin = (req, { email, user, outcome }) => {
+  observeBuffer.push('login_events', {
+    email: String(email || '').trim().toLowerCase(),
+    user_id: user ? user.user_id : null,
+    school: user ? user.school : null,
+    outcome,
+    ip: req.ip || null,
+    user_agent: req.headers['user-agent'] || null,
+  });
+};
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -145,24 +159,28 @@ const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
 
   const login = async (req, res) => {
     const { email, password } = req.body;
+    let user = null;
 
     try {
       const sql = userQueries.loginUser;
       const result = await db.query(sql, [email]);
 
       if (result.rows.length === 0) {
+        recordLogin(req, { email, user: null, outcome: 'unknown_email' });
         throw { status: 404, message: "User not found" };
       }
 
-      const user = result.rows[0];
+      user = result.rows[0];
       const isPasswordValid = await bcrypt.compare(password, user.password);
 
       if (!isPasswordValid) {
+        recordLogin(req, { email, user, outcome: 'bad_password' });
         throw { status: 401, message: "Invalid credentials" };
       }
 
       // Archived accounts keep their history but can't sign in.
       if (user.is_archived) {
+        recordLogin(req, { email, user, outcome: 'archived' });
         throw { status: 403, message: "This account has been archived. Contact your school admin." };
       }
 
@@ -170,6 +188,11 @@ const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
         user.is_verified = true;
         user.is_verified_school = true;
       }
+
+      recordLogin(req, { email, user, outcome: user.is_verified && user.is_verified_school ? 'success' : 'not_verified' });
+      db.query(userQueries.touchLastLogin, [user.user_id]).catch((err) => {
+        logger.warn({ observe: true, err }, 'last_login_at update failed');
+      });
 
       // Get active term for the user's school
       const activeTerm = await getActiveTermForSchool(user.school);
@@ -203,6 +226,7 @@ const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
           role: user.role,
           isVerified: user.is_verified,
           isVerifiedSchool: user.is_verified_school,
+          isPlatformOwner: isPlatformOwner(user.email),
           createdAt: user.created_at,
           lastModifiedAt: user.last_modified_at,
           activeTerm: activeTerm ? activeTerm.name : false,
@@ -213,9 +237,12 @@ const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
       };
 
     } catch (error) {
-      logger.error({ err: error }, "Login failed");
+      // A thrown { status, message } is a verdict, not a failure: keep its
+      // status so a wrong password is a 401 and never counts as a 500.
+      const status = Number.isInteger(error.status) ? error.status : 500;
+      if (status >= 500) logger.error({ err: error }, "Login failed");
       return {
-        status: 500,
+        status,
         message: error.message || "Internal Server Error"
       };
     }
@@ -613,6 +640,7 @@ const validateSession = async (req, res) => {
         role: user.role,
         isVerified: user.is_verified,
         isVerifiedSchool: user.is_verified_school,
+        isPlatformOwner: isPlatformOwner(user.email),
         createdAt: user.created_at,
         lastModifiedAt: user.last_modified_at,
         activeTerm: activeTerm ? activeTerm.name : false,
