@@ -41,6 +41,8 @@ CREATE TABLE users (
   archived_by            UUID REFERENCES users(user_id) ON DELETE SET NULL,
   declined_at            TIMESTAMPTZ,
   staff_title            TEXT,
+  last_seen_at           TIMESTAMPTZ,
+  last_login_at          TIMESTAMPTZ,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)
@@ -1529,3 +1531,73 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_announcement_email_jobs_recipient
   ON announcement_email_jobs(announcement_id, LOWER(recipient_email));
 CREATE INDEX IF NOT EXISTS idx_announcement_email_jobs_due ON announcement_email_jobs(send_after) WHERE status = 'pending';
 
+-- Observe console (from observe_migration.sql)
+CREATE TABLE IF NOT EXISTS request_events (
+  event_id        BIGSERIAL PRIMARY KEY,
+  ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  request_id      TEXT,
+  user_id         UUID,
+  school          TEXT,
+  role            TEXT,
+  impersonator_id UUID,
+  method          TEXT NOT NULL,
+  route           TEXT NOT NULL,
+  path            TEXT NOT NULL,
+  status          SMALLINT NOT NULL,
+  duration_ms     INTEGER NOT NULL,
+  ip              TEXT,
+  user_agent      TEXT,
+  error_message   TEXT
+);
+CREATE INDEX IF NOT EXISTS request_events_ts_idx       ON request_events (ts DESC);
+CREATE INDEX IF NOT EXISTS request_events_user_ts_idx  ON request_events (user_id, ts DESC);
+CREATE INDEX IF NOT EXISTS request_events_route_ts_idx ON request_events (route, ts DESC);
+CREATE INDEX IF NOT EXISTS request_events_err_ts_idx   ON request_events (ts DESC) WHERE status >= 400;
+
+CREATE TABLE IF NOT EXISTS error_events (
+  event_id    BIGSERIAL PRIMARY KEY,
+  ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source      TEXT NOT NULL,
+  request_id  TEXT,
+  user_id     UUID,
+  school      TEXT,
+  route       TEXT,
+  message     TEXT NOT NULL,
+  stack       TEXT,
+  fingerprint TEXT NOT NULL,
+  context     JSONB
+);
+CREATE INDEX IF NOT EXISTS error_events_ts_idx    ON error_events (ts DESC);
+CREATE INDEX IF NOT EXISTS error_events_fp_ts_idx ON error_events (fingerprint, ts DESC);
+
+CREATE TABLE IF NOT EXISTS client_events (
+  event_id    BIGSERIAL PRIMARY KEY,
+  ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  user_id     UUID,
+  school      TEXT,
+  role        TEXT,
+  kind        TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  stack       TEXT,
+  page        TEXT,
+  user_agent  TEXT,
+  request_id  TEXT,
+  status      SMALLINT,
+  fingerprint TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS client_events_ts_idx    ON client_events (ts DESC);
+CREATE INDEX IF NOT EXISTS client_events_fp_ts_idx ON client_events (fingerprint, ts DESC);
+
+CREATE TABLE IF NOT EXISTS login_events (
+  event_id   BIGSERIAL PRIMARY KEY,
+  ts         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  email      TEXT NOT NULL,
+  user_id    UUID,
+  school     TEXT,
+  outcome    TEXT NOT NULL,
+  ip         TEXT,
+  user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS login_events_ts_idx ON login_events (ts DESC);
+
+CREATE INDEX IF NOT EXISTS users_last_seen_idx ON users (last_seen_at DESC) WHERE last_seen_at IS NOT NULL;
