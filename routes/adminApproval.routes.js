@@ -1,6 +1,7 @@
 const express = require("express");
 const requireAdmin = require("../middleware/requireAdmin");
 const controller = require("../controllers/adminApproval.controller");
+const { adminVerificationResendLimiter } = require("../middleware/spamProtection");
 
 const router = express.Router();
 
@@ -22,5 +23,7 @@ router.patch("/:id/role", controller.changeRole);
 router.patch("/:id/name", controller.rename);
 router.post("/:id/decline", controller.decline);
 router.post("/:id/restore", controller.restore);
+router.post("/:id/resend-verification", adminVerificationResendLimiter, controller.resendVerification);
+router.post("/:id/verify-email", controller.verifyEmail);
 
 module.exports = router;

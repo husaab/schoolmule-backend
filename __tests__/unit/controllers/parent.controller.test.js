@@ -36,7 +36,21 @@ describe('Parent Controller', () => {
       expect(res.body.data[0].userId).toBe(TEST_PARENT_USER_ID);
       expect(res.body.data[0].firstName).toBe('Parent');
       expect(res.body.data[0].lastName).toBe('User');
+      expect(res.body.data[0].fullName).toBe('Parent User');
       expect(res.body.data[0].email).toBe('parent@test.com');
+    });
+
+    it('builds fullName from whichever name parts exist', async () => {
+      const row = buildUserRow({
+        user_id: TEST_PARENT_USER_ID,
+        role: 'PARENT',
+        first_name: 'Parent',
+        last_name: null,
+        school: TEST_SCHOOL,
+      });
+      mockQueryResponse([row]);
+      const res = await authGet('/api/parents');
+      expect(res.body.data[0].fullName).toBe('Parent');
     });
 
     it('should return 200 with empty array when no parents', async () => {

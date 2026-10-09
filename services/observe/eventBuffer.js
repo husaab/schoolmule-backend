@@ -57,6 +57,8 @@ function buildInsert(table, rows) {
       let v = row[col];
       if (v === undefined) v = null;
       if (JSON_COLUMNS.has(col) && v !== null) v = JSON.stringify(v);
+      // Postgres text rejects NUL, and one rejected row fails the whole batch.
+      if (typeof v === 'string') v = v.replace(/\u0000/g, '');
       values.push(v);
       return `$${i * cols.length + j + 1}`;
     });
@@ -78,6 +80,24 @@ async function flushNow() {
           counters.flushes += 1;
         } catch (err) {
           counters.failures += 1;
+          // A bad value (SQLSTATE class 22, e.g. a number out of range) in
+          // one row must not cost everyone else's rows: retry them one by
+          // one. Any other failure means the database itself is down, so
+          // don't hammer it.
+          if (typeof err?.code === 'string' && err.code.startsWith('22') && rows.length > 1) {
+            let kept = 0;
+            for (const row of rows) {
+              const single = buildInsert(table, [row]);
+              try {
+                await db.query(single.text, single.values);
+                kept += 1;
+              } catch {
+                // this row is the bad one
+              }
+            }
+            logger.warn({ observe: true, err, table, rows: rows.length, kept }, 'observe: batch had a bad row; retried one by one');
+            continue;
+          }
           // warn, not error: the log mirror only listens to error lines, so
           // a failing database can never feed itself more rows.
           logger.warn({ observe: true, err, table, rows: rows.length }, 'observe: flush failed; rows dropped');

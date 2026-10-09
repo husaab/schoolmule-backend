@@ -61,6 +61,36 @@ describe('eventBuffer', () => {
     expect(buffer.stats().failures).toBe(1);
   });
 
+  it('retries one by one when a row has a bad value, keeping the good rows', async () => {
+    db.query
+      .mockRejectedValueOnce(Object.assign(new Error('smallint out of range'), { code: '22003' }))
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValueOnce(Object.assign(new Error('smallint out of range'), { code: '22003' }));
+    buffer.push('login_events', { email: 'good@test.com', outcome: 'success' });
+    buffer.push('login_events', { email: 'bad@test.com', outcome: 'success' });
+    await buffer.flushNow();
+    // one batch insert, then one insert per row
+    const inserts = db.query.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO login_events'))
+    expect(inserts).toHaveLength(3);
+    expect(inserts[1][1]).toContain('good@test.com');
+    expect(buffer.pending()).toBe(0);
+  });
+
+  it('does not retry row by row when the database is down', async () => {
+    db.query.mockRejectedValueOnce(Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }));
+    buffer.push('login_events', { email: 'a@test.com', outcome: 'success' });
+    buffer.push('login_events', { email: 'b@test.com', outcome: 'success' });
+    await buffer.flushNow();
+    expect(db.query.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO login_events'))).toHaveLength(1);
+  });
+
+  it('strips NUL characters, which Postgres text rejects', async () => {
+    buffer.push('login_events', { email: 'a\u0000b@test.com', outcome: 'success' });
+    await buffer.flushNow();
+    const [, values] = db.query.mock.calls.find(([sql]) => sql.startsWith('INSERT INTO login_events'));
+    expect(values).toContain('ab@test.com');
+  });
+
   it('serialises jsonb context', async () => {
     buffer.push('error_events', { source: 'server', message: 'x', fingerprint: 'f', context: { a: 1 } });
     await buffer.flushNow();

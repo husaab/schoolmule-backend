@@ -24,10 +24,13 @@ const errorHandler = (err, req, res, next) => {
   }
 
   const isProduction = process.env.NODE_ENV === "production";
+  // A thrown { status: 4xx, message } is a verdict meant for the user; only
+  // a 5xx may carry internals, so only that is masked in production.
+  const maskMessage = isProduction && statusCode >= 500;
 
   res.status(statusCode).json({
     success: false,
-    message: isProduction
+    message: maskMessage
       ? "Internal Server Error"
       : err.message || "Internal Server Error",
     ...(!isProduction && { stack: err.stack }),

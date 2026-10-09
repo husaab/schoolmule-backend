@@ -184,7 +184,12 @@ const recordLogin = (req, { email, user, outcome }) => {
         throw { status: 403, message: "This account has been archived. Contact your school admin." };
       }
 
-      if (user.role === 'ADMIN') {
+      // Admins skip both checks. Persist it, not just the token: otherwise
+      // /me reads false from the database, sees drift and reissues a token
+      // that every route then rejects as ACCOUNT_NOT_VERIFIED.
+      if (user.role === 'ADMIN' && (!user.is_verified || !user.is_verified_school)) {
+        await db.query(userQueries.markAdminVerified, [user.user_id]);
+        logger.info({ userId: user.user_id, school: user.school }, "Admin account marked verified at login");
         user.is_verified = true;
         user.is_verified_school = true;
       }
@@ -260,11 +265,14 @@ const recordLogin = (req, { email, user, outcome }) => {
       }
   
       const user = result.rows[0];
+      // This route isn't wrapped in responseParser: answer through res, or
+      // the request hangs.
       if (user.is_verified) {
-        return {
-          status: 200,
-          message: "User already verified"
-        };
+        return res.status(200).json({
+          success: true,
+          message: "User already verified",
+          data: { alreadyVerified: true }
+        });
       }
   
       const verificationUrl = `${process.env.FRONTEND_URL}/verify-email-token?token=${user.email_token}`;
@@ -301,14 +309,24 @@ const recordLogin = (req, { email, user, outcome }) => {
       const result = await db.query(userQueries.verifyEmailToken, [token]);
   
       if (result.rowCount === 0) {
-        throw { status: 400, message: "Invalid or expired token" };
+        // Nothing flipped: either the link was already used (a second click,
+        // a mail scanner's prefetch, a re-run effect) or it never existed.
+        const existing = await db.query(userQueries.selectByEmailToken, [token]);
+        if (existing.rowCount === 0) {
+          throw { status: 400, message: "This verification link is invalid or has already been used. Try signing in." };
+        }
+        // Already verified: say so, and send no emails a second time.
+        return res.status(200).json({
+          success: true,
+          message: "Email already verified",
+          data: { alreadyVerified: true }
+        });
       }
   
       const user = result.rows[0];
 
-      // The token was consumed above, so the verification itself succeeded.
-      // Neither courtesy email below may fail the request: a retry would only
-      // see "Invalid or expired token". Log and carry on.
+      // The verification itself succeeded above. Neither courtesy email below
+      // may fail the request. Log and carry on.
       const html = getConfirmedEmailHTML({ name: user.username });
 
       await sendSafely(resend, {
@@ -340,6 +358,7 @@ const recordLogin = (req, { email, user, outcome }) => {
         success: true,
         message: "Email verified successfully",
         data: {
+          alreadyVerified: false,
           id: user.user_id,
           email: user.email,
           username: user.username,
@@ -595,6 +614,15 @@ const validateSession = async (req, res) => {
         success: false,
         message: 'This account has been archived'
       });
+    }
+
+    // Same rule as login: an admin is always verified. Repair a row that
+    // predates the login fix so this check and the token can't disagree.
+    if (user.role === 'ADMIN' && (!user.is_verified || !user.is_verified_school)) {
+      await db.query(userQueries.markAdminVerified, [user.user_id]);
+      logger.info({ userId: user.user_id, school: user.school }, "Admin account marked verified at session check");
+      user.is_verified = true;
+      user.is_verified_school = true;
     }
     
     // Get active term for the user's school

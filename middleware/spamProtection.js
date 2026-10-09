@@ -28,6 +28,22 @@ const verificationEmailLimiter = rateLimit({
   legacyHeaders: false
 });
 
+// Admin "Resend email" on the Approvals page - 20 per 15 minutes per admin.
+// Its own counter: sharing the public limiter (3 per IP) would lock an admin
+// out after three stuck signups, or when a parent on the school network
+// resends their own.
+const adminVerificationResendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  message: {
+    status: 'failed',
+    message: 'Too many verification emails sent. Please try again in a few minutes.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.userId || req.ip
+});
+
 // Rate limiter for password reset - 3 per 15 minutes per IP
 const passwordResetLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -130,6 +146,7 @@ const validateInput = (req, res, next) => {
 module.exports = {
   signupLimiter,
   verificationEmailLimiter,
+  adminVerificationResendLimiter,
   passwordResetLimiter,
   contactFormLimiter,
   loginLimiter,

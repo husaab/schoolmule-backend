@@ -1,5 +1,6 @@
-// Mounted at /api/observe/client-events AHEAD of the owner-gated router so
-// every signed-in browser can report, but nothing else under /observe opens up.
+// Mounted at /api/observe/client-events AHEAD of the global verifyUser guard
+// (with verifyUser.tokenOnly) and the owner-gated router, so every signed-in
+// browser can report, verified or not, but nothing else under /observe opens up.
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { postClientEvents } = require('../controllers/observeClientEvents.controller');

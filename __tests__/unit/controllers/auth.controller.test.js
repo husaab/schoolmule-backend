@@ -1,8 +1,11 @@
-jest.mock('resend', () => ({
-  Resend: jest.fn(() => ({
-    emails: { send: jest.fn().mockResolvedValue({}) },
-  })),
-}));
+// One shared send mock so tests can count the emails a request sent.
+jest.mock('resend', () => {
+  const send = jest.fn().mockResolvedValue({});
+  return {
+    Resend: jest.fn(() => ({ emails: { send } })),
+    __send: send,
+  };
+});
 
 jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('$2b$10$hashedpassword'),
@@ -52,6 +55,11 @@ const {
 } = require('../../helpers/factories');
 
 const bcrypt = require('bcrypt');
+const { __send: mockSend } = require('resend');
+const db = require('../../__mocks__/config/database');
+const userQueries = require('../../../queries/user.queries');
+
+const callsTo = (sql) => db.query.mock.calls.filter((c) => c[0] === sql);
 
 let app;
 beforeAll(() => {
@@ -199,6 +207,31 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.isVerified).toBe(true);
     expect(res.body.data.isVerifiedSchool).toBe(true);
+    // Persisted, not just put in the token, so /me can't see drift.
+    expect(callsTo(userQueries.markAdminVerified)).toEqual([[userQueries.markAdminVerified, [user.user_id]]]);
+    const claims = jwt.verify(res.body.data.token, JWT_SECRET);
+    expect(claims).toMatchObject({ isVerified: true, isVerifiedSchool: true });
+  });
+
+  it('does not touch an admin row that is already verified', async () => {
+    const body = buildLoginBody();
+    mockQueryResponse([buildUserRow({ email: body.email, role: 'ADMIN', is_verified: true, is_verified_school: true })]);
+
+    const res = await request(app).post(url).send(body);
+
+    expect(res.status).toBe(200);
+    expect(callsTo(userQueries.markAdminVerified)).toHaveLength(0);
+  });
+
+  it('never auto-verifies a parent', async () => {
+    const body = buildLoginBody();
+    mockQueryResponse([buildUserRow({ email: body.email, role: 'PARENT', is_verified: false, is_verified_school: false })]);
+
+    const res = await request(app).post(url).send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isVerified).toBe(false);
+    expect(callsTo(userQueries.markAdminVerified)).toHaveLength(0);
   });
 });
 
@@ -219,7 +252,7 @@ describe('POST /api/auth/verify-email', () => {
     expect(res.body.message).toContain('Verification email sent');
   });
 
-  it.skip('returns 200 when user is already verified (controller bug: returns object without using res)', async () => {
+  it('answers (does not hang) when the user is already verified', async () => {
     const user = buildUserRow({ is_verified: true });
     mockQueryResponse([user]);
 
@@ -227,23 +260,13 @@ describe('POST /api/auth/verify-email', () => {
       .post(url)
       .send({ email: user.email });
 
-    // sendVerificationEmail returns { status: 200, message: "User already verified" }
-    // but then also does return res.status(200)... Actually looking at the code:
-    // if user.is_verified it does: return { status: 200, message: "User already verified" }
-    // This is NOT wrapped in responseParser, so no { success: true } wrapper.
-    // But the route does NOT use responseParser, it directly calls sendVerificationEmail.
-    // The function returns an object literal, which Express ignores.
-    // Actually wait - it does `return { status: 200, message: ... }` without using res.
-    // This means Express won't send a response and the request will hang.
-    // But let's check - the route is: router.post("/verify-email", verificationEmailLimiter, sendVerificationEmail)
-    // sendVerificationEmail writes to res when user is not verified, but returns plain object when verified.
-    // This is actually a bug in the controller. In testing, the request will timeout.
-    // Let me skip this case or expect a timeout-like behavior.
-    // Actually, looking more closely, the function returns an object but the try block
-    // does NOT call next or res, so express will just hang.
-    // For testing purposes, this would cause a timeout.
-    // Let's test the error path instead.
-    expect(true).toBe(true); // skip - controller bug
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      success: true,
+      message: 'User already verified',
+      data: { alreadyVerified: true },
+    });
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('returns 500 when user not found', async () => {
@@ -277,6 +300,39 @@ describe('GET /api/auth/confirm-email', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.message).toContain('Email verified successfully');
     expect(res.body.data).toHaveProperty('email');
+    expect(res.body.data.alreadyVerified).toBe(false);
+    // Confirmation to the user, then the notice to the school's admins.
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend.mock.calls[0][0].to).toBe(user.email);
+    expect(mockSend.mock.calls[1][0].to).toEqual(['admin@school.com']);
+  });
+
+  it('keeps the token, so it only flips an unverified row', async () => {
+    mockQueryResponse([buildUserRow()], 1);
+
+    await request(app).get(url).query({ token: 'valid-token-123' });
+
+    expect(userQueries.verifyEmailToken).not.toMatch(/email_token\s*=\s*null/i);
+    expect(userQueries.verifyEmailToken).toMatch(/is_verified = false/);
+    expect(callsTo(userQueries.verifyEmailToken)[0][1]).toEqual(['valid-token-123']);
+  });
+
+  it('answers 200 alreadyVerified on a second click and sends no emails', async () => {
+    const user = buildUserRow({ is_verified: true });
+    // verifyEmailToken: nothing left to flip
+    mockQueryResponse([], 0);
+    // selectByEmailToken: the token still belongs to the (verified) user
+    mockQueryResponse([user], 1);
+
+    const res = await request(app)
+      .get(url)
+      .query({ token: 'used-token' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({ alreadyVerified: true });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(callsTo(userQueries.getAdminsBySchool)).toHaveLength(0);
   });
 
   it('returns 400 when token is missing', async () => {
@@ -287,12 +343,16 @@ describe('GET /api/auth/confirm-email', () => {
 
   it('returns 400 when token is invalid', async () => {
     mockQueryResponse([], 0);
+    mockQueryResponse([], 0);
 
     const res = await request(app)
       .get(url)
       .query({ token: 'invalid-token' });
 
     expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toBe('This verification link is invalid or has already been used. Try signing in.');
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });
 
@@ -673,6 +733,19 @@ describe('GET /api/auth/me', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.token).toBeUndefined();
     expect(res.body.data.impersonator).toEqual(expect.objectContaining({ userId: TEST_ADMIN_USER_ID }));
+  });
+
+  it('repairs an unverified admin row instead of reissuing a token every route rejects', async () => {
+    const token = mockAdminUser();
+    mockQueryResponse([buildUserRow({ user_id: TEST_ADMIN_USER_ID, role: 'ADMIN', is_verified: false, is_verified_school: false })]);
+
+    const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isVerified).toBe(true);
+    expect(res.body.data.isVerifiedSchool).toBe(true);
+    expect(res.body.data.token).toBeUndefined();
+    expect(callsTo(userQueries.markAdminVerified)).toEqual([[userQueries.markAdminVerified, [TEST_ADMIN_USER_ID]]]);
   });
 
   it('returns 401 when no token provided', async () => {

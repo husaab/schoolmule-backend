@@ -64,11 +64,28 @@ const userQueries = {
       RETURNING *
     `,
 
+    // The token is kept after use so a second click (or a mail scanner's
+    // prefetch) finds the account already verified instead of an unknown
+    // token. Guarded on is_verified = false so only one request wins.
     verifyEmailToken: `
       UPDATE users 
-      SET is_verified = true , email_token = null
-      WHERE email_token = $1
+      SET is_verified = true
+      WHERE email_token = $1 AND is_verified = false
       RETURNING user_id, email, username, is_verified, school
+    `,
+
+    selectByEmailToken: `
+      SELECT user_id, email, username, is_verified, school
+      FROM users
+      WHERE email_token = $1
+    `,
+
+    // Admins skip both checks at login; persist that so /me and the JWT agree.
+    markAdminVerified: `
+      UPDATE users
+      SET is_verified = true, is_verified_school = true, last_modified_at = NOW()
+      WHERE user_id = $1 AND role = 'ADMIN'
+        AND (is_verified = false OR is_verified_school = false)
     `,
 
     getPendingSchoolApprovals: `

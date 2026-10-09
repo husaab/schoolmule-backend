@@ -108,12 +108,15 @@ app.use("/api/registration/google", googleSheetsPublicRoutes);
 // Intuit OAuth callback: no JWT on the redirect, school comes from the signed state.
 app.use("/api/finance/qbo", financePublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
+// Any signed-in browser may report its own errors, verified or not: an
+// unverified or pending account is exactly the one stuck in a redirect loop.
+// So it sits ahead of the global guard with a token-only check (bad tokens
+// still 401). Not recorded by observeRequest; these are events themselves.
+app.use("/api/observe/client-events", verifyUser.tokenOnly, observeClientEventsRoutes);
 
 app.use(verifyUser);
 app.use(observeRequest);
-// Any signed-in browser may report its own errors; only the console is owner-gated.
-app.use("/api/observe/client-events", observeClientEventsRoutes);
-// Cross-school by design: mounted before resolveSchoolYear.
+// Owner-gated console. Cross-school by design: mounted before resolveSchoolYear.
 app.use("/api/observe", requirePlatformOwner, observeRoutes);
 
 app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no year context

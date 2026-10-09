@@ -3,7 +3,8 @@
 // The three things an admin can do with a signup: approve it (optionally
 // fixing the role and linking a parent's children), decline it, or restore a
 // declined one. Shared by the Approvals API and the legacy /api/auth routes so
-// both paths change state the same way.
+// both paths change state the same way. A signup that never verified its
+// email can also be sent the link again, or marked verified by hand.
 //
 // Every action commits its database work first and only then sends email.
 // A mail failure is reported as emailSent:false, never as a failed request:
@@ -14,7 +15,7 @@ const db = require("../config/database");
 const logger = require("../logger");
 const queries = require("../queries/adminApproval.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
-const { getApprovalEmailHTML, getDeclineEmailHTML } = require("../templates/emailTemplate");
+const { getApprovalEmailHTML, getDeclineEmailHTML, getVerificationEmailHTML } = require("../templates/emailTemplate");
 const { toUser } = require("../utils/userMapper");
 const { sendSafely: sendSafelyWith } = require("../utils/emailUtils");
 const { Resend } = require("resend");
@@ -253,6 +254,47 @@ const restoreSignup = async ({ school, userId }) => {
   return { user: toUser(user) };
 };
 
+/** Send an unverified signup their verification link again. */
+const resendVerification = async ({ school, userId, adminId }) => {
+  const user = await withTransaction(async (client) => {
+    const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
+    expectState(rows[0], "unverified", "resend the verification email");
+    const { rows: updated } = await client.query(queries.ensureEmailToken, [userId, school]);
+    return updated[0];
+  });
+
+  // Same link and template as POST /api/auth/verify-email.
+  const emailSent = await sendSafelyWith(
+    resend,
+    {
+      from: "verify@schoolmule.ca",
+      to: user.email,
+      subject: "Verify your email at School Mule",
+      html: getVerificationEmailHTML({
+        name: user.first_name,
+        url: `${process.env.FRONTEND_URL}/verify-email-token?token=${user.email_token}`,
+      }),
+    },
+    "Verification email failed to send",
+    { userId, adminId, action: "resend-verification" }
+  );
+
+  logger.info({ adminId, userId, school, emailSent }, "Admin resent verification email");
+  return { emailSent };
+};
+
+/** Mark an unverified signup's email as verified. They land in the pending queue. */
+const markEmailVerified = async ({ school, userId, adminId }) => {
+  const user = await withTransaction(async (client) => {
+    const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
+    expectState(rows[0], "unverified", "mark the email verified");
+    const { rows: updated } = await client.query(queries.markEmailVerified, [userId, school]);
+    return updated[0];
+  });
+  logger.info({ adminId, userId, school }, "Admin marked email verified");
+  return toUser(user);
+};
+
 /**
  * Students an admin could link to a pending parent: every active-year
  * student, with the ones whose family email matches flagged as suggestions.
@@ -288,5 +330,7 @@ module.exports = {
   renamePendingSignup,
   declineSignup,
   restoreSignup,
+  resendVerification,
+  markEmailVerified,
   childCandidates,
 };

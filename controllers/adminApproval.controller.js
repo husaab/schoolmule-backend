@@ -19,7 +19,7 @@ const fail = (res, error, fallback) => {
   return res.status(500).json({ status: "failed", message: fallback });
 };
 
-// GET /api/admin/approvals — pending and declined signups
+// GET /api/admin/approvals — pending, unverified and declined signups
 const listApprovals = async (req, res) => {
   try {
     const { rows } = await db.query(queries.selectApprovalUsers, [req.user.school]);
@@ -123,4 +123,43 @@ const restore = async (req, res) => {
   }
 };
 
-module.exports = { listApprovals, getChildCandidates, approve, changeRole, rename, decline, restore };
+// POST /api/admin/approvals/:id/resend-verification
+const resendVerification = async (req, res) => {
+  try {
+    const { emailSent } = await actions.resendVerification({
+      school: req.user.school,
+      userId: req.params.id,
+      adminId: req.user.userId,
+    });
+    const message = emailSent ? "Verification email sent" : "Couldn't send the email";
+    return res.status(200).json({ status: "success", message, data: { emailSent } });
+  } catch (error) {
+    return fail(res, error, "Error resending verification email");
+  }
+};
+
+// POST /api/admin/approvals/:id/verify-email
+const verifyEmail = async (req, res) => {
+  try {
+    const data = await actions.markEmailVerified({
+      school: req.user.school,
+      userId: req.params.id,
+      adminId: req.user.userId,
+    });
+    return res.status(200).json({ status: "success", message: "Email marked as verified", data });
+  } catch (error) {
+    return fail(res, error, "Error marking email verified");
+  }
+};
+
+module.exports = {
+  listApprovals,
+  getChildCandidates,
+  approve,
+  changeRole,
+  rename,
+  decline,
+  restore,
+  resendVerification,
+  verifyEmail,
+};

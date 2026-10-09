@@ -2,18 +2,23 @@ const db = require('../config/database');
 const parentQueries = require('../queries/parent.queries');
 const logger = require('../logger');
 
+// fullName is what the admin pickers show; build it here so every client
+// gets the same "First Last".
+const toParent = u => ({
+  userId:    u.user_id,
+  firstName: u.first_name,
+  lastName:  u.last_name,
+  fullName:  [u.first_name, u.last_name].filter(Boolean).join(' '),
+  email:     u.email,
+  school:    u.school,
+  createdAt: u.created_at,
+});
+
 async function getAllParents(req, res) {
   const school = req.user.school;
   try {
     const { rows } = await db.query(parentQueries.selectParentsBySchool, [school]);
-    const data = rows.map(u => ({
-      userId:    u.user_id,
-      firstName: u.first_name,
-      lastName:  u.last_name,
-      email:     u.email,
-      school:    u.school,
-      createdAt: u.created_at,
-    }));
+    const data = rows.map(toParent);
     logger.info(`Fetched ${data.length} parents for school ${school}`);
     res.status(200).json({ status: 'success', data });
   } catch (err) {
@@ -30,14 +35,7 @@ async function getParentById(req, res) {
       return res.status(404).json({ status: 'failed', message: `Parent with id ${id} not found` });
     }
     const u = rows[0];
-    const data = {
-      userId:    u.user_id,
-      firstName: u.first_name,
-      lastName:  u.last_name,
-      email:     u.email,
-      school:    u.school,
-      createdAt: u.created_at,
-    };
+    const data = toParent(u);
     logger.info(`Fetched parent ${id}`);
     res.status(200).json({ status: 'success', data });
   } catch (err) {

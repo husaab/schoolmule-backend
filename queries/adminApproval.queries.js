@@ -1,7 +1,7 @@
 // Queries for the admin Approvals page (/api/admin/approvals). A signup is
-// "pending" once the email is verified and until an admin approves it;
-// declining archives the account and stamps declined_at. Every statement is
-// pinned to a school so an admin only ever sees their own tenant.
+// "unverified" until its email is verified, then "pending" until an admin
+// approves it; declining archives the account and stamps declined_at. Every
+// statement is pinned to a school so an admin only ever sees their own tenant.
 
 const USER_COLUMNS = `
   user_id, email, username, first_name, last_name, school, role,
@@ -11,7 +11,9 @@ const USER_COLUMNS = `
 `;
 
 const adminApprovalQueries = {
-  //  Pending signups plus declined ones, in one trip. The page splits them.
+  //  Pending, unverified and declined signups, in one trip. The page splits
+  //  them on isVerified / isArchived. Admins are never unverified signups
+  //  (login repairs the flags), so a stale admin row stays off the page.
   //  Each row carries the active-year students whose family email matches the
   //  signup's email, so the queue shows "children on file" before review.
   //  $1 = school
@@ -28,8 +30,8 @@ const adminApprovalQueries = {
       ), '[]'::json) AS matched_children
     FROM users
     WHERE school = $1
-      AND is_verified = true
       AND is_verified_school = false
+      AND (is_verified = true OR role <> 'ADMIN')
       AND (is_archived = false OR declined_at IS NOT NULL)
     ORDER BY is_archived, created_at DESC
   `,
@@ -119,6 +121,29 @@ const adminApprovalQueries = {
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2
       AND is_archived = true AND declined_at IS NOT NULL
+    RETURNING ${USER_COLUMNS}
+  `,
+
+  //  Make sure an unverified signup has an email token, minting one if it
+  //  was cleared, and return it for the verification link.
+  //  $1 = user_id, $2 = school
+  ensureEmailToken: `
+    UPDATE users
+    SET email_token = COALESCE(email_token, gen_random_uuid()::text)
+    WHERE user_id = $1 AND school = $2
+      AND is_verified = false AND is_archived = false
+    RETURNING user_id, email, first_name, school, email_token
+  `,
+
+  //  An admin vouches for the email (the person can't find the message).
+  //  Moves the signup into the pending queue; grants no school access.
+  //  $1 = user_id, $2 = school
+  markEmailVerified: `
+    UPDATE users
+    SET is_verified = true,
+        last_modified_at = NOW()
+    WHERE user_id = $1 AND school = $2
+      AND is_verified = false AND is_archived = false
     RETURNING ${USER_COLUMNS}
   `,
 
