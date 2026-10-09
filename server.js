@@ -48,6 +48,7 @@ const announcementRoutes = require("./routes/announcement.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
+const observeClientEventsRoutes = require("./routes/observeClientEvents.routes");
 const healthRoutes = require("./routes/health.routes");
 const observeRequest = require("./middleware/observeRequest");
 const requirePlatformOwner = require("./middleware/requirePlatformOwner");
@@ -110,6 +111,8 @@ app.use("/api/schedule/public", schedulePublicRoutes);
 
 app.use(verifyUser);
 app.use(observeRequest);
+// Any signed-in browser may report its own errors; only the console is owner-gated.
+app.use("/api/observe/client-events", observeClientEventsRoutes);
 // Cross-school by design: mounted before resolveSchoolYear.
 app.use("/api/observe", requirePlatformOwner, observeRoutes);
 
