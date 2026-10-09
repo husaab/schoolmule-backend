@@ -41,7 +41,7 @@ describe('Integration: Student Assessment Routes', () => {
 
     const { rows: classRows } = await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-       VALUES ('ALHAADIACADEMY', 5, 'Math', 'Teacher One', $1, $2, 'Term 1') RETURNING class_id`,
+       VALUES ('ALHAADIACADEMY', '5', 'Math', 'Teacher One', $1, $2, 'Term 1') RETURNING class_id`,
       [TEACHER_USER_ID, termRows[0].term_id]
     );
     const classId = classRows[0].class_id;

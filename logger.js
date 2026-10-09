@@ -39,28 +39,6 @@ const logger = pino(
       error: pino.stdSerializers.err,
     },
 
-    // Most catch blocks call logger.error('Doing x:', error). To pino that
-    // second argument is a printf interpolation value, and with no %s in the
-    // message it is silently dropped: the line reads "Doing x:" and nothing
-    // else, which is how a production 500 can leave no trace of its cause.
-    // Move a trailing error (or any object) into the err key so the stack
-    // reaches stdout and the observe mirror.
-    hooks: {
-      logMethod(args, method) {
-        if (
-          args.length >= 2 &&
-          typeof args[0] === "string" &&
-          args[1] !== null &&
-          typeof args[1] === "object" &&
-          !/%[sdjoO]/.test(args[0])
-        ) {
-          const [msg, err, ...rest] = args;
-          return method.apply(this, [{ err }, msg, ...rest]);
-        }
-        return method.apply(this, args);
-      },
-    },
-
     redact: {
       paths: [
         "password",

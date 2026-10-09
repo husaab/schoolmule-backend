@@ -3,11 +3,15 @@
 // Audience is never stored. `IN_AUDIENCE(s)` says whether student alias `s`
 // is in the audience of announcement alias `a`; every list, guard, count
 // and enqueue is built on it so they can never disagree.
+//
+// students.grade and classes.grade are the "GRADE" enum in production while
+// announcements.grade (and every grade parameter) is TEXT; Postgres has no
+// enum = text operator, so the enum side is always cast with ::text.
 
 const IN_AUDIENCE = (s) => `
   (${s}.school = a.school AND ${s}.is_archived IS NOT TRUE AND (
      (a.scope = 'class'  AND EXISTS (SELECT 1 FROM class_students cs WHERE cs.class_id = a.class_id AND cs.student_id = ${s}.student_id))
-  OR (a.scope = 'grade'  AND ${s}.grade = a.grade AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))
+  OR (a.scope = 'grade'  AND ${s}.grade::text = a.grade AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))
   OR (a.scope = 'school' AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))))`;
 
 // Teacher-side visibility (also the teacher's own posts). `u` = user id param.
@@ -16,9 +20,9 @@ const TEACHER_SEES = (u) => `
    OR a.scope = 'school'
    OR (a.scope = 'class' AND (cl.teacher_id = ${u} OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = a.class_id AND ct.teacher_id = ${u})))
    OR (a.scope = 'grade' AND (
-        EXISTS (SELECT 1 FROM students hs WHERE hs.school = a.school AND hs.grade = a.grade AND hs.homeroom_teacher_id = ${u}
+        EXISTS (SELECT 1 FROM students hs WHERE hs.school = a.school AND hs.grade::text = a.grade AND hs.homeroom_teacher_id = ${u}
                   AND hs.is_archived IS NOT TRUE AND (a.school_year_id IS NULL OR hs.school_year_id = a.school_year_id))
-     OR EXISTS (SELECT 1 FROM classes gc WHERE gc.school = a.school AND gc.grade = a.grade
+     OR EXISTS (SELECT 1 FROM classes gc WHERE gc.school = a.school AND gc.grade::text = a.grade
                   AND (a.school_year_id IS NULL OR gc.school_year_id = a.school_year_id)
                   AND (gc.teacher_id = ${u} OR EXISTS (SELECT 1 FROM class_teachers ct2 WHERE ct2.class_id = gc.class_id AND ct2.teacher_id = ${u}))))))`;
 
@@ -81,7 +85,7 @@ const announcementQueries = {
       AND ($4::uuid IS NULL OR a.school_year_id = $4 OR a.school_year_id IS NULL)
       AND ($5::uuid IS NULL OR a.class_id = $5)
       AND ($6::text IS NULL OR a.scope = $6)
-      AND ($7::text IS NULL OR a.grade = $7 OR cl.grade = $7)
+      AND ($7::text IS NULL OR a.grade = $7 OR cl.grade::text = $7)
       AND ($8::uuid IS NULL OR a.author_id = $8)
       AND ($9::boolean IS FALSE OR a.author_id = $1)
       AND ($10::boolean IS FALSE OR (r.user_id IS NULL AND a.author_id IS DISTINCT FROM $1))
@@ -284,7 +288,7 @@ const announcementQueries = {
     WHERE s.school = $2 AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)
     GROUP BY s.grade
     HAVING $3 = 'ADMIN' OR BOOL_OR(s.homeroom_teacher_id = $1)
-    ORDER BY LENGTH(s.grade), s.grade
+    ORDER BY LENGTH(s.grade::text), s.grade::text
   `,
   // $1 class_id, $2 user_id, $3 school_year_id|null
   canPostToClass: `
@@ -294,7 +298,7 @@ const announcementQueries = {
   `,
   // $1 grade, $2 user_id, $3 school, $4 school_year_id|null
   canPostToGrade: `
-    SELECT EXISTS (SELECT 1 FROM students s WHERE s.school = $3 AND s.grade = $1 AND s.homeroom_teacher_id = $2
+    SELECT EXISTS (SELECT 1 FROM students s WHERE s.school = $3 AND s.grade::text = $1::text AND s.homeroom_teacher_id = $2
                      AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)) AS allowed
   `,
   // $1 school, $2 scope, $3 class_id|null, $4 grade|null, $5 school_year_id|null

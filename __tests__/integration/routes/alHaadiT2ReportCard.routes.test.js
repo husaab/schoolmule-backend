@@ -63,7 +63,7 @@ describe('Integration: Al Haadi T2 report card generation', () => {
   async function seedClassWithScore({ termId, termName, subject, studentId, score }) {
     const { rows: classRows } = await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-       VALUES ('ALHAADIACADEMY', 4, $1, 'Teacher One', $2, $3, $4) RETURNING class_id`,
+       VALUES ('ALHAADIACADEMY', '4', $1, 'Teacher One', $2, $3, $4) RETURNING class_id`,
       [subject, TEACHER_USER_ID, termId, termName]
     );
     const classId = classRows[0].class_id;

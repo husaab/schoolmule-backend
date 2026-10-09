@@ -51,7 +51,7 @@ describe('Integration: Progress Reports Routes (Feedback CRUD)', () => {
     );
     const { rows } = await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-       VALUES ('ALHAADIACADEMY', 5, 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026') RETURNING class_id`,
+       VALUES ('ALHAADIACADEMY', '5', 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026') RETURNING class_id`,
       [TEACHER_USER_ID, termRows[0].term_id]
     );
     return rows[0].class_id;
@@ -167,7 +167,7 @@ describe('Integration: Progress Reports Routes (Feedback CRUD)', () => {
       const classId1 = await seedClass();
       const { rows: classRows2 } = await pool.query(
         `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
-         VALUES ('ALHAADIACADEMY', 5, 'Science', 'Teacher One', $1, (SELECT term_id FROM terms LIMIT 1), 'Term 1 2025-2026') RETURNING class_id`,
+         VALUES ('ALHAADIACADEMY', '5', 'Science', 'Teacher One', $1, (SELECT term_id FROM terms LIMIT 1), 'Term 1 2025-2026') RETURNING class_id`,
         [TEACHER_USER_ID]
       );
       const classId2 = classRows2[0].class_id;

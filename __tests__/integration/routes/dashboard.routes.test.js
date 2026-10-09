@@ -60,7 +60,7 @@ describe('Integration: Dashboard Routes', () => {
     // Seed a class
     await pool.query(
       `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
-       VALUES ('ALHAADIACADEMY', 5, 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026', $3)`,
+       VALUES ('ALHAADIACADEMY', '5', 'Math', 'Teacher One', $1, $2, 'Term 1 2025-2026', $3)`,
       [TEACHER_USER_ID, termRows[0].term_id, activeYearId]
     );
 

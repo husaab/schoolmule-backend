@@ -6,6 +6,9 @@
 -- Enums
 CREATE TYPE school AS ENUM ('ALHAADIACADEMY', 'PLAYGROUND');
 CREATE TYPE attendance_status AS ENUM ('PRESENT', 'ABSENT', 'LATE', 'EXCUSED');
+-- Production types students/classes/report_cards/progress_reports.grade as this
+-- enum; announcements.grade is TEXT, so cross-table comparisons must cast.
+CREATE TYPE "GRADE" AS ENUM ('1', '2', '3', '4', '5', '6', '7', '8', 'JK', 'SK');
 
 -- ─── Tier 0: Foundation Tables (no FKs) ──────────────────────
 
@@ -197,7 +200,7 @@ CREATE TABLE students (
   name                   TEXT NOT NULL,
   school                 school NOT NULL,
   homeroom_teacher_id    UUID REFERENCES users(user_id),
-  grade                  TEXT NOT NULL,
+  grade                  "GRADE" NOT NULL,
   oen                    TEXT,
   mother_name            TEXT,
   mother_email           TEXT,
@@ -267,7 +270,7 @@ CREATE TABLE password_reset_tokens (
 CREATE TABLE classes (
   class_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school                 school NOT NULL,
-  grade                  TEXT NOT NULL,
+  grade                  "GRADE" NOT NULL,
   subject                TEXT NOT NULL,
   teacher_name           TEXT NOT NULL,
   teacher_id             UUID NOT NULL REFERENCES users(user_id),
@@ -413,7 +416,7 @@ CREATE TABLE report_cards (
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   student_name           TEXT,
-  grade                  TEXT,
+  grade                  "GRADE",
   file_path              TEXT,
   generated_at           TIMESTAMPTZ DEFAULT NOW(),
   school                 school NOT NULL,
@@ -438,7 +441,7 @@ CREATE TABLE progress_reports (
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   student_name           TEXT,
-  grade                  TEXT,
+  grade                  "GRADE",
   file_path              TEXT,
   generated_at           TIMESTAMPTZ DEFAULT NOW(),
   school                 school NOT NULL,
