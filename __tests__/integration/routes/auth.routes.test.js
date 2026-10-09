@@ -55,10 +55,10 @@ describe('Integration: Auth Routes', () => {
         .post('/api/auth/register')
         .send({ email: 'john@test.com', password: 'password123' });
 
-      // Controller catches the error and RETURNS { status: 500, message: "Missing required fields" }
-      // responseParser wraps returned values as success: true
+      // Controller catches the error and RETURNS { status: 500, message: "Missing required fields" };
+      // responseParser reports success by the status it returns.
       expect(res.status).toBe(500);
-      expect(res.body.success).toBe(true);
+      expect(res.body.success).toBe(false);
       expect(res.body.message).toContain('Missing required fields');
     });
 
@@ -86,9 +86,8 @@ describe('Integration: Auth Routes', () => {
         });
 
       expect(res.status).toBe(400);
-      // Controller catches duplicate key error and RETURNS { status: 400 },
-      // so responseParser wraps it as success: true
-      expect(res.body.success).toBe(true);
+      // Controller catches the duplicate key error and RETURNS { status: 400 }.
+      expect(res.body.success).toBe(false);
       expect(res.body.message).toContain('email already exists');
     });
   });
@@ -130,13 +129,14 @@ describe('Integration: Auth Routes', () => {
         .post('/api/auth/login')
         .send({ email: 'admin@test.com', password: 'correctpassword' });
 
-      // Same wrapping as other login failures: the controller returns the error.
-      expect(res.status).toBe(500);
+      // The controller's thrown { status: 403 } is the verdict, not a crash.
+      expect(res.status).toBe(403);
+      expect(res.body.success).toBe(false);
       expect(res.body.message).toMatch(/archived/i);
       expect(res.body.data?.token).toBeUndefined();
     });
 
-    it('returns 500 with error message for non-existent user', async () => {
+    it('returns 404 with error message for non-existent user', async () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({
@@ -144,13 +144,12 @@ describe('Integration: Auth Routes', () => {
           password: 'password123',
         });
 
-      // The login controller catches its own error and RETURNS { status: 500, message },
-      // so responseParser wraps it as success: true
-      expect(res.status).toBe(500);
-      expect(res.body.success).toBe(true);
+      // The login controller returns the thrown { status: 404, message } as-is.
+      expect(res.status).toBe(404);
+      expect(res.body.success).toBe(false);
     });
 
-    it('returns 500 with error message for wrong password', async () => {
+    it('returns 401 with error message for wrong password', async () => {
       const res = await request(app)
         .post('/api/auth/login')
         .send({
@@ -158,9 +157,9 @@ describe('Integration: Auth Routes', () => {
           password: 'wrongpassword',
         });
 
-      // Same pattern — controller returns the error, responseParser wraps as success
-      expect(res.status).toBe(500);
-      expect(res.body.success).toBe(true);
+      // Same pattern: a wrong password is a 401, never a server error.
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
     });
   });
 
