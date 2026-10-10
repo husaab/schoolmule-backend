@@ -19,6 +19,7 @@ const { getApprovalEmailHTML, getDeclineEmailHTML, getVerificationEmailHTML } = 
 const { toUser } = require("../utils/userMapper");
 const { sendSafely: sendSafelyWith } = require("../utils/emailUtils");
 const { Resend } = require("resend");
+const { v4: uuidv4 } = require("uuid");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -258,7 +259,7 @@ const resendVerification = async ({ school, userId, adminId }) => {
   const user = await withTransaction(async (client) => {
     const { rows } = await client.query(queries.selectUserForUpdate, [userId, school]);
     expectState(rows[0], "unverified", "resend the verification email");
-    const { rows: updated } = await client.query(queries.ensureEmailToken, [userId, school]);
+    const { rows: updated } = await client.query(queries.ensureEmailToken, [userId, school, uuidv4()]);
     return updated[0];
   });
 

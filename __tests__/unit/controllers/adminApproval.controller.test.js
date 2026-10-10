@@ -74,9 +74,14 @@ describe('POST /api/admin/approvals/:id/resend-verification', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: 'success', message: 'Verification email sent', data: { emailSent: true } });
     expect(clientCallsTo(queries.selectUserForUpdate)[0][1]).toEqual([USER_ID, TEST_SCHOOL]);
-    // Mints a token when it was cleared, keeps the existing one otherwise.
-    expect(queries.ensureEmailToken).toMatch(/COALESCE\(email_token, gen_random_uuid\(\)::text\)/);
-    expect(clientCallsTo(queries.ensureEmailToken)[0][1]).toEqual([USER_ID, TEST_SCHOOL]);
+    // Mints a token when it was cleared, keeps the existing one otherwise. The
+    // token is a bound parameter, not gen_random_uuid()::text, because prod's
+    // users.email_token is uuid and COALESCE(uuid, text) is a Postgres error.
+    expect(queries.ensureEmailToken).toMatch(/COALESCE\(email_token, \$3\)/);
+    expect(queries.ensureEmailToken).not.toMatch(/gen_random_uuid/);
+    const [, , freshToken] = clientCallsTo(queries.ensureEmailToken)[0][1];
+    expect(clientCallsTo(queries.ensureEmailToken)[0][1]).toEqual([USER_ID, TEST_SCHOOL, freshToken]);
+    expect(freshToken).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     // Commit first, then email.
     const sqls = db._mockClient.query.mock.calls.map((c) => c[0]);
     expect(sqls[sqls.length - 1]).toBe('COMMIT');

@@ -333,6 +333,45 @@ describe('Integration: Admin Approvals Routes', () => {
     });
   });
 
+  describe('POST /api/admin/approvals/:id/resend-verification', () => {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    // users.email_token is uuid in prod (and in seed.sql). The query used to
+    // COALESCE the column with gen_random_uuid()::text, which Postgres rejects
+    // with "COALESCE types uuid and text cannot be matched" — a 500 before any
+    // email was attempted. This runs the real statement against a uuid column.
+    it('mints a token when the signup has none and emails the link', async () => {
+      const res = await authenticatedRequest('post', `/api/admin/approvals/${UNVERIFIED_ID}/resend-verification`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: 'success', message: 'Verification email sent', data: { emailSent: true } });
+      const row = await userRow(pool, UNVERIFIED_ID);
+      expect(row.email_token).toMatch(UUID_RE);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const sent = mockSend.mock.calls[0][0];
+      expect(sent.to).toBe('unverified@test.com');
+      expect(sent.html).toContain(`/verify-email-token?token=${row.email_token}`);
+    });
+
+    it('keeps an existing token so earlier emails still verify', async () => {
+      const existing = '550e8400-e29b-41d4-a716-446655440099';
+      await pool.query('UPDATE users SET email_token = $1 WHERE user_id = $2', [existing, UNVERIFIED_ID]);
+
+      const res = await authenticatedRequest('post', `/api/admin/approvals/${UNVERIFIED_ID}/resend-verification`);
+
+      expect(res.status).toBe(200);
+      expect((await userRow(pool, UNVERIFIED_ID)).email_token).toBe(existing);
+      expect(mockSend.mock.calls[0][0].html).toContain(`/verify-email-token?token=${existing}`);
+    });
+
+    it('409s for a signup that already verified and sends nothing', async () => {
+      const res = await authenticatedRequest('post', `/api/admin/approvals/${PENDING_PARENT_ID}/resend-verification`);
+
+      expect(res.status).toBe(409);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
   describe('legacy /api/auth approval routes', () => {
     it('decline-school now persists the decline', async () => {
       const res = await authenticatedRequest('post', '/api/auth/decline-school').send({ userId: PENDING_TEACHER_ID });

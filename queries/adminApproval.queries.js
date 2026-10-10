@@ -127,9 +127,13 @@ const adminApprovalQueries = {
   //  Make sure an unverified signup has an email token, minting one if it
   //  was cleared, and return it for the verification link.
   //  $1 = user_id, $2 = school
+  //  $3 is a fresh uuid minted by the caller. It is bound rather than built
+  //  with gen_random_uuid()::text because users.email_token is uuid in prod:
+  //  COALESCE(uuid, text) is a Postgres error, while a bound parameter takes
+  //  the column's type whatever it is.
   ensureEmailToken: `
     UPDATE users
-    SET email_token = COALESCE(email_token, gen_random_uuid()::text)
+    SET email_token = COALESCE(email_token, $3)
     WHERE user_id = $1 AND school = $2
       AND is_verified = false AND is_archived = false
     RETURNING user_id, email, first_name, school, email_token

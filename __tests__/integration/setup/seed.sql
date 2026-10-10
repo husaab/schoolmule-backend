@@ -36,7 +36,7 @@ CREATE TABLE users (
   last_name              VARCHAR NOT NULL,
   school                 school NOT NULL,
   role                   TEXT NOT NULL,
-  email_token            TEXT,
+  email_token            UUID,
   is_verified            BOOLEAN DEFAULT FALSE,
   is_verified_school     BOOLEAN DEFAULT FALSE,
   is_archived            BOOLEAN NOT NULL DEFAULT FALSE,
