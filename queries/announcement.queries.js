@@ -14,6 +14,31 @@ const IN_AUDIENCE = (s) => `
   OR (a.scope = 'grade'  AND ${s}.grade::text = a.grade AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))
   OR (a.scope = 'school' AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))))`;
 
+// Every address the school can reach for student alias `s`: the parent_students
+// link rows (account email, else the link's parent_email) PLUS the mother/father
+// emails on the student record, which is all the office has for most families.
+// One row per source; consumers dedupe on `email`. A record email that matches
+// an account in the school is treated as that account (so it gets the portal
+// link, not a sign-up link). `src` 0 = link row, 1 = student record.
+const GUARDIAN_EMAILS = (s) => `
+  SELECT ps.parent_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))) AS email,
+         COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), NULLIF(TRIM(ps.parent_name), ''), ps.parent_email) AS name,
+         ps.relation, u.first_name, u.password AS user_password, COALESCE(u.is_archived, FALSE) AS user_archived, 0 AS src
+  FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+  WHERE ps.student_id = ${s}.student_id AND TRIM(COALESCE(u.email, ps.parent_email, '')) <> ''
+  UNION ALL
+  SELECT mu.user_id, LOWER(TRIM(${s}.mother_email)),
+         COALESCE(NULLIF(TRIM(CONCAT(mu.first_name, ' ', mu.last_name)), ''), NULLIF(TRIM(${s}.mother_name), ''), ${s}.mother_email),
+         'Mother', mu.first_name, mu.password, COALESCE(mu.is_archived, FALSE), 1
+  FROM (SELECT 1) one LEFT JOIN users mu ON LOWER(mu.email) = LOWER(TRIM(${s}.mother_email)) AND mu.school = ${s}.school
+  WHERE TRIM(COALESCE(${s}.mother_email, '')) <> ''
+  UNION ALL
+  SELECT fu.user_id, LOWER(TRIM(${s}.father_email)),
+         COALESCE(NULLIF(TRIM(CONCAT(fu.first_name, ' ', fu.last_name)), ''), NULLIF(TRIM(${s}.father_name), ''), ${s}.father_email),
+         'Father', fu.first_name, fu.password, COALESCE(fu.is_archived, FALSE), 1
+  FROM (SELECT 1) one LEFT JOIN users fu ON LOWER(fu.email) = LOWER(TRIM(${s}.father_email)) AND fu.school = ${s}.school
+  WHERE TRIM(COALESCE(${s}.father_email, '')) <> ''`;
+
 // Teacher-side visibility (also the teacher's own posts). `u` = user id param.
 const TEACHER_SEES = (u) => `
   (a.author_id = ${u}
@@ -157,17 +182,12 @@ const announcementQueries = {
   selectReceipts: `
     WITH a AS (SELECT * FROM announcements WHERE announcement_id = $1),
     g AS (
-      SELECT ps.parent_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))) AS email,
-             COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name, ps.parent_email) AS name,
-             MIN(ps.relation) AS relation,
+      SELECT ge.parent_id, ge.email, MIN(ge.name) AS name, MIN(ge.relation) AS relation,
              ARRAY_AGG(DISTINCT s.name ORDER BY s.name) AS student_names,
-             BOOL_OR(u.password = '!') AS invite_pending, BOOL_OR(u.is_archived) AS archived
+             BOOL_OR(ge.user_password = '!') AS invite_pending, BOOL_OR(ge.user_archived) AS archived
       FROM a JOIN students s ON ${IN_AUDIENCE('s')}
-      JOIN parent_students ps ON ps.student_id = s.student_id
-      LEFT JOIN users u ON u.user_id = ps.parent_id
-      WHERE COALESCE(u.email, ps.parent_email) IS NOT NULL
-      GROUP BY ps.parent_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))),
-               COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name, ps.parent_email)
+      CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+      GROUP BY ge.parent_id, ge.email
     )
     SELECT g.parent_id AS user_id, g.name, g.relation, g.student_names, r.read_at,
       CASE WHEN r.read_at IS NOT NULL THEN 'seen'
@@ -198,19 +218,18 @@ const announcementQueries = {
     INSERT INTO announcement_email_jobs (announcement_id, recipient_id, recipient_email, kind, school, send_after)
     SELECT DISTINCT ON (email) $1, parent_id, email, kind, school, NOW() + $2::interval
     FROM (
-      SELECT a.school, ps.parent_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))) AS email,
-             CASE WHEN ps.parent_id IS NULL THEN 'signup' WHEN u.password = '!' THEN 'invite' ELSE 'account' END AS kind,
-             CASE WHEN ps.parent_id IS NULL THEN 2 WHEN u.password = '!' THEN 1 ELSE 0 END AS pri
+      SELECT a.school, g.parent_id, g.email,
+             CASE WHEN g.parent_id IS NULL THEN 'signup' WHEN g.user_password = '!' THEN 'invite' ELSE 'account' END AS kind,
+             -- an address reachable through an account wins over the same address as sign-up; link rows win over record emails
+             (CASE WHEN g.parent_id IS NULL THEN 2 WHEN g.user_password = '!' THEN 1 ELSE 0 END) * 10 + g.src AS pri
       FROM announcements a
       JOIN students s ON ${IN_AUDIENCE('s')}
-      JOIN parent_students ps ON ps.student_id = s.student_id
-      LEFT JOIN users u ON u.user_id = ps.parent_id
+      CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) g
       LEFT JOIN users author ON author.user_id = a.author_id
       WHERE a.announcement_id = $1
-        AND COALESCE(u.email, ps.parent_email) IS NOT NULL AND TRIM(COALESCE(u.email, ps.parent_email)) <> ''
-        AND (u.user_id IS NULL OR u.is_archived = FALSE)
-        AND (a.author_id IS NULL OR ps.parent_id IS DISTINCT FROM a.author_id)
-        AND (author.email IS NULL OR LOWER(TRIM(COALESCE(u.email, ps.parent_email))) <> LOWER(author.email))
+        AND NOT g.user_archived
+        AND (a.author_id IS NULL OR g.parent_id IS DISTINCT FROM a.author_id)
+        AND (author.email IS NULL OR g.email <> LOWER(TRIM(author.email)))
     ) x
     ORDER BY email, pri
     ON CONFLICT DO NOTHING
@@ -243,18 +262,19 @@ const announcementQueries = {
       a.announcement_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id,
       cl.subject AS class_subject, cl.grade AS class_grade,
       TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
-      COALESCE(u.first_name, split_part(pl.parent_name, ' ', 1)) AS recipient_first_name,
+      COALESCE(u.first_name, split_part(pl.name, ' ', 1)) AS recipient_first_name,
       u.is_archived AS recipient_archived,
       (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
       (SELECT ARRAY_AGG(DISTINCT s.name ORDER BY s.name) FROM students s
-         JOIN parent_students ps ON ps.student_id = s.student_id
-        WHERE ${IN_AUDIENCE('s')} AND (ps.parent_id = j.recipient_id OR LOWER(TRIM(ps.parent_email)) = j.recipient_email)) AS child_names
+         CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+        WHERE ${IN_AUDIENCE('s')} AND (ge.parent_id = j.recipient_id OR ge.email = j.recipient_email)) AS child_names
     FROM announcement_email_jobs j
     JOIN announcements a ON a.announcement_id = j.announcement_id
     LEFT JOIN classes cl ON cl.class_id = a.class_id
     LEFT JOIN users au ON au.user_id = a.author_id
     LEFT JOIN users u ON u.user_id = j.recipient_id
-    LEFT JOIN LATERAL (SELECT parent_name FROM parent_students WHERE LOWER(TRIM(parent_email)) = j.recipient_email LIMIT 1) pl ON TRUE
+    LEFT JOIN LATERAL (SELECT ge.name FROM students s CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+                        WHERE ${IN_AUDIENCE('s')} AND ge.email = j.recipient_email LIMIT 1) pl ON TRUE
     WHERE j.job_id = $1
   `,
   // $1 job_id, $2 status, $3 last_error|null
@@ -309,20 +329,20 @@ const announcementQueries = {
     WITH a AS (SELECT $1::school AS school, $2::text AS scope, $3::uuid AS class_id, $4::text AS grade, $5::uuid AS school_year_id),
     st AS (SELECT s.student_id, s.name FROM a, students s WHERE ${IN_AUDIENCE('s')}),
     g AS (
-      SELECT LOWER(TRIM(COALESCE(u.email, ps.parent_email))) AS email,
-             BOOL_OR(ps.parent_id IS NOT NULL AND u.password <> '!' AND u.is_archived = FALSE) AS has_account,
-             BOOL_OR(ps.parent_id IS NOT NULL AND u.password = '!') AS invite_pending
-      FROM st JOIN parent_students ps ON ps.student_id = st.student_id LEFT JOIN users u ON u.user_id = ps.parent_id
-      WHERE COALESCE(u.email, ps.parent_email) IS NOT NULL AND TRIM(COALESCE(u.email, ps.parent_email)) <> ''
-      GROUP BY 1
+      SELECT ge.email,
+             BOOL_OR(ge.parent_id IS NOT NULL AND ge.user_password <> '!' AND NOT ge.user_archived) AS has_account,
+             BOOL_OR(ge.parent_id IS NOT NULL AND ge.user_password = '!') AS invite_pending
+      FROM st JOIN students s ON s.student_id = st.student_id
+      CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+      GROUP BY ge.email
     )
     SELECT (SELECT COUNT(*) FROM st)::int AS students,
            (SELECT COUNT(*) FROM g WHERE has_account)::int AS guardians_with_account,
            (SELECT COUNT(*) FROM g WHERE NOT has_account AND invite_pending)::int AS guardians_invite_pending,
            (SELECT COUNT(*) FROM g WHERE NOT has_account AND NOT invite_pending)::int AS guardians_email_only,
            (SELECT COALESCE(json_agg(json_build_object('studentId', st.student_id, 'name', st.name) ORDER BY st.name), '[]')
-              FROM st WHERE NOT EXISTS (SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
-                                        WHERE ps.student_id = st.student_id AND TRIM(COALESCE(u.email, ps.parent_email, '')) <> '')) AS students_without_email
+              FROM st WHERE NOT EXISTS (SELECT 1 FROM students s CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+                                        WHERE s.student_id = st.student_id)) AS students_without_email
   `,
   // "Ask about this": is this parent + child in the audience of this (live) announcement? $1 announcement_id, $2 parent_id, $3 student_id
   selectParentAnnouncementContext: `
@@ -335,3 +355,4 @@ const announcementQueries = {
 
 module.exports = announcementQueries;
 module.exports.IN_AUDIENCE = IN_AUDIENCE;
+module.exports.GUARDIAN_EMAILS = GUARDIAN_EMAILS;

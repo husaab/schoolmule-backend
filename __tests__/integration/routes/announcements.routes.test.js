@@ -22,7 +22,7 @@ const asHomeroom = { userId: HOMEROOM_ID, username: 'Sana Rahman', email: 'homer
 
 describe('Integration: Announcements', () => {
   let pool;
-  let yearId, classId, aminaId, bilalId, otherGradeId;
+  let yearId, classId, aminaId, bilalId, otherGradeId, zaydId;
 
   beforeAll(() => { getApp(); pool = getTestPool(); });
 
@@ -53,7 +53,12 @@ describe('Integration: Announcements', () => {
     aminaId = await st('Amina Test', '6', HOMEROOM_ID);
     bilalId = await st('Bilal Test', '6', HOMEROOM_ID);
     otherGradeId = await st('Yusuf Test', '3', null);
-    await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2), ($1, $3)`, [classId, aminaId, bilalId]);
+    // No link row at all: the office only has the guardian emails on the student record.
+    zaydId = (await pool.query(
+      `INSERT INTO students (name, grade, school, school_year_id, homeroom_teacher_id, mother_name, mother_email, father_name, father_email)
+       VALUES ('Zayd Test', '6', 'ALHAADIACADEMY', $1, $2, 'Zahra Test', 'ZMom@example.com', 'Dad Test', 'dad@example.com') RETURNING student_id`,
+      [yearId, HOMEROOM_ID])).rows[0].student_id;
+    await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2), ($1, $3), ($1, $4)`, [classId, aminaId, bilalId, zaydId]);
     const link = (sid, pid, name, email, rel) => pool.query(
       `INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school) VALUES ($1, $2, $3, $4, $5, 'ALHAADIACADEMY')`,
       [sid, pid, name, email, rel],
@@ -82,7 +87,12 @@ describe('Integration: Announcements', () => {
       { recipient_email: 'mom@example.com', kind: 'account', recipient_id: MOM_ID },
       { recipient_email: 'noor@example.com', kind: 'signup', recipient_id: null },
       { recipient_email: 'pending@example.com', kind: 'invite', recipient_id: PENDING_ID },
+      { recipient_email: 'zmom@example.com', kind: 'signup', recipient_id: null },   // students.mother_email, no link row
     ]);
+    // dad@example.com appears on Zayd's record too: still one job, matched to the existing account.
+
+    const preview = await authenticatedRequest('get', `/api/announcements/preview?scope=class&classId=${classId}`, asTeacher);
+    expect(preview.body.data).toEqual({ students: 3, guardiansWithAccount: 2, guardiansInvitePending: 1, guardiansEmailOnly: 2, studentsWithoutEmail: [] });
 
     const mom = await authenticatedRequest('get', '/api/announcements', asMom);
     expect(mom.body.data).toHaveLength(1);
@@ -97,7 +107,9 @@ describe('Integration: Announcements', () => {
     const staff = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
     expect(staff.body.data.audienceCount).toBe(2); // mom + dad; pending and email-only do not count
     expect(staff.body.data.seenCount).toBe(0);
-    expect(staff.body.data.emails).toMatchObject({ pending: 4, signup: 1, invite: 1 });
+    expect(staff.body.data.emails).toMatchObject({ pending: 5, signup: 2, invite: 1 });
+    const zahra = staff.body.data.receipts.notYet.find((r) => r.name === 'Zahra Test');
+    expect(zahra).toMatchObject({ userId: null, relation: 'Mother', studentNames: ['Zayd Test'], state: 'no-account' });
   });
 
   it('read marks, unread counts and the badge', async () => {
@@ -156,7 +168,7 @@ describe('Integration: Announcements', () => {
   it('the worker sends one email per job kind and records sent', async () => {
     const id = (await postClass(asTeacher)).body.data.announcementId;
     await pool.query(`UPDATE announcement_email_jobs SET send_after = NOW() - interval '1 minute' WHERE announcement_id = $1`, [id]);
-    expect(await notifier.drainAnnouncements()).toBe(4);
+    expect(await notifier.drainAnnouncements()).toBe(5);
     const rows = (await pool.query(`SELECT status, kind FROM announcement_email_jobs WHERE announcement_id = $1 ORDER BY kind`, [id])).rows;
     expect(rows.every((r) => r.status === 'sent')).toBe(true);
     expect((await pool.query(`SELECT COUNT(*)::int AS n FROM password_reset_tokens WHERE user_id = $1`, [PENDING_ID])).rows[0].n).toBe(1);
