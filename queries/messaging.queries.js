@@ -270,8 +270,12 @@ const messagingQueries = {
   selectAssessmentContext: `
     SELECT a.assessment_id, a.name, a.date, a.weight_points, a.max_score, a.is_published, a.parent_comment, a.published_at,
            sa.score,
-           (SELECT ROUND(AVG(x.score / NULLIF(a.max_score, 0) * 100)::numeric, 1)
-              FROM student_assessments x WHERE x.assessment_id = a.assessment_id AND x.score IS NOT NULL) AS class_avg_pct
+           sa.status,
+           (SELECT ROUND(AVG(CASE WHEN x.status = 'missing' THEN 0 ELSE x.score / NULLIF(a.max_score, 0) * 100 END)::numeric, 1)
+              FROM student_assessments x
+              WHERE x.assessment_id = a.assessment_id
+                AND x.status <> 'excused'
+                AND (x.score IS NOT NULL OR x.status = 'missing')) AS class_avg_pct
     FROM assessments a
     LEFT JOIN student_assessments sa ON sa.assessment_id = a.assessment_id AND sa.student_id = $2
     WHERE a.assessment_id = $1

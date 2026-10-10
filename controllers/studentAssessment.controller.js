@@ -4,7 +4,7 @@ const db = require('../config/database');
 const { selectScoresByClass, upsertStudentAssessments, selectStudentAssessment } = require('../queries/studentAssessment.queries');
 const logger = require('../logger');
 const ExcelJS = require('exceljs');
-const { calculateStudentGrade } = require('../utils/gradeCalculator');
+const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, STATUSES } = require('../services/gradeEngine');
 
 /**
  * GET /classes/:classId/scores
@@ -41,7 +41,8 @@ const getScoresByClass = async (req, res) => {
 
 /**
  * POST /classes/:classId/scores
- * → Accept a JSON array of { studentId, assessmentId, score } objects, then upsert them all in one batch.
+ * → Accept a JSON array of { studentId, assessmentId, score, status? } objects, then upsert them all in one batch.
+ *   status ∈ 'graded' | 'missing' | 'excused' (default 'graded'). See services/gradeEngine.js.
  *
  * Request body shape:
  * {
@@ -83,13 +84,17 @@ const upsertScoresByClass = async (req, res) => {
     const assessmentById = new Map(assessmentRows.map((a) => [a.assessment_id, a]));
 
     const invalid = [];
-    for (const { studentId, assessmentId, score } of scores) {
+    for (const { studentId, assessmentId, score, status } of scores) {
       const assessment = assessmentById.get(assessmentId);
       if (!assessment) {
         invalid.push({ studentId, assessmentId, score, reason: 'Assessment not found in this class' });
         continue;
       }
-      if (score == null) continue; // null clears the score
+      if (status != null && !STATUSES.includes(status)) {
+        invalid.push({ studentId, assessmentId, score, reason: `Status must be one of ${STATUSES.join(', ')}` });
+        continue;
+      }
+      if (score == null) continue; // null clears the score (cell becomes "not yet graded")
       const numScore = Number(score);
       const maxScore = parseFloat(assessment.max_score) || 100;
       if (isNaN(numScore) || numScore < 0 || numScore > maxScore) {
@@ -117,19 +122,24 @@ const upsertScoresByClass = async (req, res) => {
 
     scores.forEach((entry, idx) => {
       const { studentId, assessmentId, score } = entry;
-      // Generate e.g. `($1,$2,$3)` for idx=0, then `($4,$5,$6)` for idx=1, etc.
-      const base = idx * 3; // because each row uses 3 parameters
-      valuePlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
-      paramsArray.push(studentId, assessmentId, score); // score can now be null
+      // A typed score is evidence, so it always resets the status to
+      // 'graded' unless the client explicitly sent one. 'missing' never
+      // carries a score; 'excused' keeps whatever score was there.
+      let status = entry.status || 'graded';
+      let value = score == null ? null : score;
+      if (status === 'missing') value = null;
+      const base = idx * 4;
+      valuePlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`);
+      paramsArray.push(studentId, assessmentId, value, status);
     });
 
     // Now plug those placeholders into our query string:
     const upsQuery = `
-      INSERT INTO student_assessments (student_id, assessment_id, score)
+      INSERT INTO student_assessments (student_id, assessment_id, score, status)
       VALUES ${valuePlaceholders.join(', ')}
       ON CONFLICT (student_id, assessment_id)
-      DO UPDATE SET score = EXCLUDED.score
-      RETURNING student_id, assessment_id, score;
+      DO UPDATE SET score = EXCLUDED.score, status = EXCLUDED.status
+      RETURNING student_id, assessment_id, score, status;
     `;
 
     const { rows: upsertedRows } = await db.query(upsQuery, paramsArray);
@@ -149,13 +159,76 @@ const upsertScoresByClass = async (req, res) => {
 };
 
 /**
+ * Set one cell's grading status. A category assessment id applies the status
+ * to every child. Used by PATCH /classes/:classId/status and by the legacy
+ * /excluded-assessments routes.
+ *
+ *   excused -> score kept, ignored by the engine
+ *   missing -> score cleared, counts as 0
+ *   graded  -> status cleared (score left as is)
+ *
+ * @returns {Promise<Array<{student_id, assessment_id, score, status}>>}
+ */
+async function applyCellStatus({ classId, studentId, assessmentId, status }) {
+  const { rows: targets } = await db.query(
+    `SELECT assessment_id FROM assessments
+     WHERE class_id = $1
+       AND (assessment_id = $2 OR parent_assessment_id = $2)
+       AND is_parent = FALSE`,
+    [classId, assessmentId]
+  );
+  if (targets.length === 0) return [];
+
+  const ids = targets.map((t) => t.assessment_id);
+  const { rows } = await db.query(
+    `INSERT INTO student_assessments (student_id, assessment_id, score, status)
+     SELECT $1, a.assessment_id, NULL, $3
+     FROM unnest($2::uuid[]) AS a(assessment_id)
+     ON CONFLICT (student_id, assessment_id)
+     DO UPDATE SET
+       status = EXCLUDED.status,
+       score  = CASE WHEN EXCLUDED.status = 'missing' THEN NULL ELSE student_assessments.score END
+     RETURNING student_id, assessment_id, score, status`,
+    [studentId, ids, status]
+  );
+  return rows;
+}
+
+/**
+ * PATCH /classes/:classId/status
+ * Body: { studentId, assessmentId, status: 'graded' | 'missing' | 'excused' }
+ */
+const setScoreStatus = async (req, res) => {
+  const { classId } = req.params;
+  const { studentId, assessmentId, status } = req.body || {};
+
+  if (!studentId || !assessmentId || !status) {
+    return res.status(400).json({ status: 'failed', message: 'studentId, assessmentId and status are required' });
+  }
+  if (!STATUSES.includes(status)) {
+    return res.status(400).json({ status: 'failed', message: `status must be one of ${STATUSES.join(', ')}` });
+  }
+
+  try {
+    const rows = await applyCellStatus({ classId, studentId, assessmentId, status });
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Assessment not found in this class' });
+    }
+    return res.status(200).json({ status: 'success', data: rows });
+  } catch (err) {
+    logger.error(err);
+    return res.status(500).json({ status: 'failed', message: 'Error updating score status' });
+  }
+};
+
+/**
  * GET /classes/:classId/scores/excel
  * → Stream back a professionally styled Excel gradebook with:
  *     • Two-row header: Parent category row + Child assessment row
  *     • Merged cells for parent assessment groups
  *     • SUBTOTAL column after each parent group showing category percentage
  *     • Color-coded sections for visual hierarchy
- *     • "EXCL" markers for excluded assessments
+ *     • "EX" markers for excused cells, "M" for missing, "-" for not yet graded
  *     • Total (%) column with accurate grade calculation
  *
  * DESIGN: Clean, professional gradebook layout with visual grouping and subtotals
@@ -221,6 +294,7 @@ const exportScoresExcel = async (req, res) => {
       const key = `${r.student_id}|${r.assessment_id}`;
       scoreLookup[key] = {
         score: r.score,
+        status: r.status,
         is_excluded: r.is_excluded,
       };
     }
@@ -500,16 +574,16 @@ const exportScoresExcel = async (req, res) => {
       const row = sheet.getRow(rowIndex);
       row.height = 28; // Taller rows to fit two-line subtotals
 
-      // Build score lookup for this student (for subtotal calculations)
-      const studentScoreLookup = {};
-      for (const a of allAssessments) {
-        const key = `${studentId}|${a.assessment_id}`;
-        const scoreData = scoreLookup[key];
-        studentScoreLookup[a.assessment_id] = {
-          score: scoreData?.score !== null && scoreData?.score !== undefined ? parseFloat(scoreData.score) : null,
-          isExcluded: scoreData?.is_excluded || false,
+      // This student's rows in engine shape (for subtotals and the total)
+      const studentRows = allAssessments.map((a) => {
+        const scoreData = scoreLookup[`${studentId}|${a.assessment_id}`];
+        return {
+          assessment_id: a.assessment_id,
+          score: scoreData?.score ?? null,
+          status: scoreData?.status || (scoreData?.is_excluded ? 'excused' : 'graded'),
         };
-      }
+      });
+      const studentScoreLookup = buildScoreLookup(studentRows);
 
       // Student name cell
       const nameCell = row.getCell(1);
@@ -531,37 +605,21 @@ const exportScoresExcel = async (req, res) => {
         const colors = groupIdx >= 0 ? groupColors[groupIdx % groupColors.length] : { light: 'FFFFFFFF', dark: 'FFF5F5F5' };
 
         if (col.type === 'subtotal') {
-          // Calculate parent score with earned/max points for display
-          const childAssessments = allAssessments.filter(
-            a => a.parent_assessment_id === col.parentId
-          );
+          // Category rollup via the shared engine (counted children only)
+          const parentAssessment = allAssessments.find((a) => a.assessment_id === col.parentId);
+          const rollup = parentAssessment
+            ? computeAssessmentForStudent(parentAssessment, allAssessments, studentScoreLookup)
+            : null;
+          const parentPoints = parseFloat(parentAssessment?.weight_points) || 0;
 
-          let earnedPoints = 0;
-          let maxPossiblePoints = 0;
-
-          childAssessments.forEach(child => {
-            const childScoreData = studentScoreLookup[child.assessment_id];
-            const isChildExcluded = childScoreData?.isExcluded || false;
-
-            if (isChildExcluded) return;
-
-            const rawScore = childScoreData?.score ?? 0;
-            const maxScore = parseFloat(child.max_score) || 100;
-            const childWeight = parseFloat(child.weight_points) || 0;
-
-            // Calculate earned points proportionally
-            const percentage = maxScore > 0 ? Math.min(rawScore / maxScore, 1) : 0;
-            earnedPoints += percentage * childWeight;
-            maxPossiblePoints += childWeight;
-          });
-
-          const percentScore = maxPossiblePoints > 0 ? (earnedPoints / maxPossiblePoints) * 100 : 0;
-
-          // Format: "89%\n17.9/20"
-          const earnedDisplay = earnedPoints % 1 === 0 ? earnedPoints.toFixed(0) : earnedPoints.toFixed(1);
-          const maxDisplay = maxPossiblePoints % 1 === 0 ? maxPossiblePoints.toFixed(0) : maxPossiblePoints.toFixed(1);
-
-          cell.value = `${percentScore.toFixed(0)}%\n${earnedDisplay}/${maxDisplay}`;
+          if (rollup && rollup.isCounted) {
+            const earnedPoints = (rollup.pct / 100) * parentPoints;
+            const earnedDisplay = earnedPoints % 1 === 0 ? earnedPoints.toFixed(0) : earnedPoints.toFixed(1);
+            const maxDisplay = parentPoints % 1 === 0 ? parentPoints.toFixed(0) : parentPoints.toFixed(1);
+            cell.value = `${rollup.pct.toFixed(0)}%\n${earnedDisplay}/${maxDisplay}`;
+          } else {
+            cell.value = rollup && rollup.state === 'excused' ? 'EX' : '-';
+          }
           cell.style = {
             font: { bold: true, size: 8 },
             alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
@@ -577,7 +635,8 @@ const exportScoresExcel = async (req, res) => {
           const key = `${studentId}|${a.assessment_id}`;
           const scoreData = scoreLookup[key];
 
-          if (scoreData?.is_excluded) {
+          const state = studentScoreLookup[a.assessment_id]?.state || 'blank';
+          if (state === 'excused') {
             cell.value = 'EX';
             cell.style = {
               font: { size: 8, italic: true, color: { argb: 'FF999999' } },
@@ -589,7 +648,19 @@ const exportScoresExcel = async (req, res) => {
                 right: { style: 'hair', color: { argb: 'FFE0E0E0' } },
               },
             };
-          } else if (scoreData?.score !== null && scoreData?.score !== undefined) {
+          } else if (state === 'missing') {
+            cell.value = 'M';
+            cell.style = {
+              font: { size: 9, bold: true, color: { argb: 'FFB3303C' } },
+              alignment: { horizontal: 'center', vertical: 'middle' },
+              fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAE4E6' } },
+              border: {
+                bottom: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+                left: { style: 'hair', color: { argb: 'FFE0E0E0' } },
+                right: { style: 'hair', color: { argb: 'FFE0E0E0' } },
+              },
+            };
+          } else if (state === 'graded') {
             cell.value = scoreData.score;
             cell.style = {
               font: { size: 10 },
@@ -616,21 +687,10 @@ const exportScoresExcel = async (req, res) => {
         }
       });
 
-      // Calculate final total grade
-      const studentScoresForCalc = [];
-      for (const a of allAssessments) {
-        const key = `${studentId}|${a.assessment_id}`;
-        const scoreData = scoreLookup[key];
-        studentScoresForCalc.push({
-          assessment_id: a.assessment_id,
-          score: scoreData?.score ?? null,
-          is_excluded: scoreData?.is_excluded || false,
-        });
-      }
-
-      const totalGrade = calculateStudentGrade(allAssessments, studentScoresForCalc);
+      // Final grade: graded work only; '-' when the student has no evidence
+      const { pct: totalGrade } = computeClassGrade(allAssessments, studentRows);
       const totalCell = row.getCell(totalColIndex);
-      totalCell.value = parseFloat(totalGrade.toFixed(1));
+      totalCell.value = totalGrade == null ? '-' : parseFloat(totalGrade.toFixed(1));
       totalCell.style = {
         font: { bold: true, size: 10 },
         alignment: { horizontal: 'center', vertical: 'middle' },
@@ -679,6 +739,8 @@ async function getStudentAssessment(req, res) {
 }
 
 module.exports = {
+  setScoreStatus,
+  applyCellStatus,
   getScoresByClass,
   upsertScoresByClass,
   exportScoresExcel,

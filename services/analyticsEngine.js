@@ -5,29 +5,27 @@
 // Design:
 //   - ONE school-wide query (selectAnalyticsMatrix) per (school, term),
 //     grouped in JS into a matrix of classes -> students -> score rows.
-//   - The caller picks which grade engine computes each (student, class) %:
-//       'null_skip' -> computeClassPctForStudent (studentViewEvaluator) —
-//                      ungraded work is skipped; matches gradebook totals,
-//                      student views, awards, and Al Haadi T2 report cards.
-//       'null_zero' -> calculateStudentGrade (gradeCalculator) —
-//                      ungraded work counts as 0; matches legacy T1 PDFs
-//                      and the dashboard average.
-//   - 5-minute in-memory cache per (school, term, engine). Scores change
-//     during the school day, so this is deliberately much shorter than the
-//     dashboard's 24h grade cache.
+//   - Every (student, class) % comes from services/gradeEngine.js — the one
+//     engine the gradebook, report cards, parent portal and emails share.
+//     A blank cell carries no weight, "missing" counts as 0, "excused" is
+//     ignored, and a student with no evidence has a null pct (never 0).
+//   - 5-minute in-memory cache per (school, term, publishedOnly). Scores
+//     change during the school day, so this is deliberately much shorter
+//     than the dashboard's 24h grade cache.
+//
+// `engine` parameters are still accepted everywhere for backwards
+// compatibility with older clients but are ignored; responses report
+// engine: 'graded_only'.
 
 const db = require('../config/database');
 const q = require('../queries/analytics.queries');
 const stats = require('../utils/statsUtils');
-const { calculateStudentGrade } = require('../utils/gradeCalculator');
-const {
-  computeClassPctForStudent,
-  computeAssessmentForStudent,
-  buildScoreLookup,
-} = require('./studentViewEvaluator');
+const gradeEngine = require('./gradeEngine');
+const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup } = gradeEngine;
 
-const VALID_ENGINES = ['null_skip', 'null_zero'];
-const DEFAULT_ENGINE = 'null_skip';
+const ENGINE_NAME = 'graded_only';
+const VALID_ENGINES = [ENGINE_NAME];
+const DEFAULT_ENGINE = ENGINE_NAME;
 
 // Sentinel termId meaning "every term combined". Classes are term-bound,
 // so the combined matrix is the union of all terms' classes; a student's
@@ -37,76 +35,36 @@ const ALL_TERMS = 'all';
 const matrixCache = new Map(); // key `${school}:${termId}:${engine}` -> { matrix, timestamp }
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-function normalizeEngine(engine) {
-  if (engine == null || engine === '') return DEFAULT_ENGINE;
-  if (!VALID_ENGINES.includes(engine)) {
-    const err = new Error(`Unknown grade engine '${engine}'. Expected one of: ${VALID_ENGINES.join(', ')}`);
-    err.statusCode = 400;
-    throw err;
-  }
-  return engine;
+function normalizeEngine() {
+  // Legacy null_skip / null_zero selectors are ignored: there is one engine.
+  return ENGINE_NAME;
 }
 
 /**
- * Compute one (student, class) percentage with the chosen engine.
- * Returns number for null_zero; number|null for null_skip (null = no
- * graded work in the class — callers must exclude it from aggregates,
- * never coerce to 0).
+ * One (student, class) result from the shared engine:
+ * { pct: number|null, coverage, missingAssessments }.
  */
-function computePct(engine, assessments, studentRows) {
-  if (engine === 'null_zero') {
-    return calculateStudentGrade(
-      assessments,
-      studentRows.map((r) => ({
-        assessment_id: r.assessment_id,
-        score: r.score,
-        is_excluded: r.is_excluded,
-      })),
-    );
-  }
-  return computeClassPctForStudent(assessments, studentRows);
+function computeGrade(assessments, studentRows) {
+  return computeClassGrade(assessments, studentRows);
 }
 
 /**
- * Missing / excluded counts for one student in one class, from their
- * score rows. "Missing" counts top-level assessments with no usable
- * grade: standalone with null score, or parent whose non-excluded
- * children are all null. Excluded assessments are never missing.
+ * Work-status counts for one student in one class.
+ *   missing       cells the teacher flagged missing (count as 0)
+ *   excused       cells excused (never count)
+ *   notYetGraded  blank cells (no evidence yet)
+ *   missingAssessments  the flagged-missing leaf assessments
  */
 function countWorkStatus(assessments, studentRows) {
-  const lookup = {};
-  for (const r of studentRows) {
-    lookup[r.assessment_id] = { score: r.score, isExcluded: Boolean(r.is_excluded) };
-  }
-
-  let missing = 0;
-  let excluded = 0;
-  const missingAssessments = [];
-
-  for (const a of assessments) {
-    if (a.parent_assessment_id) continue; // top-level only
-    const sd = lookup[a.assessment_id];
-    if (sd?.isExcluded) {
-      excluded += 1;
-      continue;
-    }
-    if (a.is_parent) {
-      const children = assessments.filter((c) => c.parent_assessment_id === a.assessment_id);
-      const hasGradedChild = children.some((c) => {
-        const csd = lookup[c.assessment_id];
-        return csd && !csd.isExcluded && csd.score != null;
-      });
-      if (!hasGradedChild) {
-        missing += 1;
-        missingAssessments.push(a);
-      }
-    } else if (sd?.score == null) {
-      missing += 1;
-      missingAssessments.push(a);
-    }
-  }
-
-  return { missing, excluded, missingAssessments };
+  const { coverage, missingAssessments } = computeClassGrade(assessments, studentRows);
+  return {
+    missing: coverage.missing,
+    excused: coverage.excused,
+    excluded: coverage.excused,
+    notYetGraded: coverage.blank,
+    missingAssessments,
+    coverage,
+  };
 }
 
 /**
@@ -157,7 +115,7 @@ function prunePublishedOnly(cls) {
  * dashboard and report cards pass nothing and get the full matrix,
  * unchanged.
  */
-function buildMatrixFromRows(rows, termId, engine, { publishedOnly = false } = {}) {
+function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = {}) {
   const classes = new Map(); // classId -> class record
 
   for (const r of rows) {
@@ -214,11 +172,13 @@ function buildMatrixFromRows(rows, termId, engine, { publishedOnly = false } = {
     delete cls._assessmentIds;
     if (publishedOnly) prunePublishedOnly(cls);
     for (const stu of cls.students.values()) {
-      stu.finalPct = computePct(engine, cls.assessments, stu.rows);
-      const ws = countWorkStatus(cls.assessments, stu.rows);
-      stu.missingCount = ws.missing;
-      stu.excludedCount = ws.excluded;
-      stu.missingAssessments = ws.missingAssessments;
+      const result = computeGrade(cls.assessments, stu.rows);
+      stu.finalPct = result.pct;
+      stu.coverage = result.coverage;
+      stu.missingCount = result.coverage.missing;
+      stu.excludedCount = result.coverage.excused;
+      stu.notYetGradedCount = result.coverage.blank;
+      stu.missingAssessments = result.missingAssessments;
 
       let cross = students.get(stu.studentId);
       if (!cross) {
@@ -237,13 +197,15 @@ function buildMatrixFromRows(rows, termId, engine, { publishedOnly = false } = {
         teacherName: cls.teacherName,
         grade: cls.grade,
         finalPct: stu.finalPct,
+        coverage: stu.coverage,
         missingCount: stu.missingCount,
         excludedCount: stu.excludedCount,
+        notYetGradedCount: stu.notYetGradedCount,
       });
     }
   }
 
-  return { termId, engine, classes, students };
+  return { termId, engine: ENGINE_NAME, classes, students };
 }
 
 /**
@@ -279,15 +241,8 @@ function classAveragesByAssessment(cls) {
   for (const stu of cls.students.values()) {
     const lookup = buildScoreLookup(stu.rows);
     for (const a of cls.assessments) {
-      const sd = lookup[a.assessment_id];
-      if (sd?.isExcluded) continue;
-      if (a.is_parent) {
-        const rollup = computeAssessmentForStudent(a, cls.assessments, lookup);
-        if (rollup && rollup.isGraded) add(a.assessment_id, rollup.pct);
-      } else {
-        const max = parseFloat(a.max_score);
-        if (sd?.score != null && max > 0) add(a.assessment_id, (parseFloat(sd.score) / max) * 100);
-      }
+      const r = computeAssessmentForStudent(a, cls.assessments, lookup);
+      if (r.isCounted) add(a.assessment_id, r.pct);
     }
   }
 
@@ -319,8 +274,10 @@ function getStudentClassBreakdown(matrix, studentId) {
       teacherName: cls.teacherName,
       finalPct: stats.round1(stu.finalPct),
       classAvg: peerPcts.length ? stats.round1(stats.mean(peerPcts)) : null,
+      coverage: stu.coverage,
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,
+      notYetGradedCount: stu.notYetGradedCount,
       assessmentScores: stu.rows.map((r) => {
         const assessment = byId.get(r.assessment_id);
         const isParent = Boolean(r.is_parent);
@@ -328,8 +285,12 @@ function getStudentClassBreakdown(matrix, studentId) {
           isParent && assessment
             ? computeAssessmentForStudent(assessment, cls.assessments, scoreLookup)
             : null;
+        const state = isParent
+          ? (rollup ? rollup.state : 'blank')
+          : (scoreLookup[r.assessment_id]?.state || 'blank');
 
         return {
+          status: state,
           assessmentId: r.assessment_id,
           name: r.assessment_name,
           date: r.assessment_date,
@@ -341,7 +302,7 @@ function getStudentClassBreakdown(matrix, studentId) {
           parentAssessmentId: r.parent_assessment_id,
           // Categories have no raw score — this is their weighted rollup
           // over graded children, or null when none are graded yet.
-          rollupPct: rollup && rollup.isGraded ? stats.round1(rollup.pct) : null,
+          rollupPct: rollup && rollup.isCounted ? stats.round1(rollup.pct) : null,
           // The room's mean on this one assessment, for context next to the mark.
           classAvgPct: classAvgByAssessment.get(r.assessment_id) ?? null,
           parentComment: r.parent_comment || null,
@@ -392,7 +353,7 @@ function overallAvgForStudent(crossRecord) {
  */
 async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = false } = {}) {
   const eng = normalizeEngine(engine);
-  const key = `${school}:${termId}:${eng}:${publishedOnly ? 'pub' : 'all'}`;
+  const key = `${school}:${termId}:${publishedOnly ? 'pub' : 'all'}`;
   const cached = matrixCache.get(key);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.matrix;
@@ -443,6 +404,7 @@ async function buildAiSnapshot(school, termId, engine) {
     const overallAvg = overallAvgForStudent(cross);
     const att = attendance.get(cross.studentId);
     const missingCount = cross.classes.reduce((s, c) => s + c.missingCount, 0);
+    const notYetGradedCount = cross.classes.reduce((s, c) => s + (c.notYetGradedCount || 0), 0);
 
     let lowest = null;
     for (const c of cross.classes) {
@@ -457,6 +419,7 @@ async function buildAiSnapshot(school, termId, engine) {
       overallAvg: overallAvg == null ? null : Math.round(overallAvg * 10) / 10,
       attendancePct: att ? att.pct : null,
       missingCount,
+      notYetGradedCount,
       lowestSubject: lowest ? lowest.subject : null,
       lowestPct: lowest ? Math.round(lowest.finalPct * 10) / 10 : null,
       classCount: cross.classes.length,
@@ -466,13 +429,11 @@ async function buildAiSnapshot(school, termId, engine) {
   return { termId, engine: eng, students: studentRecords };
 }
 
-function invalidateCache(school, termId, engine) {
-  if (school && termId && engine) {
-    // Both variants: a key carries a :pub/:all suffix since the parent
-    // portal got its own published-only matrix, so deleting the bare
-    // 3-part key would match nothing at all.
-    matrixCache.delete(`${school}:${termId}:${engine}:all`);
-    matrixCache.delete(`${school}:${termId}:${engine}:pub`);
+function invalidateCache(school, termId) {
+  if (school && termId) {
+    // Both variants: the parent portal has its own published-only matrix.
+    matrixCache.delete(`${school}:${termId}:all`);
+    matrixCache.delete(`${school}:${termId}:pub`);
     return;
   }
   for (const key of matrixCache.keys()) {
@@ -491,8 +452,10 @@ module.exports = {
   DEFAULT_ENGINE,
   VALID_ENGINES,
   ALL_TERMS,
+  ENGINE_NAME,
   // exported for unit testing
   buildMatrixFromRows,
   countWorkStatus,
-  computePct,
+  computeGrade,
+  prunePublishedOnly,
 };

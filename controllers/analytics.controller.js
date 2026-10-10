@@ -2,13 +2,14 @@
 //
 // Teacher analytics endpoints. School ALWAYS comes from req.user.school
 // (the JWT) — never from a query param — so analytics can never leak
-// across schools. Every endpoint accepts ?engine=null_skip|null_zero
+// across schools. `?engine=` is accepted for older clients and ignored.
 // (default null_skip; see services/analyticsEngine.js for the difference).
 
 const db = require('../config/database');
 const q = require('../queries/analytics.queries');
 const logger = require('../logger');
 const engine = require('../services/analyticsEngine');
+const { computeAssessmentForStudent, buildScoreLookup, cellState } = require('../services/gradeEngine');
 const stats = require('../utils/statsUtils');
 
 // ────────────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ function groupStudentsByGrade(matrix) {
       studentName: cross.studentName,
       overallAvg: stats.round1(overallAvg),
       missingCount: cross.classes.reduce((s, c) => s + c.missingCount, 0),
+      notYetGradedCount: cross.classes.reduce((s, c) => s + (c.notYetGradedCount || 0), 0),
       classCount: cross.classes.length,
     });
   }
@@ -190,10 +192,11 @@ function buildTermDiff(currentMatrix, compareMatrix) {
  * skipped — they carry no scores of their own.
  */
 function classWorkStatus(cls) {
-  const scoredCount = new Map(); // assessmentId -> students with a usable score
+  const scoredCount = new Map(); // assessmentId -> students with evidence (graded or missing)
   for (const stu of cls.students.values()) {
     for (const r of stu.rows) {
-      if (r.is_excluded || r.score == null) continue;
+      const state = cellState(r);
+      if (state !== 'graded' && state !== 'missing') continue;
       scoredCount.set(r.assessment_id, (scoredCount.get(r.assessment_id) || 0) + 1);
     }
   }
@@ -226,31 +229,11 @@ function buildAssessmentStats(cls) {
     let gradedCount = 0;
     let eligibleCount = 0;
     for (const stu of cls.students.values()) {
-      const row = stu.rows.find((r) => r.assessment_id === a.assessment_id);
-      const isExcluded = Boolean(row?.is_excluded);
-      if (isExcluded) continue;
+      const r = computeAssessmentForStudent(a, cls.assessments, buildScoreLookup(stu.rows));
+      if (r.state === 'excused') continue;
       eligibleCount += 1;
-
-      if (a.is_parent) {
-        // Parent pct from graded children only (mirrors the null-skip engine).
-        const children = cls.assessments.filter((c) => c.parent_assessment_id === a.assessment_id);
-        let earned = 0;
-        let maxW = 0;
-        for (const c of children) {
-          const crow = stu.rows.find((r) => r.assessment_id === c.assessment_id);
-          if (!crow || crow.is_excluded || crow.score == null) continue;
-          const max = parseFloat(c.max_score) || 100;
-          const cw = parseFloat(c.weight_points) || 0;
-          earned += (max > 0 ? Math.min(parseFloat(crow.score) / max, 1) : 0) * cw;
-          maxW += cw;
-        }
-        if (maxW > 0) {
-          pcts.push((earned / maxW) * 100);
-          gradedCount += 1;
-        }
-      } else if (row && row.score != null) {
-        const max = parseFloat(a.max_score) || 100;
-        pcts.push(max > 0 ? (parseFloat(row.score) / max) * 100 : 0);
+      if (r.isCounted) {
+        pcts.push(r.pct);
         gradedCount += 1;
       }
     }
@@ -365,13 +348,16 @@ const getClassDetail = async (req, res) => {
       finalPct: stats.round1(stu.finalPct),
       rank: stu.finalPct != null ? idx + 1 : null,
       percentileInClass: stats.round1(stats.percentileRank(stu.finalPct, classPcts)),
+      coverage: stu.coverage,
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,
+      notYetGradedCount: stu.notYetGradedCount,
       assessmentScores: stu.rows.map((r) => ({
         assessmentId: r.assessment_id,
         name: r.assessment_name,
         score: r.score == null ? null : parseFloat(r.score),
         maxScore: r.max_score == null ? null : parseFloat(r.max_score),
+        status: cellState(r),
         isExcluded: Boolean(r.is_excluded),
         isParent: Boolean(r.is_parent),
         parentAssessmentId: r.parent_assessment_id,
@@ -461,8 +447,10 @@ const getStudentDetail = async (req, res) => {
         finalPct: stats.round1(stu.finalPct),
         classAvg: classAvgPct(cls),
         percentileInClass: stats.round1(stats.percentileRank(stu.finalPct, classPcts)),
+        coverage: stu.coverage,
         missingCount: stu.missingCount,
         excludedCount: stu.excludedCount,
+        notYetGradedCount: stu.notYetGradedCount,
         assessmentScores: stu.rows.map((r) => ({
           assessmentId: r.assessment_id,
           name: r.assessment_name,
@@ -470,6 +458,7 @@ const getStudentDetail = async (req, res) => {
           score: r.score == null ? null : parseFloat(r.score),
           maxScore: r.max_score == null ? null : parseFloat(r.max_score),
           weightPoints: r.weight_points == null ? null : parseFloat(r.weight_points),
+          status: cellState(r),
           isExcluded: Boolean(r.is_excluded),
           isParent: Boolean(r.is_parent),
           parentAssessmentId: r.parent_assessment_id,
@@ -502,6 +491,7 @@ const getStudentDetail = async (req, res) => {
         classCount: cross.classes.length,
         percentileInGrade: stats.round1(stats.percentileRank(overallAvg, cohortPcts)),
         missingCount: missingWork.length,
+        notYetGradedCount: cross.classes.reduce((sum, c) => sum + (c.notYetGradedCount || 0), 0),
       },
       classes,
       missingWork,
@@ -593,6 +583,7 @@ const getClassesHealth = async (req, res) => {
         classAvg: classAvgPct(cls),
         classMedian: classMedianPct(cls),
         missingCount: students.reduce((sum, s) => sum + s.missingCount, 0),
+        notYetGradedCount: students.reduce((sum, s) => sum + (s.notYetGradedCount || 0), 0),
         studentIds: students.map((s) => s.studentId),
         ...classWorkStatus(cls),
       });
@@ -620,9 +611,9 @@ const getClassesHealth = async (req, res) => {
 // ────────────────────────────────────────────────────────────────────
 const invalidateCache = async (req, res) => {
   const { school } = req.user;
-  const { termId, engine: eng } = req.body || {};
+  const { termId } = req.body || {};
   try {
-    engine.invalidateCache(school, termId, eng);
+    engine.invalidateCache(school, termId);
     return res.status(200).json({ status: 'success', message: 'Analytics cache invalidated' });
   } catch (error) {
     logger.error(error);

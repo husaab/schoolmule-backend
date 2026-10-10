@@ -10,12 +10,12 @@
 // (see the require.main guard in server.js). Every test suite requires
 // server.js, so a poller started at module load would leave timers running.
 
-const { Resend } = require('resend');
 const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
 const schoolQueries = require('../queries/school.queries');
-const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../utils/emailUtils');
+const { schoolSender } = require('./email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { getConversationDigestEmailHTML, getGuardianInviteEmailHTML, getAnnouncementEmailHTML } = require('../templates/emailTemplate');
 const aq = require('../queries/announcement.queries');
@@ -61,6 +61,8 @@ async function contextLineFor(ctx) {
   const a = rows[0];
   if (!a) return null;
   if (ctx.recipient_role === 'PARENT' && !a.is_published) return null;
+  if (a.status === 'missing') return 'Missing (0%)';
+  if (a.status === 'excused') return 'Excused';
   if (a.score == null || !a.max_score) return null;
   const pct = Math.round((Number(a.score) / Number(a.max_score)) * 1000) / 10;
   return `${Number(a.score)}/${Number(a.max_score)} (${pct}%)`;
@@ -127,14 +129,12 @@ async function processJob(job) {
     ? `${msgs[0].sender_name || 'SchoolMule'} sent a message about ${ctx.student_name}'s ${ctx.title}`
     : `${msgs.length} new messages about ${ctx.student_name}'s ${ctx.title}`;
 
-  const resend = new Resend(getSchoolApiKey(job.school));
-  const result = await resend.emails.send({
-    from: `messages@${getSchoolDomain(job.school)}`,
+  await sendOrThrow(getResend(), {
+    ...schoolSender({ school: job.school, schoolInfo, role: 'messages' }),
     to: [ctx.recipient_email],
     subject,
     html,
   });
-  if (result?.error) throw new Error(result.error.message || 'Email sending failed');
 
   // Resend accepted it: record that FIRST so a bookkeeping hiccup can never resend.
   await db.query(q.finishJob, [job.job_id, 'sent', null]);
@@ -180,9 +180,8 @@ async function sendInviteReminders() {
       }
       const schoolName = getSchoolName(link.school);
       const studentFirstName = String(link.student_name || '').split(' ')[0];
-      const resend = new Resend(getSchoolApiKey(link.school));
-      const result = await resend.emails.send({
-        from: `messages@${getSchoolDomain(link.school)}`,
+      await sendOrThrow(getResend(), {
+        ...schoolSender({ school: link.school, schoolInfo, role: 'messages' }),
         to: [link.email],
         subject: `Still waiting for you: a message about ${studentFirstName}`,
         html: getGuardianInviteEmailHTML({
@@ -197,7 +196,6 @@ async function sendInviteReminders() {
           reminder: true,
         }),
       });
-      if (result?.error) throw new Error(result.error.message || 'Email sending failed');
       await db.query(q.markInviteReminded, [link.parent_student_link_id]);
       sent += 1;
       await sleep(RATE_LIMIT_MS);
@@ -265,14 +263,12 @@ async function processAnnouncementJob(job) {
     schoolName,
     schoolInfo,
   });
-  const resend = new Resend(getSchoolApiKey(ctx.school));
-  const result = await resend.emails.send({
-    from: `messages@${getSchoolDomain(ctx.school)}`,
+  await sendOrThrow(getResend(), {
+    ...schoolSender({ school: ctx.school, schoolInfo, role: 'messages' }),
     to: [ctx.recipient_email],
     subject: `${label}: ${ctx.title}`,
     html,
   });
-  if (result?.error) throw new Error(result.error.message || 'Email sending failed');
   await db.query(aq.finishAnnouncementJob, [job.job_id, 'sent', null]);
   return 'sent';
 }

@@ -68,7 +68,8 @@ const assessmentPublishQueries = {
       s.name AS student_name,
       a.assessment_id,
       sa.score,
-      CASE WHEN sea.assessment_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_excluded
+      COALESCE(sa.status, 'graded') AS status,
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
     FROM class_students AS cs
     JOIN students AS s
       ON s.student_id = cs.student_id
@@ -78,10 +79,6 @@ const assessmentPublishQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
-    LEFT JOIN student_excluded_assessments AS sea
-      ON sea.student_id    = cs.student_id
-     AND sea.class_id      = cs.class_id
-     AND sea.assessment_id = a.assessment_id
     WHERE cs.class_id = $1
   `,
 

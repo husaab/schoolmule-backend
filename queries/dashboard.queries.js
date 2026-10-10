@@ -184,7 +184,8 @@ const dashboardQueries = {
       a.assessment_id,
       a.class_id,
       sa.score,
-      CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
+      COALESCE(sa.status, 'graded') AS status,
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     JOIN assessments a ON a.class_id = c.class_id
@@ -192,10 +193,6 @@ const dashboardQueries = {
     LEFT JOIN student_assessments sa
       ON sa.assessment_id = a.assessment_id
       AND sa.student_id = cs.student_id
-    LEFT JOIN student_excluded_assessments sea
-      ON sea.student_id = cs.student_id
-      AND sea.class_id = c.class_id
-      AND sea.assessment_id = a.assessment_id
     WHERE c.school = $1 AND ($2::uuid IS NULL OR c.school_year_id = $2) AND s.is_archived = false
   `,
 };

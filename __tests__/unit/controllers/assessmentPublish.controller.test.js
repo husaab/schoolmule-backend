@@ -101,9 +101,19 @@ describe('countUngradedStudents', () => {
     expect(countUngradedStudents([quiz], [quiz], scores)).toEqual([]);
   });
 
-  it('treats an excluded student as ungraded for warning purposes', () => {
+  it('does not warn about an excused student (excused is deliberate, not ungraded)', () => {
     const scores = new Map([student('s1', 'Alice', [scoreRow('q1', 15, true)])]);
-    expect(countUngradedStudents([quiz], [quiz], scores)[0].ungradedStudentCount).toBe(1);
+    expect(countUngradedStudents([quiz], [quiz], scores)).toEqual([]);
+  });
+
+  it('reports flagged-missing students separately from not-yet-graded ones', () => {
+    const scores = new Map([
+      student('s1', 'Alice', [{ ...scoreRow('q1', null), status: 'missing' }]),
+      student('s2', 'Bilal', [scoreRow('q1', null)]),
+    ]);
+    const [warning] = countUngradedStudents([quiz], [quiz], scores);
+    expect(warning.ungradedStudentCount).toBe(1);
+    expect(warning.missingStudentCount).toBe(1);
   });
 });
 

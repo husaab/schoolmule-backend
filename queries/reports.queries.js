@@ -55,23 +55,23 @@ const getAssessmentsByClass = `
     name ASC
 `;
 
-// Get student's assessment scores with exclusion status
+// Get student's score row for EVERY assessment in the class (blank cells
+// included), with the grading status. Drives from assessments, not from
+// student_assessments, so a never-entered cell still appears as blank.
 const getStudentAssessmentScores = `
   SELECT
-    sa.assessment_id,
+    a.assessment_id,
     sa.score,
     a.max_score,
     a.weight_percent,
     a.weight_points,
-    CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
-  FROM student_assessments sa
-  JOIN assessments a ON sa.assessment_id = a.assessment_id
-  LEFT JOIN student_excluded_assessments sea
-    ON sea.student_id = sa.student_id
-    AND sea.class_id = a.class_id
-    AND sea.assessment_id = a.assessment_id
-  WHERE sa.student_id = $1
-    AND a.class_id = $2
+    COALESCE(sa.status, 'graded') AS status,
+    (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+  FROM assessments a
+  LEFT JOIN student_assessments sa
+    ON sa.assessment_id = a.assessment_id
+   AND sa.student_id = $1
+  WHERE a.class_id = $2
 `;
 
 // Verify student is enrolled in class

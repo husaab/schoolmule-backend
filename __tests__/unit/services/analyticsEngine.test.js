@@ -37,20 +37,11 @@ beforeEach(() => {
 });
 
 describe('normalizeEngine', () => {
-  it('defaults to null_skip', () => {
-    expect(engine.normalizeEngine(undefined)).toBe('null_skip');
-    expect(engine.normalizeEngine('')).toBe('null_skip');
-  });
-  it('accepts valid engines', () => {
-    expect(engine.normalizeEngine('null_zero')).toBe('null_zero');
-  });
-  it('throws a 400-coded error for unknown engines', () => {
-    expect(() => engine.normalizeEngine('bogus')).toThrow(/Unknown grade engine/);
-    try {
-      engine.normalizeEngine('bogus');
-    } catch (e) {
-      expect(e.statusCode).toBe(400);
-    }
+  it('always resolves to the single graded_only engine (legacy selectors ignored)', () => {
+    expect(engine.normalizeEngine(undefined)).toBe('graded_only');
+    expect(engine.normalizeEngine('null_skip')).toBe('graded_only');
+    expect(engine.normalizeEngine('null_zero')).toBe('graded_only');
+    expect(engine.normalizeEngine('bogus')).toBe('graded_only');
   });
 });
 
@@ -67,10 +58,24 @@ describe('buildMatrixFromRows + engine toggle', () => {
     expect(stu.finalPct).toBeCloseTo(80);
   });
 
-  it('null_zero counts ungraded work as 0 (40%)', () => {
-    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_zero');
+  it('a missing flag counts as 0 (40%) and is reported in coverage', () => {
+    const flagged = [
+      matrixRow({ assessment_id: 'a1', score: 80 }),
+      matrixRow({ assessment_id: 'a2', assessment_name: 'Quiz 2', score: null, status: 'missing' }),
+    ];
+    const matrix = engine.buildMatrixFromRows(flagged, 't1');
     const stu = matrix.classes.get('c1').students.get('s1');
     expect(stu.finalPct).toBeCloseTo(40);
+    expect(stu.coverage).toMatchObject({ assessed: 2, graded: 1, missing: 1, blank: 0, total: 2 });
+    expect(stu.missingCount).toBe(1);
+  });
+
+  it('a blank cell is "not yet graded", not missing', () => {
+    const matrix = engine.buildMatrixFromRows(rows, 't1');
+    const stu = matrix.classes.get('c1').students.get('s1');
+    expect(stu.missingCount).toBe(0);
+    expect(stu.notYetGradedCount).toBe(1);
+    expect(stu.coverage).toMatchObject({ assessed: 1, blank: 1, total: 2 });
   });
 
   it('null_skip returns null when nothing is graded', () => {
@@ -92,62 +97,55 @@ describe('buildMatrixFromRows + engine toggle', () => {
 });
 
 describe('countWorkStatus', () => {
-  it('counts missing standalone, skips excluded', () => {
+  it('counts flagged-missing, excused and blank cells separately', () => {
     const assessments = [
-      { assessment_id: 'a1', is_parent: false, parent_assessment_id: null },
-      { assessment_id: 'a2', is_parent: false, parent_assessment_id: null },
-      { assessment_id: 'a3', is_parent: false, parent_assessment_id: null },
+      { assessment_id: 'a1', is_parent: false, parent_assessment_id: null, weight_points: 10 },
+      { assessment_id: 'a2', is_parent: false, parent_assessment_id: null, weight_points: 10 },
+      { assessment_id: 'a3', is_parent: false, parent_assessment_id: null, weight_points: 10 },
+      { assessment_id: 'a4', is_parent: false, parent_assessment_id: null, weight_points: 10 },
     ];
     const rows = [
-      { assessment_id: 'a1', score: 80, is_excluded: false },
-      { assessment_id: 'a2', score: null, is_excluded: false },
-      { assessment_id: 'a3', score: null, is_excluded: true },
+      { assessment_id: 'a1', score: 80, status: 'graded' },
+      { assessment_id: 'a2', score: null, status: 'missing' },
+      { assessment_id: 'a3', score: null, status: 'excused' },
+      { assessment_id: 'a4', score: null, status: 'graded' },
     ];
     const ws = engine.countWorkStatus(assessments, rows);
     expect(ws.missing).toBe(1);
-    expect(ws.excluded).toBe(1);
+    expect(ws.excused).toBe(1);
+    expect(ws.notYetGraded).toBe(1);
     expect(ws.missingAssessments.map((a) => a.assessment_id)).toEqual(['a2']);
   });
 
-  it('a parent is missing only when no child is graded', () => {
+  it('lists a flagged child of a category as missing work', () => {
     const assessments = [
-      { assessment_id: 'p1', is_parent: true, parent_assessment_id: null },
-      { assessment_id: 'ch1', is_parent: false, parent_assessment_id: 'p1' },
-      { assessment_id: 'ch2', is_parent: false, parent_assessment_id: 'p1' },
+      { assessment_id: 'p1', is_parent: true, parent_assessment_id: null, weight_points: 100 },
+      { assessment_id: 'ch1', is_parent: false, parent_assessment_id: 'p1', weight_points: 5 },
+      { assessment_id: 'ch2', is_parent: false, parent_assessment_id: 'p1', weight_points: 5 },
     ];
-    const graded = engine.countWorkStatus(assessments, [
-      { assessment_id: 'ch1', score: 5, is_excluded: false },
-      { assessment_id: 'ch2', score: null, is_excluded: false },
+    const ws = engine.countWorkStatus(assessments, [
+      { assessment_id: 'ch1', score: 5, status: 'graded' },
+      { assessment_id: 'ch2', score: null, status: 'missing' },
     ]);
-    expect(graded.missing).toBe(0);
-
-    const ungraded = engine.countWorkStatus(assessments, [
-      { assessment_id: 'ch1', score: null, is_excluded: false },
-      { assessment_id: 'ch2', score: null, is_excluded: false },
-    ]);
-    expect(ungraded.missing).toBe(1);
+    expect(ws.missing).toBe(1);
+    expect(ws.missingAssessments.map((a) => a.assessment_id)).toEqual(['ch2']);
   });
 });
 
 describe('buildAnalyticsMatrix caching', () => {
-  it('caches per (school, term, engine) and invalidates correctly', async () => {
+  it('caches per (school, term) regardless of legacy engine arg, and invalidates correctly', async () => {
     mockQueryResponse([matrixRow()]);
     const first = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
-    const second = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
-    expect(second).toBe(first); // cache hit, no second query
+    const second = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_zero');
+    expect(second).toBe(first); // same cache entry: the engine arg is ignored
     expect(db.query).toHaveBeenCalledTimes(1);
-
-    // Different engine -> separate cache entry -> new query
-    mockQueryResponse([matrixRow()]);
-    await engine.buildAnalyticsMatrix('SCH', 't1', 'null_zero');
-    expect(db.query).toHaveBeenCalledTimes(2);
 
     // Invalidate school -> re-fetch
     engine.invalidateCache('SCH');
     mockQueryResponse([matrixRow()]);
-    const third = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
+    const third = await engine.buildAnalyticsMatrix('SCH', 't1');
     expect(third).not.toBe(first);
-    expect(db.query).toHaveBeenCalledTimes(3);
+    expect(db.query).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -224,15 +222,10 @@ describe('publishedOnly (parent-visible matrix)', () => {
     expect(matrix.classes.get('c1').assessments).toHaveLength(1);
   });
 
-  it('does the same for the null_zero engine', () => {
-    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_zero', { publishedOnly: true });
-    expect(matrix.classes.get('c1').students.get('s1').finalPct).toBeCloseTo(80);
-  });
-
   it('does not count unpublished work as missing', () => {
     const withMissing = [
       matrixRow({ assessment_id: 'a1', score: 80, is_published: true }),
-      matrixRow({ assessment_id: 'a2', score: null, is_published: false }),
+      matrixRow({ assessment_id: 'a2', score: null, status: 'missing', is_published: false }),
     ];
     const parentView = engine.buildMatrixFromRows(withMissing, 't1', 'null_skip', {
       publishedOnly: true,
@@ -387,7 +380,7 @@ describe('getStudentClassBreakdown', () => {
     expect(none.every((a) => a.classAvgPct === null)).toBe(true);
   });
 
-  it('flags category rows in missingWork so the parent portal can filter them', () => {
+  it('lists a flagged-missing child (never the category) in missingWork, and exposes cell status', () => {
     const rows = [
       matrixRow({
         assessment_id: 'cat',
@@ -396,12 +389,17 @@ describe('getStudentClassBreakdown', () => {
         max_score: null,
         score: null,
       }),
-      matrixRow({ assessment_id: 'kid1', parent_assessment_id: 'cat', score: null }),
+      matrixRow({ assessment_id: 'kid1', parent_assessment_id: 'cat', score: null, status: 'missing' }),
+      matrixRow({ assessment_id: 'kid2', parent_assessment_id: 'cat', score: null }),
     ];
-    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
+    const matrix = engine.buildMatrixFromRows(rows, 't1');
     const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
     expect(breakdown.missingWork).toHaveLength(1);
-    expect(breakdown.missingWork[0].isParent).toBe(true);
+    expect(breakdown.missingWork[0].assessmentId).toBe('kid1');
+    expect(breakdown.missingWork[0].isParent).toBe(false);
+    const byId = Object.fromEntries(breakdown.classes[0].assessmentScores.map((a) => [a.assessmentId, a.status]));
+    expect(byId).toEqual({ cat: 'graded', kid1: 'missing', kid2: 'blank' });
+    expect(breakdown.classes[0].coverage).toMatchObject({ missing: 1, blank: 1, total: 2 });
   });
 });
 

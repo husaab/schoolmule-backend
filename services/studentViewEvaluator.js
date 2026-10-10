@@ -5,7 +5,7 @@
 //
 // Design:
 //   - Pure orchestration. SQL lives in queries/studentView.queries.js.
-//     Per-class weighted grades come from utils/gradeCalculator.js so
+//     Per-class weighted grades come from services/gradeEngine.js so
 //     this code never disagrees with the gradebook.
 //   - One term at a time, then combine per-term results per termScope.
 //   - JK/SK students are excluded at the SQL layer (classes filter).
@@ -28,114 +28,17 @@ const db = require('../config/database');
 const q = require('../queries/studentView.queries');
 
 // ────────────────────────────────────────────────────────────────────
-// View-specific grade calc
+// Grade calc
 // ────────────────────────────────────────────────────────────────────
 //
-// Differs from utils/gradeCalculator on one specific point: null/unentered
-// scores are SKIPPED entirely (no weight, no contribution), not treated as 0.
-// Rationale: awards/recognition should reflect a student's performance on
-// completed work. If a student is enrolled in a class with no entered scores,
-// they don't appear in the class's average at all.
-//
-// Returns the student's % in the class, or `null` if they have zero graded
-// assessments in this class (in which case the class is excluded from their
-// across-class average).
-/**
- * Build the { assessment_id -> { score, isExcluded } } lookup that the
- * per-assessment math below reads from. Exported so callers that evaluate
- * several assessments for the same student build it only once.
- */
-function buildScoreLookup(scoreRowsForStudent) {
-  const scoreLookup = {};
-  for (const row of scoreRowsForStudent) {
-    scoreLookup[row.assessment_id] = {
-      score: row.score == null ? null : parseFloat(row.score),
-      isExcluded: Boolean(row.is_excluded),
-    };
-  }
-  return scoreLookup;
-}
+// Per-class percentages come from services/gradeEngine.js, the one engine
+// shared with the gradebook, report cards and parent portal. A student with
+// no evidence in a class gets null and is left out of that class's average.
 
-/**
- * One top-level assessment's result for one student, null-skip semantics.
- *
- * This is the single source of truth for "what did this student get on
- * this assessment" — computeClassPctForStudent below calls it per
- * top-level assessment, and so do the publish email, the publish
- * ungraded-count preview, and the parent portal's category rollup. Do not
- * re-derive this math anywhere else.
- *
- * Returns:
- *   isGraded  — false when the assessment contributes no weight (excluded,
- *               ungraded standalone, or a category with no graded children).
- *               Callers must skip these entirely, never treat them as 0.
- *   pct       — 0-100, or null when !isGraded.
- *   earned/max— raw points for a standalone (what an email shows as
- *               "18/20"); null for a category, which has no raw score of
- *               its own — only a weighted rollup of its children.
- *   weight    — this assessment's weight_points, i.e. how much the class
- *               total is scaled by when it is graded.
- */
-function computeAssessmentForStudent(assessment, allAssessments, scoreLookup) {
-  const weight = parseFloat(assessment.weight_points) || 0;
-  const notGraded = { isGraded: false, pct: null, earned: null, max: null, weight };
-
-  const sd = scoreLookup[assessment.assessment_id];
-  if (sd?.isExcluded) return notGraded;
-
-  if (assessment.is_parent) {
-    const children = allAssessments.filter(
-      (c) => c.parent_assessment_id === assessment.assessment_id,
-    );
-    let childEarned = 0;
-    let childMax = 0;
-    for (const c of children) {
-      const csd = scoreLookup[c.assessment_id];
-      if (csd?.isExcluded) continue;
-      if (csd?.score == null) continue; // skip ungraded children
-      const max = parseFloat(c.max_score) || 100;
-      const cw = parseFloat(c.weight_points) || 0;
-      const pct = max > 0 ? Math.min(csd.score / max, 1) : 0;
-      childEarned += pct * cw;
-      childMax += cw;
-    }
-    if (childMax === 0) return notGraded; // no graded children → skip parent
-    return {
-      isGraded: true,
-      pct: (childEarned / childMax) * 100,
-      earned: null, // a category has no raw score, only a rollup
-      max: null,
-      weight,
-    };
-  }
-
-  if (sd?.score == null) return notGraded; // skip ungraded standalone
-  const max = parseFloat(assessment.max_score) || 100;
-  return {
-    isGraded: true,
-    pct: max > 0 ? (sd.score / max) * 100 : 0,
-    earned: sd.score,
-    max,
-    weight,
-  };
-}
+const { computeClassGrade } = require('./gradeEngine');
 
 function computeClassPctForStudent(assessments, scoreRowsForStudent) {
-  const scoreLookup = buildScoreLookup(scoreRowsForStudent);
-  const topLevel = assessments.filter((a) => !a.parent_assessment_id);
-
-  let earned = 0;       // sum of (pct × weight) for graded assessments
-  let activeWeight = 0; // sum of weights of graded assessments
-
-  for (const a of topLevel) {
-    const result = computeAssessmentForStudent(a, assessments, scoreLookup);
-    if (!result.isGraded) continue;
-    earned += (result.pct * result.weight) / 100;
-    activeWeight += result.weight;
-  }
-
-  if (activeWeight === 0) return null;
-  return (earned / activeWeight) * 100;
+  return computeClassGrade(assessments, scoreRowsForStudent).pct;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -293,6 +196,7 @@ async function evaluateTerm(school, termId, criteria) {
     result.set(studentId, {
       qualified,
       metric,
+      hasData: info.pcts.length > 0,
       studentName: info.studentName,
       grade: info.grade,
       homeroomTeacherId: info.homeroomTeacherId,
@@ -334,9 +238,9 @@ function combinePerTerm(termResults, termIds, termScope, criteria = {}) {
         perTerm[termId] = { qualified: entry.qualified, metric: entry.metric };
         if (entry.qualified) qualifiedTerms += 1;
         // Only include the term in the display average if the student
-        // actually had graded work that term (metric > 0). Otherwise it
-        // would tank an otherwise valid headline number.
-        if (entry.metric > 0) {
+        // actually had graded work that term. A genuine 0% term still
+        // counts; a term with no evidence does not.
+        if (entry.hasData) {
           metricSum += entry.metric;
           metricCount += 1;
         }
@@ -379,7 +283,8 @@ function combinePerTerm(termResults, termIds, termScope, criteria = {}) {
       homeroomTeacherId: baseInfo.homeroomTeacherId,
       perTerm,
       qualified,
-      displayMetric: metricCount > 0 ? metricSum / metricCount : 0,
+      // null, never 0, when the student had no graded work in any term in scope.
+      displayMetric: metricCount > 0 ? metricSum / metricCount : null,
     });
   }
   return out;
@@ -439,12 +344,5 @@ module.exports = {
   applyAggregation,
   combinePerTerm,
   resolveTermIds,
-  // null-skip per-class grade: used by Student Views and the analytics
-  // null_skip engine. (The Al Haadi T2 report card uses the gradebook
-  // missing-zero engine instead, so it agrees with the gradebook.)
   computeClassPctForStudent,
-  // per-assessment null-skip math, shared with the publish email/preview
-  // and the parent portal's category rollup
-  computeAssessmentForStudent,
-  buildScoreLookup,
 };

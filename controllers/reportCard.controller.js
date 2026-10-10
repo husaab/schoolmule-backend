@@ -8,7 +8,7 @@ const reportCardQueries = require('../queries/reportCard.queries');
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient'); // configure this file if not already
 const logger = require('../logger');
-const { calculateStudentGrade } = require('../utils/gradeCalculator');
+const { computeClassGrade } = require('../services/gradeEngine');
 const studentViewQueries = require('../queries/studentView.queries');
 const alHaadiT2Queries = require('../queries/alHaadiT2ReportCard.queries');
 const classQueries = require('../queries/class.queries');
@@ -25,11 +25,11 @@ async function resolveClassTerm(classId) {
 }
 
 /**
- * Calculate final grades per subject for a student using JavaScript-based calculation
- * Handles exclusions, parent/child hierarchy, and weight scaling consistently with frontend
+ * Final grade per subject for a student via the shared grade engine
+ * (graded work only; null when the student has no evidence in the subject).
  *
  * @param {string} studentId - The student's UUID
- * @returns {Promise<Array<{subject_name: string, final_grade: number}>>}
+ * @returns {Promise<Array<{subject_name: string, final_grade: number|null}>>}
  */
 async function calculateSubjectGradesForStudent(studentId) {
   // 1. Get all classes the student is enrolled in
@@ -68,24 +68,21 @@ async function calculateSubjectGradesForStudent(studentId) {
       SELECT
         a.assessment_id,
         sa.score,
-        CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
+        COALESCE(sa.status, 'graded') AS status,
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
       FROM assessments a
       LEFT JOIN student_assessments sa
         ON sa.assessment_id = a.assessment_id
         AND sa.student_id = $1
-      LEFT JOIN student_excluded_assessments sea
-        ON sea.student_id = $1
-        AND sea.class_id = a.class_id
-        AND sea.assessment_id = a.assessment_id
       WHERE a.class_id = $2
     `, [studentId, cls.class_id]);
 
-    // Calculate grade using shared utility
-    const grade = calculateStudentGrade(assessments, studentScores);
+    // Shared engine: graded work only. null = enrolled but no evidence yet.
+    const { pct } = computeClassGrade(assessments, studentScores);
 
     classGrades.push({
       subject: cls.subject,
-      grade: grade
+      grade: pct
     });
   }
 
@@ -98,13 +95,13 @@ async function calculateSubjectGradesForStudent(studentId) {
     subjectMap.get(cg.subject).push(cg.grade);
   }
 
-  // Calculate average for each subject
+  // Average the classes that have evidence; all-null -> null ("I" on the card)
   const results = [];
   for (const [subject, grades] of subjectMap) {
-    const avgGrade = grades.reduce((sum, g) => sum + g, 0) / grades.length;
+    const graded = grades.filter((g) => g != null);
     results.push({
       subject_name: subject,
-      final_grade: avgGrade
+      final_grade: graded.length ? graded.reduce((sum, g) => sum + g, 0) / graded.length : null
     });
   }
 
@@ -119,9 +116,8 @@ async function calculateSubjectGradesForStudent(studentId) {
 // ────────────────────────────────────────────────────────────────────
 //
 // The T2 variant shows First Term / Second Term / Final Term rows per
-// subject. T1 and T2 percentages use calculateStudentGrade (the gradebook
-// engine: unentered scores count as 0, exclusions and parent/child
-// hierarchies handled) so the card never disagrees with the gradebook.
+// subject. T1 and T2 percentages come from services/gradeEngine (graded
+// work only) so the card never disagrees with the gradebook.
 
 /**
  * Resolve the school's Term 1 and Term 2 term rows for the academic year
@@ -169,12 +165,11 @@ async function resolveAlHaadiTermPair(school, termString) {
 }
 
 /**
- * Compute a student's per-subject percentage for ONE term using the gradebook
- * engine (calculateStudentGrade: unentered scores count as 0, matching the
- * gradebook and the standard report card). A class the student is enrolled in
- * but has NO entered scores for stays null → renders as "—" rather than 0%.
- * Multiple classes sharing a subject average their non-null pcts,
- * mirroring calculateSubjectGradesForStudent's grouping; all-null → null.
+ * Compute a student's per-subject percentage for ONE term using the shared
+ * grade engine (graded work only). A class the student is enrolled in but
+ * has no evidence for stays null → renders as "I" (insufficient evidence).
+ * A subject absent from the map (not enrolled that term) renders as "—".
+ * Multiple classes sharing a subject average their non-null pcts; all-null → null.
  *
  * @param {string} studentId
  * @param {string|null} termId  null → empty map (term not found)
@@ -212,10 +207,8 @@ async function computeTermSubjectGrades(studentId, termId) {
     }
 
     const studentRows = scoreRows.filter((r) => r.student_id === studentId);
-    // Enrolled but nothing entered → null ("—"); otherwise the gradebook-matching
-    // grade (blanks among entered work count as 0).
-    const hasEnteredScore = studentRows.some((r) => !r.is_excluded && r.score != null);
-    const pct = hasEnteredScore ? calculateStudentGrade(assessments, studentRows) : null;
+    // Enrolled but no evidence → null ("I"); otherwise the gradebook-matching grade.
+    const { pct } = computeClassGrade(assessments, studentRows);
 
     if (!subjectPcts.has(cls.subject)) subjectPcts.set(cls.subject, []);
     subjectPcts.get(cls.subject).push(pct);
@@ -235,23 +228,31 @@ async function computeTermSubjectGrades(studentId, termId) {
 /**
  * Merge the per-term subject maps into the row model the T2 template renders.
  *
- *   Rule A — T1-only subject (e.g. Gr4-8 PE):   t2 missing → final null ("—")
- *   Rule B — T2 subject with no T1 record:      t1 missing → final null ("—")
- *   Rule E — zero graded work in a term:        map holds null → same as missing
- *   Final Term = (t1 + t2) / 2 ONLY when both are present.
+ *   Rule A — T1-only subject (e.g. Gr4-8 PE):   t2 absent → t2 "—", final "—"
+ *   Rule B — T2 subject with no T1 record:      t1 absent → t1 "—", final "—"
+ *   Rule E — enrolled but no evidence in a term: map holds null → "I"; the
+ *            Final is then "I" as well (both terms ran, evidence insufficient)
+ *   Final Term = (t1 + t2) / 2 ONLY when both are numbers.
+ *
+ * A cell is a number, 'I' (insufficient evidence) or null (structural "—").
  *
  * @param {Map<string, number|null>} t1Map
  * @param {Map<string, number|null>} t2Map
- * @returns {Array<{ subject: string, t1: number|null, t2: number|null, final: number|null }>}
+ * @returns {Array<{ subject: string, t1: number|'I'|null, t2: number|'I'|null, final: number|'I'|null }>}
  *          one entry per subject in the union of both maps, sorted alphabetically
  */
 function mergeTermSubjects(t1Map, t2Map) {
   const subjects = new Set([...t1Map.keys(), ...t2Map.keys()]);
   const rows = [];
+  const cell = (map, subject) => (map.has(subject) ? (map.get(subject) ?? 'I') : null);
   for (const subject of subjects) {
-    const t1 = t1Map.get(subject) ?? null;
-    const t2 = t2Map.get(subject) ?? null;
-    const final = t1 != null && t2 != null ? (t1 + t2) / 2 : null;
+    const t1 = cell(t1Map, subject);
+    const t2 = cell(t2Map, subject);
+    // Final averages two numbers. If the subject ran both terms but one has
+    // insufficient evidence, the final is 'I' too; a structural gap stays '—'.
+    let final = null;
+    if (typeof t1 === 'number' && typeof t2 === 'number') final = (t1 + t2) / 2;
+    else if (t1 != null && t2 != null) final = 'I';
     rows.push({ subject, t1, t2, final });
   }
   rows.sort((a, b) => a.subject.localeCompare(b.subject));
@@ -681,7 +682,7 @@ const generateSingleReportCard = async (studentId, term, opts = {}) => {
   const assessments = await calculateSubjectGradesForStudent(studentId);
   const subjects = assessments.map(a => ({
     subject: a.subject_name,
-    grade: Number(a.final_grade).toFixed(1)
+    grade: a.final_grade == null ? null : Number(a.final_grade)
   }));
 
   const { rows: classRows } = await db.query(`
@@ -830,7 +831,7 @@ const generateAlHaadiT2ReportCard = async (studentId, term, student, opts = {}) 
     // Table may not exist yet, use empty assets
   }
 
-  // Per-term subject grades via the student-view engine, merged into
+  // Per-term subject grades via the shared grade engine, merged into
   // { subject, t1, t2, final } rows (rules A/B/E live in mergeTermSubjects).
   const { t1, t2 } = await resolveAlHaadiTermPair(student.school, term);
   const [t1Map, t2Map] = await Promise.all([

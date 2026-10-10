@@ -201,7 +201,7 @@ describe('Integration: Al Haadi T2 report card generation', () => {
     expect(html).not.toContain('Final Term');
   });
 
-  it('treats a T2 class with zero graded work as missing (rule E)', async () => {
+  it("prints 'I' for a T2 class with no evidence and no Final (rule E)", async () => {
     const { rows: t1Rows } = await pool.query(
       `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active)
        VALUES ('ALHAADIACADEMY', $1, '2025-09-01', '2026-01-31', '2025-2026', false) RETURNING term_id`,
@@ -231,8 +231,8 @@ describe('Integration: Al Haadi T2 report card generation', () => {
 
     const html = capturedHTML[0];
     expect(html).toContain('88.0%'); // T1 row kept
-    // T2 and Final rows are em-dashes; final must NOT average 88 with 0.
+    // T2 and Final rows are "I" (insufficient evidence); final must NOT average 88 with 0.
     expect(html).not.toContain('44.0%');
-    expect((html.match(/—/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect((html.match(/<td class="grade-cell">I<\/td>/g) || []).length).toBe(2);
   });
 });

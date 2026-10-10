@@ -56,12 +56,12 @@ describe('mergeTermSubjects', () => {
     expect(rows).toEqual([{ subject: 'French', t1: null, t2: 75, final: null }]);
   });
 
-  it('rule E: a term with zero graded work (null in map) is treated as missing', () => {
+  it("rule E: enrolled with no evidence in a term renders 'I' for that term and for the Final", () => {
     const rows = mergeTermSubjects(
       new Map([['Science', 88]]),
       new Map([['Science', null]])
     );
-    expect(rows).toEqual([{ subject: 'Science', t1: 88, t2: null, final: null }]);
+    expect(rows).toEqual([{ subject: 'Science', t1: 88, t2: 'I', final: 'I' }]);
   });
 
   it('unions subjects from both terms and sorts alphabetically', () => {
@@ -85,7 +85,7 @@ describe('shared exports', () => {
   it('percentToLetterGrade is exported and follows the rubric', () => {
     expect(percentToLetterGrade(91)).toBe('A+');
     expect(percentToLetterGrade(72)).toBe('B-');
-    expect(percentToLetterGrade(40)).toBe('D-');
+    expect(percentToLetterGrade(40)).toBe('R');
     expect(percentToLetterGrade(null)).toBe('-');
   });
 
@@ -102,7 +102,7 @@ describe('shared exports', () => {
   });
 });
 
-// ─── computeTermSubjectGrades (gradebook missing-zero engine) ───
+// ─── computeTermSubjectGrades (shared graded-only engine) ───
 describe('computeTermSubjectGrades', () => {
   const STUDENT = 'stu-1';
   const TERM = 'term-1';
@@ -129,9 +129,9 @@ describe('computeTermSubjectGrades', () => {
     });
   };
 
-  it('counts an ungraded child as zero (missing-zero, not null-skip)', async () => {
+  it('skips an ungraded child (graded work only)', async () => {
     // Parent worth 10 pts with two children (5 pts each, max 10):
-    // one scored 8/10, one ungraded. Missing-zero → 40%; null-skip would be 80%.
+    // one scored 8/10, one blank. Graded-only → 80%.
     mockClass('Arabic', [
       scoreRow({ assessment_id: 'P', assessment_name: 'Quizzes', weight_points: '10', max_score: null, is_parent: true, parent_assessment_id: null, score: null }),
       scoreRow({ assessment_id: 'C1', assessment_name: 'Quiz 1', weight_points: '5', max_score: '10', is_parent: false, parent_assessment_id: 'P', score: '8' }),
@@ -139,10 +139,10 @@ describe('computeTermSubjectGrades', () => {
     ]);
 
     const result = await computeTermSubjectGrades(STUDENT, TERM);
-    expect(result.get('Arabic')).toBeCloseTo(40, 5);
+    expect(result.get('Arabic')).toBeCloseTo(80, 5);
   });
 
-  it('returns null ("—") when the student has no entered scores in the class', async () => {
+  it('returns null ("I") when the student has no evidence in the class', async () => {
     mockClass('French', [
       scoreRow({ assessment_id: 'A1', assessment_name: 'Test', weight_points: '100', max_score: '100', is_parent: false, parent_assessment_id: null, score: null }),
     ]);

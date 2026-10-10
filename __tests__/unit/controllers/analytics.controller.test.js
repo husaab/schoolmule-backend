@@ -58,7 +58,7 @@ describe('GET /api/analytics/overview', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('success');
-    expect(res.body.data.engine).toBe('null_skip');
+    expect(res.body.data.engine).toBe('graded_only');
     expect(res.body.data.school.stats.avg).toBe(75);
     expect(res.body.data.byGrade).toHaveLength(1);
     expect(res.body.data.byGrade[0].grade).toBe('5');
@@ -94,13 +94,15 @@ describe('GET /api/analytics/overview', () => {
     expect(res.body.message).toContain('termId');
   });
 
-  it('returns 400 for an unknown engine', async () => {
+  it('ignores a legacy engine selector instead of rejecting it', async () => {
+    mockQueryResponse(sampleRows); // matrix
+    mockQueryResponse([{ term_id: 't1', name: 'Term 1', is_active: true }]); // terms
     const res = await request(app)
       .get(url)
       .set(authHeader())
-      .query({ termId: 't1', engine: 'bogus' });
-    expect(res.status).toBe(400);
-    expect(res.body.message).toContain('Unknown grade engine');
+      .query({ termId: 't1', engine: 'null_zero' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.engine).toBe('graded_only');
   });
 
   it('returns 500 on database error', async () => {
@@ -186,7 +188,7 @@ describe('GET /api/analytics/student/:studentId', () => {
   it('returns student detail with percentiles, attendance and missing work', async () => {
     const rows = [
       ...sampleRows,
-      matrixRow({ assessment_id: 'a2', assessment_name: 'Quiz 2', score: null, weight_points: 50 }),
+      matrixRow({ assessment_id: 'a2', assessment_name: 'Quiz 2', score: null, status: 'missing', weight_points: 50 }),
       matrixRow({
         student_id: 's2',
         student_name: 'Bob',
@@ -210,7 +212,7 @@ describe('GET /api/analytics/student/:studentId', () => {
     const d = res.body.data;
     expect(d.studentName).toBe('Alice');
     expect(d.attendance.pct).toBe(96);
-    expect(d.overall.avg).toBe(85); // null_skip: Quiz 2 ungraded -> skipped
+    expect(d.overall.avg).toBeCloseTo(56.7, 1); // Quiz 2 flagged missing -> counts as 0 (85*100 + 0*50)/150
     expect(d.classes).toHaveLength(1);
     expect(d.missingWork).toHaveLength(1);
     expect(d.missingWork[0].assessmentName).toBe('Quiz 2');
@@ -373,7 +375,8 @@ describe('GET /api/analytics/classes-health', () => {
       assessmentCount: 3,
       ungradedAssessments: 1, // a3
       unpublishedGraded: 1, // a2
-      missingCount: 3, // s1 misses a3; s2 misses a2 + a3
+      missingCount: 0, // blank cells are "not yet graded", not missing
+      notYetGradedCount: 3, // s1: a3; s2: a2 + a3
       lastGradedDate: '2025-10-08',
     });
     expect(math.classAvg).toBeCloseTo(71.3, 1); // (77.5 + 65) / 2

@@ -1,3 +1,5 @@
+const { computeAssessmentForStudent, buildScoreLookup, cellState, formatCoverage } = require('../services/gradeEngine');
+
 /**
  * Get letter grade and color based on percentage
  * Uses Ontario grading scale
@@ -15,7 +17,7 @@ function getLetterGrade(percentage) {
   if (percentage >= 57) return { letter: 'D+', color: '#f97316', bg: '#ffedd5' };
   if (percentage >= 53) return { letter: 'D', color: '#f97316', bg: '#ffedd5' };
   if (percentage >= 50) return { letter: 'D-', color: '#f97316', bg: '#ffedd5' };
-  return { letter: 'F', color: '#ef4444', bg: '#fee2e2' };
+  return { letter: 'R', color: '#ef4444', bg: '#fee2e2' };
 }
 
 /**
@@ -40,6 +42,7 @@ function getStudentSummaryHTML({
   assessments,
   studentAssessments,
   calculatedGrade,
+  coverage = null,
   daysOfAbsence = 0
 }) {
   const { name: schoolName, address, phone, email } = schoolInfo;
@@ -48,7 +51,11 @@ function getStudentSummaryHTML({
   const { name: termName } = term;
 
   // Get letter grade for overall grade
-  const overallLetterGrade = getLetterGrade(calculatedGrade);
+  const hasGrade = calculatedGrade != null;
+  const overallLetterGrade = hasGrade ? getLetterGrade(calculatedGrade) : { letter: '—', color: '#6b7280', bg: '#f3f4f6' };
+  const coverageLine = coverage ? formatCoverage(coverage) : '';
+  const scoreLookup = buildScoreLookup(studentAssessments);
+  const stateLabel = { blank: 'Not yet graded', missing: 'Missing', excused: 'Excused' };
 
   // Organize assessments into hierarchy: parents with children, and standalone
   const parentAssessments = assessments.filter(a => a.is_parent && a.parent_assessment_id === null);
@@ -60,11 +67,16 @@ function getStudentSummaryHTML({
   // First, render standalone assessments
   standaloneAssessments.forEach(assessment => {
     const studentScore = studentAssessments.find(sa => sa.assessment_id === assessment.assessment_id);
-    let scoreDisplay = 'Not Submitted';
+    const state = cellState(studentScore);
+    let scoreDisplay = stateLabel[state] || 'Not yet graded';
     let percentage = null;
     let letterGradeHtml = '';
 
-    if (studentScore && studentScore.score !== null) {
+    if (state === 'missing') {
+      percentage = 0;
+      const lg = getLetterGrade(0);
+      letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
+    } else if (state === 'graded') {
       percentage = assessment.max_score
         ? (studentScore.score / assessment.max_score) * 100
         : studentScore.score;
@@ -95,32 +107,16 @@ function getStudentSummaryHTML({
   parentAssessments.forEach(parent => {
     const childAssessments = assessments.filter(a => a.parent_assessment_id === parent.assessment_id);
 
-    // Calculate parent score from children
-    let parentScoreDisplay = 'Not Submitted';
+    // Category rollup via the shared engine (counted children only)
+    const rollup = computeAssessmentForStudent(parent, assessments, scoreLookup);
+    let parentScoreDisplay = rollup.state === 'excused' ? 'Excused' : 'Not yet graded';
     let parentPercentage = null;
     let parentLetterHtml = '';
-
-    if (childAssessments.length > 0) {
-      let childTotalScore = 0;
-      let childTotalPossible = 0;
-      let hasScores = false;
-
-      childAssessments.forEach(child => {
-        const childScore = studentAssessments.find(sa => sa.assessment_id === child.assessment_id);
-        if (childScore && childScore.score !== null) {
-          const childWeight = child.weight_points || 1;
-          childTotalScore += (childScore.score * childWeight);
-          childTotalPossible += ((child.max_score || 100) * childWeight);
-          hasScores = true;
-        }
-      });
-
-      if (hasScores && childTotalPossible > 0) {
-        parentPercentage = (childTotalScore / childTotalPossible) * 100;
-        parentScoreDisplay = `${parentPercentage.toFixed(1)}%`;
-        const lg = getLetterGrade(parentPercentage);
-        parentLetterHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-      }
+    if (rollup.isCounted) {
+      parentPercentage = rollup.pct;
+      parentScoreDisplay = `${parentPercentage.toFixed(1)}%`;
+      const lg = getLetterGrade(parentPercentage);
+      parentLetterHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
     }
 
     // Parent row
@@ -144,11 +140,16 @@ function getStudentSummaryHTML({
     // Child rows
     childAssessments.forEach(child => {
       const childScore = studentAssessments.find(sa => sa.assessment_id === child.assessment_id);
-      let scoreDisplay = 'Not Submitted';
+      const state = cellState(childScore);
+      let scoreDisplay = stateLabel[state] || 'Not yet graded';
       let percentage = null;
       let letterGradeHtml = '';
 
-      if (childScore && childScore.score !== null) {
+      if (state === 'missing') {
+        percentage = 0;
+        const lg = getLetterGrade(0);
+        letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
+      } else if (state === 'graded') {
         percentage = child.max_score
           ? (childScore.score / child.max_score) * 100
           : childScore.score;
@@ -600,10 +601,11 @@ function getStudentSummaryHTML({
           <div class="stats-row">
             <div class="stat-card primary">
               <div class="stat-label">Current Grade</div>
-              <div class="stat-value">${calculatedGrade.toFixed(1)}%</div>
+              <div class="stat-value">${hasGrade ? calculatedGrade.toFixed(1) + '%' : '—'}</div>
               <div class="grade-badge" style="background: ${overallLetterGrade.bg}; color: ${overallLetterGrade.color};">
                 ${overallLetterGrade.letter}
               </div>
+              ${coverageLine ? `<div class="stat-subtext">Based on ${coverageLine}</div>` : ''}
             </div>
             <div class="stat-card">
               <div class="stat-label">Letter Grade</div>

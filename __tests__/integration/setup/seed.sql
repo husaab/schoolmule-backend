@@ -23,6 +23,9 @@ CREATE TABLE schools (
   timezone               TEXT,
   academic_year_start_date DATE,
   academic_year_end_date DATE,
+  email_sending_domain   TEXT,
+  email_sender_local     TEXT,
+  email_reply_to         TEXT[] NOT NULL DEFAULT '{}',
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
@@ -356,6 +359,7 @@ CREATE TABLE student_assessments (
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   assessment_id          UUID NOT NULL REFERENCES assessments(assessment_id) ON DELETE CASCADE,
   score                  NUMERIC(10, 2),
+  status                 TEXT NOT NULL DEFAULT 'graded' CHECK (status IN ('graded', 'missing', 'excused')),
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   updated_at             TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (student_id, assessment_id)

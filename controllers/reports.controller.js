@@ -4,7 +4,7 @@ const logger = require("../logger");
 const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStudentSummaryHTML } = require("../templates/studentSummaryTemplate");
 const { getStudentSummaryHTMLHorizontal } = require("../templates/studentSummaryTemplateHorizontal");
-const { calculateStudentGrade } = require("../utils/gradeCalculator");
+const { computeClassGrade } = require("../services/gradeEngine");
 
 const generateStudentSummaryReport = async (req, res) => {
   try {
@@ -89,9 +89,8 @@ const generateStudentSummaryReport = async (req, res) => {
     const scoresResult = await db.query(reportsQueries.getStudentAssessmentScores, [studentId, classId]);
     const studentScores = scoresResult.rows;
 
-    // 8. Calculate weighted grade using shared utility
-    // Note: calculateStudentGrade expects studentScores with is_excluded flag (added to query)
-    const calculatedGrade = calculateStudentGrade(assessments, studentScores);
+    // 8. Grade via the shared engine: graded work only (null = no evidence yet)
+    const { pct: calculatedGrade, coverage } = computeClassGrade(assessments, studentScores);
 
     // 9. Get attendance data (days of absence)
     let daysOfAbsence = 0;
@@ -120,6 +119,7 @@ const generateStudentSummaryReport = async (req, res) => {
       assessments,
       studentAssessments: studentScores,
       calculatedGrade,
+      coverage,
       daysOfAbsence
     });
 

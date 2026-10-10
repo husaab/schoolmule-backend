@@ -22,7 +22,7 @@
  */
 
 const { formatCommentHTML } = require('../utils/commentFormatter')
-const { percentToLetterGrade } = require('./reportCardTemplate')
+const { formatReportMark } = require('./reportCardTemplate')
 
 function getAlHaadiT2ReportCardHTML({
   schoolInfo,
@@ -45,10 +45,11 @@ function getAlHaadiT2ReportCardHTML({
 
   // Grades 1-3 show letters, 4-8 show percentages — same rule as the
   // standard template's grade cell.
-  const isLetterGrade = Number(grade) <= 3;
-  const formatGrade = (pct) => {
-    if (pct == null) return '—';
-    return isLetterGrade ? percentToLetterGrade(pct) : `${pct.toFixed(1)}%`;
+  // null = structural dash (subject not in that term); 'I' = enrolled but no
+  // evidence; below 50 = 'R'; otherwise letter / percent.
+  const formatGrade = (value) => {
+    if (value == null) return '—';
+    return formatReportMark(value, grade);
   };
 
   // Generate subject cards grouped into pages (2 per page max, vertically centered)

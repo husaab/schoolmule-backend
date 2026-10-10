@@ -18,8 +18,8 @@ const q = require('../queries/messaging.queries');
 const announcementQueries = require('../queries/announcement.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
 const schoolQueries = require('../queries/school.queries');
-const { Resend } = require('resend');
-const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../utils/emailUtils');
+const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
@@ -170,9 +170,8 @@ async function sendGuardianInvite({ school, to, recipientFirstName, teacherName,
   }
   const schoolName = getSchoolName(school);
   const studentFirstName = String(studentName || '').split(' ')[0];
-  const resend = new Resend(getSchoolApiKey(school));
-  const result = await resend.emails.send({
-    from: `messages@${getSchoolDomain(school)}`,
+  await sendOrThrow(getResend(), {
+    ...schoolSender({ school, schoolInfo, role: 'messages' }),
     to: [to],
     subject: `${teacherName} sent you a message about ${studentFirstName}`,
     html: getGuardianInviteEmailHTML({
@@ -180,7 +179,6 @@ async function sendGuardianInvite({ school, to, recipientFirstName, teacherName,
       url: inviteLink(token, conversationId), schoolName, schoolInfo,
     }),
   });
-  if (result?.error) throw new Error(result.error.message || 'Email sending failed');
 }
 
 /**
@@ -304,7 +302,9 @@ async function buildThread(conv, user) {
       weightPoints: hideScore || c.weight_points == null ? null : Number(c.weight_points),
       maxScore: hideScore || c.max_score == null ? null : Number(c.max_score),
       score: hideScore || c.score == null ? null : Number(c.score),
-      pct: hideScore ? null : pctOf(c.score, c.max_score),
+      pct: hideScore || c.status === 'excused' ? null : c.status === 'missing' ? 0 : pctOf(c.score, c.max_score),
+      // graded | missing | excused | blank — the same cell state the gradebook shows
+      status: hideScore ? null : c.status === 'missing' || c.status === 'excused' ? c.status : c.score == null ? 'blank' : 'graded',
       isPublished: Boolean(c.is_published),
       parentComment: hideScore ? null : c.parent_comment,
       classAvgPct: user.role === 'PARENT' || c.class_avg_pct == null ? null : Number(c.class_avg_pct),

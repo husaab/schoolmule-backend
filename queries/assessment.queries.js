@@ -185,63 +185,6 @@ const assessmentQueries = {
       last_modified_at = NOW()
     WHERE assessment_id = ANY($1::uuid[])
     RETURNING *
-  `,
-
-  // Updated grade calculation that handles parent assessments with point-based system
-  selectFinalGradesByStudent: `
-    WITH assessment_scores AS (
-      -- Get direct scores for child assessments and standalone assessments
-      SELECT 
-        a.assessment_id,
-        a.parent_assessment_id,
-        COALESCE(a.weight_points, a.weight_percent, 0) as weight_points,
-        a.max_score,
-        a.is_parent,
-        c.subject,
-        COALESCE(sa.score, 0) as raw_score
-      FROM assessments a
-      JOIN classes c ON c.class_id = a.class_id
-      JOIN class_students cs ON cs.class_id = c.class_id
-      LEFT JOIN student_assessments sa ON sa.assessment_id = a.assessment_id AND sa.student_id = $1
-      WHERE cs.student_id = $1
-    ),
-    parent_scores AS (
-      -- Calculate scores for parent assessments as weighted average of children
-      SELECT 
-        p.assessment_id,
-        p.subject,
-        p.weight_points,
-        COALESCE(
-          SUM(
-            (c.raw_score / NULLIF(c.max_score, 0)) * c.weight_points
-          ) / NULLIF(SUM(c.weight_points), 0) * 100,
-          0
-        ) as calculated_percentage
-      FROM assessment_scores p
-      JOIN assessment_scores c ON c.parent_assessment_id = p.assessment_id
-      WHERE p.is_parent = true
-      GROUP BY p.assessment_id, p.subject, p.weight_points
-    ),
-    final_scores AS (
-      -- Combine standalone assessments and parent assessments
-      SELECT 
-        subject, 
-        weight_points, 
-        (raw_score / NULLIF(max_score, 0)) * 100 as percentage_score
-      FROM assessment_scores 
-      WHERE parent_assessment_id IS NULL AND is_parent = false
-      
-      UNION ALL
-      
-      SELECT subject, weight_points, calculated_percentage as percentage_score
-      FROM parent_scores
-    )
-    SELECT 
-      subject AS subject_name,
-      SUM(percentage_score * (weight_points / 100.0)) AS final_grade
-    FROM final_scores
-    GROUP BY subject
-    ORDER BY subject
   `
 }
 

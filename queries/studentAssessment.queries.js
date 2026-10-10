@@ -15,7 +15,8 @@ SELECT
   a.is_parent,
   a.parent_assessment_id,
   sa.score,
-  CASE WHEN sea.assessment_id IS NOT NULL THEN true ELSE false END as is_excluded
+  COALESCE(sa.status, 'graded') AS status,
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
 FROM class_students AS cs
 JOIN students AS s
   ON cs.student_id = s.student_id
@@ -24,10 +25,6 @@ JOIN assessments AS a
 LEFT JOIN student_assessments AS sa
   ON sa.student_id = cs.student_id
  AND sa.assessment_id = a.assessment_id
-LEFT JOIN student_excluded_assessments sea 
-  ON sea.student_id = cs.student_id 
- AND sea.class_id = cs.class_id 
- AND sea.assessment_id = a.assessment_id
 WHERE cs.class_id = $1
 ORDER BY s.name, a.weight_percent;
 `;

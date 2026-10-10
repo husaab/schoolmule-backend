@@ -405,6 +405,7 @@ function getAssessmentPublishedEmailHTML({
   className,
   assessments,
   batchComment,
+  runningGradeLabel,
   schoolName,
   schoolInfo,
   portalUrl,
@@ -436,6 +437,9 @@ function getAssessmentPublishedEmailHTML({
       paragraph('Dear Parent/Guardian,'),
       paragraph(`${count} in <strong>${escapeHtml(className)}</strong> ${assessments.length === 1 ? 'was' : 'were'} graded and shared with you.`),
       `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`,
+      runningGradeLabel
+        ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>. Work that has not been graded yet is not included.`)
+        : '',
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
       button('View in Parent Portal', portalUrl),
       signOff(schoolName),

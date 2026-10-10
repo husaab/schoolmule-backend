@@ -69,6 +69,16 @@ async function resolveTerm(req) {
 // engine pass nothing and are unaffected.
 const PARENT_VIEW = { publishedOnly: true };
 
+/** Sum per-class coverage counts into one { assessed, graded, missing, excused, blank, total }. */
+function sumCoverage(classes) {
+  const out = { assessed: 0, graded: 0, missing: 0, excused: 0, blank: 0, total: 0 };
+  for (const c of classes) {
+    if (!c.coverage) continue;
+    for (const k of Object.keys(out)) out[k] += c.coverage[k] || 0;
+  }
+  return out;
+}
+
 const mapEventToResponse = (event) => ({
   eventId: event.event_id,
   school: event.school,
@@ -159,6 +169,7 @@ const getSummary = async (req, res) => {
             : null,
           overallAvg: cross ? stats.round1(engine.overallAvgForStudent(cross)) : null,
           classCount: cross ? cross.classes.length : 0,
+          coverage: cross ? sumCoverage(cross.classes) : null,
           attendance: att
             ? { presentDays: att.presentDays, totalDays: att.totalDays, pct: att.pct }
             : null,
@@ -245,6 +256,8 @@ const getStudentGrades = async (req, res) => {
           avg: stats.round1(breakdown.overallAvg),
           classCount: breakdown.classes.length,
           missingCount: breakdown.missingWork.length,
+          notYetGradedCount: breakdown.classes.reduce((s, c) => s + (c.notYetGradedCount || 0), 0),
+          coverage: sumCoverage(breakdown.classes),
         },
         classes,
         missingWork: breakdown.missingWork,
@@ -449,7 +462,11 @@ const getRecentPublications = async (req, res) => {
           if (a.parentAssessmentId) continue; // the category represents its children
           if (a.isExcluded) continue;
 
-          const pct = a.isParent
+          // A flagged-missing mark counts as 0 in the grade, so the feed must
+          // show it rather than silently lowering the average.
+          const pct = a.status === 'missing'
+            ? 0
+            : a.isParent
             ? a.rollupPct
             : a.score != null && a.maxScore
               ? stats.round1((a.score / a.maxScore) * 100)
@@ -467,6 +484,7 @@ const getRecentPublications = async (req, res) => {
             score: a.score,
             maxScore: a.maxScore,
             pct,
+            status: a.status,
             comment: a.parentComment,
             publishedAt: a.publishedAt,
             isNew: lastSeenTime == null || publishedTime > lastSeenTime,

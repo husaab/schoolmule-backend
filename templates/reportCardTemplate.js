@@ -8,9 +8,10 @@ const { formatCommentHTML } = require('../utils/commentFormatter')
 /**
  * Convert a numeric percentage to a letter grade based on school rubric.
  * Used for grades 1-3 report cards where letters are shown instead of percentages.
+ * Below 50 is "R" (Ontario: achievement below level 1, remediation required).
  *
  * @param {number} percent - The grade percentage (0-100)
- * @returns {string} Letter grade (A+, A, A-, B+, B, B-, C+, C, C-, D+, D, D-, or F)
+ * @returns {string} Letter grade (A+ … D-, or R)
  */
 function percentToLetterGrade(percent) {
   if (percent == null || isNaN(percent)) return '-';
@@ -27,7 +28,22 @@ function percentToLetterGrade(percent) {
   if (rounded >= 57) return 'D+';
   if (rounded >= 53) return 'D';
   if (rounded >= 50) return 'D-';
-  return 'D-';
+  return 'R';
+}
+
+/**
+ * Report-card mark for one subject cell.
+ *   null / undefined  -> 'I'  (insufficient evidence: enrolled, nothing graded)
+ *   'I'               -> 'I'
+ *   below 50          -> 'R'  (letter and percentage formats alike)
+ *   otherwise         -> letter (grades 1-3) or "NN.N%" (grades 4-8)
+ */
+function formatReportMark(value, studentGrade) {
+  if (value === 'I' || value == null) return 'I';
+  const pct = Number(value);
+  if (Number.isNaN(pct)) return 'I';
+  if (pct < 50) return 'R';
+  return Number(studentGrade) <= 3 ? percentToLetterGrade(pct) : `${pct.toFixed(1)}%`;
 }
 
 function getReportCardHTML({
@@ -68,7 +84,7 @@ function getReportCardHTML({
           </thead>
           <tbody>
             <tr>
-              <td class="grade-cell">${Number(grade) <= 3 ? percentToLetterGrade(parseFloat(sub.grade)) : sub.grade + '%'}</td>
+              <td class="grade-cell">${formatReportMark(sub.grade, grade)}</td>
               <td class="habit-cell">${workHabits}</td>
               <td class="habit-cell">${behavior}</td>
             </tr>
@@ -714,4 +730,4 @@ function getAcademicYear() {
   }
 }
 
-module.exports = { getReportCardHTML, percentToLetterGrade };
+module.exports = { getReportCardHTML, percentToLetterGrade, formatReportMark };

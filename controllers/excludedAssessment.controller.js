@@ -1,17 +1,26 @@
 // File: src/controllers/excludedAssessment.controller.js
+//
+// Legacy exclusion API kept for older clients. "Excluded" now means the
+// cell status 'excused' on student_assessments (see services/gradeEngine.js);
+// writes go through applyCellStatus so a category id excuses every child.
 
 const db = require('../config/database')
 const excludedAssessmentQueries = require('../queries/excludedAssessment.queries')
+const { applyCellStatus } = require('./studentAssessment.controller')
 const logger = require('../logger')
 
-//
-// 1) POST /excluded-assessments
-// Create a new exclusion record
-//
+const mapRow = (r) => ({
+  studentId: r.student_id,
+  classId: r.class_id,
+  assessmentId: r.assessment_id,
+  assessmentName: r.assessment_name,
+  createdAt: r.created_at || null,
+})
+
+// POST /excluded-assessments  { studentId, classId, assessmentId }
 const createExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.body
 
-  // Basic required field check
   if (!studentId || !classId || !assessmentId) {
     return res.status(400).json({
       status: 'failed',
@@ -20,163 +29,79 @@ const createExclusion = async (req, res) => {
   }
 
   try {
-    const { rows } = await db.query(excludedAssessmentQueries.createExclusion, [
-      studentId,
-      classId,
-      assessmentId,
-    ])
-
+    const rows = await applyCellStatus({ classId, studentId, assessmentId, status: 'excused' })
     if (rows.length === 0) {
-      // Record already exists (ON CONFLICT DO NOTHING)
-      return res.status(200).json({
-        status: 'success',
-        message: 'Exclusion already exists',
-      })
+      return res.status(404).json({ status: 'failed', message: 'Assessment not found in this class' })
     }
-
-    const exclusion = rows[0]
-    logger.info(`Assessment exclusion created for student ${studentId} in class ${classId}, assessment ${assessmentId}`)
-    
+    logger.info(`Assessment excused for student ${studentId} in class ${classId}, assessment ${assessmentId}`)
     return res.status(201).json({
       status: 'success',
-      data: {
-        studentId: exclusion.student_id,
-        classId: exclusion.class_id,
-        assessmentId: exclusion.assessment_id,
-        createdAt: exclusion.created_at,
-      },
+      data: { studentId, classId, assessmentId, cells: rows },
     })
   } catch (error) {
     logger.error(error)
-    return res
-      .status(500)
-      .json({ status: 'failed', message: 'Error creating assessment exclusion' })
+    return res.status(500).json({ status: 'failed', message: 'Error creating assessment exclusion' })
   }
 }
 
-//
-// 2) DELETE /excluded-assessments/:studentId/:classId/:assessmentId
-// Remove an exclusion record
-//
+// DELETE /excluded-assessments/:studentId/:classId/:assessmentId
 const deleteExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.params
 
   try {
-    const result = await db.query(excludedAssessmentQueries.deleteExclusion, [
+    const { rows: existing } = await db.query(excludedAssessmentQueries.checkExclusion, [
       studentId,
       classId,
       assessmentId,
     ])
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({
-        status: 'failed',
-        message: 'Exclusion not found',
-      })
+    const rows = await applyCellStatus({ classId, studentId, assessmentId, status: 'graded' })
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'failed', message: 'Exclusion not found' })
     }
-
-    logger.info(`Assessment exclusion deleted for student ${studentId} in class ${classId}, assessment ${assessmentId}`)
-    
-    return res.status(200).json({
-      status: 'success',
-      message: 'Assessment exclusion deleted successfully',
-    })
+    if (existing.length === 0 && rows.every((r) => r.status === 'graded')) {
+      // Category id or already-clear cell: still a successful no-op for callers.
+    }
+    logger.info(`Assessment excuse cleared for student ${studentId} in class ${classId}, assessment ${assessmentId}`)
+    return res.status(200).json({ status: 'success', message: 'Assessment exclusion deleted successfully' })
   } catch (error) {
     logger.error(error)
-    return res
-      .status(500)
-      .json({ status: 'failed', message: 'Error deleting assessment exclusion' })
+    return res.status(500).json({ status: 'failed', message: 'Error deleting assessment exclusion' })
   }
 }
 
-//
-// 3) GET /excluded-assessments/:studentId/:classId
-//   Get all excluded assessments for a student in a specific class
-//
+// GET /excluded-assessments/:studentId/:classId
 const getExclusionsByStudentAndClass = async (req, res) => {
   const { studentId, classId } = req.params
-
   try {
-    const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByStudentAndClass, [
-      studentId,
-      classId,
-    ])
-
-    logger.info(`Fetched ${rows.length} exclusions for student ${studentId} in class ${classId}`)
-
-    return res.status(200).json({
-      status: 'success',
-      data: rows.map((exclusion) => ({
-        studentId: exclusion.student_id,
-        classId: exclusion.class_id,
-        assessmentId: exclusion.assessment_id,
-        createdAt: exclusion.created_at,
-      })),
-    })
+    const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByStudentAndClass, [studentId, classId])
+    return res.status(200).json({ status: 'success', data: rows.map(mapRow) })
   } catch (error) {
     logger.error(error)
-    return res
-      .status(500)
-      .json({ status: 'failed', message: 'Error fetching assessment exclusions' })
+    return res.status(500).json({ status: 'failed', message: 'Error fetching assessment exclusions' })
   }
 }
 
-//
-// 4) GET /excluded-assessments/:studentId/:classId/:assessmentId/check
-//   Check if specific assessment is excluded for student in class
-//
+// GET /excluded-assessments/:studentId/:classId/:assessmentId/check
 const checkExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.params
-
   try {
-    const { rows } = await db.query(excludedAssessmentQueries.checkExclusion, [
-      studentId,
-      classId,
-      assessmentId,
-    ])
-
-    const isExcluded = rows.length > 0
-
-    return res.status(200).json({
-      status: 'success',
-      data: {
-        isExcluded,
-      },
-    })
+    const { rows } = await db.query(excludedAssessmentQueries.checkExclusion, [studentId, classId, assessmentId])
+    return res.status(200).json({ status: 'success', data: { isExcluded: rows.length > 0 } })
   } catch (error) {
     logger.error(error)
-    return res
-      .status(500)
-      .json({ status: 'failed', message: 'Error checking assessment exclusion' })
+    return res.status(500).json({ status: 'failed', message: 'Error checking assessment exclusion' })
   }
 }
 
-//
-// 5) GET /excluded-assessments/class/:classId
-// Get all excluded assessments for an entire class
-//
+// GET /excluded-assessments/class/:classId
 const getExclusionsByClass = async (req, res) => {
   const { classId } = req.params
-
   try {
     const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByClass, [classId])
-
-    logger.info(`Fetched ${rows.length} exclusions for class ${classId}`)
-
-    return res.status(200).json({
-      status: 'success',
-      data: rows.map((exclusion) => ({
-        studentId: exclusion.student_id,
-        classId: exclusion.class_id,
-        assessmentId: exclusion.assessment_id,
-        createdAt: exclusion.created_at,
-      })),
-    })
+    return res.status(200).json({ status: 'success', data: rows.map(mapRow) })
   } catch (error) {
     logger.error(error)
-    return res
-      .status(500)
-      .json({ status: 'failed', message: 'Error fetching class assessment exclusions' })
+    return res.status(500).json({ status: 'failed', message: 'Error fetching class assessment exclusions' })
   }
 }
 

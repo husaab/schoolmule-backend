@@ -146,6 +146,39 @@ describe('Integration: Student Assessment Routes', () => {
       expect(res.body.data[0].score).toBeNull();
     });
 
+    it('stores a status with a score and clears the score for missing', async () => {
+      const { classId, assessmentId1, assessmentId2 } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+
+      const res = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({
+          scores: [
+            { studentId, assessmentId: assessmentId1, score: 40, status: 'excused' },
+            { studentId, assessmentId: assessmentId2, score: 50, status: 'missing' },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      const byId = Object.fromEntries(res.body.data.map((r) => [r.assessment_id, r]));
+      expect(byId[assessmentId1]).toMatchObject({ status: 'excused' });
+      expect(parseFloat(byId[assessmentId1].score)).toBe(40);
+      expect(byId[assessmentId2]).toMatchObject({ status: 'missing', score: null });
+
+      // A plain score resets the status to graded
+      const again = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({ scores: [{ studentId, assessmentId: assessmentId1, score: 70 }] });
+      expect(again.body.data[0].status).toBe('graded');
+    });
+
+    it('rejects an unknown status', async () => {
+      const { classId, assessmentId1 } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      const res = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({ scores: [{ studentId, assessmentId: assessmentId1, score: 5, status: 'late' }] });
+      expect(res.status).toBe(400);
+    });
+
     it('returns 400 when scores array is empty', async () => {
       const { classId } = await seedClassWithAssessments();
 
@@ -162,6 +195,65 @@ describe('Integration: Student Assessment Routes', () => {
         .send({ scores: 'not an array' });
 
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('PATCH /api/studentAssessments/classes/:classId/status', () => {
+    it('sets missing / excused / graded on a cell and expands a category to its children', async () => {
+      const { classId, assessmentId1 } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+      await pool.query(
+        'INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, 80)',
+        [studentId, assessmentId1]
+      );
+
+      const excused = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: assessmentId1, status: 'excused' });
+      expect(excused.status).toBe(200);
+      expect(excused.body.data[0]).toMatchObject({ status: 'excused' });
+      expect(parseFloat(excused.body.data[0].score)).toBe(80); // score kept
+
+      const missing = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: assessmentId1, status: 'missing' });
+      expect(missing.body.data[0]).toMatchObject({ status: 'missing', score: null });
+
+      const graded = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: assessmentId1, status: 'graded' });
+      expect(graded.body.data[0]).toMatchObject({ status: 'graded' });
+
+      // Category → every child
+      const { rows: p } = await pool.query(
+        `INSERT INTO assessments (class_id, name, is_parent, weight_points) VALUES ($1, 'Quizzes', true, 50) RETURNING assessment_id`,
+        [classId]
+      );
+      await pool.query(
+        `INSERT INTO assessments (class_id, name, is_parent, parent_assessment_id, weight_points, max_score)
+         VALUES ($1, 'Q1', false, $2, 25, 10), ($1, 'Q2', false, $2, 25, 10)`,
+        [classId, p[0].assessment_id]
+      );
+      const cat = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: p[0].assessment_id, status: 'excused' });
+      expect(cat.status).toBe(200);
+      expect(cat.body.data).toHaveLength(2);
+      expect(cat.body.data.every((r) => r.status === 'excused')).toBe(true);
+
+      // The matrix reports the status
+      const matrix = await authenticatedRequest('get', `/api/studentAssessments/classes/${classId}/scores`);
+      const rows = matrix.body.data.filter((r) => r.student_id === studentId);
+      expect(rows.find((r) => r.assessment_id === assessmentId1).status).toBe('graded');
+      expect(rows.filter((r) => r.status === 'excused')).toHaveLength(2);
+    });
+
+    it('returns 404 for an assessment outside the class and 400 for a bad status', async () => {
+      const { classId } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      const notFound = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: '00000000-0000-0000-0000-000000000000', status: 'missing' });
+      expect(notFound.status).toBe(404);
+      const bad = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: '00000000-0000-0000-0000-000000000000', status: 'late' });
+      expect(bad.status).toBe(400);
     });
   });
 

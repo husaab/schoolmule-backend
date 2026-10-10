@@ -23,7 +23,6 @@
 // the same null-skip helper the parent portal and report cards use. Never
 // re-derive weighting here.
 
-const { Resend } = require('resend');
 
 const db = require('../config/database');
 const logger = require('../logger');
@@ -32,12 +31,16 @@ const publishQueries = require('../queries/assessmentPublish.queries');
 const classQueries = require('../queries/class.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
-const { cleanEmailArray, getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { cleanEmailArray, getResend, sendOrThrow } = require('../utils/emailUtils');
+const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const {
   computeAssessmentForStudent,
   buildScoreLookup,
-} = require('../services/studentViewEvaluator');
+  computeClassGrade,
+  formatCoverage,
+  cellState,
+} = require('../services/gradeEngine');
 const { invalidateWeeklySummaries } = require('../services/aiWeeklySummary.service');
 
 // Resend allows ~2 requests/second. Matches sendBulkReportEmails.
@@ -75,7 +78,8 @@ function expandCascade(requested, allAssessments, scoreRowsByStudent) {
   const gradedAssessmentIds = new Set();
   for (const { rows } of scoreRowsByStudent.values()) {
     for (const r of rows) {
-      if (r.score != null && !r.is_excluded) gradedAssessmentIds.add(r.assessment_id);
+      const state = cellState(r);
+      if (state === 'graded' || state === 'missing') gradedAssessmentIds.add(r.assessment_id);
     }
   }
 
@@ -103,7 +107,8 @@ function expandCascade(requested, allAssessments, scoreRowsByStudent) {
 }
 
 /**
- * How many enrolled students have no usable grade for each selected
+ * How many enrolled students are not yet graded (blank, carries no weight)
+ * and how many are flagged missing (counts as 0) for each selected
  * assessment. Surfaced as a warning in the publish modal — never a block.
  */
 function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
@@ -111,16 +116,19 @@ function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
 
   for (const assessment of requested) {
     let ungraded = 0;
+    let missing = 0;
     for (const { rows } of scoreRowsByStudent.values()) {
       const lookup = buildScoreLookup(rows);
       const result = computeAssessmentForStudent(assessment, allAssessments, lookup);
-      if (!result.isGraded) ungraded += 1;
+      if (result.state === 'blank') ungraded += 1;
+      else if (result.state === 'missing') missing += 1;
     }
-    if (ungraded > 0) {
+    if (ungraded > 0 || missing > 0) {
       warnings.push({
         assessmentId: assessment.assessment_id,
         assessmentName: assessment.name,
         ungradedStudentCount: ungraded,
+        missingStudentCount: missing,
         totalStudents: scoreRowsByStudent.size,
       });
     }
@@ -132,13 +140,32 @@ function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
 /** Format one assessment's result for the email table. */
 function formatAssessmentLine(assessment, result) {
   const pct = Math.round(result.pct * 10) / 10;
+  const isMissing = result.state === 'missing';
   return {
     name: assessment.name,
     // A category has no raw score — only a weighted rollup of its children.
-    scoreLabel: result.earned != null && result.max != null ? `${result.earned}/${result.max}` : '',
+    scoreLabel: isMissing
+      ? 'Missing'
+      : result.earned != null && result.max != null ? `${result.earned}/${result.max}` : '',
     pctLabel: `(${pct}%)`,
     comment: assessment.parent_comment || null,
   };
+}
+
+/**
+ * The assessments a parent can see once `publishedIds` are published:
+ * published ones plus any category with a published child (same structural
+ * rule as analyticsEngine.prunePublishedOnly).
+ */
+function visibleAssessments(publishedSet, allAssessments) {
+  const visible = new Set(publishedSet);
+  for (const a of allAssessments) {
+    if (!a.is_parent) continue;
+    if (allAssessments.some((c) => c.parent_assessment_id === a.assessment_id && publishedSet.has(c.assessment_id))) {
+      visible.add(a.assessment_id);
+    }
+  }
+  return allAssessments.filter((a) => visible.has(a.assessment_id));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -254,6 +281,13 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent) {
     (a) => publishedSet.has(a.assessment_id) && !a.parent_assessment_id,
   );
 
+  // Every assessment the parent can see after this publish, including
+  // earlier batches, so the running grade in the email matches the portal.
+  const allPublishedIds = new Set(
+    allAssessments.filter((a) => a.is_published || publishedSet.has(a.assessment_id)).map((a) => a.assessment_id),
+  );
+  const parentVisible = visibleAssessments(allPublishedIds, allAssessments);
+
   const tasks = [];
   for (const student of scoreRowsByStudent.values()) {
     const lookup = buildScoreLookup(student.rows);
@@ -262,17 +296,22 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent) {
 
     for (const assessment of topLevelPublished) {
       const result = computeAssessmentForStudent(assessment, allAssessments, lookup);
-      if (!result.isGraded) continue;
+      if (!result.isCounted) continue;
       lines.push(formatAssessmentLine(assessment, result));
       gradedIds.push(assessment.assessment_id);
     }
 
     if (lines.length === 0) continue;
+    const running = computeClassGrade(parentVisible, student.rows);
     tasks.push({
       studentId: student.studentId,
       studentName: student.studentName,
       lines,
       gradedAssessmentIds: gradedIds,
+      runningGradeLabel:
+        running.pct == null
+          ? null
+          : `${Math.round(running.pct * 10) / 10}% · based on ${formatCoverage(running.coverage)}`,
     });
   }
 
@@ -497,24 +536,21 @@ const previewPublishEmail = async (req, res) => {
     const sample = tasks[0];
     const trimmedBatchComment = typeof batchComment === 'string' && batchComment.trim() ? batchComment.trim() : null;
 
-    const resend = new Resend(getSchoolApiKey(school));
-    const result = await resend.emails.send({
-      from: `reports@${getSchoolDomain(school)}`,
+    await sendOrThrow(getResend(), {
+      ...schoolSender({ school, schoolInfo, role: 'academics' }),
       to: [req.user.email],
       subject: `[Preview] ${sample.studentName} — New Grades Posted (${className})`,
       html: getAssessmentPublishedEmailHTML({
         studentName: sample.studentName,
         className,
         assessments: sample.lines,
+        runningGradeLabel: sample.runningGradeLabel,
         batchComment: trimmedBatchComment,
         schoolName: getSchoolName(school),
         schoolInfo,
         portalUrl: `${process.env.FRONTEND_URL}/parent/grades`,
       }),
     });
-    if (result?.error) {
-      throw new Error(result.error.message || 'Email sending failed');
-    }
 
     return res.status(200).json({
       status: 'success',
@@ -536,8 +572,8 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
 
   const { className, schoolInfo } = await loadEmailContext(classId, school);
   const schoolName = getSchoolName(school);
-  const schoolDomain = getSchoolDomain(school);
-  const resend = new Resend(getSchoolApiKey(school));
+  const sender = schoolSender({ school, schoolInfo, role: 'academics' });
+  const resend = getResend();
   const portalUrl = `${process.env.FRONTEND_URL}/parent/grades`;
 
   const logEmail = async (task, status, errorMessage) => {
@@ -574,13 +610,14 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
 
     try {
       const result = await resend.emails.send({
-        from: `reports@${schoolDomain}`,
+        ...sender,
         to: task.emails,
         subject: `${task.studentName} — New Grades Posted (${className})`,
         html: getAssessmentPublishedEmailHTML({
           studentName: task.studentName,
           className,
           assessments: task.lines,
+          runningGradeLabel: task.runningGradeLabel,
           batchComment: batchComment || null,
           schoolName,
           schoolInfo,

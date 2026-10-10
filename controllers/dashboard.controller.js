@@ -3,7 +3,7 @@
 const db = require('../config/database');
 const dashboardQueries = require('../queries/dashboard.queries');
 const logger = require('../logger');
-const { calculateStudentGrade } = require('../utils/gradeCalculator');
+const { computeClassGrade } = require('../services/gradeEngine');
 
 // Simple in-memory cache with TTL for school average grades
 // Railway server runs continuously, so this persists between requests
@@ -11,8 +11,8 @@ const gradeCache = new Map(); // key: school, value: { average, timestamp }
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
 
 /**
- * Calculate school-wide average grade using proper grade calculation
- * Handles exclusions, parent/child hierarchy, max_score conversion, and weight scaling
+ * School-wide average of every (student, class) grade that has evidence
+ * (services/gradeEngine: blanks carry no weight, missing counts 0, excused ignored)
  *
  * @param {string} school - The school enum value
  * @param {string|null} schoolYearId - The selected school year's id
@@ -57,9 +57,10 @@ async function calculateSchoolAverageGrade(school, schoolYearId) {
 
     if (classAssessments.length === 0) continue;
 
-    // Calculate grade using shared utility (handles all edge cases)
-    const grade = calculateStudentGrade(classAssessments, studentScores);
-    allGrades.push(grade);
+    // Shared engine: graded work only. A student with no evidence in the
+    // class has no grade and must not drag the school average down.
+    const { pct } = computeClassGrade(classAssessments, studentScores);
+    if (pct != null) allGrades.push(pct);
   }
 
   // 5. Calculate school-wide average
