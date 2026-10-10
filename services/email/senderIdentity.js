@@ -25,7 +25,7 @@ const SCHOOL_ROLES = new Set(['academics', 'messages']);
 const platformDomain = () => process.env.MAIL_DOMAIN || 'schoolmule.ca';
 
 // RFC 5322 display name: drop characters that would break or spoof the header.
-const displayName = (name) => String(name || '').replace(/["<>\r\n]/g, '').trim();
+const displayName = (name) => String(name || '').replace(/["<>\\\r\n]/g, '').trim();
 
 const formatAddress = (name, address) => {
   const safe = displayName(name);
@@ -38,7 +38,9 @@ const derivedLocal = (row, school) =>
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '') || 'school';
 
-const unique = (list) => Array.from(new Set(list.map((e) => e.toLowerCase())));
+// Only well-formed addresses may become a Reply-To; a bad one would make Resend reject the whole send.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const validAddresses = (list) => Array.from(new Set(cleanEmailArray(list).map((e) => e.toLowerCase()).filter((e) => EMAIL_RE.test(e))));
 
 /**
  * Sender identity for an email in the school's voice.
@@ -59,7 +61,7 @@ function schoolSender({ school, schoolInfo, role = 'academics' }) {
     ? `${role}@${row.email_sending_domain}`
     : `${derivedLocal(row, school)}@${platformDomain()}`;
 
-  const replyTo = unique(cleanEmailArray([...(row.email_reply_to || []), row.email]));
+  const replyTo = validAddresses([...(row.email_reply_to || []), row.email]);
 
   return { from: formatAddress(name, address), replyTo: replyTo.length ? replyTo : undefined };
 }
@@ -73,7 +75,7 @@ function schoolSender({ school, schoolInfo, role = 'academics' }) {
  */
 function platformSender(role = 'no-reply', opts = {}) {
   const address = `${role}@${platformDomain()}`;
-  const replyTo = cleanEmailArray([].concat(opts.replyTo ?? process.env.SUPPORT_EMAIL ?? []));
+  const replyTo = validAddresses([].concat(opts.replyTo ?? process.env.SUPPORT_EMAIL ?? []));
   return { from: formatAddress(PLATFORM_NAME, address), replyTo: replyTo.length ? replyTo : undefined };
 }
 

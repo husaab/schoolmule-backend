@@ -35,11 +35,13 @@ const toSchoolPayload = (school) => {
 // list, or { error } naming the first bad address. undefined = not provided.
 const parseReplyTo = (raw) => {
   if (raw === undefined) return { list: undefined };
-  const items = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n;]+/);
-  const list = Array.from(new Set(cleanEmailArray(items.map((e) => String(e ?? '').trim().toLowerCase()))));
-  const bad = list.find((e) => !EMAIL_RE.test(e));
+  if (raw !== null && !Array.isArray(raw) && typeof raw !== 'string') return { error: 'emailReplyTo must be a list of email addresses' };
+  const items = (Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n;]+/))
+    .map((e) => String(e ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  const bad = items.find((e) => !EMAIL_RE.test(e));
   if (bad) return { error: `"${bad}" is not a valid email address` };
-  return { list };
+  return { list: Array.from(new Set(cleanEmailArray(items))) };
 };
 
 /**

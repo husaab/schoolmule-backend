@@ -56,6 +56,12 @@ describe('senderIdentity', () => {
         .toEqual(['admin@example.org', 'second@example.org', 'office@example.org']);
     });
 
+    it('drops a malformed reply address instead of letting Resend reject the send', () => {
+      expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ email: 'a@b, c@d', email_reply_to: ['ok@example.org'] }) }).replyTo)
+        .toEqual(['ok@example.org']);
+      expect(platformSender('contact', { replyTo: 'visitor@' }).replyTo).toBeUndefined();
+    });
+
     it('omits replyTo when the school has no addresses at all', () => {
       expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ email: null }) }).replyTo).toBeUndefined();
     });
@@ -72,7 +78,7 @@ describe('senderIdentity', () => {
     });
 
     it('strips characters that could break the From header out of the school name', () => {
-      const s = schoolSender({ school: 'X', schoolInfo: alHaadi({ name: 'Evil "School" <x@y.z>' }) });
+      const s = schoolSender({ school: 'X', schoolInfo: alHaadi({ name: 'Evil "School" <x@y.z>\\' }) });
       expect(s.from).toBe('"Evil School x@y.z" <alhaadiacademy@schoolmule.ca>');
     });
 

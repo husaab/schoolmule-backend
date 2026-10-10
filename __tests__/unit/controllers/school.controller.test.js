@@ -272,6 +272,14 @@ describe('school sender settings', () => {
     expect(db.query.mock.calls.at(-1)[1][7]).toBeNull();
   });
 
+  it('PUT rejects an entry with no @ and a non-list body instead of silently clearing the list', async () => {
+    let res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', emailReplyTo: 'foo' });
+    expect(res.status).toBe(400);
+    res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', emailReplyTo: { nope: true } });
+    expect(res.status).toBe(400);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it('PUT rejects a malformed reply-to address', async () => {
     const res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', emailReplyTo: ['ok@x.ca', 'nope@'] });
     expect(res.status).toBe(400);
