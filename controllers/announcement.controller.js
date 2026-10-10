@@ -27,6 +27,8 @@ const EMAIL_DELAY = '2 minutes';
 const SCOPES = ['class', 'grade', 'school'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_PREVIEW_RECIPIENTS = 5;
 
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
@@ -215,9 +217,11 @@ const preview = async (req, res) => {
   }
 };
 
-// POST /api/announcements/preview-email  { scope, classId?, grade?, title, body, attachmentCount? }
-// Emails the author one copy exactly as a guardian with an account will get
-// it. Same validation and scope rules as posting; nothing is stored or queued.
+// POST /api/announcements/preview-email  { scope, classId?, grade?, title, body, attachmentCount?, to?[] }
+// Emails one copy, exactly as a guardian with an account will get it, to the
+// author or to up to MAX_PREVIEW_RECIPIENTS addresses they name (a colleague,
+// the principal). Each address gets its own send. Same validation and scope
+// rules as posting; nothing is stored or queued.
 const previewEmail = async (req, res) => {
   const { scope, classId, grade } = req.body;
   if (!SCOPES.includes(scope)) return failed(res, 400, 'Invalid scope');
@@ -225,7 +229,14 @@ const previewEmail = async (req, res) => {
   if (scope === 'grade' && !grade) return failed(res, 400, 'grade is required');
   const v = validateFields({ title: req.body.title, body: req.body.body });
   if (v.error) return failed(res, 400, v.error);
-  if (!req.user.email) return failed(res, 400, 'Your account has no email address to send the preview to');
+  const to = [...new Set([].concat(req.body.to ?? []).map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
+  if (to.length === 0) {
+    if (!req.user.email) return failed(res, 400, 'Your account has no email address to send the preview to');
+    to.push(String(req.user.email).trim().toLowerCase());
+  }
+  if (to.length > MAX_PREVIEW_RECIPIENTS) return failed(res, 400, `Send the preview to at most ${MAX_PREVIEW_RECIPIENTS} addresses`);
+  const malformed = to.find((e) => !EMAIL_RE.test(e));
+  if (malformed) return failed(res, 400, `${malformed} is not a valid email address`);
   const attachmentCount = Math.max(0, Math.min(20, Number.parseInt(req.body.attachmentCount, 10) || 0));
 
   try {
@@ -234,8 +245,10 @@ const previewEmail = async (req, res) => {
     const label = scopeLabel({ scope, grade, class_subject: check.classSubject, class_grade: check.classGrade });
     const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [req.user.school]);
     const authorName = req.user.username || 'SchoolMule';
-    const html = getAnnouncementEmailHTML({
-      recipientFirstName: authorName.split(' ')[0],
+    const ownEmail = String(req.user.email || '').trim().toLowerCase();
+    const htmlFor = (addr) => getAnnouncementEmailHTML({
+      // The author sees their own greeting; a colleague gets the neutral one.
+      recipientFirstName: addr === ownEmail ? authorName.split(' ')[0] : null,
       authorName,
       scopeLabel: label,
       childNames: [],
@@ -248,14 +261,16 @@ const previewEmail = async (req, res) => {
       schoolInfo: schoolRows[0] || null,
     });
     const resend = new Resend(getSchoolApiKey(req.user.school));
-    const result = await resend.emails.send({
-      from: `messages@${getSchoolDomain(req.user.school)}`,
-      to: [req.user.email],
-      subject: `[Preview] ${label}: ${v.title}`,
-      html,
-    });
-    if (result?.error) throw new Error(result.error.message || 'Email sending failed');
-    return res.status(200).json({ status: 'success', data: { sentTo: req.user.email } });
+    for (const addr of to) {
+      const result = await resend.emails.send({
+        from: `messages@${getSchoolDomain(req.user.school)}`,
+        to: [addr],
+        subject: `[Preview] ${label}: ${v.title}`,
+        html: htmlFor(addr),
+      });
+      if (result?.error) throw new Error(result.error.message || 'Email sending failed');
+    }
+    return res.status(200).json({ status: 'success', data: { sentTo: to } });
   } catch (error) {
     logger.error('Error sending announcement preview email:', error);
     return failed(res, 500, 'Could not send the preview email');

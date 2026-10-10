@@ -130,7 +130,7 @@ describe('announcement controller', () => {
       const res = await authenticatedRequest('post', '/api/announcements/preview-email', mockTeacherUser())
         .send({ scope: 'class', classId: CLASS, title: 'Forms due Friday', body: 'Please return the form.', attachmentCount: 1 });
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ sentTo: 'teacher@test.com' });
+      expect(res.body.data).toEqual({ sentTo: ['teacher@test.com'] });
 
       expect(mockSend).toHaveBeenCalledTimes(1);
       const msg = mockSend.mock.calls[0][0];
@@ -152,6 +152,35 @@ describe('announcement controller', () => {
       expect((await authenticatedRequest('post', '/api/announcements/preview-email', mockParentUser()).send({ scope: 'class', classId: CLASS, title: 'T', body: 'x' })).status).toBe(403);
       makeRouter({ 'FROM classes cl WHERE cl.class_id = $1': [{ school: SCHOOL, subject: 'Math', grade: '6', allowed: false }] });
       expect((await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ scope: 'class', classId: CLASS, title: 'T', body: 'x' })).status).toBe(403);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /preview-email to others', () => {
+    beforeEach(() => mockSend.mockClear());
+    const body = { scope: 'class', classId: CLASS, title: 'Forms due Friday', body: 'Please return the form.' };
+
+    it('sends one copy per address, de-duplicated and lower-cased, and reports who got it', async () => {
+      makeRouter();
+      const res = await authenticatedRequest('post', '/api/announcements/preview-email', mockTeacherUser())
+        .send({ ...body, to: [' Principal@Example.com ', 'vp@example.com', 'principal@example.com'] });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ sentTo: ['principal@example.com', 'vp@example.com'] });
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend.mock.calls.map((c) => c[0].to)).toEqual([['principal@example.com'], ['vp@example.com']]);
+      expect(mockSend.mock.calls[0][0].subject).toBe('[Preview] Gr 6 Math: Forms due Friday');
+    });
+
+    it('an empty list means the author; more than 5 or a malformed address is refused before anything is sent', async () => {
+      makeRouter();
+      const t = mockTeacherUser();
+      let res = await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ ...body, to: [] });
+      expect(res.body.data).toEqual({ sentTo: ['teacher@test.com'] });
+      mockSend.mockClear();
+      res = await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ ...body, to: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com'] });
+      expect(res.status).toBe(400);
+      res = await authenticatedRequest('post', '/api/announcements/preview-email', t).send({ ...body, to: ['not an email'] });
+      expect(res.status).toBe(400);
       expect(mockSend).not.toHaveBeenCalled();
     });
   });
