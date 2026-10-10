@@ -44,7 +44,6 @@ module.exports = async function globalSetup() {
   process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'mock-service-role-key';
   process.env.SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'test@test.com';
   process.env.MAIL_DOMAIN = process.env.MAIL_DOMAIN || 'test.com';
-  process.env.ALHAADIACADEMY_RESEND_API_KEY = process.env.ALHAADIACADEMY_RESEND_API_KEY || 'test_key';
 
   // Connect and create schema
   let pool = new Pool({ ...pgConfig, ssl: false });

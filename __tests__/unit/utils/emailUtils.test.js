@@ -1,7 +1,7 @@
 jest.mock('../../../logger', () => ({ error: jest.fn(), info: jest.fn(), warn: jest.fn() }));
 
 const logger = require('../../../logger');
-const { cleanEmailArray, getSchoolApiKey, getSchoolDomain, sendOrThrow, sendSafely } = require('../../../utils/emailUtils');
+const { cleanEmailArray, getResend, sendOrThrow, sendSafely } = require('../../../utils/emailUtils');
 
 const payload = { from: 'verify@schoolmule.ca', to: 'p@example.com', subject: 's', html: '<p>x</p>' };
 // A Resend client whose send() resolves with `result`.
@@ -20,32 +20,10 @@ describe('emailUtils', () => {
     });
   });
 
-  describe('getSchoolApiKey / getSchoolDomain', () => {
-    const saved = {};
-    const restore = (name, value) => {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    };
-    beforeEach(() => {
-      saved.shared = process.env.RESEND_API_KEY;
-      saved.school = process.env.ALHAADIACADEMY_RESEND_API_KEY;
-    });
-    afterEach(() => {
-      restore('RESEND_API_KEY', saved.shared);
-      restore('ALHAADIACADEMY_RESEND_API_KEY', saved.school);
-    });
-
-    it('prefers the school-specific key and falls back to the shared one', () => {
-      process.env.RESEND_API_KEY = 'shared';
-      delete process.env.ALHAADIACADEMY_RESEND_API_KEY;
-      expect(getSchoolApiKey('ALHAADIACADEMY')).toBe('shared');
-      process.env.ALHAADIACADEMY_RESEND_API_KEY = 'school';
-      expect(getSchoolApiKey('Al Haadi Academy')).toBe('school');
-    });
-
-    it('maps Al Haadi to its own domain and everyone else to schoolmule.ca', () => {
-      expect(getSchoolDomain('ALHAADIACADEMY')).toBe('alhaadiacademy.ca');
-      expect(getSchoolDomain('PLAYGROUND')).toBe('schoolmule.ca');
+  describe('getResend', () => {
+    it('returns one shared client for the whole process', () => {
+      expect(getResend()).toBe(getResend());
+      expect(typeof getResend().emails.send).toBe('function');
     });
   });
 

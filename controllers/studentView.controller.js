@@ -1,6 +1,5 @@
 // controllers/studentView.controller.js
 
-const { Resend } = require('resend');
 const db = require('../config/database');
 const ExcelJS = require('exceljs');
 const logger = require('../logger');
@@ -12,7 +11,8 @@ const { createPDFBuffer, createPDFBuffers } = require('../utils/pdfGenerator');
 const certificateTemplate = require('../templates/certificateTemplate');
 const { getCertificateEmailHTML } = require('../templates/emailTemplate');
 const { getSchoolName } = require('../utils/schoolUtils');
-const { cleanEmailArray, getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { cleanEmailArray, getResend } = require('../utils/emailUtils');
+const { schoolSender } = require('../services/email/senderIdentity');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -429,8 +429,8 @@ const sendStudentViewCertificateEmails = async (req, res) => {
     }
 
     const schoolName = getSchoolName(view.school);
-    const schoolDomain = getSchoolDomain(view.school);
-    const resend = new Resend(getSchoolApiKey(view.school));
+    const sender = schoolSender({ school: view.school, schoolInfo, role: 'academics' });
+    const resend = getResend();
     const ccAddresses = cleanEmailArray(rawCcAddresses);
     const issuedDate = new Date().toLocaleDateString('en-CA');
 
@@ -494,7 +494,7 @@ const sendStudentViewCertificateEmails = async (req, res) => {
         const safeView = view.name.replace(/[^a-z0-9-_]+/gi, '_');
 
         const emailPayload = {
-          from: `certificates@${schoolDomain}`,
+          ...sender,
           to: parentEmails,
           subject,
           html,
@@ -613,8 +613,8 @@ const sendSingleStudentViewCertificateEmail = async (req, res) => {
     }
 
     const schoolName = getSchoolName(view.school);
-    const schoolDomain = getSchoolDomain(view.school);
-    const resend = new Resend(getSchoolApiKey(view.school));
+    const sender = schoolSender({ school: view.school, schoolInfo, role: 'academics' });
+    const resend = getResend();
     const ccAddresses = cleanEmailArray(rawCcAddresses);
 
     const pdfBuffer = await createPDFBuffer(
@@ -651,7 +651,7 @@ const sendSingleStudentViewCertificateEmail = async (req, res) => {
     const safeView = view.name.replace(/[^a-z0-9-_]+/gi, '_');
 
     const emailPayload = {
-      from: `certificates@${schoolDomain}`,
+      ...sender,
       to: emailAddresses,
       subject,
       html,

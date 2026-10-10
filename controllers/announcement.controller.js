@@ -8,14 +8,14 @@
 
 const path = require('path');
 const crypto = require('crypto');
-const { Resend } = require('resend');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/announcement.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAnnouncementEmailHTML } = require('../templates/emailTemplate');
-const { getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../utils/emailUtils');
+const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { BUCKET, SIGNED_URL_TTL, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 const { scopeLabel } = require('../utils/announcementScope');
@@ -260,15 +260,14 @@ const previewEmail = async (req, res) => {
       schoolName: getSchoolName(req.user.school),
       schoolInfo: schoolRows[0] || null,
     });
-    const resend = new Resend(getSchoolApiKey(req.user.school));
+    const sender = schoolSender({ school: req.user.school, schoolInfo: schoolRows[0] || null, role: 'messages' });
     for (const addr of to) {
-      const result = await resend.emails.send({
-        from: `messages@${getSchoolDomain(req.user.school)}`,
+      await sendOrThrow(getResend(), {
+        ...sender,
         to: [addr],
         subject: `[Preview] ${label}: ${v.title}`,
         html: htmlFor(addr),
       });
-      if (result?.error) throw new Error(result.error.message || 'Email sending failed');
     }
     return res.status(200).json({ status: 'success', data: { sentTo: to } });
   } catch (error) {

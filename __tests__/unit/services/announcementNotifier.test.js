@@ -46,10 +46,11 @@ describe('announcement notifier', () => {
   });
 
   it('account kind: letterhead email with escaped body, scope subject, portal link; marks sent', async () => {
-    const r = makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx()], 'FROM schools': [{ name: 'Al Haadi Academy', school_code: 'ALHAADIACADEMY' }] });
+    const r = makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx()], 'FROM schools': [{ name: 'Al Haadi Academy', school_code: 'ALHAADIACADEMY', email_sending_domain: 'alhaadiacademy.ca' }] });
     expect(await notifier.drainAnnouncements()).toBe(1);
     const email = mockSend.mock.calls[0][0];
-    expect(email.from).toBe('messages@alhaadiacademy.ca');
+    // The school has a verified sending domain, so messages go out from it.
+    expect(email.from).toBe('"Al Haadi Academy" <messages@alhaadiacademy.ca>');
     expect(email.to).toEqual(['layla@example.com']);
     expect(email.subject).toBe('Gr 6 Math: Forms due Friday');
     expect(email.html).toContain('Please return &lt;the form&gt;.<br>Thanks');

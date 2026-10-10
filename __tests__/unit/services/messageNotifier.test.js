@@ -77,12 +77,14 @@ describe('messageNotifier', () => {
         return [msg(), msg({ message_id: 'm2', body: 'Second', attachment_count: 2 })];
       },
       'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, is_published: true }],
-      'FROM schools': [{ name: 'Al Haadi Academy' }],
+      'FROM schools': [{ name: 'Al Haadi Academy', slug: 'al-haadi-academy', email: 'office@school.example', email_reply_to: ['admin@school.example'] }],
     });
     expect(await notifier.drainOnce()).toBe(1);
     expect(mockSend).toHaveBeenCalledTimes(1);
     const email = mockSend.mock.calls[0][0];
-    expect(email.from).toBe('messages@alhaadiacademy.ca');
+    // No verified school domain on the row: sent under the school's name from the platform domain.
+    expect(email.from).toBe('"Al Haadi Academy" <alhaadiacademy@test.com>');
+    expect(email.replyTo).toEqual(['admin@school.example', 'office@school.example']);
     expect(email.to).toEqual(['parent@example.com']);
     expect(email.subject).toMatch(/2 new messages about Amina Test/);
     expect(email.html).toContain('Second');

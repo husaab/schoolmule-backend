@@ -1,9 +1,8 @@
 // src/controllers/email.controller.js
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 const logger = require('../logger');
 const { getContactEmailHTML, getTicketEmailHTML } = require('../templates/emailTemplate');
-const { sendOrThrow } = require('../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../utils/emailUtils');
+const { platformSender } = require('../services/email/senderIdentity');
 
 async function sendContactEmail(req, res) {
   const { name, email, message } = req.body;
@@ -14,8 +13,9 @@ async function sendContactEmail(req, res) {
   const html = getContactEmailHTML({ name, email, message });
 
   try {
-    await sendOrThrow(resend, {
-      from: 'contact@schoolmule.ca',
+    // Reply-To is the visitor, so a reply from the support inbox goes straight back to them.
+    await sendOrThrow(getResend(), {
+      ...platformSender('contact', { replyTo: email }),
       to: process.env.SUPPORT_EMAIL,
       subject: `School Mule Contact Form: ${name}`,
       html
@@ -49,8 +49,8 @@ async function sendTicketEmail(req, res) {
   });
 
   try {
-    await sendOrThrow(resend, {
-      from: `support@${process.env.MAIL_DOMAIN}`,
+    await sendOrThrow(getResend(), {
+      ...platformSender('support', { replyTo: contactEmail }),
       to: process.env.SUPPORT_EMAIL,
       subject: `Ticket: ${issueType} (from ${username} , school: ${school})`,
       html

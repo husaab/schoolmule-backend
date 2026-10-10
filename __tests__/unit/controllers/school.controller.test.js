@@ -8,6 +8,7 @@ const { mockAdminUser, TEST_SCHOOL } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError, mockPgError } = require('../../helpers/mockDb');
 const { buildSchoolRow } = require('../../helpers/factories');
 const { v4: uuidv4 } = require('uuid');
+const db = require('../../__mocks__/config/database');
 
 const app = getApp();
 
@@ -228,5 +229,53 @@ describe('School Controller', () => {
       expect(res.status).toBe(500);
       expect(res.body.status).toBe('failed');
     });
+  });
+});
+
+// ── sender identity fields ──────────────────────────────────────
+describe('school sender settings', () => {
+  it('exposes the From addresses parents see and the reply-to list', async () => {
+    const row = buildSchoolRow({
+      school_code: 'ALHAADIACADEMY', name: 'Al Haadi Academy', slug: 'al-haadi-academy',
+      email_sending_domain: null, email_reply_to: ['admin@school.example'],
+    });
+    mockQueryResponse([row]);
+    const res = await authGet('/api/schools/ALHAADIACADEMY');
+    expect(res.status).toBe(200);
+    expect(res.body.data.emailSendingDomain).toBeNull();
+    expect(res.body.data.emailReplyTo).toEqual(['admin@school.example']);
+    // MAIL_DOMAIN is test.com in unit tests
+    expect(res.body.data.emailAddresses).toEqual({ academics: 'alhaadiacademy@test.com', messages: 'alhaadiacademy@test.com' });
+  });
+
+  it('uses role addresses on a verified school domain', async () => {
+    const row = buildSchoolRow({ school_code: 'ALHAADIACADEMY', email_sending_domain: 'alhaadiacademy.ca', email_reply_to: [] });
+    mockQueryResponse([row]);
+    const res = await authGet('/api/schools/ALHAADIACADEMY');
+    expect(res.body.data.emailAddresses).toEqual({ academics: 'academics@alhaadiacademy.ca', messages: 'messages@alhaadiacademy.ca' });
+  });
+
+  it('PUT accepts a comma-separated reply-to list, lowercased and deduped', async () => {
+    const row = buildSchoolRow({ email_reply_to: ['a@x.ca', 'b@x.ca'] });
+    mockQueryResponse([row]);
+    const res = await authPut(`/api/schools/${row.school_id}`).send({ name: 'S', emailReplyTo: 'A@x.ca, b@x.ca,a@x.ca' });
+    expect(res.status).toBe(200);
+    const params = db.query.mock.calls.at(-1)[1];
+    expect(params[7]).toEqual(['a@x.ca', 'b@x.ca']);
+    expect(params[8]).toBe(row.school_id);
+  });
+
+  it('PUT leaves the reply-to list alone when it is not sent', async () => {
+    const row = buildSchoolRow();
+    mockQueryResponse([row]);
+    await authPut(`/api/schools/${row.school_id}`).send({ name: 'S' });
+    expect(db.query.mock.calls.at(-1)[1][7]).toBeNull();
+  });
+
+  it('PUT rejects a malformed reply-to address', async () => {
+    const res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', emailReplyTo: ['ok@x.ca', 'nope@'] });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/nope@/);
+    expect(db.query).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,9 @@ const schoolQueries = {
       timezone,
       academic_year_start_date,
       academic_year_end_date,
+      email_sending_domain,
+      email_sender_local,
+      email_reply_to,
       created_at,
       last_updated_at
     FROM schools
@@ -38,6 +41,9 @@ const schoolQueries = {
       timezone,
       academic_year_start_date,
       academic_year_end_date,
+      email_sending_domain,
+      email_sender_local,
+      email_reply_to,
       created_at,
       last_updated_at
     FROM schools
@@ -60,6 +66,9 @@ const schoolQueries = {
       timezone,
       academic_year_start_date,
       academic_year_end_date,
+      email_sending_domain,
+      email_sender_local,
+      email_reply_to,
       created_at,
       last_updated_at
     FROM schools
@@ -88,7 +97,8 @@ const schoolQueries = {
 
   /**
    * Update school
-   * Params: name, address, phone, email, timezone, academic_year_start_date, academic_year_end_date, school_id
+   * Params: name, address, phone, email, timezone, academic_year_start_date, academic_year_end_date,
+   *         email_reply_to (TEXT[] or NULL to leave unchanged), school_id
    */
   updateSchool: `
     UPDATE schools 
@@ -100,8 +110,9 @@ const schoolQueries = {
       timezone = $5,
       academic_year_start_date = $6,
       academic_year_end_date = $7,
+      email_reply_to = COALESCE($8::text[], email_reply_to),
       last_updated_at = NOW()
-    WHERE school_id = $8
+    WHERE school_id = $9
     RETURNING *
   `,
 

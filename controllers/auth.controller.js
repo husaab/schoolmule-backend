@@ -7,13 +7,12 @@ const passwordQueries = require('../queries/password.queries');
 const logger = require("../logger");
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML,
   getResetEmailHTML } = require('../templates/emailTemplate');
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 const approvalActions = require('../services/approvalActions');
 const { SIGNUP_ROLES } = approvalActions;
 
 const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = require('../utils/sessionContext');
-const { sendOrThrow, sendSafely } = require('../utils/emailUtils');
+const { getResend, sendOrThrow, sendSafely } = require('../utils/emailUtils');
+const { platformSender } = require('../services/email/senderIdentity');
 const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 
@@ -129,8 +128,8 @@ const recordLogin = (req, { email, user, outcome }) => {
       // The account is committed either way. A rejected email must not turn a
       // successful signup into a 500 (the next attempt would hit "email already
       // exists"); the verify-email page offers a resend.
-      const emailSent = await sendSafely(resend, {
-        from: 'verify@schoolmule.ca',
+      const emailSent = await sendSafely(getResend(), {
+        ...platformSender('verify'),
         to: user.email,
         subject: 'Verify your email at School Mule',
         html
@@ -302,8 +301,8 @@ const recordLogin = (req, { email, user, outcome }) => {
         url: verificationUrl
       });
 
-      await sendOrThrow(resend, {
-        from: 'verify@schoolmule.ca',
+      await sendOrThrow(getResend(), {
+        ...platformSender('verify'),
         to: email,
         subject: 'Verify your email at School Mule',
         html
@@ -350,8 +349,8 @@ const recordLogin = (req, { email, user, outcome }) => {
       // may fail the request. Log and carry on.
       const html = getConfirmedEmailHTML({ name: user.username });
 
-      await sendSafely(resend, {
-        from: 'verify@schoolmule.ca',
+      await sendSafely(getResend(), {
+        ...platformSender('verify'),
         to: user.email,
         subject: 'Your Email Has Been Verified at School Mule',
         html,
@@ -368,8 +367,8 @@ const recordLogin = (req, { email, user, outcome }) => {
       });
 
       logger.info({ recipientCount: recipients.length }, "Notifying admins");
-      await sendSafely(resend, {
-        from: 'notification@schoolmule.ca',
+      await sendSafely(getResend(), {
+        ...platformSender('notification'),
         to: recipients,
         subject: 'New User Awaiting School Approval',
         html: adminHtml,
@@ -460,8 +459,8 @@ const resendSchoolApprovalEmail = async (req, res) => {
     const user = result.rows[0];
     const html = getApprovalEmailHTML({ name: user.username });
 
-    await sendOrThrow(resend, {
-      from: 'verify@schoolmule.ca',
+    await sendOrThrow(getResend(), {
+      ...platformSender('verify'),
       to: user.email,
       subject: 'Reminder: Your School Mule Account Was Approved',
       html,
@@ -553,8 +552,8 @@ const requestPasswordReset = async (req, res) => {
 
 const sendResetEmail = async (to, url) => {
   const html = getResetEmailHTML({ name: 'there', url }); // you can customize name later
-  await sendOrThrow(resend, {
-    from: 'reset@schoolmule.ca',
+  await sendOrThrow(getResend(), {
+    ...platformSender('reset'),
     to,
     subject: 'Reset your password',
     html

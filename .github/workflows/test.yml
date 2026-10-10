@@ -66,7 +66,6 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: mock-service-role-key
       SUPPORT_EMAIL: test@test.com
       MAIL_DOMAIN: test.com
-      ALHAADIACADEMY_RESEND_API_KEY: test_key
 
     steps:
       - uses: actions/checkout@v4

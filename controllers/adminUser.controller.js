@@ -12,10 +12,9 @@ const adminUserQueries = require("../queries/adminUser.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = require("../utils/sessionContext");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
-const { Resend } = require("resend");
 const { toUser } = require("../utils/userMapper");
-const { sendOrThrow } = require("../utils/emailUtils");
-const resend = new Resend(process.env.RESEND_API_KEY);
+const { getResend, sendOrThrow } = require("../utils/emailUtils");
+const { platformSender } = require("../services/email/senderIdentity");
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
 // Roles an admin may preview. Previewing another admin shows the same UI the
@@ -62,8 +61,8 @@ const sendInvite = async (user, invitedBy) => {
   });
 
   // Throws when Resend rejects the email, so inviteUser/resendInvite report it.
-  await sendOrThrow(resend, {
-    from: "verify@schoolmule.ca",
+  await sendOrThrow(getResend(), {
+    ...platformSender("verify"),
     to: user.email,
     subject: "You're invited to School Mule",
     html,

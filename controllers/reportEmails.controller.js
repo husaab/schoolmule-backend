@@ -1,4 +1,3 @@
-const { Resend } = require('resend');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
@@ -9,7 +8,8 @@ const studentQueries = require('../queries/student.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../templates/emailTemplate');
 const { getSchoolName } = require('../utils/schoolUtils');
-const { cleanEmailArray, getSchoolApiKey, getSchoolDomain } = require('../utils/emailUtils');
+const { cleanEmailArray, getResend } = require('../utils/emailUtils');
+const { schoolSender } = require('../services/email/senderIdentity');
 
 // Helper function to convert snake_case to camelCase
 const toCamelCase = (row) => ({
@@ -157,19 +157,11 @@ const sendReportEmail = async (req, res) => {
 
     const subject = customHeader || `${student.name} - ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
 
-    // Get school-specific API key
-    logger.info(`Getting API key for school: ${student.school}`);
-    const schoolApiKey = getSchoolApiKey(student.school);
-    logger.info('API key obtained successfully');
-    
-    const schoolDomain = getSchoolDomain(student.school);
-    logger.info(`School domain: ${schoolDomain}`);
-    
-    const resend = new Resend(schoolApiKey);
+    const resend = getResend();
 
     // Prepare email payload
     const emailPayload = {
-      from: `reports@${schoolDomain}`,
+      ...schoolSender({ school: student.school, schoolInfo, role: 'academics' }),
       to: emailAddresses,
       subject,
       html: htmlContent,
@@ -339,10 +331,9 @@ const sendBulkReportEmails = async (req, res) => {
 
     const { rows: reports } = await db.query(reportQuery, [studentIds, term, school]);
 
-    // Step 4: Get school-specific configuration
-    const schoolApiKey = getSchoolApiKey(school);
-    const schoolDomain = getSchoolDomain(school);
-    const resend = new Resend(schoolApiKey);
+    // Step 4: Sender identity (one Resend team for every school)
+    const sender = schoolSender({ school, schoolInfo, role: 'academics' });
+    const resend = getResend();
     const schoolName = getSchoolName(school);
 
     // Step 5: Prepare email tasks
@@ -434,7 +425,7 @@ const sendBulkReportEmails = async (req, res) => {
 
         // Prepare email payload
         const emailPayload = {
-          from: `reports@${schoolDomain}`,
+          ...sender,
           to: task.parentEmails,
           subject,
           html: htmlContent,

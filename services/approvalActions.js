@@ -17,11 +17,9 @@ const queries = require("../queries/adminApproval.queries");
 const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getApprovalEmailHTML, getDeclineEmailHTML, getVerificationEmailHTML } = require("../templates/emailTemplate");
 const { toUser } = require("../utils/userMapper");
-const { sendSafely: sendSafelyWith } = require("../utils/emailUtils");
-const { Resend } = require("resend");
+const { getResend, sendSafely: sendSafelyWith } = require("../utils/emailUtils");
+const { platformSender } = require("../services/email/senderIdentity");
 const { v4: uuidv4 } = require("uuid");
-
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Roles a signup can be approved as. ADMIN is granted only from the Users page.
 const SIGNUP_ROLES = ["TEACHER", "PARENT"];
@@ -37,7 +35,7 @@ class ApprovalError extends Error {
 }
 
 const sendSafely = (payload, context) =>
-  sendSafelyWith(resend, payload, "Approval email failed to send", context);
+  sendSafelyWith(getResend(), payload, "Approval email failed to send", context);
 
 const withTransaction = async (work) => {
   const client = await db.connect();
@@ -178,7 +176,7 @@ const approveSignup = async ({ school, userId, role, name, children = [], sendEm
   const emailSent = sendEmail
     ? await sendSafely(
         {
-          from: "verify@schoolmule.ca",
+          ...platformSender("verify"),
           to: result.user.email,
           subject: "Your SchoolMule account is approved",
           html: getApprovalEmailHTML({
@@ -231,7 +229,7 @@ const declineSignup = async ({ school, userId, adminId, sendEmail = true }) => {
   const emailSent = sendEmail
     ? await sendSafely(
         {
-          from: "verify@schoolmule.ca",
+          ...platformSender("verify"),
           to: user.email,
           subject: "Your SchoolMule registration wasn't approved",
           html: getDeclineEmailHTML({ name: user.first_name, school: user.school }),
@@ -265,9 +263,9 @@ const resendVerification = async ({ school, userId, adminId }) => {
 
   // Same link and template as POST /api/auth/verify-email.
   const emailSent = await sendSafelyWith(
-    resend,
+    getResend(),
     {
-      from: "verify@schoolmule.ca",
+      ...platformSender("verify"),
       to: user.email,
       subject: "Verify your email at School Mule",
       html: getVerificationEmailHTML({

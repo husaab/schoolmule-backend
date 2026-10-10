@@ -3,6 +3,44 @@
 const db = require('../config/database');
 const schoolQueries = require('../queries/school.queries');
 const logger = require('../logger');
+const { cleanEmailArray } = require('../utils/emailUtils');
+const { schoolSender, senderAddress } = require('../services/email/senderIdentity');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// One shape for every school response. `emailAddresses` is what parents see
+// in the From line, derived from the sending settings (see senderIdentity).
+const toSchoolPayload = (school) => {
+  const sender = (role) => senderAddress(schoolSender({ school: school.school_code, schoolInfo: school, role }).from);
+  return {
+    schoolId: school.school_id,
+    schoolCode: school.school_code,
+    name: school.name,
+    slug: school.slug,
+    address: school.address,
+    phone: school.phone,
+    email: school.email,
+    timezone: school.timezone,
+    academicYearStartDate: school.academic_year_start_date,
+    academicYearEndDate: school.academic_year_end_date,
+    emailSendingDomain: school.email_sending_domain || null,
+    emailReplyTo: Array.isArray(school.email_reply_to) ? school.email_reply_to : [],
+    emailAddresses: { academics: sender('academics'), messages: sender('messages') },
+    createdAt: school.created_at,
+    lastUpdatedAt: school.last_updated_at,
+  };
+};
+
+// Accepts an array or a comma/newline separated string. Returns the cleaned
+// list, or { error } naming the first bad address. undefined = not provided.
+const parseReplyTo = (raw) => {
+  if (raw === undefined) return { list: undefined };
+  const items = Array.isArray(raw) ? raw : String(raw ?? '').split(/[,\n;]+/);
+  const list = Array.from(new Set(cleanEmailArray(items.map((e) => String(e ?? '').trim().toLowerCase()))));
+  const bad = list.find((e) => !EMAIL_RE.test(e));
+  if (bad) return { error: `"${bad}" is not a valid email address` };
+  return { list };
+};
 
 /**
  * GET /api/schools
@@ -13,20 +51,7 @@ const getAllSchools = async (req, res) => {
     const { rows } = await db.query(schoolQueries.selectAllSchools);
     return res.status(200).json({
       status: 'success',
-      data: rows.map(s => ({
-        schoolId: s.school_id,
-        schoolCode: s.school_code,
-        name: s.name,
-        slug: s.slug,
-        address: s.address,
-        phone: s.phone,
-        email: s.email,
-        timezone: s.timezone,
-        academicYearStartDate: s.academic_year_start_date,
-        academicYearEndDate: s.academic_year_end_date,
-        createdAt: s.created_at,
-        lastUpdatedAt: s.last_updated_at
-      }))
+      data: rows.map(toSchoolPayload)
     });
   } catch (error) {
     logger.error('Error fetching schools:', error);
@@ -64,20 +89,7 @@ const getSchoolByCode = async (req, res) => {
     const school = rows[0];
     return res.status(200).json({
       status: 'success',
-      data: {
-        schoolId: school.school_id,
-        schoolCode: school.school_code,
-        name: school.name,
-        slug: school.slug,
-        address: school.address,
-        phone: school.phone,
-        email: school.email,
-        timezone: school.timezone,
-        academicYearStartDate: school.academic_year_start_date,
-        academicYearEndDate: school.academic_year_end_date,
-        createdAt: school.created_at,
-        lastUpdatedAt: school.last_updated_at
-      }
+      data: toSchoolPayload(school)
     });
   } catch (error) {
     logger.error('Error fetching school by code:', error);
@@ -115,20 +127,7 @@ const getSchoolById = async (req, res) => {
     const school = rows[0];
     return res.status(200).json({
       status: 'success',
-      data: {
-        schoolId: school.school_id,
-        schoolCode: school.school_code,
-        name: school.name,
-        slug: school.slug,
-        address: school.address,
-        phone: school.phone,
-        email: school.email,
-        timezone: school.timezone,
-        academicYearStartDate: school.academic_year_start_date,
-        academicYearEndDate: school.academic_year_end_date,
-        createdAt: school.created_at,
-        lastUpdatedAt: school.last_updated_at
-      }
+      data: toSchoolPayload(school)
     });
   } catch (error) {
     logger.error('Error fetching school by ID:', error);
@@ -185,20 +184,7 @@ const createSchool = async (req, res) => {
     const school = rows[0];
     return res.status(201).json({
       status: 'success',
-      data: {
-        schoolId: school.school_id,
-        schoolCode: school.school_code,
-        name: school.name,
-        slug: school.slug,
-        address: school.address,
-        phone: school.phone,
-        email: school.email,
-        timezone: school.timezone,
-        academicYearStartDate: school.academic_year_start_date,
-        academicYearEndDate: school.academic_year_end_date,
-        createdAt: school.created_at,
-        lastUpdatedAt: school.last_updated_at
-      }
+      data: toSchoolPayload(school)
     });
   } catch (error) {
     if (error.code === '23505') { // Unique constraint violation
@@ -229,7 +215,8 @@ const updateSchool = async (req, res) => {
     email,
     timezone,
     academicYearStartDate,
-    academicYearEndDate
+    academicYearEndDate,
+    emailReplyTo
   } = req.body;
 
   if (!id) {
@@ -246,6 +233,12 @@ const updateSchool = async (req, res) => {
     });
   }
 
+  // Where parent replies go. Omitted = unchanged; [] = only the school email.
+  const replyTo = parseReplyTo(emailReplyTo);
+  if (replyTo.error) {
+    return res.status(400).json({ status: 'failed', message: replyTo.error });
+  }
+
   try {
     const { rows } = await db.query(schoolQueries.updateSchool, [
       name,
@@ -255,6 +248,7 @@ const updateSchool = async (req, res) => {
       timezone || 'America/New_York',
       academicYearStartDate || null,
       academicYearEndDate || null,
+      replyTo.list ?? null,
       id
     ]);
 
@@ -268,20 +262,7 @@ const updateSchool = async (req, res) => {
     const school = rows[0];
     return res.status(200).json({
       status: 'success',
-      data: {
-        schoolId: school.school_id,
-        schoolCode: school.school_code,
-        name: school.name,
-        slug: school.slug,
-        address: school.address,
-        phone: school.phone,
-        email: school.email,
-        timezone: school.timezone,
-        academicYearStartDate: school.academic_year_start_date,
-        academicYearEndDate: school.academic_year_end_date,
-        createdAt: school.created_at,
-        lastUpdatedAt: school.last_updated_at
-      }
+      data: toSchoolPayload(school)
     });
   } catch (error) {
     logger.error('Error updating school:', error);

@@ -6,11 +6,11 @@
 //
 // Alert failures never fail a sync run: they are logged and swallowed.
 
-const { Resend } = require('resend');
 const db = require('../../config/database');
 const logger = require('../../logger');
 const queries = require('../../queries/finance.queries');
-const { getSchoolApiKey, getSchoolDomain, sendOrThrow } = require('../../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../../utils/emailUtils');
+const { platformSender } = require('../email/senderIdentity');
 const { SCHOOLMULE_BRAND, renderEmail, paragraph, note, button } = require('../../templates/emailLayout');
 
 const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -64,8 +64,7 @@ async function notifySyncFailure({ school, consecutiveFailures, needsReconnect, 
     });
 
     // sendOrThrow: a rejected email must not start the 24h cooldown below.
-    const resend = new Resend(getSchoolApiKey(school));
-    await sendOrThrow(resend, { from: `finance@${getSchoolDomain(school)}`, to, subject, html });
+    await sendOrThrow(getResend(), { ...platformSender('notification'), to, subject, html });
     await db.query(queries.markAlerted, [school]);
     logger.warn({ school, to: to.length, needsReconnect, consecutiveFailures }, 'QuickBooks sync alert sent');
     return true;
