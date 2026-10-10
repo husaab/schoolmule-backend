@@ -11,6 +11,9 @@ const BUCKET = 'message-attachments';
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const SIGNED_URL_TTL = 3600;
+// Raw bytes of files attached to one email. Resend caps a message at 40 MB after
+// base64 (+33%), so 25 MB raw leaves headroom for the HTML and headers.
+const EMAIL_ATTACHMENT_BUDGET = 25 * 1024 * 1024;
 
 const ALLOWED = {
   '.jpg': ['image/jpeg'],
@@ -56,6 +59,39 @@ async function signedUrlMap(filePaths) {
   }
 }
 
+/**
+ * Downloads attachment rows so they can ride inside an email. Files that would
+ * push the email over `budget`, or that cannot be fetched, are reported with
+ * attached=false so the template can point at the portal instead. Never throws.
+ *
+ * @param {Array<{file_path:string,file_name:string,mime_type?:string,size_bytes?:number}>} rows
+ * @returns {Promise<{attachments: Array<{filename:string,content:Buffer}>, files: Array<object>}>}
+ *   `files` mirrors `rows` in order, each with `fileName` and `attached`, plus the row's other fields.
+ */
+async function emailAttachments(rows, budget = EMAIL_ATTACHMENT_BUDGET) {
+  const attachments = [];
+  const files = [];
+  let used = 0;
+  for (const row of rows || []) {
+    const entry = { ...row, fileName: row.file_name, attached: false };
+    files.push(entry);
+    const declared = Number(row.size_bytes) || 0;
+    if (used + declared > budget) continue;
+    try {
+      const { data, error } = await supabase.storage.from(BUCKET).download(row.file_path);
+      if (error || !data) throw error || new Error('empty download');
+      const content = Buffer.from(await data.arrayBuffer());
+      if (used + content.length > budget) continue;
+      used += content.length;
+      attachments.push({ filename: row.file_name, content });
+      entry.attached = true;
+    } catch (error) {
+      logger.warn({ filePath: row.file_path, err: error?.message || error }, 'Attachment could not be fetched for email; linking instead');
+    }
+  }
+  return { attachments, files };
+}
+
 /** Best-effort delete of storage objects; logs and never throws. */
 async function removeObjects(filePaths) {
   if (!filePaths.length) return;
@@ -66,4 +102,4 @@ async function removeObjects(filePaths) {
   }
 }
 
-module.exports = { BUCKET, MAX_FILES, MAX_FILE_BYTES, SIGNED_URL_TTL, ALLOWED, fileFilter, uploadFiles, signedUrlMap, removeObjects };
+module.exports = { BUCKET, MAX_FILES, MAX_FILE_BYTES, SIGNED_URL_TTL, EMAIL_ATTACHMENT_BUDGET, ALLOWED, fileFilter, uploadFiles, signedUrlMap, emailAttachments, removeObjects };

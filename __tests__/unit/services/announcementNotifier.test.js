@@ -2,6 +2,7 @@ const mockSend = jest.fn().mockResolvedValue({ data: { id: 'email-1' } });
 jest.mock('resend', () => ({ Resend: jest.fn(() => ({ emails: { send: mockSend } })) }));
 
 const db = require('../../../config/database'); // mapped to the mock
+const supabase = require('../../../config/supabaseClient'); // mapped to the mock
 const notifier = require('../../../services/messageNotifier');
 
 const JOB = '77777777-7777-4777-8777-777777777777';
@@ -60,6 +61,27 @@ describe('announcement notifier', () => {
     expect(email.html).toContain('Read in SchoolMule');
     const [finish] = r.ran('UPDATE announcement_email_jobs\n    SET status = $2::text');
     expect(finish.params.slice(0, 2)).toEqual([JOB, 'sent']);
+  });
+
+  it('attaches the announcement files, downloading them once for every recipient in the tick', async () => {
+    supabase._reset();
+    supabase._mockStorage.download.mockResolvedValue({ data: { arrayBuffer: async () => Buffer.from('img') }, error: null });
+    let n = 0;
+    const r = makeRouter({
+      [CLAIM]: () => (n++ < 2 ? [job({ recipient_id: `p${n}`, recipient_email: `p${n}@example.com` })] : []),
+      'AS child_names': [ctx()],
+      'FROM announcement_attachments WHERE announcement_id = $1 ORDER BY': [
+        { attachment_id: 'a1', announcement_id: ANN, file_path: 'S/announcements/x/a.png', file_name: 'trip.png', mime_type: 'image/png', size_bytes: 3 },
+      ],
+    });
+    expect(await notifier.drainAnnouncements()).toBe(2);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    for (const [email] of mockSend.mock.calls) {
+      expect(email.attachments).toEqual([{ filename: 'trip.png', content: Buffer.from('img') }]);
+      expect(email.html).toContain('Attached: trip.png');
+    }
+    expect(supabase._mockStorage.download).toHaveBeenCalledTimes(1);
+    expect(r.ran('FROM announcement_attachments WHERE announcement_id = $1 ORDER BY')).toHaveLength(1);
   });
 
   it('signup kind links to the school parent sign-up page; invite kind mints a token and links to reset-password', async () => {

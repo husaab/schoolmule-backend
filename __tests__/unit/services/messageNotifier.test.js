@@ -4,6 +4,7 @@ jest.mock('resend', () => ({
 }));
 
 const db = require('../../../config/database'); // mapped to the mock
+const supabase = require('../../../config/supabaseClient'); // mapped to the mock
 const notifier = require('../../../services/messageNotifier');
 
 const JOB = '77777777-7777-4777-8777-777777777777';
@@ -58,6 +59,27 @@ describe('messageNotifier', () => {
     await notifier.drainOnce();
     expect(mockSend).not.toHaveBeenCalled();
     expect(r.ran('SET status = $2::text, last_error = $3')[0].params[1]).toBe('skipped');
+  });
+
+  it('attaches the message files to the email and names them; oversized ones fall back to a link', async () => {
+    supabase._reset();
+    supabase._mockStorage.download.mockResolvedValue({ data: { arrayBuffer: async () => Buffer.from('%PDF') }, error: null });
+    const r = makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx()],
+      'AS attachment_count': [msg({ attachment_count: 2 })],
+      'FROM message_attachments WHERE message_id = ANY': [
+        { attachment_id: 'a1', message_id: 'm1', file_path: 'S/c/m1/a.pdf', file_name: 'worksheet.pdf', mime_type: 'application/pdf', size_bytes: 4 },
+        { attachment_id: 'a2', message_id: 'm1', file_path: 'S/c/m1/b.pdf', file_name: 'huge.pdf', mime_type: 'application/pdf', size_bytes: 30 * 1024 * 1024 },
+      ],
+    });
+    expect(await notifier.drainOnce()).toBe(1);
+    const email = mockSend.mock.calls[0][0];
+    expect(email.attachments).toEqual([{ filename: 'worksheet.pdf', content: Buffer.from('%PDF') }]);
+    expect(email.html).toContain('Attached: worksheet.pdf');
+    expect(email.html).toContain('huge.pdf — too large to attach');
+    expect(r.ran('FROM message_attachments WHERE message_id = ANY')[0].params).toEqual([['m1']]);
+    expect(r.ran('SET status = $2::text, last_error = $3')[0].params.slice(0, 2)).toEqual([JOB, 'sent']);
   });
 
   it('skips when nothing is unread for this recipient', async () => {

@@ -28,6 +28,20 @@ describe('getConversationDigestEmailHTML', () => {
     expect(html).not.toContain('<b>there</b>');
   });
 
+  it('names attached files and flags the ones that were too large', () => {
+    const html = getConversationDigestEmailHTML({
+      ...base,
+      messages: [{
+        senderName: 'Ahmed Khan', body: 'See attached', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 2,
+        attachments: [{ fileName: 'a <b>.pdf', attached: true }, { fileName: 'big.mov', attached: false }],
+      }],
+    });
+    expect(html).toContain('Attached: a &lt;b&gt;.pdf');
+    expect(html).toContain('big.mov — too large to attach');
+    expect(html).toContain('The attached files are also kept in SchoolMule');
+    expect(html).not.toContain('2 attachments');
+  });
+
   it('uses a single-message heading naming the sender', () => {
     const html = getConversationDigestEmailHTML({
       ...base,

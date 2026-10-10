@@ -21,6 +21,7 @@ const { getConversationDigestEmailHTML, getGuardianInviteEmailHTML, getAnnouncem
 const aq = require('../queries/announcement.queries');
 const { scopeLabel, parentLink } = require('../utils/announcementScope');
 const adminUserQueries = require('../queries/adminUser.queries');
+const { emailAttachments } = require('../utils/attachmentUpload');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -38,6 +39,8 @@ let lastReminderDate = null;
 const torontoDate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 // Set when the outbox table is missing: say so once and stand down.
 let disabledReason = null;
+// Files of one announcement, downloaded once per tick and shared by every recipient's job.
+const announcementFileCache = new Map();
 let announcementsDisabled = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,6 +103,14 @@ async function processJob(job) {
     return 'skipped';
   }
 
+  // The files ride inside the email so a parent never has to open the portal
+  // to see a worksheet; anything over the size budget falls back to a link.
+  const withFiles = msgs.filter((m) => m.attachment_count > 0).map((m) => m.message_id);
+  const { rows: attachmentRows } = withFiles.length
+    ? await db.query(q.selectAttachmentsByMessageIds, [withFiles])
+    : { rows: [] };
+  const { attachments, files } = await emailAttachments(attachmentRows);
+
   let schoolInfo = null;
   try {
     const r = await db.query(schoolQueries.selectSchoolByCode, [job.school]);
@@ -120,6 +131,7 @@ async function processJob(job) {
       body: m.body,
       sentAtLabel: timeLabel(m.created_at),
       attachmentCount: m.attachment_count,
+      attachments: files.filter((f) => f.message_id === m.message_id),
     })),
     link: threadLink(ctx.recipient_role, job.conversation_id),
     schoolName,
@@ -134,6 +146,7 @@ async function processJob(job) {
     to: [ctx.recipient_email],
     subject,
     html,
+    ...(attachments.length ? { attachments } : {}),
   });
 
   // Resend accepted it: record that FIRST so a bookkeeping hiccup can never resend.
@@ -223,6 +236,17 @@ function announcementLink(kind, ctx, token) {
   return parentLink(ctx.announcement_id);
 }
 
+/** An announcement's files for email, downloaded once per tick (see announcementFileCache). */
+async function announcementFiles(ctx) {
+  if (!(ctx.attachment_count > 0)) return { attachments: [], files: [] };
+  const cached = announcementFileCache.get(ctx.announcement_id);
+  if (cached) return cached;
+  const { rows } = await db.query(aq.selectAttachments, [ctx.announcement_id]);
+  const result = await emailAttachments(rows);
+  announcementFileCache.set(ctx.announcement_id, result);
+  return result;
+}
+
 /** One announcement job: render the row as it is now and send once. Returns 'sent' | 'skipped'. */
 async function processAnnouncementJob(job) {
   const { rows } = await db.query(aq.selectAnnouncementJobContext, [job.job_id]);
@@ -250,6 +274,7 @@ async function processAnnouncementJob(job) {
   }
   const schoolName = getSchoolName(ctx.school);
   const label = scopeLabel(ctx);
+  const { attachments, files } = await announcementFiles(ctx);
   const html = getAnnouncementEmailHTML({
     recipientFirstName: ctx.recipient_first_name,
     authorName: ctx.author_name || 'SchoolMule',
@@ -258,6 +283,7 @@ async function processAnnouncementJob(job) {
     title: ctx.title,
     body: ctx.body,
     attachmentCount: ctx.attachment_count,
+    attachments: files,
     link: announcementLink(ctx.kind, ctx, token),
     kind: ctx.kind,
     schoolName,
@@ -268,6 +294,7 @@ async function processAnnouncementJob(job) {
     to: [ctx.recipient_email],
     subject: `${label}: ${ctx.title}`,
     html,
+    ...(attachments.length ? { attachments } : {}),
   });
   await db.query(aq.finishAnnouncementJob, [job.job_id, 'sent', null]);
   return 'sent';
@@ -301,10 +328,16 @@ async function drainAnnouncementOnce() {
 /** Drains announcement jobs, bounded per tick. */
 async function drainAnnouncements(limit = ANNOUNCEMENT_BATCH) {
   let handled = 0;
-  while (handled < limit) {
-    const n = await drainAnnouncementOnce();
-    if (n === 0) break;
-    handled += n;
+  announcementFileCache.clear();
+  try {
+    while (handled < limit) {
+      const n = await drainAnnouncementOnce();
+      if (n === 0) break;
+      handled += n;
+    }
+  } finally {
+    // Buffers are only worth holding for one fan-out; free them between ticks.
+    announcementFileCache.clear();
   }
   return handled;
 }

@@ -175,6 +175,27 @@ function getTicketEmailHTML({ username, school, issueType, description, contactE
  * messages: [{ senderName, body, sentAtLabel, attachmentCount }]
  * contextLine: e.g. "14/20 (70%)" — null when the score must not be shown.
  */
+/**
+ * Attachment line under a message or announcement body. With a `files` list
+ * (from emailAttachments) it names what is attached and what was too large;
+ * with only a count (previews, older callers) it says how many there are.
+ */
+function attachmentLine(files, count, fallback) {
+  if (Array.isArray(files) && files.length) {
+    const attached = files.filter((f) => f.attached).map((f) => escapeHtml(f.fileName));
+    const skipped = files.filter((f) => !f.attached).map((f) => escapeHtml(f.fileName));
+    const parts = [];
+    if (attached.length) parts.push(`📎 Attached: ${attached.join(', ')}`);
+    if (skipped.length) parts.push(`${skipped.join(', ')} — too large to attach; open in SchoolMule to download`);
+    return `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${parts.join('<br>')}</div>`;
+  }
+  if (count > 0) {
+    return `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${count} attachment${count === 1 ? '' : 's'} — ${fallback}</div>`;
+  }
+  return '';
+}
+const anyAttached = (lists) => lists.some((files) => Array.isArray(files) && files.some((f) => f.attached));
+
 function getConversationDigestEmailHTML({
   recipientFirstName,
   studentName,
@@ -195,10 +216,7 @@ function getConversationDigestEmailHTML({
   const blocks = messages
     .map((m) => {
       const meta = `${m.senderName} · ${m.sentAtLabel}`;
-      const attach =
-        m.attachmentCount > 0
-          ? `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${m.attachmentCount} attachment${m.attachmentCount === 1 ? '' : 's'} — open in SchoolMule to view</div>`
-          : '';
+      const attach = attachmentLine(m.attachments, m.attachmentCount, 'open in SchoolMule to view');
       return note(meta, `${multiline(m.body)}${attach}`);
     })
     .join('');
@@ -221,7 +239,9 @@ function getConversationDigestEmailHTML({
       ]),
       blocks,
       button('Reply in SchoolMule', link),
-      finePrint("Attachments stay inside SchoolMule so only the student's guardians and teachers can open them."),
+      anyAttached(messages.map((m) => m.attachments))
+        ? finePrint("The attached files are also kept in SchoolMule, where only the student's guardians and teachers can open them.")
+        : '',
       signOff(schoolName),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),
@@ -266,13 +286,11 @@ function getGuardianInviteEmailHTML({
  * childNames: the recipient's children in the audience (empty for school-wide).
  */
 function getAnnouncementEmailHTML({
-  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, link, kind = 'account', schoolName, schoolInfo,
+  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, attachments = [], link, kind = 'account', schoolName, schoolInfo,
 }) {
   const children = childNames.filter(Boolean).map(escapeHtml);
   const whose = children.length === 0 ? '' : children.length === 1 ? `, ${children[0]}'s class` : `, ${children.join(' and ')}'s classes`;
-  const attach = attachmentCount > 0
-    ? `<div style="margin-top:8px;font-size:13px;color:${COLORS.muted};">${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'} — ${kind === 'account' ? 'open in SchoolMule to download' : 'available once you sign in'}</div>`
-    : '';
+  const attach = attachmentLine(attachments, attachmentCount, 'attached to the email parents receive');
   const cta = kind === 'account'
     ? [
         button('Read in SchoolMule', link),
