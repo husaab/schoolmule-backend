@@ -14,5 +14,7 @@ router.get('/errors/range', c.getErrorsRange); // before :fingerprint
 router.get('/errors/:fingerprint', c.getErrorGroup);
 router.get('/logins', c.getLogins);
 router.get('/infra', c.getInfra);
+router.get('/scanner', c.getScanner);
+router.get('/scanner/series', c.getScannerSeries);
 
 module.exports = router;

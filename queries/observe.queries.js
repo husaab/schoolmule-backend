@@ -9,6 +9,15 @@ const SCOPE = `route NOT LIKE '/api/observe%'`;
 const BUCKETS = `buckets AS (SELECT generate_series($1::timestamptz, $2::timestamptz - $3::interval, $3::interval) AS b)`;
 const P95 = `COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0)::int`;
 const USER_COLS = `u.first_name, u.last_name, u.email AS user_email, u.school AS user_school, u.role AS user_role`;
+// Scanner: signed-in traffic, optionally one user ($3).
+const SCANNER_SCOPE = `${SCOPE} AND user_id IS NOT NULL AND ($3::uuid IS NULL OR user_id = $3::uuid)`;
+const SCANNER_GAPS = `
+  gaps AS (
+    SELECT user_id, method, route, status, duration_ms,
+           EXTRACT(EPOCH FROM ts - lag(ts) OVER (PARTITION BY user_id, method, route ORDER BY ts)) AS gap
+    FROM request_events WHERE ts >= $1 AND ts < $2 AND ${SCANNER_SCOPE})`;
+// Ordered-set aggregates skip NULLs, so a stream's first request (no gap) is ignored.
+const MEDIAN_GAP = `percentile_cont(0.5) WITHIN GROUP (ORDER BY gap)`;
 
 const ALL_ERRORS = `
   SELECT 'server' AS source, fingerprint, route AS location, message, user_id, ts, stack, request_id,
@@ -223,6 +232,48 @@ const observeQueries = {
     SELECT email, COUNT(*)::int AS attempts, MAX(ts) AS last_at, array_agg(DISTINCT outcome) AS outcomes
     FROM login_events WHERE ts >= $1 AND ts < $2 AND outcome <> 'success'
     GROUP BY email ORDER BY attempts DESC, last_at DESC LIMIT 20`,
+
+  // ---- Request scanner: who is polling what. $3 is an optional user_id. ----
+  // A gap is the seconds since the same user's previous request to the same
+  // method+route; it is never measured across users. Only authenticated rows
+  // count, so the totals here are "requests by signed-in users".
+
+  scannerTotals: `
+    SELECT COUNT(*)::int AS requests, COUNT(DISTINCT user_id)::int AS users, COUNT(DISTINCT (method, route))::int AS routes
+    FROM request_events WHERE ts >= $1 AND ts < $2 AND ${SCANNER_SCOPE}`,
+
+  // $4 burst threshold (seconds). Per method+route with gaps pooled from
+  // every user's own stream.
+  scannerRoutes: `
+    WITH ${SCANNER_GAPS}
+    SELECT method, route, COUNT(*)::int AS requests, COUNT(DISTINCT user_id)::int AS users,
+           COUNT(*) FILTER (WHERE status = 304)::int AS n304, ${P95} AS p95_ms,
+           COUNT(gap)::int AS gaps, COUNT(*) FILTER (WHERE gap < $4)::int AS bursts, ${MEDIAN_GAP} AS median_gap_s
+    FROM gaps GROUP BY 1, 2 ORDER BY requests DESC LIMIT 200`,
+
+  // $4 burst threshold, $5 min requests (exclusive), $6 max median gap
+  // (exclusive). One user on one route, busiest first.
+  scannerSuspects: `
+    WITH ${SCANNER_GAPS},
+    streams AS (
+      SELECT user_id, method, route, COUNT(*)::int AS requests, COUNT(*) FILTER (WHERE status = 304)::int AS n304,
+             COUNT(gap)::int AS gaps, COUNT(*) FILTER (WHERE gap < $4)::int AS bursts, ${MEDIAN_GAP} AS median_gap_s
+      FROM gaps GROUP BY 1, 2, 3 HAVING COUNT(*) > $5)
+    SELECT s.*, ${USER_COLS} FROM streams s LEFT JOIN users u ON u.user_id = s.user_id
+    WHERE s.median_gap_s < $6 ORDER BY s.requests DESC LIMIT 50`,
+
+  // $3 bucket, $4 optional user_id, $5 method, $6 route. Requests per bucket
+  // for one route, zero-filled.
+  scannerSeries: `
+    WITH ${BUCKETS},
+    agg AS (
+      SELECT date_bin($3::interval, ts, $1::timestamptz) AS b, COUNT(*)::int AS requests
+      FROM request_events
+      WHERE ts >= $1 AND ts < $2 AND ${SCOPE} AND user_id IS NOT NULL AND ($4::uuid IS NULL OR user_id = $4::uuid)
+        AND method = $5 AND route = $6
+      GROUP BY 1)
+    SELECT buckets.b AS ts, COALESCE(requests, 0) AS requests
+    FROM buckets LEFT JOIN agg ON agg.b = buckets.b ORDER BY buckets.b`,
 };
 
 module.exports = observeQueries;

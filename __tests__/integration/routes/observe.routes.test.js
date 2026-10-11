@@ -207,3 +207,112 @@ describe('Integration: /api/observe', () => {
     expect(d.failedByEmail).toEqual([expect.objectContaining({ email: 'ghost@test.com', attempts: 2, outcomes: ['unknown_email'] })]);
   });
 });
+
+describe('Integration: /api/observe/scanner', () => {
+  let pool;
+  const POLLER_ID = '550e8400-e29b-41d4-a716-446655440010';
+  const CLICKER_ID = '550e8400-e29b-41d4-a716-446655440011';
+  const UNREAD = '/api/messaging/conversations/unread-count';
+  const YEARS = '/api/school-years';
+
+  // n requests from one user to one route, `stepMs` apart, starting at `start`.
+  const insertStream = (userId, route, { n, stepMs, start, status = 304, offsetMs = 0 }) =>
+    pool.query(
+      `INSERT INTO request_events (ts, request_id, user_id, school, role, method, route, path, status, duration_ms)
+       SELECT $1::timestamptz + ($5::int + i * $4::int) * INTERVAL '1 millisecond', gen_random_uuid()::text, $2, 'ALHAADIACADEMY', 'TEACHER', 'GET', $3, $3, $6, 20
+       FROM generate_series(0, $7::int - 1) AS i`,
+      [start, userId, route, stepMs, offsetMs, status, n]
+    );
+
+  beforeAll(() => { getApp(); pool = getTestPool(); process.env.PLATFORM_OWNER_EMAILS = 'owner@test.com'; process.env.OBSERVE_DISABLED = 'true'; });
+  afterAll(() => { delete process.env.PLATFORM_OWNER_EMAILS; });
+
+  beforeEach(async () => {
+    await insertUser(pool, { id: OWNER_ID, email: 'owner@test.com', first: 'Own', last: 'Er', role: 'ADMIN' });
+    await insertUser(pool, { id: POLLER_ID, email: 'poller@test.com', first: 'Po', last: 'Ller', role: 'TEACHER' });
+    await insertUser(pool, { id: CLICKER_ID, email: 'clicker@test.com', first: 'Cli', last: 'Cker', role: 'TEACHER' });
+    const start = ago(200);
+    // A 30 s poller: 250 requests over 125 minutes, all 304.
+    await insertStream(POLLER_ID, UNREAD, { n: 250, stepMs: 30000, start });
+    // Duplicate mounts: 20 pairs of school-years 100 ms apart, 60 s between pairs.
+    await insertStream(CLICKER_ID, YEARS, { n: 20, stepMs: 60000, start, status: 200 });
+    await insertStream(CLICKER_ID, YEARS, { n: 20, stepMs: 60000, start, status: 200, offsetMs: 100 });
+    // The clicker also polls unread-count, but slowly and under the threshold.
+    await insertStream(CLICKER_ID, UNREAD, { n: 10, stepMs: 300000, start });
+    // Console traffic and anonymous rows are never counted.
+    await insertRequest(pool, { ts: ago(5), userId: OWNER_ID, role: 'ADMIN', route: '/api/observe/scanner' });
+    await pool.query(`INSERT INTO request_events (ts, method, route, path, status, duration_ms) VALUES ($1, 'GET', '/api/health', '/api/health', 200, 1)`, [ago(5)]);
+  });
+
+  it('403s a non-owner', async () => {
+    expect((await get('/api/observe/scanner', adminToken())).status).toBe(403);
+  });
+
+  it('ranks routes with cadence, 304 share and p95, and lists polling suspects', async () => {
+    const res = await get('/api/observe/scanner?window=24h');
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+    expect(d.totals).toEqual({ requests: 300, users: 2, routes: 2 });
+    expect(d.thresholds).toEqual({ burstGapS: 2, suspectMinRequests: 200, suspectMaxMedianGapS: 120 });
+
+    const unread = d.routes.find((r) => r.route === UNREAD);
+    expect(unread).toEqual(expect.objectContaining({ method: 'GET', requests: 260, users: 2, status304Share: 1, p95Ms: 20, burstShare: 0, pattern: 'timer' }));
+    // Per-user gaps: 249 × 30 s and 9 × 300 s; the median is still 30 s.
+    expect(unread.medianGapS).toBe(30);
+    expect(unread.gaps).toBe(258);
+
+    const years = d.routes.find((r) => r.route === YEARS);
+    expect(years).toEqual(expect.objectContaining({ requests: 40, users: 1, status304Share: 0, pattern: 'duplicate' }));
+    expect(years.medianGapS).toBeCloseTo(0.1, 3);
+    // 39 gaps: 20 of 0.1 s and 19 of 59.9 s.
+    expect(years.burstShare).toBeCloseTo(20 / 39, 5);
+
+    expect(d.routes.map((r) => r.route)).not.toContain('/api/observe/scanner');
+    expect(d.routes.map((r) => r.route)).not.toContain('/api/health');
+
+    expect(d.suspects).toEqual([
+      expect.objectContaining({ method: 'GET', route: UNREAD, requests: 250, medianGapS: 30, burstShare: 0, gaps: 249, pattern: 'timer', status304Share: 1, user: expect.objectContaining({ id: POLLER_ID, name: 'Po Ller', role: 'TEACHER' }) }),
+    ]);
+  });
+
+  it('filters by user and validates the id', async () => {
+    const res = await get(`/api/observe/scanner?window=24h&user=${CLICKER_ID}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.totals).toEqual({ requests: 50, users: 1, routes: 2 });
+    expect(res.body.data.suspects).toEqual([]);
+    expect(res.body.data.routes.find((r) => r.route === UNREAD).requests).toBe(10);
+    expect((await get('/api/observe/scanner?user=nope')).status).toBe(400);
+  });
+
+  it('GET /scanner/series buckets one route into 5-minute slots', async () => {
+    const res = await get(`/api/observe/scanner/series?window=24h&method=get&route=${encodeURIComponent(UNREAD)}`);
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+    expect(d.bucket).toBe('5 minutes');
+    expect(d.series).toHaveLength(24 * 12);
+    expect(d.series.reduce((n, p) => n + p.requests, 0)).toBe(260);
+    // A full 5-minute bucket inside the poller's run holds exactly 10 of its requests (plus at most one from the clicker).
+    expect(Math.max(...d.series.map((p) => p.requests))).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...d.series.map((p) => p.requests))).toBeLessThanOrEqual(11);
+
+    const filtered = await get(`/api/observe/scanner/series?window=24h&user=${CLICKER_ID}&method=GET&route=${encodeURIComponent(UNREAD)}`);
+    expect(filtered.body.data.series.reduce((n, p) => n + p.requests, 0)).toBe(10);
+
+    const hourly = await get(`/api/observe/scanner/series?window=1h&method=GET&route=${encodeURIComponent(UNREAD)}`);
+    expect(hourly.body.data.bucket).toBe('1 minute');
+    expect(hourly.body.data.series).toHaveLength(60);
+
+    expect((await get('/api/observe/scanner/series?window=24h&method=GET')).status).toBe(400);
+    expect((await get('/api/observe/scanner/series?window=24h&route=/x')).status).toBe(400);
+    expect((await get(`/api/observe/scanner/series?window=24h&method=GET&route=${encodeURIComponent(UNREAD)}&user=bad`)).status).toBe(400);
+  });
+
+  it('returns empty lists, not errors, for an empty window', async () => {
+    await pool.query('TRUNCATE request_events');
+    const res = await get('/api/observe/scanner?window=1h');
+    expect(res.status).toBe(200);
+    expect(res.body.data.totals).toEqual({ requests: 0, users: 0, routes: 0 });
+    expect(res.body.data.routes).toEqual([]);
+    expect(res.body.data.suspects).toEqual([]);
+  });
+});

@@ -3,10 +3,15 @@ const q = require('../queries/observe.queries');
 const { withTimedClient } = require('../services/observe/timedQuery');
 const { parseWindow } = require('../services/observe/window');
 const railway = require('../services/observe/railwayMetrics');
+const { cadenceOf, isPollingSuspect, THRESHOLDS } = require('../services/observe/cadence');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEED_LIMIT = 50;
 const TOP_FEATURE_SERIES = 8;
+// The scanner's timeline is finer than the window's own bucket so a 30 s
+// poller is visible; 30d keeps its hourly bucket to stay at 720 points.
+const SCANNER_BUCKET = { '1h': '1 minute', '24h': '5 minutes', '7d': '5 minutes', '30d': '1 hour' };
+const METHOD_RE = /^[A-Z]{3,10}$/;
 
 const windowOut = (w) => ({ key: w.key, from: w.from.toISOString(), to: w.to.toISOString(), bucket: w.bucket });
 const winArgs = (w) => [w.from, w.to];
@@ -374,6 +379,70 @@ const getLogins = async (req, res) => {
   }
 };
 
+// ?user= is optional: null when absent, the uuid when valid, undefined when not.
+const parseUserId = (raw) => {
+  if (raw === undefined || raw === null || raw === '') return null;
+  return UUID_RE.test(String(raw)) ? String(raw) : undefined;
+};
+const badUser = (res) => res.status(400).json({ status: 'failed', message: 'Invalid user id' });
+
+const cadenceFields = (r) => cadenceOf({ gaps: r.gaps, bursts: r.bursts, medianGapS: r.median_gap_s });
+
+const getScanner = async (req, res) => {
+  const w = parseWindow(req.query.window);
+  const userId = parseUserId(req.query.user);
+  if (userId === undefined) return badUser(res);
+  const { burstGapS, suspectMinRequests, suspectMaxMedianGapS } = THRESHOLDS;
+  try {
+    const data = await withTimedClient(async (run) => {
+      const totals = await run(q.scannerTotals, [...winArgs(w), userId]);
+      const routes = await run(q.scannerRoutes, [...winArgs(w), userId, burstGapS]);
+      const suspects = await run(q.scannerSuspects, [...winArgs(w), userId, burstGapS, suspectMinRequests, suspectMaxMedianGapS]);
+      const t = totals.rows[0];
+      return {
+        window: windowOut(w),
+        thresholds: THRESHOLDS,
+        totals: { requests: num(t.requests), users: num(t.users), routes: num(t.routes) },
+        routes: routes.rows.map((r) => {
+          const requests = num(r.requests);
+          return { method: r.method, route: r.route, requests, users: num(r.users), status304Share: rate(num(r.n304), requests), p95Ms: num(r.p95_ms), ...cadenceFields(r) };
+        }),
+        suspects: suspects.rows
+          .map((r) => ({ user: userOf(r), method: r.method, route: r.route, requests: num(r.requests), status304Share: rate(num(r.n304), num(r.requests)), ...cadenceFields(r) }))
+          .filter(isPollingSuspect),
+      };
+    });
+    return res.json({ status: 'success', data });
+  } catch (err) {
+    return fail(res, err, 'scanner');
+  }
+};
+
+const getScannerSeries = async (req, res) => {
+  const w = parseWindow(req.query.window);
+  const userId = parseUserId(req.query.user);
+  if (userId === undefined) return badUser(res);
+  const method = String(req.query.method || '').toUpperCase();
+  const route = String(req.query.route || '');
+  if (!METHOD_RE.test(method) || !route.startsWith('/') || route.length > 300) {
+    return res.status(400).json({ status: 'failed', message: 'method and route are required' });
+  }
+  const bucket = SCANNER_BUCKET[w.key];
+  try {
+    const data = await withTimedClient(async (run) => {
+      const { rows } = await run(q.scannerSeries, [...winArgs(w), bucket, userId, method, route]);
+      return {
+        window: windowOut(w),
+        bucket,
+        series: rows.map((r) => ({ ts: iso(r.ts), requests: num(r.requests) })),
+      };
+    });
+    return res.json({ status: 'success', data });
+  } catch (err) {
+    return fail(res, err, 'scanner series');
+  }
+};
+
 const getInfra = async (req, res) => {
   const w = parseWindow(req.query.window);
   try {
@@ -384,4 +453,4 @@ const getInfra = async (req, res) => {
   }
 };
 
-module.exports = { getOverview, getActivity, getUsers, getUser, getFeatures, getErrors, getErrorsRange, getErrorGroup, getLogins, getInfra };
+module.exports = { getOverview, getActivity, getUsers, getUser, getFeatures, getErrors, getErrorsRange, getErrorGroup, getLogins, getInfra, getScanner, getScannerSeries };
