@@ -8,11 +8,17 @@
 // announcements.grade (and every grade parameter) is TEXT; Postgres has no
 // enum = text operator, so the enum side is always cast with ::text.
 
-const IN_AUDIENCE = (s) => `
+// Custom scope: the hand-picked rows in announcement_students. The audience
+// preview has no announcement row yet, so it passes its own predicate
+// (`s.student_id = ANY(a.student_ids)`) instead.
+const CUSTOM_BY_TABLE = (s) => `EXISTS (SELECT 1 FROM announcement_students x WHERE x.announcement_id = a.announcement_id AND x.student_id = ${s}.student_id)`;
+
+const IN_AUDIENCE = (s, custom = CUSTOM_BY_TABLE(s)) => `
   (${s}.school = a.school AND ${s}.is_archived IS NOT TRUE AND (
      (a.scope = 'class'  AND EXISTS (SELECT 1 FROM class_students cs WHERE cs.class_id = a.class_id AND cs.student_id = ${s}.student_id))
   OR (a.scope = 'grade'  AND ${s}.grade::text = a.grade AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))
-  OR (a.scope = 'school' AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))))`;
+  OR (a.scope = 'school' AND (a.school_year_id IS NULL OR ${s}.school_year_id = a.school_year_id))
+  OR (a.scope = 'custom' AND ${custom})))`;
 
 // Every address the school can reach for student alias `s`: the parent_students
 // link rows (account email, else the link's parent_email) PLUS the mother/father
@@ -49,7 +55,14 @@ const TEACHER_SEES = (u) => `
                   AND hs.is_archived IS NOT TRUE AND (a.school_year_id IS NULL OR hs.school_year_id = a.school_year_id))
      OR EXISTS (SELECT 1 FROM classes gc WHERE gc.school = a.school AND gc.grade::text = a.grade
                   AND (a.school_year_id IS NULL OR gc.school_year_id = a.school_year_id)
-                  AND (gc.teacher_id = ${u} OR EXISTS (SELECT 1 FROM class_teachers ct2 WHERE ct2.class_id = gc.class_id AND ct2.teacher_id = ${u}))))))`;
+                  AND (gc.teacher_id = ${u} OR EXISTS (SELECT 1 FROM class_teachers ct2 WHERE ct2.class_id = gc.class_id AND ct2.teacher_id = ${u})))))
+   OR (a.scope = 'custom' AND EXISTS (
+        SELECT 1 FROM announcement_students x JOIN students xs ON xs.student_id = x.student_id
+        WHERE x.announcement_id = a.announcement_id AND xs.is_archived IS NOT TRUE AND (
+          xs.homeroom_teacher_id = ${u}
+          OR EXISTS (SELECT 1 FROM class_students cs2 JOIN classes c2 ON c2.class_id = cs2.class_id
+                     WHERE cs2.student_id = xs.student_id AND (a.school_year_id IS NULL OR c2.school_year_id = a.school_year_id)
+                       AND (c2.teacher_id = ${u} OR EXISTS (SELECT 1 FROM class_teachers ct3 WHERE ct3.class_id = c2.class_id AND ct3.teacher_id = ${u})))))))`;
 
 const PARENT_SEES = (u) => `
   EXISTS (SELECT 1 FROM parent_students ps JOIN students s ON s.student_id = ps.student_id
@@ -69,17 +82,30 @@ const SEEN_COUNT = `
   (SELECT COUNT(*) FROM announcement_reads r
    WHERE r.announcement_id = a.announcement_id
      AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = r.user_id))::int`;
+// "Got it" presses by guardians, same denominator as SEEN_COUNT.
+const ACK_COUNT = `
+  (SELECT COUNT(*) FROM announcement_acks k
+   WHERE k.announcement_id = a.announcement_id
+     AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = k.user_id))::int`;
 
 const IS_PINNED = `(a.pinned_until IS NOT NULL AND a.pinned_until >= (NOW() AT TIME ZONE 'America/Toronto')::date)`;
 
 const BASE_COLUMNS = `
   a.announcement_id, a.school, a.school_year_id, a.scope, a.class_id, a.grade, a.title, a.body,
-  a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at,
+  a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at, a.ack_requested,
   TO_CHAR(a.pinned_until, 'YYYY-MM-DD') AS pinned_until,  -- DATE as the YYYY-MM-DD the API promises, not a JS Date
   cl.subject AS class_subject, cl.grade AS class_grade,
   TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
   ${IS_PINNED} AS is_pinned,
-  (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count`;
+  (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
+  (SELECT COUNT(*) FROM announcement_students x JOIN students xs ON xs.student_id = x.student_id
+    WHERE x.announcement_id = a.announcement_id AND xs.is_archived IS NOT TRUE)::int AS student_count,
+  -- "Amina R., Bilal H., Hana S." for the custom label on staff lists
+  (SELECT COALESCE(ARRAY_AGG(p.n ORDER BY p.n), '{}')
+     FROM (SELECT split_part(xs.name, ' ', 1) || CASE WHEN split_part(xs.name, ' ', 2) <> '' THEN ' ' || LEFT(split_part(xs.name, ' ', 2), 1) || '.' ELSE '' END AS n
+             FROM announcement_students x JOIN students xs ON xs.student_id = x.student_id
+            WHERE x.announcement_id = a.announcement_id AND xs.is_archived IS NOT TRUE
+            ORDER BY xs.name LIMIT 3) p) AS student_names_preview`;
 
 const BASE_FROM = `
   FROM announcements a
@@ -92,8 +118,10 @@ const announcementQueries = {
     SELECT ${BASE_COLUMNS},
       (a.author_id = $2) AS is_author,
       ${PARENT_SEES('$2')} AS is_guardian,
-      ${TEACHER_SEES('$2')} AS is_class_teacher
+      ${TEACHER_SEES('$2')} AS is_class_teacher,
+      k.acked_at
     ${BASE_FROM}
+    LEFT JOIN announcement_acks k ON k.announcement_id = a.announcement_id AND k.user_id = $2
     WHERE a.announcement_id = $1
   `,
 
@@ -104,11 +132,14 @@ const announcementQueries = {
       (r.user_id IS NOT NULL OR a.author_id = $1) AS read,  -- your own post is never unread
       ${AUDIENCE_COUNT} AS audience_count,
       ${SEEN_COUNT} AS seen_count,
+      ${ACK_COUNT} AS ack_count,
+      k.acked_at,
       (SELECT COALESCE(json_agg(json_build_object('studentId', s.student_id, 'name', s.name) ORDER BY s.name), '[]')
          FROM students s JOIN parent_students ps ON ps.student_id = s.student_id AND ps.parent_id = $1
         WHERE ${IN_AUDIENCE('s')}) AS children
     ${BASE_FROM}
     LEFT JOIN announcement_reads r ON r.announcement_id = a.announcement_id AND r.user_id = $1
+    LEFT JOIN announcement_acks k ON k.announcement_id = a.announcement_id AND k.user_id = $1
     WHERE a.school = $2 AND a.deleted_at IS NULL
       AND ($4::uuid IS NULL OR a.school_year_id = $4 OR a.school_year_id IS NULL)
       AND ($5::uuid IS NULL OR a.class_id = $5)
@@ -134,16 +165,31 @@ const announcementQueries = {
       AND ${VISIBLE('$1', '$3')}
   `,
 
-  // $1 school, $2 school_year_id, $3 scope, $4 class_id, $5 grade, $6 title, $7 body, $8 author_id, $9 author_role, $10 pinned_until
+  // $1 school, $2 school_year_id, $3 scope, $4 class_id, $5 grade, $6 title, $7 body, $8 author_id, $9 author_role, $10 pinned_until, $11 ack_requested
   insertAnnouncement: `
-    INSERT INTO announcements (school, school_year_id, scope, class_id, grade, title, body, author_id, author_role, pinned_until)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    INSERT INTO announcements (school, school_year_id, scope, class_id, grade, title, body, author_id, author_role, pinned_until, ack_requested)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING announcement_id, published_at
   `,
-  // $1 id, $2 title, $3 body, $4 pinned_until
+  // $1 id, $2 title, $3 body, $4 pinned_until, $5 ack_requested. "edited" means the words changed;
+  // a pin, an acknowledgement toggle or an audience change does not re-stamp it.
   updateAnnouncement: `
-    UPDATE announcements SET title = $2, body = $3, pinned_until = $4, edited_at = NOW()
+    UPDATE announcements SET title = $2, body = $3, pinned_until = $4, ack_requested = $5,
+        edited_at = CASE WHEN title IS DISTINCT FROM $2 OR body IS DISTINCT FROM $3 THEN NOW() ELSE edited_at END
     WHERE announcement_id = $1 RETURNING edited_at
+  `,
+  touchEdited: `UPDATE announcements SET edited_at = NOW() WHERE announcement_id = $1 RETURNING edited_at`,
+  // $1 announcement_id, $2 student_id[]
+  insertAnnouncementStudents: `
+    INSERT INTO announcement_students (announcement_id, student_id) SELECT $1, UNNEST($2::uuid[]) ON CONFLICT DO NOTHING
+  `,
+  deleteAnnouncementStudentsNotIn: `
+    DELETE FROM announcement_students WHERE announcement_id = $1 AND NOT (student_id = ANY($2::uuid[]))
+  `,
+  selectAnnouncementStudents: `
+    SELECT s.student_id, s.name, s.grade::text AS grade
+    FROM announcement_students x JOIN students s ON s.student_id = x.student_id
+    WHERE x.announcement_id = $1 AND s.is_archived IS NOT TRUE ORDER BY s.name
   `,
   // $1 id, $2 user_id
   softDeleteAnnouncement: `
@@ -177,6 +223,13 @@ const announcementQueries = {
     ON CONFLICT (announcement_id, user_id) DO UPDATE SET read_at = announcement_reads.read_at
     RETURNING read_at
   `,
+  // "Got it". $1 announcement_id, $2 user_id
+  upsertAck: `
+    INSERT INTO announcement_acks (announcement_id, user_id) VALUES ($1, $2)
+    ON CONFLICT (announcement_id, user_id) DO UPDATE SET acked_at = announcement_acks.acked_at
+    RETURNING acked_at
+  `,
+  deleteAck: `DELETE FROM announcement_acks WHERE announcement_id = $1 AND user_id = $2`,
 
   // Who has / has not seen it, one row per guardian account or email-only link. $1 announcement_id
   selectReceipts: `
@@ -189,7 +242,7 @@ const announcementQueries = {
       CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
       GROUP BY ge.parent_id, ge.email
     )
-    SELECT g.parent_id AS user_id, g.name, g.relation, g.student_names, r.read_at,
+    SELECT g.parent_id AS user_id, g.name, g.relation, g.student_names, r.read_at, k.acked_at,
       CASE WHEN r.read_at IS NOT NULL THEN 'seen'
            WHEN g.parent_id IS NULL THEN 'no-account'
            WHEN g.invite_pending THEN 'invited'
@@ -198,9 +251,10 @@ const announcementQueries = {
            ELSE 'pending' END AS state
     FROM g
     LEFT JOIN announcement_reads r ON r.announcement_id = $1 AND r.user_id = g.parent_id
+    LEFT JOIN announcement_acks k ON k.announcement_id = $1 AND k.user_id = g.parent_id
     LEFT JOIN announcement_email_jobs j ON j.announcement_id = $1 AND LOWER(j.recipient_email) = g.email
     WHERE g.archived IS NOT TRUE
-    ORDER BY (r.read_at IS NULL), r.read_at, g.name
+    ORDER BY (k.acked_at IS NULL), (r.read_at IS NULL), r.read_at, g.name
   `,
   selectEmailStats: `
     SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
@@ -238,6 +292,16 @@ const announcementQueries = {
     UPDATE announcement_email_jobs SET status = 'skipped', last_error = 'announcement removed'
     WHERE announcement_id = $1 AND status = 'pending'
   `,
+  // After a custom audience shrinks: pending jobs whose address no longer belongs to anyone in the audience.
+  cancelJobsOutsideAudience: `
+    UPDATE announcement_email_jobs j SET status = 'skipped', last_error = 'removed from audience'
+    WHERE j.announcement_id = $1 AND j.status = 'pending'
+      AND NOT EXISTS (
+        SELECT 1 FROM announcements a
+        JOIN students s ON ${IN_AUDIENCE('s')}
+        CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
+        WHERE a.announcement_id = $1 AND ge.email = LOWER(j.recipient_email))
+  `,
   retryFailedAnnouncementJobs: `
     UPDATE announcement_email_jobs SET status = 'pending', attempts = 0, last_error = NULL, send_after = NOW()
     WHERE announcement_id = $1 AND status = 'failed' RETURNING job_id
@@ -259,9 +323,10 @@ const announcementQueries = {
   // Everything the email needs, read at send time so an edit inside the window ships corrected. $1 job_id
   selectAnnouncementJobContext: `
     SELECT j.job_id, j.kind, j.recipient_id, j.recipient_email, j.school,
-      a.announcement_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id,
+      a.announcement_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id, a.author_role, a.ack_requested,
       cl.subject AS class_subject, cl.grade AS class_grade,
       TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
+      au.email AS author_email, COALESCE(au.is_archived, FALSE) AS author_archived,
       COALESCE(u.first_name, split_part(pl.name, ' ', 1)) AS recipient_first_name,
       u.is_archived AS recipient_archived,
       (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
@@ -324,10 +389,10 @@ const announcementQueries = {
     SELECT EXISTS (SELECT 1 FROM students s WHERE s.school = $3 AND s.grade::text = $1::text AND s.homeroom_teacher_id = $2
                      AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)) AS allowed
   `,
-  // $1 school, $2 scope, $3 class_id|null, $4 grade|null, $5 school_year_id|null
+  // $1 school, $2 scope, $3 class_id|null, $4 grade|null, $5 school_year_id|null, $6 student_id[]|null (custom)
   selectAudiencePreview: `
-    WITH a AS (SELECT $1::school AS school, $2::text AS scope, $3::uuid AS class_id, $4::text AS grade, $5::uuid AS school_year_id),
-    st AS (SELECT s.student_id, s.name FROM a, students s WHERE ${IN_AUDIENCE('s')}),
+    WITH a AS (SELECT $1::school AS school, $2::text AS scope, $3::uuid AS class_id, $4::text AS grade, $5::uuid AS school_year_id, $6::uuid[] AS student_ids),
+    st AS (SELECT s.student_id, s.name FROM a, students s WHERE ${IN_AUDIENCE('s', 's.student_id = ANY(a.student_ids)')}),
     g AS (
       SELECT ge.email,
              BOOL_OR(ge.parent_id IS NOT NULL AND ge.user_password <> '!' AND NOT ge.user_archived) AS has_account,
@@ -343,6 +408,36 @@ const announcementQueries = {
            (SELECT COALESCE(json_agg(json_build_object('studentId', st.student_id, 'name', st.name) ORDER BY st.name), '[]')
               FROM st WHERE NOT EXISTS (SELECT 1 FROM students s CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
                                         WHERE s.student_id = st.student_id)) AS students_without_email
+  `,
+  // Custom scope guard: how many of the ids are real students of this school/year (not archived),
+  // and how many of those the caller may pick (admin: all; teacher: taught this year or homeroom).
+  // $1 student_id[], $2 school, $3 school_year_id|null, $4 user_id, $5 role
+  selectPickableCount: `
+    SELECT COUNT(*)::int AS in_school,
+           COUNT(*) FILTER (WHERE $5::text = 'ADMIN' OR s.homeroom_teacher_id = $4 OR EXISTS (
+             SELECT 1 FROM class_students cs JOIN classes c ON c.class_id = cs.class_id
+             WHERE cs.student_id = s.student_id AND ($3::uuid IS NULL OR c.school_year_id = $3)
+               AND (c.teacher_id = $4 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $4))))::int AS pickable
+    FROM students s
+    WHERE s.student_id = ANY($1::uuid[]) AND s.school = $2 AND s.is_archived IS NOT TRUE
+      AND ($3::uuid IS NULL OR s.school_year_id = $3)
+  `,
+  // The picker roster: every student the caller may hand-pick, with classes and guardian names for search.
+  // $1 user_id, $2 school, $3 role, $4 school_year_id|null
+  selectPickableStudents: `
+    SELECT s.student_id, s.name, s.grade::text AS grade,
+      COALESCE((SELECT json_agg(json_build_object('classId', c.class_id, 'subject', c.subject) ORDER BY c.subject)
+                  FROM class_students cs JOIN classes c ON c.class_id = cs.class_id
+                 WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR c.school_year_id = $4)), '[]') AS classes,
+      COALESCE((SELECT ARRAY_AGG(DISTINCT ge.name) FROM (${GUARDIAN_EMAILS('s')}) ge WHERE ge.name IS NOT NULL), '{}') AS guardian_names,
+      EXISTS (SELECT 1 FROM (${GUARDIAN_EMAILS('s')}) ge) AS has_email
+    FROM students s
+    WHERE s.school = $2 AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)
+      AND ($3::text = 'ADMIN' OR s.homeroom_teacher_id = $1 OR EXISTS (
+            SELECT 1 FROM class_students cs JOIN classes c ON c.class_id = cs.class_id
+            WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR c.school_year_id = $4)
+              AND (c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))))
+    ORDER BY LENGTH(s.grade::text), s.grade::text, s.name
   `,
   // "Ask about this": is this parent + child in the audience of this (live) announcement? $1 announcement_id, $2 parent_id, $3 student_id
   selectParentAnnouncementContext: `
