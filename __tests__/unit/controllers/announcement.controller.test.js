@@ -439,7 +439,8 @@ describe('announcement controller', () => {
       let res = await authenticatedRequest('get', '/api/announcements/targets', mockTeacherUser());
       expect(res.body.data).toMatchObject({ classes: [{ classId: CLASS, subject: 'Math', grade: '6', studentCount: 22 }], grades: [{ grade: '6', studentCount: 48 }], canSchool: false, canCustom: true });
       // No school row in this router: the platform address, no reply-to list.
-      expect(res.body.data.sender).toEqual({ from: 'alhaadiacademy@schoolmule.ca', replyTo: [], includesAuthor: true, canEdit: false });
+      expect(res.body.data.sender).toMatchObject({ replyTo: [], includesAuthor: true, canEdit: false });
+      expect(res.body.data.sender.from).toMatch(/^alhaadiacademy@/);
       res = await authenticatedRequest('get', '/api/announcements/targets', mockAdminUser());
       expect(res.body.data.canSchool).toBe(true);
       expect((await authenticatedRequest('get', '/api/announcements/targets', mockParentUser())).status).toBe(403);

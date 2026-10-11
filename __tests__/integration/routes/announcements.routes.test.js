@@ -174,6 +174,136 @@ describe('Integration: Announcements', () => {
     expect((await pool.query(`SELECT COUNT(*)::int AS n FROM password_reset_tokens WHERE user_id = $1`, [PENDING_ID])).rows[0].n).toBe(1);
   }, 20000);
 
+  describe('custom audiences', () => {
+    const postCustom = (who, ids, extra = {}) => {
+      let r = authenticatedRequest('post', '/api/announcements', who).field('scope', 'custom').field('title', 'Reading group').field('body', 'Starts Monday');
+      for (const id of ids) r = r.field('studentIds', id);
+      for (const [k, v] of Object.entries(extra)) r = r.field(k, v);
+      return r;
+    };
+    const jobs = async (id) => (await pool.query(`SELECT recipient_email, kind, status, last_error FROM announcement_email_jobs WHERE announcement_id = $1 ORDER BY recipient_email`, [id])).rows;
+
+    it('teacher posts to hand-picked students: only their families see it and get emails; teachers of those students see it', async () => {
+      const res = await postCustom(asTeacher, [aminaId, zaydId]);
+      expect(res.status).toBe(201);
+      const id = res.body.data.announcementId;
+      expect(res.body.data).toMatchObject({ scope: 'custom', scopeLabel: 'Selected families', studentCount: 2, ackRequested: false });
+
+      expect((await jobs(id)).map((j) => [j.recipient_email, j.kind])).toEqual([
+        ['dad@example.com', 'account'], ['mom@example.com', 'account'], ['zmom@example.com', 'signup'],
+      ]); // Bilal's Noor and the pending parent are not in the audience
+
+      const mom = await authenticatedRequest('get', '/api/announcements', asMom);
+      expect(mom.body.data).toHaveLength(1);
+      expect(mom.body.data[0].children.map((c) => c.name)).toEqual(['Amina Test']);
+      expect(mom.body.data[0].scopeLabel).toBe('Selected families');
+      expect((await authenticatedRequest('get', '/api/announcements', asStranger)).body.data).toHaveLength(0);
+      expect((await authenticatedRequest('get', `/api/announcements/${id}`, asStranger)).status).toBe(403);
+      // The co-teacher teaches Amina; the homeroom teacher is homeroom for both.
+      expect((await authenticatedRequest('get', '/api/announcements', asCo)).body.data).toHaveLength(1);
+      expect((await authenticatedRequest('get', '/api/announcements', asHomeroom)).body.data).toHaveLength(1);
+
+      const staff = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
+      expect(staff.body.data.students.map((s) => s.name)).toEqual(['Amina Test', 'Zayd Test']);
+      expect(staff.body.data.studentNamesPreview).toEqual(['Amina T.', 'Zayd T.']);
+      expect(staff.body.data.audienceCount).toBe(2);
+
+      const preview = await authenticatedRequest('post', '/api/announcements/preview', asTeacher).send({ scope: 'custom', studentIds: [aminaId, zaydId] });
+      expect(preview.body.data).toEqual({ students: 2, guardiansWithAccount: 2, guardiansInvitePending: 0, guardiansEmailOnly: 1, studentsWithoutEmail: [] });
+    });
+
+    it('the picker roster follows the same rule as posting: teachers only see students they teach', async () => {
+      const teacher = await authenticatedRequest('get', '/api/announcements/students', asTeacher);
+      expect(teacher.body.data.map((s) => s.name)).toEqual(['Amina Test', 'Bilal Test', 'Zayd Test']);
+      expect(teacher.body.data[0]).toMatchObject({ grade: '6', classes: [{ classId, subject: 'Math' }], guardianNames: expect.arrayContaining(['Mom Test', 'Dad Test']), hasEmail: true });
+      const admin = await authenticatedRequest('get', '/api/announcements/students', asAdmin);
+      expect(admin.body.data.map((s) => s.name)).toEqual(['Yusuf Test', 'Amina Test', 'Bilal Test', 'Zayd Test']);
+      expect(admin.body.data[0].hasEmail).toBe(true); // Yusuf: link row with an account email
+      expect((await postCustom(asTeacher, [aminaId, otherGradeId])).status).toBe(403);
+      expect((await postCustom(asTeacher, [aminaId, '00000000-0000-4000-8000-000000000000'])).status).toBe(404);
+      expect((await postCustom(asAdmin, [otherGradeId])).status).toBe(201);
+      expect((await authenticatedRequest('get', '/api/announcements/targets', asTeacher)).body.data.canCustom).toBe(true);
+    });
+
+    it('editing the selection emails only the new families and cancels pending emails for the removed ones', async () => {
+      const id = (await postCustom(asTeacher, [aminaId, zaydId])).body.data.announcementId;
+      const res = await authenticatedRequest('patch', `/api/announcements/${id}`, asAdmin).field('studentIds', aminaId).field('studentIds', bilalId);
+      expect(res.status).toBe(200);
+      expect(res.body.data.editedAt).toBeNull(); // audience-only edit does not say "edited"
+      expect(res.body.data.studentCount).toBe(2);
+      expect((await jobs(id)).map((j) => [j.recipient_email, j.kind, j.status])).toEqual([
+        ['dad@example.com', 'account', 'pending'],
+        ['mom@example.com', 'account', 'pending'],
+        ['noor@example.com', 'signup', 'pending'],      // new
+        ['pending@example.com', 'invite', 'pending'],   // new
+        ['zmom@example.com', 'signup', 'skipped'],      // removed with Zayd
+      ]);
+      expect((await jobs(id)).find((j) => j.recipient_email === 'zmom@example.com').last_error).toBe('removed from audience');
+      const detail = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
+      expect(detail.body.data.students.map((s) => s.name)).toEqual(['Amina Test', 'Bilal Test']);
+      // A class post cannot change its students.
+      const cls = (await postClass(asTeacher)).body.data.announcementId;
+      expect((await authenticatedRequest('patch', `/api/announcements/${cls}`, asTeacher).field('studentIds', aminaId)).status).toBe(400);
+    });
+
+    it('a family removed from the audience loses access, receipts and counts', async () => {
+      await pool.query(`INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school) VALUES ($1, $2, 'Other Parent', 'other@example.com', 'Mother', 'ALHAADIACADEMY')`, [zaydId, STRANGER_ID]);
+      const id = (await postCustom(asTeacher, [zaydId], { ackRequested: '1' })).body.data.announcementId;
+      expect((await authenticatedRequest('post', `/api/announcements/${id}/read`, asStranger)).status).toBe(200);
+      expect((await authenticatedRequest('post', `/api/announcements/${id}/ack`, asStranger)).status).toBe(200);
+      expect((await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher)).body.data).toMatchObject({ seenCount: 1, ackCount: 1 });
+      expect((await authenticatedRequest('patch', `/api/announcements/${id}`, asTeacher).field('studentIds', aminaId)).status).toBe(200);
+      expect((await authenticatedRequest('get', `/api/announcements/${id}`, asStranger)).status).toBe(403);
+      expect((await authenticatedRequest('get', '/api/announcements', asStranger)).body.data).toHaveLength(0);
+      const after = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
+      expect(after.body.data).toMatchObject({ seenCount: 0, ackCount: 0 });
+      expect(after.body.data.receipts.seen).toEqual([]);
+      expect(after.body.data.receipts.notYet.map((r) => r.name)).not.toContain('Other Parent');
+    });
+
+    it('emails for a teacher post reply to the teacher and the office; "Ask about this" works for a custom post', async () => {
+      const resend = require('resend');
+      const send = resend.Resend.mock.results[0]?.value.emails.send;
+      const id = (await postCustom(asTeacher, [aminaId])).body.data.announcementId;
+      await pool.query(`UPDATE announcement_email_jobs SET send_after = NOW() - interval '1 minute' WHERE announcement_id = $1`, [id]);
+      await pool.query(`UPDATE schools SET email_reply_to = '{office@example.org}', email = 'info@example.org' WHERE school_code = 'ALHAADIACADEMY'`);
+      expect(await notifier.drainAnnouncements()).toBe(2);
+      const sent = send.mock.calls.slice(-2).map((c) => c[0]);
+      for (const email of sent) {
+        expect(email.replyTo).toEqual(['teacher@example.com', 'office@example.org', 'info@example.org']);
+        expect(email.subject).toBe('Selected families: Reading group');
+      }
+      const ask = await authenticatedRequest('post', '/api/messaging/conversations', asMom)
+        .field('studentId', aminaId).field('teacherId', TEACHER_ID).field('title', 'Re: Reading group').field('body', 'Which days?').field('announcementId', id);
+      expect(ask.status).toBe(201);
+      expect(ask.body.data.conversation.classId).toBeNull();
+    }, 20000);
+  });
+
+  describe('acknowledgements', () => {
+    it('a guardian acks (which also marks it read), the author sees the count, undo clears it; guards', async () => {
+      const id = (await postClass(asTeacher).field('ackRequested', '1')).body.data.announcementId;
+      expect((await authenticatedRequest('get', '/api/announcements', asMom)).body.data[0]).toMatchObject({ ackRequested: true, acked: false });
+      const ack = await authenticatedRequest('post', `/api/announcements/${id}/ack`, asMom);
+      expect(ack.status).toBe(200);
+      expect(ack.body.data.ackedAt).toBeTruthy();
+      expect((await authenticatedRequest('get', '/api/announcements', asMom)).body.data[0]).toMatchObject({ acked: true, read: true });
+      let staff = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
+      expect(staff.body.data).toMatchObject({ ackRequested: true, ackCount: 1, seenCount: 1 });
+      expect(staff.body.data.receipts.seen[0]).toMatchObject({ name: 'Mom Test', ackedAt: expect.any(String) });
+      expect((await authenticatedRequest('delete', `/api/announcements/${id}/ack`, asMom)).status).toBe(200);
+      staff = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
+      expect(staff.body.data.ackCount).toBe(0);
+      expect(staff.body.data.receipts.seen[0].ackedAt).toBeNull();
+      // Not a guardian → 403; the flag can be switched off → 409.
+      expect((await authenticatedRequest('post', `/api/announcements/${id}/ack`, asAdmin)).status).toBe(403);
+      expect((await authenticatedRequest('patch', `/api/announcements/${id}`, asTeacher).field('ackRequested', '0')).status).toBe(200);
+      const off = await authenticatedRequest('post', `/api/announcements/${id}/ack`, asMom);
+      expect(off.status).toBe(409);
+      expect(off.body.code).toBe('ACK_NOT_REQUESTED');
+    });
+  });
+
   it('"Ask about this": a parent opens a General thread with an admin author of a school-wide post', async () => {
     const id = (await postSchool('PA Day')).body.data.announcementId;
     const res = await authenticatedRequest('post', '/api/messaging/conversations', asMom)
