@@ -76,17 +76,19 @@ const AUDIENCE_COUNT = `
      JOIN parent_students ps ON ps.student_id = s.student_id AND ps.parent_id IS NOT NULL
      JOIN users u ON u.user_id = ps.parent_id AND u.is_archived = FALSE AND u.password <> '!'
    WHERE ${IN_AUDIENCE('s')})::int`;
-// Reads by guardians (any role: a teacher linked to their child counts), so
-// the seen/audience ratio stays honest for dual-role accounts.
+// A guardian of a student in the audience (any role: a teacher linked to their
+// child counts), so the seen/audience ratio stays honest for dual-role accounts
+// and a family removed from a custom post stops counting.
+const GUARDIAN_IN_AUDIENCE = (u) => `
+  EXISTS (SELECT 1 FROM parent_students ps JOIN students s ON s.student_id = ps.student_id
+          WHERE ps.parent_id = ${u} AND ${IN_AUDIENCE('s')})`;
 const SEEN_COUNT = `
   (SELECT COUNT(*) FROM announcement_reads r
-   WHERE r.announcement_id = a.announcement_id
-     AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = r.user_id))::int`;
+   WHERE r.announcement_id = a.announcement_id AND ${GUARDIAN_IN_AUDIENCE('r.user_id')})::int`;
 // "Got it" presses by guardians, same denominator as SEEN_COUNT.
 const ACK_COUNT = `
   (SELECT COUNT(*) FROM announcement_acks k
-   WHERE k.announcement_id = a.announcement_id
-     AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = k.user_id))::int`;
+   WHERE k.announcement_id = a.announcement_id AND ${GUARDIAN_IN_AUDIENCE('k.user_id')})::int`;
 
 const IS_PINNED = `(a.pinned_until IS NOT NULL AND a.pinned_until >= (NOW() AT TIME ZONE 'America/Toronto')::date)`;
 
@@ -286,7 +288,10 @@ const announcementQueries = {
         AND (author.email IS NULL OR g.email <> LOWER(TRIM(author.email)))
     ) x
     ORDER BY email, pri
-    ON CONFLICT DO NOTHING
+    ON CONFLICT (announcement_id, LOWER(recipient_email)) DO UPDATE
+      SET status = 'pending', attempts = 0, last_error = NULL, send_after = EXCLUDED.send_after,
+          recipient_id = EXCLUDED.recipient_id, kind = EXCLUDED.kind
+      WHERE announcement_email_jobs.status = 'skipped' AND announcement_email_jobs.last_error = 'removed from audience'
   `,
   cancelPendingAnnouncementJobs: `
     UPDATE announcement_email_jobs SET status = 'skipped', last_error = 'announcement removed'

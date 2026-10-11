@@ -259,7 +259,24 @@ describe('Integration: Announcements', () => {
       expect(after.body.data).toMatchObject({ seenCount: 0, ackCount: 0 });
       expect(after.body.data.receipts.seen).toEqual([]);
       expect(after.body.data.receipts.notYet.map((r) => r.name)).not.toContain('Other Parent');
+      // The list counts agree with the detail: the removed family's read/ack rows no longer count.
+      const listed = (await authenticatedRequest('get', '/api/announcements', asTeacher)).body.data.find((a) => a.announcementId === id);
+      expect(listed).toMatchObject({ seenCount: 0, ackCount: 0 });
     });
+
+    it('a family removed and then re-added gets its email back; the send path skips a recipient who left the audience', async () => {
+      const id = (await postCustom(asTeacher, [aminaId, zaydId])).body.data.announcementId;
+      expect((await authenticatedRequest('patch', `/api/announcements/${id}`, asTeacher).field('studentIds', aminaId)).status).toBe(200);
+      expect((await jobs(id)).find((j) => j.recipient_email === 'zmom@example.com')).toMatchObject({ status: 'skipped', last_error: 'removed from audience' });
+      expect((await authenticatedRequest('patch', `/api/announcements/${id}`, asTeacher).field('studentIds', aminaId).field('studentIds', zaydId)).status).toBe(200);
+      expect((await jobs(id)).find((j) => j.recipient_email === 'zmom@example.com')).toMatchObject({ status: 'pending', last_error: null });
+      // A pending job whose family has since left the audience is skipped at send time, not sent.
+      await pool.query(`DELETE FROM announcement_students WHERE announcement_id = $1 AND student_id = $2`, [id, zaydId]);
+      await pool.query(`UPDATE announcement_email_jobs SET send_after = NOW() - interval '1 minute' WHERE announcement_id = $1`, [id]);
+      await notifier.drainAnnouncements();
+      expect((await jobs(id)).find((j) => j.recipient_email === 'zmom@example.com')).toMatchObject({ status: 'skipped', last_error: 'removed from audience' });
+      expect((await jobs(id)).find((j) => j.recipient_email === 'mom@example.com').status).toBe('sent');
+    }, 20000);
 
     it('emails for a teacher post reply to the teacher and the office; "Ask about this" works for a custom post', async () => {
       const resend = require('resend');
@@ -295,6 +312,15 @@ describe('Integration: Announcements', () => {
       staff = await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher);
       expect(staff.body.data.ackCount).toBe(0);
       expect(staff.body.data.receipts.seen[0].ackedAt).toBeNull();
+      // A teacher who is also a guardian of a child in the audience may ack (guardian path), but sees no staff receipts.
+      await pool.query(`INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school) VALUES ($1, $2, 'Teacher Two', 'co@example.com', 'Father', 'ALHAADIACADEMY')`, [zaydId, CO_TEACHER_ID]);
+      const stranger = { userId: CO_TEACHER_ID, username: 'Teacher Two', email: 'co@example.com', role: 'TEACHER' };
+      // Make Teacher Two a stranger to the class first so only the guardian link grants anything.
+      await pool.query(`DELETE FROM class_teachers WHERE teacher_id = $1`, [CO_TEACHER_ID]);
+      expect((await authenticatedRequest('get', `/api/announcements/${id}`, stranger)).status).toBe(403);
+      expect((await authenticatedRequest('post', `/api/announcements/${id}/ack`, stranger)).status).toBe(200);
+      expect((await authenticatedRequest('get', `/api/announcements/${id}`, asTeacher)).body.data.ackCount).toBe(1);
+      expect((await authenticatedRequest('delete', `/api/announcements/${id}/ack`, stranger)).status).toBe(200);
       // Not a guardian → 403; the flag can be switched off → 409.
       expect((await authenticatedRequest('post', `/api/announcements/${id}/ack`, asAdmin)).status).toBe(403);
       expect((await authenticatedRequest('patch', `/api/announcements/${id}`, asTeacher).field('ackRequested', '0')).status).toBe(200);

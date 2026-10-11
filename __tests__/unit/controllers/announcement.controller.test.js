@@ -179,7 +179,12 @@ describe('announcement controller', () => {
       const res = await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser())
         .field('studentIds', S1).field('studentIds', S2).field('ackRequested', 'true');
       expect(res.status).toBe(200);
+      // The selection is checked against the post's own year (accessRow has school_year_id 'y1'), not the browser's.
+      expect(r.ran('AS pickable')[0].params).toEqual([[S1, S2], SCHOOL, 'y1', TEACHER, 'TEACHER']);
       expect(r.ran('UPDATE announcements SET title')[0].params).toEqual([ANN, 'Forms due Friday', 'Please return the form.', null, true]);
+      // Cancel-outside-audience runs before the re-enqueue, each in its own guard.
+      const order = r.calls.map((c) => c.sql);
+      expect(order.findIndex((x) => x.includes("last_error = 'removed from audience'"))).toBeLessThan(order.findIndex((x) => x.includes('INSERT INTO announcement_email_jobs')));
       expect(r.ran('INSERT INTO announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
       expect(r.ran('DELETE FROM announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
       expect(r.ran('INSERT INTO announcement_email_jobs')[0].params).toEqual([ANN, '2 minutes']);
@@ -254,8 +259,11 @@ describe('announcement controller', () => {
     });
 
     it('guardian in any role may ack; non-guardians 403; not requested 409', async () => {
-      makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: true, is_author: false, is_class_teacher: true })], 'INSERT INTO announcement_acks': [{ acked_at: 'x' }] });
+      // A teacher-parent who does not teach the class: no staff view, but the guardian link lets them ack.
+      makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: true, is_author: false, is_class_teacher: false })], 'INSERT INTO announcement_acks': [{ acked_at: 'x' }] });
+      expect((await authenticatedRequest('get', `/api/announcements/${ANN}`, mockTeacherUser())).status).toBe(403);
       expect((await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockTeacherUser())).status).toBe(200);
+      expect((await authenticatedRequest('delete', `/api/announcements/${ANN}/ack`, mockTeacherUser())).status).toBe(200);
       makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: false })] });
       expect((await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockAdminUser())).status).toBe(403);
       makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: false, is_guardian: true, is_author: false, is_class_teacher: false })] });

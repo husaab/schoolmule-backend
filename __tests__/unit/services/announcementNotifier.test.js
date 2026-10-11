@@ -139,6 +139,13 @@ describe('announcement notifier', () => {
     expect(mockSend.mock.calls[0][0].html).toContain('Reply privately');
   });
 
+  it('skips a recipient whose children have all left the audience', async () => {
+    const r = makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx({ child_names: [] })] });
+    await notifier.drainAnnouncements();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(r.ran('SET status = $2::text')[0].params.slice(1)).toEqual(['skipped', 'removed from audience']);
+  });
+
   it('skips a removed announcement and an archived recipient without sending', async () => {
     let r = makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx({ deleted_at: '2026-10-08T13:00:00Z' })] });
     await notifier.drainAnnouncements();

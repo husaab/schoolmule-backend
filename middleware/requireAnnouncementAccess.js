@@ -52,12 +52,18 @@ const isVisible = (row, user) =>
 /** Author or admin may edit / remove. */
 const canMutate = (ann, user) => user.role === 'ADMIN' || ann.isAuthor;
 
-const requireAnnouncementAccess = async (req, res, next) => {
+/**
+ * `asGuardian`: also let through anyone who is a guardian of a student in the
+ * audience, whatever their role. Used only by the "Got it" routes, so a
+ * teacher-parent can acknowledge their child's post without being handed the
+ * staff view (receipts of every family) on GET.
+ */
+const makeGuard = ({ asGuardian = false } = {}) => async (req, res, next) => {
   try {
     const { rows } = await db.query(q.selectAnnouncementAccess, [req.params.id, req.user.userId]);
     const row = rows[0];
     if (!row || row.school !== req.user.school) return res.status(404).json(NOT_FOUND);
-    if (!isVisible(row, req.user)) return res.status(403).json(NOT_AUTHORIZED);
+    if (!isVisible(row, req.user) && !(asGuardian && row.is_guardian)) return res.status(403).json(NOT_AUTHORIZED);
     if (row.deleted_at) return req.method === 'GET' ? res.status(410).json(REMOVED) : res.status(404).json(NOT_FOUND);
     req.announcement = accessRowToAnnouncement(row);
     return next();
@@ -67,6 +73,9 @@ const requireAnnouncementAccess = async (req, res, next) => {
   }
 };
 
+const requireAnnouncementAccess = makeGuard();
+
 module.exports = requireAnnouncementAccess;
+module.exports.requireAnnouncementGuardianAccess = makeGuard({ asGuardian: true });
 module.exports.accessRowToAnnouncement = accessRowToAnnouncement;
 module.exports.canMutate = canMutate;

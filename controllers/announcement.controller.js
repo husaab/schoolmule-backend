@@ -482,7 +482,8 @@ const update = async (req, res) => {
   const ackRequested = req.body.ackRequested === undefined ? ann.ackRequested : parseBool(req.body.ackRequested);
   try {
     if (studentIds) {
-      const check = await checkScope(req.user, 'custom', null, null, yearOf(req), studentIds);
+      // Checked against the post's own year: an old custom post is edited against its own cohort.
+      const check = await checkScope(req.user, 'custom', null, null, ann.schoolYearId ?? yearOf(req), studentIds);
       if (check.error) return failed(res, check.error[0], check.error[1]);
     }
     const client = await db.connect();
@@ -517,13 +518,18 @@ const update = async (req, res) => {
     }
     await removeObjects(removedPaths.map((p) => p.file_path));
     if (studentIds) {
-      // New families get an email (the unique index keeps everyone else's single
-      // send); families no longer in the audience lose their pending one.
+      // Families no longer in the audience lose their pending email first (the
+      // send path double-checks membership too); then new families get one, and
+      // a family picked again after being removed gets its skipped job back.
       try {
-        await db.query(q.enqueueAnnouncementJobs, [ann.announcementId, EMAIL_DELAY]);
         await db.query(q.cancelJobsOutsideAudience, [ann.announcementId]);
       } catch (error) {
-        logger.error('Failed to re-queue announcement emails after an audience change:', error);
+        logger.error('Failed to cancel announcement emails after an audience change:', error);
+      }
+      try {
+        await db.query(q.enqueueAnnouncementJobs, [ann.announcementId, EMAIL_DELAY]);
+      } catch (error) {
+        logger.error('Failed to queue announcement emails after an audience change:', error);
       }
     }
     const item = toItem({

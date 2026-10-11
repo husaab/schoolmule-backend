@@ -251,10 +251,14 @@ async function announcementFiles(ctx) {
 async function processAnnouncementJob(job) {
   const { rows } = await db.query(aq.selectAnnouncementJobContext, [job.job_id]);
   const ctx = rows[0];
+  // child_names is derived through IN_AUDIENCE per recipient, so an empty list
+  // means this address no longer belongs to anyone in the audience (a family
+  // removed from a custom post, or an archived student) — do not send.
   const skip = !ctx ? 'job context missing'
     : ctx.deleted_at ? 'announcement removed'
       : ctx.recipient_archived ? 'recipient archived'
-        : !ctx.recipient_email ? 'no recipient' : null;
+        : !ctx.recipient_email ? 'no recipient'
+          : !(ctx.child_names && ctx.child_names.length) ? 'removed from audience' : null;
   if (skip) {
     await db.query(aq.finishAnnouncementJob, [job.job_id, 'skipped', skip]);
     return 'skipped';

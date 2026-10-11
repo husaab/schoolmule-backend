@@ -5,6 +5,7 @@
 const express = require('express');
 const requireStaff = require('../middleware/requireStaff');
 const requireAnnouncementAccess = require('../middleware/requireAnnouncementAccess');
+const { requireAnnouncementGuardianAccess } = require('../middleware/requireAnnouncementAccess');
 const { uploadFiles } = require('../utils/attachmentUpload');
 const c = require('../controllers/announcement.controller');
 
@@ -24,8 +25,8 @@ router.get('/:id', requireAnnouncementAccess, c.get);
 router.patch('/:id', requireAnnouncementAccess, uploadFiles, c.update);
 router.delete('/:id', requireAnnouncementAccess, c.remove);
 router.post('/:id/read', requireAnnouncementAccess, c.markRead);
-router.post('/:id/ack', requireAnnouncementAccess, c.acknowledge);
-router.delete('/:id/ack', requireAnnouncementAccess, c.unacknowledge);
+router.post('/:id/ack', requireAnnouncementGuardianAccess, c.acknowledge);
+router.delete('/:id/ack', requireAnnouncementGuardianAccess, c.unacknowledge);
 router.post('/:id/emails/retry', requireAnnouncementAccess, c.retryEmails);
 router.get('/:id/attachments/:attachmentId/url', requireAnnouncementAccess, c.attachmentUrl);
 
