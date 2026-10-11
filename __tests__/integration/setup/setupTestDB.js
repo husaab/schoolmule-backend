@@ -6,6 +6,8 @@ const ALL_TABLES = [
   'error_events',
   'client_events',
   'login_events',
+  'announcement_acks',
+  'announcement_students',
   'announcement_email_jobs',
   'announcement_reads',
   'announcement_attachments',

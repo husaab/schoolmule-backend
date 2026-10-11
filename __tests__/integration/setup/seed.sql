@@ -1479,7 +1479,7 @@ CREATE TABLE IF NOT EXISTS announcements (
   announcement_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   school           school NOT NULL,
   school_year_id   UUID REFERENCES school_years(school_year_id) ON DELETE SET NULL,
-  scope            VARCHAR(8) NOT NULL CHECK (scope IN ('class','grade','school')),
+  scope            VARCHAR(8) NOT NULL CHECK (scope IN ('class','grade','school','custom')),
   class_id         UUID REFERENCES classes(class_id) ON DELETE CASCADE,
   grade            TEXT,
   title            TEXT NOT NULL,
@@ -1492,10 +1492,12 @@ CREATE TABLE IF NOT EXISTS announcements (
   deleted_at       TIMESTAMPTZ,
   deleted_by       UUID REFERENCES users(user_id),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ack_requested    BOOLEAN NOT NULL DEFAULT FALSE,
   CONSTRAINT chk_announcements_scope CHECK (
     (scope = 'class'  AND class_id IS NOT NULL) OR
     (scope = 'grade'  AND grade IS NOT NULL) OR
-    (scope = 'school'))
+    (scope = 'school') OR
+    (scope = 'custom'))
 );
 CREATE INDEX IF NOT EXISTS idx_announcements_school_year ON announcements(school, school_year_id, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_announcements_class ON announcements(class_id) WHERE class_id IS NOT NULL;
@@ -1537,6 +1539,22 @@ CREATE TABLE IF NOT EXISTS announcement_email_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_announcement_email_jobs_recipient
   ON announcement_email_jobs(announcement_id, LOWER(recipient_email));
 CREATE INDEX IF NOT EXISTS idx_announcement_email_jobs_due ON announcement_email_jobs(send_after) WHERE status = 'pending';
+
+-- announcements_v2_migration.sql: hand-picked audiences and acknowledgements
+CREATE TABLE IF NOT EXISTS announcement_students (
+  announcement_id  UUID NOT NULL REFERENCES announcements(announcement_id) ON DELETE CASCADE,
+  student_id       UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  added_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (announcement_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_announcement_students_student ON announcement_students(student_id);
+
+CREATE TABLE IF NOT EXISTS announcement_acks (
+  announcement_id  UUID NOT NULL REFERENCES announcements(announcement_id) ON DELETE CASCADE,
+  user_id          UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  acked_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (announcement_id, user_id)
+);
 
 -- Observe console (from observe_migration.sql)
 CREATE TABLE IF NOT EXISTS request_events (
