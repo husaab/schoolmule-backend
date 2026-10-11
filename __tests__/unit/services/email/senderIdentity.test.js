@@ -31,6 +31,18 @@ describe('senderIdentity', () => {
       expect(senderAddress(s.from)).toBe('alhaadiacademy@schoolmule.ca');
     });
 
+    it('prepends extraReplyTo addresses, deduped and validated, ahead of the office list', () => {
+      const s = schoolSender({
+        school: 'X', role: 'messages',
+        schoolInfo: alHaadi({ email_reply_to: ['Office@example.org', 'admin@example.org'] }),
+        extraReplyTo: ['Teacher@Example.org', 'bad', 'admin@example.org'],
+      });
+      // First occurrence wins, so an extra that is also an office address keeps its place up front.
+      expect(s.replyTo).toEqual(['teacher@example.org', 'admin@example.org', 'office@example.org']);
+      // Omitted: byte-for-byte what digests and invites get today.
+      expect(schoolSender({ school: 'X', schoolInfo: alHaadi(), role: 'messages' }).replyTo).toEqual(['office@example.org']);
+    });
+
     it('derives the local part from the slug, or the override when set', () => {
       expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ slug: 'maple-grove-2' }) }).from)
         .toBe('"Al Haadi Academy" <maplegrove2@schoolmule.ca>');

@@ -279,22 +279,31 @@ function getGuardianInviteEmailHTML({
 }
 
 /**
- * Announcement — one post to every guardian in a class, grade or school.
- * `kind` picks the call to action: 'account' → read in the portal,
- * 'invite' → finish the pending account (fresh invite link),
- * 'signup' → create an account on the school's parent sign-up page.
+ * Announcement — one post to every guardian in a class, grade, school or a
+ * hand-picked set of families. `kind` picks the call to action: 'account' →
+ * read in the portal, 'invite' → finish the pending account (fresh invite
+ * link), 'signup' → create an account on the school's parent sign-up page.
  * childNames: the recipient's children in the audience (empty for school-wide).
+ * ackRequested + ackLink: the author asked for a "Got it"; the button opens the
+ * portal with &ack=1 so the acknowledgement is recorded once signed in.
  */
 function getAnnouncementEmailHTML({
-  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, attachments = [], link, kind = 'account', schoolName, schoolInfo,
+  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, attachments = [], link,
+  kind = 'account', ackRequested = false, ackLink = null, schoolName, schoolInfo,
 }) {
   const children = childNames.filter(Boolean).map(escapeHtml);
-  const whose = children.length === 0 ? '' : children.length === 1 ? `, ${children[0]}'s class` : `, ${children.join(' and ')}'s classes`;
+  const custom = scopeLabel === 'Selected families';
+  const whose = children.length === 0 ? '' : custom
+    ? (children.length === 1 ? `, ${children[0]}'s` : `, ${children.join(' and ')}'s`)
+    : (children.length === 1 ? `, ${children[0]}'s class` : `, ${children.join(' and ')}'s classes`);
+  const audience = custom ? 'a selected group of families' : escapeHtml(scopeLabel);
   const attach = attachmentLine(attachments, attachmentCount, 'attached to the email parents receive');
+  const replyHint = `Have a question? Reply to this email or open SchoolMule and choose “Reply privately” to write to ${escapeHtml(authorName)}.`;
   const cta = kind === 'account'
     ? [
+        ackRequested && ackLink ? button('Got it ✓', ackLink) : '',
         button('Read in SchoolMule', link),
-        finePrint(`Have a question? Open the announcement and choose “Ask about this” to start a private conversation with ${escapeHtml(authorName)}.`),
+        finePrint(`${ackRequested ? '“Got it” opens SchoolMule and records that you have read this. ' : ''}${replyHint}`),
       ]
     : kind === 'invite'
       ? [
@@ -314,7 +323,7 @@ function getAnnouncementEmailHTML({
     preheader: `${scopeLabel} · ${schoolName}`,
     content: [
       paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
-      paragraph(`<strong>${escapeHtml(authorName)}</strong> posted an announcement to <strong>${escapeHtml(scopeLabel)}</strong>${whose}.`),
+      paragraph(`<strong>${escapeHtml(authorName)}</strong> posted an announcement to <strong>${audience}</strong>${whose}.`),
       facts([
         ['For', escapeHtml(scopeLabel) + (children.length ? ` · ${children.join(', ')}` : '')],
         ['Posted by', escapeHtml(authorName)],

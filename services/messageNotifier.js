@@ -275,6 +275,7 @@ async function processAnnouncementJob(job) {
   const schoolName = getSchoolName(ctx.school);
   const label = scopeLabel(ctx);
   const { attachments, files } = await announcementFiles(ctx);
+  const link = announcementLink(ctx.kind, ctx, token);
   const html = getAnnouncementEmailHTML({
     recipientFirstName: ctx.recipient_first_name,
     authorName: ctx.author_name || 'SchoolMule',
@@ -284,13 +285,18 @@ async function processAnnouncementJob(job) {
     body: ctx.body,
     attachmentCount: ctx.attachment_count,
     attachments: files,
-    link: announcementLink(ctx.kind, ctx, token),
+    link,
+    ackRequested: Boolean(ctx.ack_requested),
+    ackLink: `${link}&ack=1`,
     kind: ctx.kind,
     schoolName,
     schoolInfo,
   });
+  // A reply to a teacher's post should reach the teacher as well as the office.
+  // Admin authors are the office; an archived author has no inbox to reach.
+  const extraReplyTo = ctx.author_role === 'TEACHER' && !ctx.author_archived && ctx.author_email ? [ctx.author_email] : [];
   await sendOrThrow(getResend(), {
-    ...schoolSender({ school: ctx.school, schoolInfo, role: 'messages' }),
+    ...schoolSender({ school: ctx.school, schoolInfo, role: 'messages', extraReplyTo }),
     to: [ctx.recipient_email],
     subject: `${label}: ${ctx.title}`,
     html,

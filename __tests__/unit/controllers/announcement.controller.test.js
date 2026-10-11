@@ -126,7 +126,7 @@ describe('announcement controller', () => {
     beforeEach(() => mockSend.mockClear());
 
     it('emails the author one copy as a parent would get it; nothing is posted', async () => {
-      const r = makeRouter();
+      const r = makeRouter({ 'FROM schools': [{ school_code: SCHOOL, name: 'Al Haadi Academy', email_sending_domain: 'alhaadiacademy.ca', email_reply_to: ['office@example.org'], email: 'info@example.org' }] });
       const res = await authenticatedRequest('post', '/api/announcements/preview-email', mockTeacherUser())
         .send({ scope: 'class', classId: CLASS, title: 'Forms due Friday', body: 'Please return the form.', attachmentCount: 1 });
       expect(res.status).toBe(200);
@@ -135,6 +135,8 @@ describe('announcement controller', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
       const msg = mockSend.mock.calls[0][0];
       expect(msg.to).toEqual(['teacher@test.com']);
+      // A preview goes to staff, so replies stay with the office list; the author is NOT prepended here.
+      expect(msg.replyTo).toEqual(['office@example.org', 'info@example.org']);
       expect(msg.subject).toBe('[Preview] Gr 6 Math: Forms due Friday');
       expect(msg.html).toContain('Please return the form.');
       expect(msg.html).toContain('1 attachment');

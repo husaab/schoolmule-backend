@@ -12,6 +12,7 @@ const ctx = (over = {}) => ({
   job_id: JOB, kind: 'account', recipient_id: 'p1', recipient_email: 'layla@example.com', school: 'ALHAADIACADEMY',
   announcement_id: ANN, title: 'Forms due Friday', body: 'Please return <the form>.\nThanks', scope: 'class', grade: null, deleted_at: null, author_id: 't1',
   class_subject: 'Math', class_grade: '6', author_name: 'Ahmed Khan', recipient_first_name: 'Layla', recipient_archived: false,
+  author_role: 'TEACHER', author_email: 'akhan@example.com', author_archived: false, ack_requested: false,
   attachment_count: 1, child_names: ['Amina Test'], ...over,
 });
 
@@ -103,6 +104,39 @@ describe('announcement notifier', () => {
     expect(html).toContain('token=tok-1');
     expect(html).toContain(encodeURIComponent(`/parent/messages?tab=announcements&announcement=${ANN}`));
     expect(html).toContain('Set up your account');
+  });
+
+  it('Reply-To: a teacher author comes first, then the office list; admin, archived or malformed authors leave the office list alone', async () => {
+    const school = { 'FROM schools': [{ name: 'Al Haadi Academy', school_code: 'ALHAADIACADEMY', email_sending_domain: 'alhaadiacademy.ca', email_reply_to: ['office@example.org'], email: 'info@example.org' }] };
+    const run = async (over) => {
+      mockSend.mockClear();
+      makeRouter({ [CLAIM]: once(job(over.kind ? { kind: over.kind, recipient_id: over.recipient_id ?? 'p1' } : {})), 'AS child_names': [ctx(over)], ...school });
+      await notifier.drainAnnouncements();
+      return mockSend.mock.calls[0][0].replyTo;
+    };
+    expect(await run({})).toEqual(['akhan@example.com', 'office@example.org', 'info@example.org']);
+    // A family with no account replies to the same people.
+    expect(await run({ kind: 'signup', recipient_id: null })).toEqual(['akhan@example.com', 'office@example.org', 'info@example.org']);
+    expect(await run({ author_role: 'ADMIN' })).toEqual(['office@example.org', 'info@example.org']);
+    expect(await run({ author_archived: true })).toEqual(['office@example.org', 'info@example.org']);
+    expect(await run({ author_email: 'not-an-email' })).toEqual(['office@example.org', 'info@example.org']);
+    expect(await run({ author_email: null })).toEqual(['office@example.org', 'info@example.org']);
+  });
+
+  it('account kind with an acknowledgement requested: "Got it" deep-links with ack=1 and the fine print says to reply by email', async () => {
+    makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx({ ack_requested: true })] });
+    await notifier.drainAnnouncements();
+    const html = mockSend.mock.calls[0][0].html;
+    expect(html).toContain(`/parent/messages?tab=announcements&amp;announcement=${ANN}&amp;ack=1`);
+    expect(html).toContain('Got it');
+    expect(html).toContain('Reply to this email');
+    expect(html).toContain('Reply privately');
+    // Without the flag there is no Got it button, and the copy still points at a private reply.
+    mockSend.mockClear();
+    makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx()] });
+    await notifier.drainAnnouncements();
+    expect(mockSend.mock.calls[0][0].html).not.toContain('ack=1');
+    expect(mockSend.mock.calls[0][0].html).toContain('Reply privately');
   });
 
   it('skips a removed announcement and an archived recipient without sending', async () => {

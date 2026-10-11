@@ -50,9 +50,11 @@ const validAddresses = (list) => Array.from(new Set(cleanEmailArray(list).map((e
  * @param {object|null} [p.schoolInfo] the schools row (selectSchoolByCode); null when the
  *                                   lookup failed, in which case the platform address is used
  * @param {'academics'|'messages'} [p.role='academics'] local part on a verified school domain
+ * @param {string[]} [p.extraReplyTo] addresses that go BEFORE the school's list (the teacher who
+ *                                   wrote an announcement); validated and deduped like the rest
  * @returns {{ from: string, replyTo: string[]|undefined }} spread straight into a Resend payload
  */
-function schoolSender({ school, schoolInfo, role = 'academics' }) {
+function schoolSender({ school, schoolInfo, role = 'academics', extraReplyTo = [] }) {
   if (!SCHOOL_ROLES.has(role)) throw new Error(`Unknown school sender role: ${role}`);
   const row = schoolInfo || { school_code: school };
   const name = row.name || getSchoolName(school || row.school_code || '');
@@ -61,7 +63,7 @@ function schoolSender({ school, schoolInfo, role = 'academics' }) {
     ? `${role}@${row.email_sending_domain}`
     : `${derivedLocal(row, school)}@${platformDomain()}`;
 
-  const replyTo = validAddresses([...(row.email_reply_to || []), row.email]);
+  const replyTo = validAddresses([...extraReplyTo, ...(row.email_reply_to || []), row.email]);
 
   return { from: formatAddress(name, address), replyTo: replyTo.length ? replyTo : undefined };
 }
