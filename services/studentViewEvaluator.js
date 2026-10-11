@@ -51,7 +51,7 @@ function computeClassPctForStudent(assessments, scoreRowsForStudent) {
 //
 // Inputs:
 //   classPercentages — number[] of the student's per-class % for this term,
-//                      already computed by calculateBulkGrades.
+//                      already computed by gradeEngine.computeClassGrade.
 //                      Empty array means the student has zero applicable
 //                      classes in this term.
 //   threshold        — number, e.g., 85

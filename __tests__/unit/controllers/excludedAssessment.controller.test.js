@@ -128,7 +128,6 @@ describe('Excluded Assessment Controller', () => {
   describe('DELETE /api/excluded-assessments/:studentId/:classId/:assessmentId', () => {
     it('should delete an exclusion successfully', async () => {
       const token = mockAdminUser();
-      mockQueryResponse([{ 1: 1 }]); // checkExclusion: currently excused
       mockQueryResponse([{ assessment_id: 'aid' }]); // target leaf lookup
       mockQueryResponse([{ student_id: 'sid', assessment_id: 'aid', score: 7, status: 'graded' }]); // upsert
 
@@ -143,7 +142,6 @@ describe('Excluded Assessment Controller', () => {
 
     it('should return 404 when exclusion not found', async () => {
       const token = mockAdminUser();
-      mockQueryResponse([]); // checkExclusion: not excused
       mockQueryResponse([]); // no matching leaf assessments
 
       const res = await request(app)

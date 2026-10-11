@@ -100,7 +100,7 @@ const studentViewQueries = {
   `,
 
   // All assessment + score rows for one class. Same shape that
-  // utils/gradeCalculator.js consumes via calculateBulkGrades.
+  // services/gradeEngine.js consumes via computeClassGrade.
   selectScoresForClass: `
     SELECT
       cs.student_id,

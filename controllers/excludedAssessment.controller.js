@@ -49,17 +49,10 @@ const deleteExclusion = async (req, res) => {
   const { studentId, classId, assessmentId } = req.params
 
   try {
-    const { rows: existing } = await db.query(excludedAssessmentQueries.checkExclusion, [
-      studentId,
-      classId,
-      assessmentId,
-    ])
+    // Clearing an already-clear cell (or a category id) is a successful no-op.
     const rows = await applyCellStatus({ classId, studentId, assessmentId, status: 'graded' })
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Exclusion not found' })
-    }
-    if (existing.length === 0 && rows.every((r) => r.status === 'graded')) {
-      // Category id or already-clear cell: still a successful no-op for callers.
     }
     logger.info(`Assessment excuse cleared for student ${studentId} in class ${classId}, assessment ${assessmentId}`)
     return res.status(200).json({ status: 'success', message: 'Assessment exclusion deleted successfully' })
@@ -73,7 +66,7 @@ const deleteExclusion = async (req, res) => {
 const getExclusionsByStudentAndClass = async (req, res) => {
   const { studentId, classId } = req.params
   try {
-    const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByStudentAndClass, [studentId, classId])
+    const { rows } = await db.query(excludedAssessmentQueries.selectExclusionsByStudentAndClass, [classId, studentId])
     return res.status(200).json({ status: 'success', data: rows.map(mapRow) })
   } catch (error) {
     logger.error(error)

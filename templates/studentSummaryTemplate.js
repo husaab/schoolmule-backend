@@ -1,24 +1,5 @@
-const { computeAssessmentForStudent, buildScoreLookup, cellState, formatCoverage } = require('../services/gradeEngine');
-
-/**
- * Get letter grade and color based on percentage
- * Uses Ontario grading scale
- */
-function getLetterGrade(percentage) {
-  if (percentage >= 90) return { letter: 'A+', color: '#10b981', bg: '#d1fae5' };
-  if (percentage >= 85) return { letter: 'A', color: '#10b981', bg: '#d1fae5' };
-  if (percentage >= 80) return { letter: 'A-', color: '#10b981', bg: '#d1fae5' };
-  if (percentage >= 77) return { letter: 'B+', color: '#3b82f6', bg: '#dbeafe' };
-  if (percentage >= 73) return { letter: 'B', color: '#3b82f6', bg: '#dbeafe' };
-  if (percentage >= 70) return { letter: 'B-', color: '#3b82f6', bg: '#dbeafe' };
-  if (percentage >= 67) return { letter: 'C+', color: '#f59e0b', bg: '#fef3c7' };
-  if (percentage >= 63) return { letter: 'C', color: '#f59e0b', bg: '#fef3c7' };
-  if (percentage >= 60) return { letter: 'C-', color: '#f59e0b', bg: '#fef3c7' };
-  if (percentage >= 57) return { letter: 'D+', color: '#f97316', bg: '#ffedd5' };
-  if (percentage >= 53) return { letter: 'D', color: '#f97316', bg: '#ffedd5' };
-  if (percentage >= 50) return { letter: 'D-', color: '#f97316', bg: '#ffedd5' };
-  return { letter: 'R', color: '#ef4444', bg: '#fee2e2' };
-}
+const { buildScoreLookup, formatCoverage } = require('../services/gradeEngine');
+const { getLetterGrade, renderLeafCell, renderParentCell } = require('./studentSummaryCells');
 
 /**
  * Format assessment date to "February 7, 2026" format
@@ -55,7 +36,6 @@ function getStudentSummaryHTML({
   const overallLetterGrade = hasGrade ? getLetterGrade(calculatedGrade) : { letter: '—', color: '#6b7280', bg: '#f3f4f6' };
   const coverageLine = coverage ? formatCoverage(coverage) : '';
   const scoreLookup = buildScoreLookup(studentAssessments);
-  const stateLabel = { blank: 'Not yet graded', missing: 'Missing', excused: 'Excused' };
 
   // Organize assessments into hierarchy: parents with children, and standalone
   const parentAssessments = assessments.filter(a => a.is_parent && a.parent_assessment_id === null);
@@ -67,25 +47,7 @@ function getStudentSummaryHTML({
   // First, render standalone assessments
   standaloneAssessments.forEach(assessment => {
     const studentScore = studentAssessments.find(sa => sa.assessment_id === assessment.assessment_id);
-    const state = cellState(studentScore);
-    let scoreDisplay = stateLabel[state] || 'Not yet graded';
-    let percentage = null;
-    let letterGradeHtml = '';
-
-    if (state === 'missing') {
-      percentage = 0;
-      const lg = getLetterGrade(0);
-      letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-    } else if (state === 'graded') {
-      percentage = assessment.max_score
-        ? (studentScore.score / assessment.max_score) * 100
-        : studentScore.score;
-      scoreDisplay = assessment.max_score
-        ? `${studentScore.score}/${assessment.max_score}`
-        : `${studentScore.score}%`;
-      const lg = getLetterGrade(percentage);
-      letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-    }
+    const { scoreDisplay, percentage, letterGradeHtml } = renderLeafCell(assessment, studentScore);
 
     assessmentRows += `
       <tr class="standalone-assessment">
@@ -107,17 +69,8 @@ function getStudentSummaryHTML({
   parentAssessments.forEach(parent => {
     const childAssessments = assessments.filter(a => a.parent_assessment_id === parent.assessment_id);
 
-    // Category rollup via the shared engine (counted children only)
-    const rollup = computeAssessmentForStudent(parent, assessments, scoreLookup);
-    let parentScoreDisplay = rollup.state === 'excused' ? 'Excused' : 'Not yet graded';
-    let parentPercentage = null;
-    let parentLetterHtml = '';
-    if (rollup.isCounted) {
-      parentPercentage = rollup.pct;
-      parentScoreDisplay = `${parentPercentage.toFixed(1)}%`;
-      const lg = getLetterGrade(parentPercentage);
-      parentLetterHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-    }
+    const { scoreDisplay: parentScoreDisplay, letterGradeHtml: parentLetterHtml } =
+      renderParentCell(parent, assessments, scoreLookup);
 
     // Parent row
     assessmentRows += `
@@ -140,25 +93,7 @@ function getStudentSummaryHTML({
     // Child rows
     childAssessments.forEach(child => {
       const childScore = studentAssessments.find(sa => sa.assessment_id === child.assessment_id);
-      const state = cellState(childScore);
-      let scoreDisplay = stateLabel[state] || 'Not yet graded';
-      let percentage = null;
-      let letterGradeHtml = '';
-
-      if (state === 'missing') {
-        percentage = 0;
-        const lg = getLetterGrade(0);
-        letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-      } else if (state === 'graded') {
-        percentage = child.max_score
-          ? (childScore.score / child.max_score) * 100
-          : childScore.score;
-        scoreDisplay = child.max_score
-          ? `${childScore.score}/${child.max_score}`
-          : `${childScore.score}%`;
-        const lg = getLetterGrade(percentage);
-        letterGradeHtml = `<span class="letter-badge" style="background: ${lg.bg}; color: ${lg.color};">${lg.letter}</span>`;
-      }
+      const { scoreDisplay, percentage, letterGradeHtml } = renderLeafCell(child, childScore);
 
       assessmentRows += `
         <tr class="child-assessment">
