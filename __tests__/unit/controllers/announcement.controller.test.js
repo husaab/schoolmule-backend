@@ -12,12 +12,15 @@ const TEACHER = '550e8400-e29b-41d4-a716-446655440001';
 const PARENT = '550e8400-e29b-41d4-a716-446655440002';
 const CLASS = '22222222-2222-4222-8222-222222222222';
 const ANN = '44444444-4444-4444-8444-444444444444';
+const S1 = '11111111-1111-4111-8111-111111111111';
+const S2 = '12121212-1212-4121-8121-121212121212';
 
 const accessRow = (over = {}) => ({
   announcement_id: ANN, school: SCHOOL, school_year_id: 'y1', scope: 'class', class_id: CLASS, grade: null, title: 'Forms due Friday',
   body: 'Please return the form.', author_id: TEACHER, author_role: 'TEACHER', author_name: 'Teacher User',
   published_at: '2026-10-08T12:00:00Z', pinned_until: null, is_pinned: false, edited_at: null, deleted_at: null,
   created_at: '2026-10-08T12:00:00Z', class_subject: 'Math', class_grade: '6', attachment_count: 0,
+  ack_requested: false, acked_at: null, student_count: 0, student_names_preview: [],
   is_author: true, is_guardian: true, is_class_teacher: true, ...over,
 });
 
@@ -65,7 +68,7 @@ describe('announcement controller', () => {
       const res = await post(mockTeacherUser()).field('scope', 'class').field('classId', CLASS).field('title', 'Forms due Friday').field('body', 'Please return the form.');
       expect(res.status).toBe(201);
       const [ins] = r.ran('INSERT INTO announcements');
-      expect(ins.params).toEqual([SCHOOL, 'y1', 'class', CLASS, null, 'Forms due Friday', 'Please return the form.', TEACHER, 'TEACHER', null]);
+      expect(ins.params).toEqual([SCHOOL, 'y1', 'class', CLASS, null, 'Forms due Friday', 'Please return the form.', TEACHER, 'TEACHER', null, false]);
       expect(r.ran('INSERT INTO announcement_email_jobs')[0].params).toEqual([ANN, '2 minutes']);
       expect(res.body.data.scopeLabel).toBe('Gr 6 Math');
       expect(res.body.data.canEdit).toBe(true);
@@ -119,6 +122,161 @@ describe('announcement controller', () => {
       res = await post(mockAdminUser()).field('scope', 'school').field('title', 't').field('body', 'b').attach('files', png, { filename: 'a.png', contentType: 'image/png' });
       expect(res.status).toBe(500);
       expect(db._mockClient.query).toHaveBeenCalledWith('ROLLBACK');
+    });
+  });
+
+  describe('custom audiences', () => {
+    const pickable = (in_school, pickable) => ({ 'AS pickable': [{ in_school, pickable }] });
+    const customPost = (who, extra = (r) => r) => extra(post(who).field('scope', 'custom').field('title', 'Reading group').field('body', 'Starts Monday'));
+
+    it('inserts the picked students inside the transaction, stores the ack flag, enqueues after commit', async () => {
+      const r = makeRouter(pickable(2, 2));
+      const res = await customPost(mockTeacherUser(), (q) => q.field('studentIds', S1).field('studentIds', S2).field('ackRequested', '1'));
+      expect(res.status).toBe(201);
+      expect(r.ran('AS pickable')[0].params).toEqual([[S1, S2], SCHOOL, 'y1', TEACHER, 'TEACHER']);
+      expect(r.ran('INSERT INTO announcements')[0].params).toEqual([SCHOOL, 'y1', 'custom', null, null, 'Reading group', 'Starts Monday', TEACHER, 'TEACHER', null, true]);
+      expect(r.ran('INSERT INTO announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
+      // Rows are written by the transaction client, before COMMIT, so the enqueue sees them.
+      const order = db._mockClient.query.mock.calls.map((c) => (typeof c[0] === 'string' ? c[0].slice(0, 32) : ''));
+      expect(order.findIndex((x) => x.startsWith('INSERT INTO announcement_students') || x.includes('announcement_students'))).toBeLessThan(order.indexOf('COMMIT'));
+      expect(r.ran('INSERT INTO announcement_email_jobs')[0].params).toEqual([ANN, '2 minutes']);
+      expect(res.body.data).toMatchObject({ scope: 'custom', scopeLabel: 'Selected families', ackRequested: true, studentCount: 2 });
+    });
+
+    it('accepts a JSON array string and dedupes repeated or upper-cased ids', async () => {
+      const r = makeRouter(pickable(2, 2));
+      const res = await customPost(mockAdminUser(), (q) => q.field('studentIds', JSON.stringify([S1, S1.toUpperCase(), S2])));
+      expect(res.status).toBe(201);
+      expect(r.ran('INSERT INTO announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
+    });
+
+    it('rejects an empty list, more than 500 ids and malformed ids before touching the database', async () => {
+      const r = makeRouter(pickable(0, 0));
+      expect((await customPost(mockTeacherUser())).status).toBe(400);
+      expect((await customPost(mockTeacherUser(), (q) => q.field('studentIds', 'nope'))).status).toBe(400);
+      const many = Array.from({ length: 501 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+      expect((await customPost(mockTeacherUser(), (q) => q.field('studentIds', JSON.stringify(many)))).status).toBe(400);
+      expect(r.ran('AS pickable')).toHaveLength(0);
+      expect(r.ran('INSERT INTO announcements')).toHaveLength(0);
+    });
+
+    it('a student outside the school/year is 404; a student the teacher does not teach is 403; admins only need the school check', async () => {
+      makeRouter(pickable(1, 1));
+      expect((await customPost(mockTeacherUser(), (q) => q.field('studentIds', S1).field('studentIds', S2))).status).toBe(404);
+      makeRouter(pickable(2, 1));
+      expect((await customPost(mockTeacherUser(), (q) => q.field('studentIds', S1).field('studentIds', S2))).status).toBe(403);
+      const r = makeRouter(pickable(2, 2));
+      expect((await customPost(mockAdminUser(), (q) => q.field('studentIds', S1).field('studentIds', S2))).status).toBe(201);
+      expect(r.ran('AS pickable')[0].params[4]).toBe('ADMIN');
+    });
+
+    it('update: a new selection re-enqueues (only new addresses get jobs) and cancels jobs outside the audience; the ack flag is editable', async () => {
+      const r = makeRouter({
+        'AS is_class_teacher': [accessRow({ scope: 'custom', class_id: null, class_subject: null, class_grade: null, student_count: 2 })],
+        ...pickable(2, 2),
+        'UPDATE announcements SET title': [{ edited_at: null }],
+      });
+      const res = await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser())
+        .field('studentIds', S1).field('studentIds', S2).field('ackRequested', 'true');
+      expect(res.status).toBe(200);
+      expect(r.ran('UPDATE announcements SET title')[0].params).toEqual([ANN, 'Forms due Friday', 'Please return the form.', null, true]);
+      expect(r.ran('INSERT INTO announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
+      expect(r.ran('DELETE FROM announcement_students')[0].params).toEqual([ANN, [S1, S2]]);
+      expect(r.ran('INSERT INTO announcement_email_jobs')[0].params).toEqual([ANN, '2 minutes']);
+      expect(r.ran("last_error = 'removed from audience'")[0].params).toEqual([ANN]);
+      expect(res.body.data.ackRequested).toBe(true);
+    });
+
+    it('update rejects an untaught student (403) and studentIds on a non-custom post (400); a plain edit never re-enqueues', async () => {
+      makeRouter({ 'AS is_class_teacher': [accessRow({ scope: 'custom', class_id: null })], ...pickable(2, 1) });
+      expect((await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser()).field('studentIds', S1).field('studentIds', S2)).status).toBe(403);
+      let r = makeRouter();
+      expect((await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser()).field('studentIds', S1)).status).toBe(400);
+      r = makeRouter({ 'UPDATE announcements SET title': [{ edited_at: 'x' }] });
+      expect((await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser()).field('title', 'Typo')).status).toBe(200);
+      expect(r.ran('INSERT INTO announcement_email_jobs')).toHaveLength(0);
+      expect(r.ran("last_error = 'removed from audience'")).toHaveLength(0);
+    });
+
+    it('preview via POST carries the ids as the array parameter; GET keeps working for the other scopes', async () => {
+      const r = makeRouter({ ...pickable(2, 2), 'AS guardians_with_account': [{ students: 2, guardians_with_account: 3, guardians_invite_pending: 0, guardians_email_only: 1, students_without_email: [] }] });
+      const res = await authenticatedRequest('post', '/api/announcements/preview', mockTeacherUser()).send({ scope: 'custom', studentIds: [S1, S2] });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ students: 2, guardiansWithAccount: 3, guardiansInvitePending: 0, guardiansEmailOnly: 1, studentsWithoutEmail: [] });
+      expect(r.ran('AS guardians_with_account')[0].params).toEqual([SCHOOL, 'custom', null, null, 'y1', [S1, S2]]);
+      const get = await authenticatedRequest('get', `/api/announcements/preview?scope=class&classId=${CLASS}`, mockTeacherUser());
+      expect(get.status).toBe(200);
+      expect(r.ran('AS guardians_with_account')[1].params).toEqual([SCHOOL, 'class', CLASS, null, 'y1', null]);
+    });
+
+    it('GET /students returns the pickable roster; GET /targets says canCustom and who replies land with', async () => {
+      const r = makeRouter({
+        'AS has_email': [{ student_id: S1, name: 'Amina Test', grade: '6', classes: [{ classId: CLASS, subject: 'Math' }], guardian_names: ['Layla Test'], has_email: true }],
+        'AS student_count\n    FROM classes cl': [{ class_id: CLASS, subject: 'Math', grade: '6', student_count: 22 }],
+        'HAVING $3': [],
+        'FROM schools': [{ school_code: SCHOOL, name: 'Al Haadi Academy', email_sending_domain: 'alhaadiacademy.ca', email_reply_to: ['majida@example.org', 'office@example.org'], email: 'info@example.org' }],
+        'LOWER(email) = ANY($2::text[])': [{ email: 'majida@example.org', name: 'Majida Test' }],
+      });
+      const students = await authenticatedRequest('get', '/api/announcements/students', mockTeacherUser());
+      expect(students.status).toBe(200);
+      expect(students.body.data).toEqual([{ studentId: S1, name: 'Amina Test', grade: '6', classes: [{ classId: CLASS, subject: 'Math' }], guardianNames: ['Layla Test'], hasEmail: true }]);
+      expect(r.ran('AS has_email')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1']);
+      expect((await authenticatedRequest('get', '/api/announcements/students', mockParentUser())).status).toBe(403);
+
+      const targets = await authenticatedRequest('get', '/api/announcements/targets', mockTeacherUser());
+      expect(targets.body.data.canCustom).toBe(true);
+      expect(targets.body.data.sender).toEqual({
+        from: 'messages@alhaadiacademy.ca',
+        replyTo: [{ email: 'majida@example.org', name: 'Majida Test' }, { email: 'office@example.org', name: null }, { email: 'info@example.org', name: null }],
+        includesAuthor: true,
+        canEdit: false,
+      });
+      const admin = await authenticatedRequest('get', '/api/announcements/targets', mockAdminUser());
+      expect(admin.body.data.sender).toMatchObject({ includesAuthor: false, canEdit: true });
+    });
+  });
+
+  describe('POST/DELETE /:id/ack', () => {
+    it('a guardian in the audience acks (and is marked read); undo deletes the row', async () => {
+      const r = makeRouter({
+        'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: true, is_author: false, is_class_teacher: false })],
+        'INSERT INTO announcement_acks': [{ acked_at: '2026-10-10T12:00:00Z' }],
+      });
+      let res = await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.ackedAt).toBe('2026-10-10T12:00:00Z');
+      expect(r.ran('INSERT INTO announcement_reads')[0].params).toEqual([ANN, PARENT]);
+      expect(r.ran('INSERT INTO announcement_acks')[0].params).toEqual([ANN, PARENT]);
+      res = await authenticatedRequest('delete', `/api/announcements/${ANN}/ack`, mockParentUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.ackedAt).toBeNull();
+      expect(r.ran('DELETE FROM announcement_acks')[0].params).toEqual([ANN, PARENT]);
+    });
+
+    it('guardian in any role may ack; non-guardians 403; not requested 409', async () => {
+      makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: true, is_author: false, is_class_teacher: true })], 'INSERT INTO announcement_acks': [{ acked_at: 'x' }] });
+      expect((await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockTeacherUser())).status).toBe(200);
+      makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: true, is_guardian: false })] });
+      expect((await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockAdminUser())).status).toBe(403);
+      makeRouter({ 'AS is_class_teacher': [accessRow({ ack_requested: false, is_guardian: true, is_author: false, is_class_teacher: false })] });
+      const res = await authenticatedRequest('post', `/api/announcements/${ANN}/ack`, mockParentUser());
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('ACK_NOT_REQUESTED');
+    });
+
+    it('list items and the detail carry the ack state and counts', async () => {
+      makeRouter({
+        'AS ack_count': [{ ...accessRow({ is_author: false }), read: true, audience_count: 2, seen_count: 1, ack_count: 1, acked_at: '2026-10-10T12:00:00Z', children: [] }],
+        'AS state': [{ user_id: PARENT, name: 'Layla Test', relation: 'Mother', student_names: ['Amina Test'], read_at: '2026-10-10T11:00:00Z', acked_at: '2026-10-10T12:00:00Z', state: 'seen' }],
+        'AS is_class_teacher': [accessRow({ ack_requested: true, acked_at: null })],
+        'FROM announcement_students x JOIN students s': [{ student_id: S1, name: 'Amina Test', grade: '6' }],
+      });
+      const list = await authenticatedRequest('get', '/api/announcements', mockTeacherUser());
+      expect(list.body.data[0]).toMatchObject({ ackCount: 1, acked: true, ackedAt: '2026-10-10T12:00:00Z' });
+      const detail = await authenticatedRequest('get', `/api/announcements/${ANN}`, mockTeacherUser());
+      expect(detail.body.data).toMatchObject({ ackRequested: true, acked: false, ackCount: 1 });
+      expect(detail.body.data.receipts.seen[0].ackedAt).toBe('2026-10-10T12:00:00Z');
+      expect(detail.body.data.students).toBeUndefined(); // class scope: no hand-picked list
     });
   });
 
@@ -213,7 +371,7 @@ describe('announcement controller', () => {
       let res = await authenticatedRequest('patch', `/api/announcements/${ANN}`, mockTeacherUser())
         .field('title', 'Forms due Monday').field('body', 'Changed').field('pinnedUntil', '2099-01-01').field('removeAttachmentIds', 'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1');
       expect(res.status).toBe(200);
-      expect(r.ran('UPDATE announcements SET title')[0].params).toEqual([ANN, 'Forms due Monday', 'Changed', '2099-01-01']);
+      expect(r.ran('UPDATE announcements SET title')[0].params).toEqual([ANN, 'Forms due Monday', 'Changed', '2099-01-01', false]);
       expect(supabase._mockStorage.remove).toHaveBeenCalledWith(['p/old.pdf']);
       expect(r.ran('INSERT INTO announcement_email_jobs')).toHaveLength(0);
       makeRouter({ 'AS is_class_teacher': [accessRow({ is_author: false, is_class_teacher: true })] });
@@ -279,7 +437,9 @@ describe('announcement controller', () => {
         'GROUP BY s.grade': [{ grade: '6', student_count: 48 }],
       });
       let res = await authenticatedRequest('get', '/api/announcements/targets', mockTeacherUser());
-      expect(res.body.data).toEqual({ classes: [{ classId: CLASS, subject: 'Math', grade: '6', studentCount: 22 }], grades: [{ grade: '6', studentCount: 48 }], canSchool: false });
+      expect(res.body.data).toMatchObject({ classes: [{ classId: CLASS, subject: 'Math', grade: '6', studentCount: 22 }], grades: [{ grade: '6', studentCount: 48 }], canSchool: false, canCustom: true });
+      // No school row in this router: the platform address, no reply-to list.
+      expect(res.body.data.sender).toEqual({ from: 'alhaadiacademy@schoolmule.ca', replyTo: [], includesAuthor: true, canEdit: false });
       res = await authenticatedRequest('get', '/api/announcements/targets', mockAdminUser());
       expect(res.body.data.canSchool).toBe(true);
       expect((await authenticatedRequest('get', '/api/announcements/targets', mockParentUser())).status).toBe(403);
@@ -289,7 +449,7 @@ describe('announcement controller', () => {
       const r = makeRouter({ 'AS students_without_email': [{ students: 22, guardians_with_account: 38, guardians_invite_pending: 1, guardians_email_only: 4, students_without_email: [{ studentId: 's9', name: 'Zayd Test' }] }] });
       const res = await authenticatedRequest('get', `/api/announcements/preview?scope=class&classId=${CLASS}`, mockTeacherUser());
       expect(res.body.data).toEqual({ students: 22, guardiansWithAccount: 38, guardiansInvitePending: 1, guardiansEmailOnly: 4, studentsWithoutEmail: [{ studentId: 's9', name: 'Zayd Test' }] });
-      expect(r.ran('AS students_without_email')[0].params).toEqual([SCHOOL, 'class', CLASS, null, 'y1']);
+      expect(r.ran('AS students_without_email')[0].params).toEqual([SCHOOL, 'class', CLASS, null, 'y1', null]);
       expect((await authenticatedRequest('get', '/api/announcements/preview?scope=school', mockTeacherUser())).status).toBe(403);
     });
   });

@@ -439,6 +439,11 @@ const announcementQueries = {
               AND (c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))))
     ORDER BY LENGTH(s.grade::text), s.grade::text, s.name
   `,
+  // Office inboxes that belong to an account in the school, for the sender line. $1 school, $2 lower-cased emails
+  selectUserNamesByEmail: `
+    SELECT LOWER(email) AS email, TRIM(CONCAT(first_name, ' ', last_name)) AS name
+    FROM users WHERE school = $1 AND LOWER(email) = ANY($2::text[])
+  `,
   // "Ask about this": is this parent + child in the audience of this (live) announcement? $1 announcement_id, $2 parent_id, $3 student_id
   selectParentAnnouncementContext: `
     SELECT a.announcement_id, a.author_id, a.scope, a.class_id, a.school, a.deleted_at,

@@ -15,7 +15,7 @@ const q = require('../queries/announcement.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAnnouncementEmailHTML } = require('../templates/emailTemplate');
 const { getResend, sendOrThrow } = require('../utils/emailUtils');
-const { schoolSender } = require('../services/email/senderIdentity');
+const { schoolSender, senderAddress } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { BUCKET, SIGNED_URL_TTL, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 const { scopeLabel } = require('../utils/announcementScope');
@@ -24,7 +24,8 @@ const { canMutate } = require('../middleware/requireAnnouncementAccess');
 const MAX_TITLE = 120;
 const MAX_BODY = 5000;
 const EMAIL_DELAY = '2 minutes';
-const SCOPES = ['class', 'grade', 'school'];
+const SCOPES = ['class', 'grade', 'school', 'custom'];
+const MAX_CUSTOM = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -37,6 +38,41 @@ const badId = (...values) => values.some((v) => v != null && v !== '' && !isUuid
 const todayToronto = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
 const yearOf = (req) => req.schoolYear?.schoolYearId ?? null;
 const isStaff = (user) => user.role === 'TEACHER' || user.role === 'ADMIN';
+const parseBool = (v) => v === true || v === 'true' || v === '1' || v === 1;
+
+/**
+ * studentIds for a custom audience: repeated multipart fields, one JSON array
+ * string, a comma list (query string) or a JSON body array. Deduped and
+ * lower-cased so the same child typed twice is one row.
+ */
+function parseStudentIds(raw) {
+  let list = raw;
+  if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+    try { list = JSON.parse(raw); } catch { return { error: 'studentIds must be a list of ids' }; }
+  } else if (typeof raw === 'string') {
+    list = raw.split(',');
+  }
+  const ids = [...new Set([].concat(list ?? []).map((v) => String(v).trim().toLowerCase()).filter(Boolean))];
+  if (ids.length === 0) return { error: 'Pick at least one student' };
+  if (ids.length > MAX_CUSTOM) return { error: `Pick at most ${MAX_CUSTOM} students` };
+  if (ids.some((v) => !isUuid(v))) return { error: 'Invalid student id' };
+  return { ids };
+}
+
+/** scope / classId / grade / studentIds from a request, validated. Returns { error } or { scope, classId, grade, studentIds }. */
+function parseAudience(src) {
+  const { scope, classId, grade } = src;
+  if (!SCOPES.includes(scope)) return { error: 'scope must be class, grade, school or custom' };
+  if (scope === 'class' && !isUuid(classId)) return { error: 'classId is required' };
+  if (scope === 'grade' && !(typeof grade === 'string' && grade.trim())) return { error: 'grade is required' };
+  let studentIds = null;
+  if (scope === 'custom') {
+    const parsed = parseStudentIds(src.studentIds);
+    if (parsed.error) return { error: parsed.error };
+    studentIds = parsed.ids;
+  }
+  return { scope, classId: scope === 'class' ? classId : null, grade: scope === 'grade' ? grade.trim() : null, studentIds };
+}
 
 /** Title / body / pinnedUntil rules shared by create and update. `partial` skips absent fields. */
 function validateFields(body, { partial = false } = {}) {
@@ -85,9 +121,19 @@ const toItem = (r, user) => {
     attachmentCount: r.attachment_count ?? 0,
     read: Boolean(r.read),
     canEdit: user.role === 'ADMIN' || r.author_id === user.userId,
+    ackRequested: Boolean(r.ack_requested),
+    acked: Boolean(r.acked_at),
+    ackedAt: r.acked_at ?? null,
   };
   if (user.role === 'PARENT') return { ...base, children: r.children ?? [] };
-  return { ...base, seenCount: r.seen_count ?? 0, audienceCount: r.audience_count ?? 0 };
+  return {
+    ...base,
+    seenCount: r.seen_count ?? 0,
+    audienceCount: r.audience_count ?? 0,
+    ackCount: r.ack_count ?? 0,
+    studentCount: r.student_count ?? 0,
+    studentNamesPreview: r.student_names_preview ?? [],
+  };
 };
 
 // req.announcement (camelCase, from the middleware) back into a row for toItem.
@@ -96,12 +142,21 @@ const fromAccess = (ann) => ({
   class_grade: ann.classGrade, grade: ann.grade, title: ann.title, body: ann.body, author_id: ann.authorId,
   author_name: ann.authorName, author_role: ann.authorRole, published_at: ann.publishedAt, pinned_until: ann.pinnedUntil,
   is_pinned: ann.isPinned, edited_at: ann.editedAt, attachment_count: ann.attachmentCount,
+  ack_requested: ann.ackRequested, acked_at: ann.ackedAt, student_count: ann.studentCount, student_names_preview: ann.studentNamesPreview,
 });
 
 /** Scope ownership without a row yet. Returns { error: [status, message] } or class meta. */
-async function checkScope(user, scope, classId, grade, yearId) {
+async function checkScope(user, scope, classId, grade, yearId, studentIds = null) {
   if (!isStaff(user)) return { error: [403, 'Only teachers and admins can post announcements'] };
   if (scope === 'school') return user.role === 'ADMIN' ? {} : { error: [403, 'Only admins can post to the whole school'] };
+  if (scope === 'custom') {
+    // Every id must be a live student of this school and year; a teacher may only
+    // pick students they teach this year or are homeroom for. Admins pick anyone.
+    const { rows: [c] } = await db.query(q.selectPickableCount, [studentIds, user.school, yearId, user.userId, user.role]);
+    if ((c?.in_school ?? 0) !== studentIds.length) return { error: [404, 'Student not found'] };
+    if ((c?.pickable ?? 0) !== studentIds.length) return { error: [403, 'You can only pick students you teach'] };
+    return {};
+  }
   if (scope === 'class') {
     const { rows } = await db.query(q.canPostToClass, [classId, user.userId, yearId]);
     const cl = rows[0];
@@ -173,16 +228,31 @@ const targets = async (req, res) => {
   const { userId, school, role } = req.user;
   if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
-    const [{ rows: classes }, { rows: grades }] = await Promise.all([
+    const [{ rows: classes }, { rows: grades }, { rows: schoolRows }] = await Promise.all([
       db.query(q.selectStaffClasses, [userId, school, role, yearOf(req)]),
       db.query(q.selectStaffGrades, [userId, school, role, yearOf(req)]),
+      db.query(schoolQueries.selectSchoolByCode, [school]),
     ]);
+    // Where replies land, so the author can see it before posting. Office
+    // addresses that belong to an account in the school show by name.
+    const sender = schoolSender({ school, schoolInfo: schoolRows[0] || null, role: 'messages' });
+    const replyTo = sender.replyTo ?? [];
+    const { rows: named } = replyTo.length ? await db.query(q.selectUserNamesByEmail, [school, replyTo]) : { rows: [] };
+    const nameOf = new Map(named.map((u) => [u.email, u.name || null]));
     return res.status(200).json({
       status: 'success',
       data: {
         classes: classes.map((c) => ({ classId: c.class_id, subject: c.subject, grade: c.grade, studentCount: c.student_count })),
         grades: grades.map((g) => ({ grade: g.grade, studentCount: g.student_count })),
         canSchool: role === 'ADMIN',
+        // A teacher with no class and no homeroom has nobody to hand-pick.
+        canCustom: role === 'ADMIN' || classes.length > 0 || grades.length > 0,
+        sender: {
+          from: senderAddress(sender.from),
+          replyTo: replyTo.map((email) => ({ email, name: nameOf.get(email) ?? null })),
+          includesAuthor: role === 'TEACHER',
+          canEdit: role === 'ADMIN',
+        },
       },
     });
   } catch (error) {
@@ -191,16 +261,32 @@ const targets = async (req, res) => {
   }
 };
 
-// GET /api/announcements/preview?scope=&classId=&grade=
-const preview = async (req, res) => {
-  const { scope, classId, grade } = req.query;
-  if (!SCOPES.includes(scope)) return failed(res, 400, 'Invalid scope');
-  if (scope === 'class' && !isUuid(classId)) return failed(res, 400, 'classId is required');
-  if (scope === 'grade' && !grade) return failed(res, 400, 'grade is required');
+// GET /api/announcements/students — the roster a custom audience is picked from.
+const students = async (req, res) => {
+  const { userId, school, role } = req.user;
+  if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
-    const check = await checkScope(req.user, scope, classId, grade, yearOf(req));
+    const { rows } = await db.query(q.selectPickableStudents, [userId, school, role, yearOf(req)]);
+    return res.status(200).json({
+      status: 'success',
+      data: rows.map((s) => ({ studentId: s.student_id, name: s.name, grade: s.grade ?? null, classes: s.classes ?? [], guardianNames: s.guardian_names ?? [], hasEmail: Boolean(s.has_email) })),
+    });
+  } catch (error) {
+    logger.error('Error loading pickable students:', error);
+    return failed(res, 500, 'Error loading students');
+  }
+};
+
+// GET /api/announcements/preview?scope=&classId=&grade=   |   POST /api/announcements/preview { scope: 'custom', studentIds[] }
+// (POST exists because 500 ids do not fit a query string.)
+const preview = async (req, res) => {
+  const a = parseAudience({ ...req.query, ...(req.body || {}) });
+  if (a.error) return failed(res, 400, a.error);
+  const { scope, classId, grade, studentIds } = a;
+  try {
+    const check = await checkScope(req.user, scope, classId, grade, yearOf(req), studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
-    const { rows: [r] } = await db.query(q.selectAudiencePreview, [req.user.school, scope, scope === 'class' ? classId : null, scope === 'grade' ? grade : null, yearOf(req)]);
+    const { rows: [r] } = await db.query(q.selectAudiencePreview, [req.user.school, scope, classId, grade, yearOf(req), studentIds]);
     return res.status(200).json({
       status: 'success',
       data: {
@@ -223,10 +309,9 @@ const preview = async (req, res) => {
 // the principal). Each address gets its own send. Same validation and scope
 // rules as posting; nothing is stored or queued.
 const previewEmail = async (req, res) => {
-  const { scope, classId, grade } = req.body;
-  if (!SCOPES.includes(scope)) return failed(res, 400, 'Invalid scope');
-  if (scope === 'class' && !isUuid(classId)) return failed(res, 400, 'classId is required');
-  if (scope === 'grade' && !grade) return failed(res, 400, 'grade is required');
+  const a = parseAudience(req.body || {});
+  if (a.error) return failed(res, 400, a.error);
+  const { scope, classId, grade, studentIds } = a;
   const v = validateFields({ title: req.body.title, body: req.body.body });
   if (v.error) return failed(res, 400, v.error);
   const to = [...new Set([].concat(req.body.to ?? []).map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
@@ -240,7 +325,7 @@ const previewEmail = async (req, res) => {
   const attachmentCount = Math.max(0, Math.min(20, Number.parseInt(req.body.attachmentCount, 10) || 0));
 
   try {
-    const check = await checkScope(req.user, scope, classId, grade, yearOf(req));
+    const check = await checkScope(req.user, scope, classId, grade, yearOf(req), studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
     const label = scopeLabel({ scope, grade, class_subject: check.classSubject, class_grade: check.classGrade });
     const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [req.user.school]);
@@ -260,6 +345,7 @@ const previewEmail = async (req, res) => {
       schoolName: getSchoolName(req.user.school),
       schoolInfo: schoolRows[0] || null,
     });
+    // Previews go to staff, so replies stay with the office list (no author prepended).
     const sender = schoolSender({ school: req.user.school, schoolInfo: schoolRows[0] || null, role: 'messages' });
     for (const addr of to) {
       await sendOrThrow(getResend(), {
@@ -276,20 +362,20 @@ const previewEmail = async (req, res) => {
   }
 };
 
-// POST /api/announcements  (multipart: scope, classId?, grade?, title, body, pinnedUntil?, files[])
+// POST /api/announcements  (multipart: scope, classId?, grade?, studentIds[]?, ackRequested?, title, body, pinnedUntil?, files[])
 const create = async (req, res) => {
   const user = req.user;
-  const { scope, classId, grade } = req.body;
   const files = req.files || [];
-  if (!SCOPES.includes(scope)) return failed(res, 400, 'scope must be class, grade or school');
-  if (scope === 'class' && !isUuid(classId)) return failed(res, 400, 'classId is required');
-  if (scope === 'grade' && !(typeof grade === 'string' && grade.trim())) return failed(res, 400, 'grade is required');
+  const a = parseAudience(req.body);
+  if (a.error) return failed(res, 400, a.error);
+  const { scope, classId, grade, studentIds } = a;
+  const ackRequested = parseBool(req.body.ackRequested);
   const v = validateFields(req.body);
   if (v.error) return failed(res, 400, v.error);
 
   try {
     const yearId = yearOf(req);
-    const check = await checkScope(user, scope, classId, grade, yearId);
+    const check = await checkScope(user, scope, classId, grade, yearId, studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
 
     const client = await db.connect();
@@ -298,9 +384,10 @@ const create = async (req, res) => {
     try {
       await client.query('BEGIN');
       ({ rows: [row] } = await client.query(q.insertAnnouncement, [
-        user.school, yearId, scope, scope === 'class' ? classId : null, scope === 'grade' ? grade.trim() : null,
-        v.title, v.body, user.userId, user.role, v.pinnedUntil,
+        user.school, yearId, scope, classId, grade, v.title, v.body, user.userId, user.role, v.pinnedUntil, ackRequested,
       ]));
+      // The enqueue runs after COMMIT and reads the audience, so the picked rows must land in this transaction.
+      if (scope === 'custom') await client.query(q.insertAnnouncementStudents, [row.announcement_id, studentIds]);
       await storeFiles(client, row.announcement_id, user.school, files, uploaded);
       await client.query('COMMIT');
     } catch (error) {
@@ -319,11 +406,12 @@ const create = async (req, res) => {
     }
 
     const item = toItem({
-      announcement_id: row.announcement_id, scope, class_id: scope === 'class' ? classId : null,
-      class_subject: check.classSubject ?? null, class_grade: check.classGrade ?? null, grade: scope === 'grade' ? grade.trim() : null,
+      announcement_id: row.announcement_id, scope, class_id: classId,
+      class_subject: check.classSubject ?? null, class_grade: check.classGrade ?? null, grade,
       title: v.title, body: v.body, author_id: user.userId, author_name: user.username, author_role: user.role,
       published_at: row.published_at, pinned_until: v.pinnedUntil, is_pinned: Boolean(v.pinnedUntil), edited_at: null,
-      attachment_count: files.length, read: true, seen_count: 0, audience_count: 0,
+      attachment_count: files.length, read: true, seen_count: 0, audience_count: 0, ack_requested: ackRequested,
+      student_count: studentIds ? studentIds.length : 0,
     }, user);
     return res.status(201).json({ status: 'success', data: { ...item, attachments: await signedAttachments(row.announcement_id) } });
   } catch (error) {
@@ -344,11 +432,12 @@ const get = async (req, res) => {
     const item = toItem({ ...fromAccess(ann), read: readRes.rows.length > 0 }, user);
     if (!isStaff(user)) return res.status(200).json({ status: 'success', data: { ...item, attachments } });
 
-    const [{ rows: receipts }, { rows: [stats] }] = await Promise.all([
+    const [{ rows: receipts }, { rows: [stats] }, { rows: picked }] = await Promise.all([
       db.query(q.selectReceipts, [ann.announcementId]),
       db.query(q.selectEmailStats, [ann.announcementId]),
+      ann.scope === 'custom' ? db.query(q.selectAnnouncementStudents, [ann.announcementId]) : Promise.resolve({ rows: null }),
     ]);
-    const shape = (r) => ({ userId: r.user_id, name: r.name, relation: r.relation, studentNames: r.student_names || [], readAt: r.read_at, state: r.state });
+    const shape = (r) => ({ userId: r.user_id, name: r.name, relation: r.relation, studentNames: r.student_names || [], readAt: r.read_at, ackedAt: r.acked_at ?? null, state: r.state });
     const seen = receipts.filter((r) => r.state === 'seen').map(shape);
     const notYet = receipts.filter((r) => r.state !== 'seen').map(shape);
     return res.status(200).json({
@@ -357,9 +446,11 @@ const get = async (req, res) => {
         ...item,
         attachments,
         seenCount: seen.length,
+        ackCount: receipts.filter((r) => r.acked_at).length,
         // Guardian accounts that can read: linked, not pending, not email-only.
         audienceCount: receipts.filter((r) => r.user_id && r.state !== 'invited' && r.state !== 'no-account').length,
         receipts: { seen, notYet },
+        ...(picked ? { students: picked.map((p) => ({ studentId: p.student_id, name: p.name, grade: p.grade ?? null })) } : {}),
         emails: { sent: stats?.sent ?? 0, pending: stats?.pending ?? 0, failed: stats?.failed ?? 0, signup: stats?.signup ?? 0, invite: stats?.invite ?? 0 },
       },
     });
@@ -369,7 +460,7 @@ const get = async (req, res) => {
   }
 };
 
-// PATCH /api/announcements/:id  (multipart: title?, body?, pinnedUntil?, removeAttachmentIds?, files[])
+// PATCH /api/announcements/:id  (multipart: title?, body?, pinnedUntil?, ackRequested?, studentIds[]? (custom only), removeAttachmentIds?, files[])
 const update = async (req, res) => {
   const ann = req.announcement;
   if (!canMutate(ann, req.user)) return failed(res, 403, 'Only the author or an admin can edit this announcement');
@@ -380,7 +471,20 @@ const update = async (req, res) => {
   const removeIds = [].concat(req.body.removeAttachmentIds ?? []).filter(Boolean);
   if (badId(...removeIds)) return failed(res, 400, 'Invalid id');
   const files = req.files || [];
+  // A custom post may change who it reaches; the other scopes are frozen.
+  let studentIds = null;
+  if (req.body.studentIds !== undefined) {
+    if (ann.scope !== 'custom') return failed(res, 400, 'Only custom announcements can change their students');
+    const parsed = parseStudentIds(req.body.studentIds);
+    if (parsed.error) return failed(res, 400, parsed.error);
+    studentIds = parsed.ids;
+  }
+  const ackRequested = req.body.ackRequested === undefined ? ann.ackRequested : parseBool(req.body.ackRequested);
   try {
+    if (studentIds) {
+      const check = await checkScope(req.user, 'custom', null, null, yearOf(req), studentIds);
+      if (check.error) return failed(res, check.error[0], check.error[1]);
+    }
     const client = await db.connect();
     const uploaded = [];
     let removedPaths = [];
@@ -390,10 +494,19 @@ const update = async (req, res) => {
     const pinnedUntil = v.pinnedUntil === undefined ? ann.pinnedUntil : v.pinnedUntil;
     try {
       await client.query('BEGIN');
-      const { rows: [u] } = await client.query(q.updateAnnouncement, [ann.announcementId, title, body, pinnedUntil]);
+      const { rows: [u] } = await client.query(q.updateAnnouncement, [ann.announcementId, title, body, pinnedUntil, ackRequested]);
       editedAt = u?.edited_at ?? editedAt;
       if (removeIds.length) ({ rows: removedPaths } = await client.query(q.deleteAttachmentsByIds, [ann.announcementId, removeIds]));
       await storeFiles(client, ann.announcementId, ann.school, files, uploaded);
+      // Attachments changing is an edit families should notice, like the words.
+      if (removeIds.length || files.length) {
+        const { rows: [t] } = await client.query(q.touchEdited, [ann.announcementId]);
+        editedAt = t?.edited_at ?? editedAt;
+      }
+      if (studentIds) {
+        await client.query(q.insertAnnouncementStudents, [ann.announcementId, studentIds]);
+        await client.query(q.deleteAnnouncementStudentsNotIn, [ann.announcementId, studentIds]);
+      }
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -403,7 +516,20 @@ const update = async (req, res) => {
       client.release();
     }
     await removeObjects(removedPaths.map((p) => p.file_path));
-    const item = toItem({ ...fromAccess(ann), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true }, req.user);
+    if (studentIds) {
+      // New families get an email (the unique index keeps everyone else's single
+      // send); families no longer in the audience lose their pending one.
+      try {
+        await db.query(q.enqueueAnnouncementJobs, [ann.announcementId, EMAIL_DELAY]);
+        await db.query(q.cancelJobsOutsideAudience, [ann.announcementId]);
+      } catch (error) {
+        logger.error('Failed to re-queue announcement emails after an audience change:', error);
+      }
+    }
+    const item = toItem({
+      ...fromAccess(ann), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true, ack_requested: ackRequested,
+      student_count: studentIds ? studentIds.length : ann.studentCount,
+    }, req.user);
     return res.status(200).json({ status: 'success', data: { ...item, attachments: await signedAttachments(ann.announcementId) } });
   } catch (error) {
     logger.error('Error editing announcement:', error);
@@ -439,6 +565,36 @@ const markRead = async (req, res) => {
   }
 };
 
+// POST /api/announcements/:id/ack — "Got it". Only a guardian in the audience
+// (whatever their role) and only when the author asked for it. Acknowledging
+// implies having read it.
+const acknowledge = async (req, res) => {
+  const ann = req.announcement;
+  if (!ann.isGuardian) return failed(res, 403, 'Only a guardian in the audience can acknowledge this');
+  if (!ann.ackRequested) return res.status(409).json({ status: 'failed', code: 'ACK_NOT_REQUESTED', message: 'This announcement does not ask for acknowledgement' });
+  try {
+    await db.query(q.upsertRead, [ann.announcementId, req.user.userId]);
+    const { rows: [r] } = await db.query(q.upsertAck, [ann.announcementId, req.user.userId]);
+    return res.status(200).json({ status: 'success', data: { ackedAt: r?.acked_at ?? null } });
+  } catch (error) {
+    logger.error('Error acknowledging announcement:', error);
+    return failed(res, 500, 'Error updating announcement');
+  }
+};
+
+// DELETE /api/announcements/:id/ack — undo.
+const unacknowledge = async (req, res) => {
+  const ann = req.announcement;
+  if (!ann.isGuardian) return failed(res, 403, 'Only a guardian in the audience can acknowledge this');
+  try {
+    await db.query(q.deleteAck, [ann.announcementId, req.user.userId]);
+    return res.status(200).json({ status: 'success', data: { ackedAt: null } });
+  } catch (error) {
+    logger.error('Error withdrawing announcement acknowledgement:', error);
+    return failed(res, 500, 'Error updating announcement');
+  }
+};
+
 // POST /api/announcements/:id/emails/retry  (admin)
 const retryEmails = async (req, res) => {
   if (req.user.role !== 'ADMIN') return failed(res, 403, 'Admin access required');
@@ -465,4 +621,4 @@ const attachmentUrl = async (req, res) => {
   }
 };
 
-module.exports = { list, unreadCount, targets, preview, previewEmail, create, get, update, remove, markRead, retryEmails, attachmentUrl, validateFields, toItem };
+module.exports = { list, unreadCount, targets, students, preview, previewEmail, create, get, update, remove, markRead, acknowledge, unacknowledge, retryEmails, attachmentUrl, validateFields, toItem };

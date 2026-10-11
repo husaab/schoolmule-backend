@@ -14,7 +14,9 @@ const router = express.Router();
 router.get('/', c.list);
 router.get('/unread-count', c.unreadCount);
 router.get('/targets', requireStaff, c.targets);
+router.get('/students', requireStaff, c.students);
 router.get('/preview', requireStaff, c.preview);
+router.post('/preview', requireStaff, c.preview); // custom: studentIds in the body
 router.post('/preview-email', requireStaff, c.previewEmail);
 router.post('/', requireStaff, uploadFiles, c.create);
 
@@ -22,6 +24,8 @@ router.get('/:id', requireAnnouncementAccess, c.get);
 router.patch('/:id', requireAnnouncementAccess, uploadFiles, c.update);
 router.delete('/:id', requireAnnouncementAccess, c.remove);
 router.post('/:id/read', requireAnnouncementAccess, c.markRead);
+router.post('/:id/ack', requireAnnouncementAccess, c.acknowledge);
+router.delete('/:id/ack', requireAnnouncementAccess, c.unacknowledge);
 router.post('/:id/emails/retry', requireAnnouncementAccess, c.retryEmails);
 router.get('/:id/attachments/:attachmentId/url', requireAnnouncementAccess, c.attachmentUrl);
 
