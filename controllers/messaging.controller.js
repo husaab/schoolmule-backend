@@ -368,7 +368,7 @@ async function buildThread(conv, user) {
 /** Staff-side class check shared by targets and stubs. Returns { error: [status, message] } or { cls: row }. */
 async function checkClassForStaff(classId, user) {
   const { rows } = await db.query(
-    'SELECT school, teacher_id, term_id, term_name, EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = $1 AND ct.teacher_id = $2) AS co FROM classes WHERE class_id = $1',
+    'SELECT school, teacher_id, term_id, term_name, subject, grade::text AS grade, EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = $1 AND ct.teacher_id = $2) AS co FROM classes WHERE class_id = $1',
     [classId, user.userId],
   );
   if (!rows.length || rows[0].school !== user.school) return { error: [404, 'Class not found'] };
@@ -522,7 +522,26 @@ const getTargets = async (req, res) => {
       });
     }
 
-    if (!classId) return failed(res, 400, 'classId is required');
+    if (!classId) {
+      // Messages page: nothing in hand. The roster is the caller's current-term
+      // classes and the students they may write about; the picker starts from
+      // the student and treats the class as optional (General) or required
+      // (assessment). Past-term classes are never offered here.
+      const term = await resolveCurrentTerm(req);
+      const params = [user.userId, user.school, user.role, req.schoolYear?.schoolYearId ?? null, ...termParams(term)];
+      const [{ rows: classRows }, { rows: studentRows }] = await Promise.all([
+        db.query(q.selectStaffRosterClasses, params),
+        db.query(q.selectStaffRosterStudents, params),
+      ]);
+      return res.status(200).json({
+        status: 'success',
+        data: {
+          currentTerm: term,
+          classes: classRows.map((c) => ({ classId: c.class_id, subject: c.subject, grade: c.grade ?? null, teacherName: c.teacher_name || null })),
+          students: studentRows.map((s) => ({ studentId: s.student_id, name: s.name, grade: s.grade ?? null, classIds: s.class_ids ?? [], guardians: s.guardians })),
+        },
+      });
+    }
     const { error: err, cls } = await checkClassForStaff(classId, user);
     if (err) return failed(res, err[0], err[1]);
     const term = await resolveCurrentTerm(req);
@@ -537,6 +556,7 @@ const getTargets = async (req, res) => {
         // A gradebook of a past term can still open the picker; the UI warns
         // teachers that sending will be refused (admins are exempt).
         inCurrentTerm: classInTerm(cls, term),
+        class: { classId, subject: cls.subject ?? null, grade: cls.grade ?? null, termName: cls.term_name ?? null },
         students: students.map((s) => ({ studentId: s.student_id, name: s.name, guardians: s.guardians })),
         assessments: assessments.map((a) => ({ assessmentId: a.assessment_id, name: a.name, date: a.date, isPublished: a.is_published })),
       },

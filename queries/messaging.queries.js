@@ -564,6 +564,44 @@ const messagingQueries = {
            (cl.teacher_id = $3 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $3)) AS teacher_teaches
     FROM classes cl WHERE cl.class_id = $1
   `,
+  // Staff "New message" with nothing in hand (the Messages page): the caller's
+  // current-term classes (admin: every current-term class). $1 user_id, $2 school,
+  // $3 role, $4 school_year_id|null, $5 current term_id|null, $6 current term name|null
+  selectStaffRosterClasses: `
+    SELECT cl.class_id, cl.subject, cl.grade::text AS grade, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name
+    FROM classes cl
+    LEFT JOIN users u ON u.user_id = cl.teacher_id
+    WHERE cl.school = $2 AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
+      AND ($3::text = 'ADMIN' OR cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))
+    ORDER BY LENGTH(cl.grade::text), cl.grade::text, cl.subject
+  `,
+  // ...and the students they may write about: those classes' students plus the
+  // caller's homeroom students (admin: every student of the year), each with the
+  // guardian summary the picker shows and the ids of the roster classes they are in.
+  // Same params as selectStaffRosterClasses.
+  selectStaffRosterStudents: `
+    SELECT s.student_id, s.name, s.grade::text AS grade,
+      COALESCE((SELECT ARRAY_AGG(cs.class_id) FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+                 WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
+                   AND ($3::text = 'ADMIN' OR cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))), '{}')::uuid[] AS class_ids,
+      COALESCE((SELECT json_agg(json_build_object(
+                  'linkId', ps.parent_student_link_id,
+                  'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
+                  'relation', ps.relation,
+                  'email', COALESCE(u.email, ps.parent_email),
+                  'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
+                  'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
+                  'invitedAt', ps.invited_at))
+                 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+                WHERE ps.student_id = s.student_id), '[]') AS guardians
+    FROM students s
+    WHERE s.school = $2 AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)
+      AND ($3::text = 'ADMIN' OR s.homeroom_teacher_id = $1 OR EXISTS (
+            SELECT 1 FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+            WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
+              AND (cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))))
+    ORDER BY LENGTH(s.grade::text), s.grade::text, s.name
+  `,
   // Staff opening the picker for one student (Students page). $1 student_id
   selectStudentForStaff: `
     SELECT s.student_id, s.name, s.school, s.homeroom_teacher_id

@@ -321,6 +321,31 @@ describe('Integration: Messaging routes', () => {
       expect((await startOn(asMom, scienceId, sciencePublishedId)).status).toBe(201);
     });
 
+    it('staff roster offers only current-term classes, with every student the caller may write about', async () => {
+      await activate(term2Id);
+      // A homeroom-only child: no current-term class with this teacher, still writable about.
+      const hr = await pool.query(
+        `INSERT INTO students (name, grade, school, school_year_id, homeroom_teacher_id) VALUES ('Homeroom Kid', '3', 'ALHAADIACADEMY', $1, $2) RETURNING student_id`,
+        [yearId, TERM2_TEACHER_ID]);
+      const t2 = await authenticatedRequest('get', '/api/messaging/conversations/targets', asTerm2Teacher);
+      expect(t2.status).toBe(200);
+      expect(t2.body.data.currentTerm).toEqual({ termId: term2Id, name: 'Term 2' });
+      expect(t2.body.data.classes).toEqual([{ classId: scienceId, subject: 'Science', grade: '6', teacherName: 'Term Two' }]);
+      expect(t2.body.data.students.map((s) => [s.name, s.classIds])).toEqual([[ 'Homeroom Kid', [] ], [ 'Amina Test', [scienceId] ]]);
+      expect(t2.body.data.students[1].guardians.map((g) => g.name).sort()).toEqual(['Dad Test', 'Mom Test']);
+      // The Term 1 Math teacher has no current-term class and no homeroom child: nothing to offer.
+      const t1 = await authenticatedRequest('get', '/api/messaging/conversations/targets', asTeacher);
+      expect(t1.body.data).toEqual({ currentTerm: { termId: term2Id, name: 'Term 2' }, classes: [], students: [] });
+      // Admins see every current-term class and every student of the year.
+      const admin = await authenticatedRequest('get', '/api/messaging/conversations/targets', {});
+      expect(admin.body.data.classes.map((c) => c.subject)).toEqual(['Science']);
+      expect(admin.body.data.students.map((s) => s.name)).toEqual(['Homeroom Kid', 'Amina Test']);
+      // The class-scoped picker names its class.
+      const math = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${classId}`, asTeacher);
+      expect(math.body.data.class).toEqual({ classId, subject: 'Math', grade: '6', termName: 'Term 1' });
+      expect(hr.rows).toHaveLength(1);
+    });
+
     it('teachers are held to the rule, admins are exempt, and the class picker says which term a class is in', async () => {
       await activate(term2Id);
       const teacher = await startOn(asTeacher, classId, draftId);

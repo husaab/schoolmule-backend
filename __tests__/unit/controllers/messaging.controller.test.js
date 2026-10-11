@@ -365,6 +365,30 @@ describe('messaging controller', () => {
       expect((await general(mockAdminUser())).status).toBe(201);
     });
 
+    it('staff roster (no params): current-term classes the caller teaches and the students they may write about', async () => {
+      const r = makeRouter({
+        ...activeTerm,
+        'AS teacher_name\n    FROM classes cl\n    LEFT JOIN users u': [{ class_id: CLASS, subject: 'Math', grade: '6', teacher_name: 'Ahmed Khan' }],
+        'AS class_ids': [{ student_id: STUDENT, name: 'Amina Test', grade: '6', class_ids: [CLASS], guardians: [] }],
+      });
+      const res = await authenticatedRequest('get', '/api/messaging/conversations/targets', mockTeacherUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        currentTerm: { termId: TERM, name: 'Term 2' },
+        classes: [{ classId: CLASS, subject: 'Math', grade: '6', teacherName: 'Ahmed Khan' }],
+        students: [{ studentId: STUDENT, name: 'Amina Test', grade: '6', classIds: [CLASS], guardians: [] }],
+      });
+      expect(r.ran('AS teacher_name\n    FROM classes cl\n    LEFT JOIN users u')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1', TERM, 'Term 2']);
+      // Parents still need a child in hand.
+      expect((await authenticatedRequest('get', '/api/messaging/conversations/targets', mockParentUser())).status).toBe(400);
+    });
+
+    it('staff targets for a class name the class so the picker never shows a placeholder', async () => {
+      makeRouter({ ...activeTerm, 'AS co FROM classes WHERE class_id = $1': [{ school: SCHOOL, teacher_id: TEACHER, co: false, term_id: TERM, term_name: 'Term 2', subject: 'Math', grade: '6' }] });
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${CLASS}`, mockTeacherUser());
+      expect(res.body.data.class).toEqual({ classId: CLASS, subject: 'Math', grade: '6', termName: 'Term 2' });
+    });
+
     it('staff targets for one student scope the classes to the current term', async () => {
       const r = makeRouter({
         ...activeTerm,
