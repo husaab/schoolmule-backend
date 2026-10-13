@@ -377,7 +377,8 @@ const deleteUser = async (req, res) => {
 //
 // `view` picks the portal for a dual-role target (a teacher who is also a
 // parent): PARENT opens their parent portal, otherwise the database role. The
-// view switcher stays hidden inside a preview, so the choice is made here.
+// frontend calls this again with the other view (still as the admin) when the
+// view switcher is used inside a running preview.
 const impersonateUser = async (req, res) => {
   const { id } = req.params;
   const admin = req.user;
