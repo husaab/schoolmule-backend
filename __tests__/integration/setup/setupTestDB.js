@@ -24,6 +24,7 @@ const ALL_TABLES = [
   'qbo_invoice_lines',
   'qbo_invoices',
   'qbo_customers',
+  'finance_manual_credits',
   'family_link_audit',
   'family_contacts',
   'family_students',

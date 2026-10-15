@@ -193,3 +193,57 @@ describe('buildGrantLedger', () => {
     expect(g.byFamily[0].cells['2026-09'].balance).toBe(500);
   });
 });
+
+describe('buildFamilyLedger — manual prepaid credits', () => {
+  // Kholoud Chanboura: parent share $575/mo, prepaid $775 in September for Oct + Nov.
+  const oct = (over = {}) => inv({ qboId: 'oct', docNumber: '9685', txnDate: '2026-10-01', dueDate: '2026-10-31', totalAmt: 575, balance: 575, ...over });
+  const credit = (over = {}) => ({ creditId: 'c1', month: '2026-10', amount: 575, note: 'deposit 21624', qboDepositId: '21624', ...over });
+
+  it('marks a month paid when the credit covers the open parent balance', () => {
+    const l = ledger([oct()], [], [], { manualCredits: [credit()] });
+    expect(l.parent.cells['2026-10']).toMatchObject({ status: 'paid', invoiced: 575, paid: 575, balance: 0 });
+    expect(l.parent.cells['2026-10'].manualCredit).toEqual({ creditId: 'c1', amount: 575, applied: 575, note: 'deposit 21624', qboDepositId: '21624', pending: false });
+    expect(l.parent.totals).toEqual({ invoiced: 575, paid: 575, balance: 0, overdueBalance: 0 });
+    expect(l.warnings).toEqual([]);
+  });
+
+  it('a smaller credit leaves the month partial and clears overdue only as far as it covers', () => {
+    const nov = inv({ qboId: 'nov', txnDate: '2026-11-01', dueDate: '2026-12-01', totalAmt: 575, balance: 575 });
+    const l = buildFamilyLedger({ months: MONTHS, today: '2026-12-10', invoices: [nov], applications: [], payments: [], items, manualCredits: [credit({ month: '2026-11', amount: 200 })] });
+    expect(l.parent.cells['2026-11']).toMatchObject({ status: 'overdue', paid: 200, balance: 375, daysOverdue: 9 });
+    expect(l.parent.totals.overdueBalance).toBe(375);
+  });
+
+  it('a credit on a month with no invoice yet is kept as pending and changes nothing', () => {
+    const l = ledger([oct()], [], [], { manualCredits: [credit({ creditId: 'c2', month: '2026-11', amount: 200 })] });
+    expect(l.parent.cells['2026-11']).toMatchObject({ status: 'none', paid: 0, balance: 0 });
+    expect(l.parent.cells['2026-11'].manualCredit).toMatchObject({ amount: 200, applied: 0, pending: true });
+    expect(l.parent.totals.paid).toBe(0);
+  });
+
+  it('never double-counts once the credit has been applied in QuickBooks', () => {
+    const l = ledger([oct({ balance: 0 })], [app({ invoiceQboId: 'oct', amount: 575, paymentDate: '2026-10-05' })], [], { manualCredits: [credit()] });
+    expect(l.parent.cells['2026-10']).toMatchObject({ status: 'paid', paid: 575, balance: 0 });
+    expect(l.parent.cells['2026-10'].manualCredit.applied).toBe(0);
+    expect(l.warnings).toContainEqual({ code: 'MANUAL_CREDIT_SUPERSEDED', month: '2026-10', creditId: 'c1', amount: 575 });
+  });
+
+  it('caps the credit at the open balance and flags the excess', () => {
+    const l = ledger([oct()], [], [], { manualCredits: [credit({ amount: 775 })] });
+    expect(l.parent.cells['2026-10']).toMatchObject({ status: 'paid', paid: 575, balance: 0 });
+    expect(l.parent.cells['2026-10'].manualCredit.applied).toBe(575);
+    expect(l.warnings).toContainEqual({ code: 'MANUAL_CREDIT_EXCEEDS', month: '2026-10', creditId: 'c1', excess: 200 });
+  });
+
+  it('never touches the grant stream', () => {
+    const l = ledger([oct(), oct({ qboId: 'g', kind: 'subsidy_grant' })], [], [], { manualCredits: [credit({ amount: 1150 })] });
+    expect(l.grant.cells['2026-10']).toMatchObject({ status: 'unpaid', balance: 575 });
+    expect(l.parent.cells['2026-10'].balance).toBe(0);
+  });
+
+  it('ignores credits for months outside the school year, with a warning', () => {
+    const l = ledger([oct()], [], [], { manualCredits: [credit({ month: '2027-08' })] });
+    expect(l.parent.totals.paid).toBe(0);
+    expect(l.warnings).toContainEqual({ code: 'MANUAL_CREDIT_OUT_OF_YEAR', month: '2027-08', creditId: 'c1' });
+  });
+});

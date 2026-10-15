@@ -503,6 +503,96 @@ const setInvoiceKind = async (req, res) => {
   }
 };
 
+// ─── Manual prepaid credits ───────────────────────────────────────────
+//
+// SchoolMule-only record of a prepayment the bookkeeper will apply in QBO by
+// hand (auto-apply would land it on the grant invoice). The ledger caps it at
+// the month's open parent balance, so it never double-counts once applied.
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const MAX_CREDIT = 100000;
+const MAX_NOTE = 500;
+
+/** The family (school-scoped) and the months of its school year, or a { status, message } failure. */
+async function familyWithMonths(school, familyId) {
+  const { rows: fam } = await db.query(queries.selectFamilyById, [school, familyId]);
+  const family = fam[0];
+  if (!family) return { status: 404, message: 'Family not found' };
+  const { rows: yr } = await db.query(schoolYearQueries.selectYearById, [family.school_year_id]);
+  if (!yr[0]) return { status: 400, message: 'Family has no school year' };
+  return { family, months: monthWindow(yr[0]).months };
+}
+
+const setManualCredit = async (req, res) => {
+  const { school, userId } = req.user;
+  const { month } = req.params;
+  if (!MONTH_RE.test(month)) return fail(res, 400, 'month must be YYYY-MM');
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_CREDIT) return fail(res, 400, `amount must be greater than 0 and at most ${MAX_CREDIT}`);
+  const note = req.body?.note == null ? null : String(req.body.note).trim() || null;
+  if (note && note.length > MAX_NOTE) return fail(res, 400, `note must be at most ${MAX_NOTE} characters`);
+  const depositRaw = req.body?.qboDepositId;
+  const qboDepositId = depositRaw == null || depositRaw === '' ? null : String(depositRaw).trim();
+  if (qboDepositId && !ID_RE.test(qboDepositId)) return fail(res, 400, 'qboDepositId must be a QuickBooks id (digits only)');
+  try {
+    const found = await familyWithMonths(school, req.params.familyId);
+    if (!found.family) return fail(res, found.status, found.message);
+    const { family, months } = found;
+    if (!months.includes(month)) return fail(res, 400, `${month} is outside this family's school year`);
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(queries.upsertManualCredit, [school, family.school_year_id, family.family_id, month, round2(amount), note, qboDepositId, userId]);
+      await audit(client, { school, yearId: family.school_year_id, familyId: family.family_id, familyName: family.name,
+        action: 'manual_credit_set', details: { month, amount: round2(amount), note, qboDepositId }, actor: userId });
+      await client.query('COMMIT');
+      const r = rows[0];
+      return ok(res, { creditId: r.credit_id, month: r.month_key, amount: num(r.amount), note: r.note ?? null, qboDepositId: r.qbo_deposit_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    logger.error({ err: error }, 'Error saving manual credit');
+    return fail(res, 500, 'Error saving manual credit');
+  }
+};
+
+const removeManualCredit = async (req, res) => {
+  const { school, userId } = req.user;
+  const { month } = req.params;
+  if (!MONTH_RE.test(month)) return fail(res, 400, 'month must be YYYY-MM');
+  try {
+    const { rows: fam } = await db.query(queries.selectFamilyById, [school, req.params.familyId]);
+    const family = fam[0];
+    if (!family) return fail(res, 404, 'Family not found');
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(queries.deleteManualCredit, [school, family.family_id, month]);
+      if (!rows[0]) {
+        await client.query('ROLLBACK');
+        return fail(res, 404, 'No manual credit for that month');
+      }
+      await audit(client, { school, yearId: family.school_year_id, familyId: family.family_id, familyName: family.name,
+        action: 'manual_credit_remove', details: { month, amount: num(rows[0].amount), note: rows[0].note ?? null, qboDepositId: rows[0].qbo_deposit_id ?? null }, actor: userId });
+      await client.query('COMMIT');
+      return ok(res, { month, removed: true });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    logger.error({ err: error }, 'Error removing manual credit');
+    return fail(res, 500, 'Error removing manual credit');
+  }
+};
+
 // ─── Customer picker ──────────────────────────────────────────────────
 
 async function yearWindow(req) {
@@ -648,5 +738,6 @@ module.exports = {
   addStudent, removeStudent,
   addContact, updateContact, removeContact,
   setInvoiceKind, searchCustomers, getSuggestions, importFamilies,
+  setManualCredit, removeManualCredit,
   loadFamilySummaries,
 };

@@ -603,6 +603,38 @@ const financeQueries = {
     RETURNING audit_id
   `,
 
+  // ─── Manual prepaid credits (finance_manual_credits) ──────────────────
+
+  selectManualCreditsByYear: `
+    SELECT credit_id, family_id, month_key, amount, note, qbo_deposit_id, created_at, updated_at
+    FROM finance_manual_credits
+    WHERE school = $1 AND school_year_id = $2
+  `,
+
+  selectManualCreditsForFamily: `
+    SELECT mc.credit_id, mc.family_id, mc.month_key, mc.amount, mc.note, mc.qbo_deposit_id, mc.created_at, mc.updated_at,
+           u.first_name AS created_by_first_name, u.last_name AS created_by_last_name
+    FROM finance_manual_credits mc
+    LEFT JOIN users u ON u.user_id = mc.created_by
+    WHERE mc.school = $1 AND mc.family_id = $2
+    ORDER BY mc.month_key
+  `,
+
+  // $1 school, $2 school_year_id, $3 family_id, $4 month_key, $5 amount, $6 note, $7 qbo_deposit_id, $8 actor
+  upsertManualCredit: `
+    INSERT INTO finance_manual_credits (school, school_year_id, family_id, month_key, amount, note, qbo_deposit_id, created_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (family_id, month_key) DO UPDATE
+      SET amount = EXCLUDED.amount, note = EXCLUDED.note, qbo_deposit_id = EXCLUDED.qbo_deposit_id, updated_at = now()
+    RETURNING credit_id, family_id, month_key, amount, note, qbo_deposit_id, created_at, updated_at
+  `,
+
+  deleteManualCredit: `
+    DELETE FROM finance_manual_credits
+    WHERE school = $1 AND family_id = $2 AND month_key = $3
+    RETURNING credit_id, month_key, amount, note, qbo_deposit_id
+  `,
+
   // ─── Seeding (families from the roster + customer map) ────────────────
 
   selectYearByLabel: `

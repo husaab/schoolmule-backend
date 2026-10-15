@@ -7,7 +7,7 @@
 
 const queries = require('../../queries/finance.queries');
 const { buildLinkIndex } = require('./gridAssembly');
-const { groupBy } = require('./util');
+const { groupBy, num } = require('./util');
 
 const toStudent = (s) => ({ studentId: s.student_id, name: s.name, grade: s.grade, isArchived: Boolean(s.is_archived), ...(s.added_at ? { addedAt: s.added_at } : {}) });
 const toContact = (c) => ({ contactId: c.contact_id, name: c.name, email: c.email, phone: c.phone, relation: c.relation, isPrimary: Boolean(c.is_primary), hasAccount: Boolean(c.user_id), source: c.source });
@@ -31,4 +31,16 @@ async function loadFamilyYear(db, school, yearId) {
   };
 }
 
-module.exports = { loadFamilyYear, toStudent, toContact };
+/** API shape of a finance_manual_credits row. */
+const toManualCredit = (row) => ({
+  creditId: row.credit_id,
+  month: row.month_key,
+  amount: num(row.amount),
+  note: row.note ?? null,
+  qboDepositId: row.qbo_deposit_id ?? null,
+  createdByName: row.created_by_first_name ? `${row.created_by_first_name} ${row.created_by_last_name || ''}`.trim() : null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+module.exports = { loadFamilyYear, toStudent, toContact, toManualCredit };
