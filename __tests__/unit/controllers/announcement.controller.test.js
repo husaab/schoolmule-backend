@@ -225,7 +225,8 @@ describe('announcement controller', () => {
       const students = await authenticatedRequest('get', '/api/announcements/students', mockTeacherUser());
       expect(students.status).toBe(200);
       expect(students.body.data).toEqual([{ studentId: S1, name: 'Amina Test', grade: '6', classes: [{ classId: CLASS, subject: 'Math' }], guardianNames: ['Layla Test'], hasEmail: true }]);
-      expect(r.ran('AS has_email')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1']);
+      // No active term in this router: no term filter ($5/$6 null).
+      expect(r.ran('AS has_email')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1', null, null]);
       expect((await authenticatedRequest('get', '/api/announcements/students', mockParentUser())).status).toBe(403);
 
       const targets = await authenticatedRequest('get', '/api/announcements/targets', mockTeacherUser());
@@ -452,6 +453,18 @@ describe('announcement controller', () => {
       res = await authenticatedRequest('get', '/api/announcements/targets', mockAdminUser());
       expect(res.body.data.canSchool).toBe(true);
       expect((await authenticatedRequest('get', '/api/announcements/targets', mockParentUser())).status).toBe(403);
+    });
+
+    it('targets and the pickable roster only offer current-term classes', async () => {
+      const r = makeRouter({
+        'is_active = TRUE': [{ term_id: 'term-1', name: 'Term 1' }],
+        'AS student_count\n    FROM classes cl': [{ class_id: CLASS, subject: 'Math', grade: '6', student_count: 22 }],
+        'AS has_email': [],
+      });
+      await authenticatedRequest('get', '/api/announcements/targets', mockTeacherUser());
+      expect(r.ran('AS student_count\n    FROM classes cl')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1', 'term-1', 'Term 1']);
+      await authenticatedRequest('get', '/api/announcements/students', mockTeacherUser());
+      expect(r.ran('AS has_email')[0].params).toEqual([TEACHER, SCHOOL, 'TEACHER', 'y1', 'term-1', 'Term 1']);
     });
 
     it('preview: counts for an allowed scope, 403 otherwise', async () => {

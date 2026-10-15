@@ -6,14 +6,8 @@
 // so a guardian linked after a thread began sees it immediately. See
 // middleware/requireConversationAccess.js.
 
-// Current-term gate for starting threads. A class belongs to the current
-// term when its term FK matches, or (legacy rows with no FK) its term_name
-// does. When no term is current ($id NULL) nothing is filtered out: the
-// picker then offers every class of the selected school year rather than an
-// empty list. Year scoping stays with the caller's query, so a "Term 1" of
-// another year can never match by name.
-const inCurrentTerm = (alias, idParam, nameParam) =>
-  `(${idParam}::uuid IS NULL OR ${alias}.term_id = ${idParam} OR (${alias}.term_id IS NULL AND ${alias}.term_name = ${nameParam}))`;
+// Current-term gate for starting threads (see termScope.js).
+const { inCurrentTerm, selectCurrentTerm } = require('./termScope');
 
 // The "who can see this conversation" projection, shared by the guard and
 // the thread endpoint. $1 conversation_id
@@ -110,11 +104,7 @@ const messagingQueries = {
 
   // The current term: the school's active term, provided it belongs to the
   // selected school year. $1 school, $2 school_year_id|null
-  selectCurrentTerm: `
-    SELECT term_id, name FROM terms WHERE school = $1 AND is_active = TRUE
-      AND ($2::uuid IS NULL OR school_year_id = $2)
-    ORDER BY start_date DESC LIMIT 1
-  `,
+  selectCurrentTerm,
 
   // Everything needed to validate a new thread in one round trip.
   // $1 student_id, $2 class_id, $3 assessment_id, $4 user_id, $5 current term_id|null, $6 current term name|null

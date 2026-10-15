@@ -12,6 +12,7 @@ const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/announcement.queries');
+const { selectCurrentTerm } = require('../queries/termScope');
 const schoolQueries = require('../queries/school.queries');
 const { getAnnouncementEmailHTML } = require('../templates/emailTemplate');
 const { getResend, sendOrThrow } = require('../utils/emailUtils');
@@ -32,6 +33,12 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_PREVIEW_RECIPIENTS = 5;
 
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
+// The active term of the selected year as [term_id, name] query params, or
+// [null, null] (no filter) when none is active.
+const currentTermParams = async (req) => {
+  const { rows } = await db.query(selectCurrentTerm, [req.user.school, req.schoolYear?.schoolYearId ?? null]);
+  return rows[0] ? [rows[0].term_id, rows[0].name] : [null, null];
+};
 const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 // A malformed id in a query string is a client mistake, not a server error.
 const badId = (...values) => values.some((v) => v != null && v !== '' && !isUuid(v));
@@ -228,8 +235,9 @@ const targets = async (req, res) => {
   const { userId, school, role } = req.user;
   if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
+    const term = await currentTermParams(req);
     const [{ rows: classes }, { rows: grades }, { rows: schoolRows }] = await Promise.all([
-      db.query(q.selectStaffClasses, [userId, school, role, yearOf(req)]),
+      db.query(q.selectStaffClasses, [userId, school, role, yearOf(req), ...term]),
       db.query(q.selectStaffGrades, [userId, school, role, yearOf(req)]),
       db.query(schoolQueries.selectSchoolByCode, [school]),
     ]);
@@ -266,7 +274,8 @@ const students = async (req, res) => {
   const { userId, school, role } = req.user;
   if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
-    const { rows } = await db.query(q.selectPickableStudents, [userId, school, role, yearOf(req)]);
+    const term = await currentTermParams(req);
+    const { rows } = await db.query(q.selectPickableStudents, [userId, school, role, yearOf(req), ...term]);
     return res.status(200).json({
       status: 'success',
       data: rows.map((s) => ({ studentId: s.student_id, name: s.name, grade: s.grade ?? null, classes: s.classes ?? [], guardianNames: s.guardian_names ?? [], hasEmail: Boolean(s.has_email) })),

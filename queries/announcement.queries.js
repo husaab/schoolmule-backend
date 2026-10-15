@@ -8,6 +8,8 @@
 // announcements.grade (and every grade parameter) is TEXT; Postgres has no
 // enum = text operator, so the enum side is always cast with ::text.
 
+const { inCurrentTerm } = require('./termScope');
+
 // Custom scope: the hand-picked rows in announcement_students. The audience
 // preview has no announcement row yet, so it passes its own predicate
 // (`s.student_id = ANY(a.student_ids)`) instead.
@@ -365,13 +367,15 @@ const announcementQueries = {
   `,
 
   // ── Targets, scope checks, preview ──────────────────────────
-  // $1 user_id, $2 school, $3 role, $4 school_year_id|null
+  // Only current-term classes: a class exists once per term, so the whole
+  // year would list every subject twice. $1 user_id, $2 school, $3 role,
+  // $4 school_year_id|null, $5 current term_id|null, $6 current term name|null
   selectStaffClasses: `
     SELECT cl.class_id, cl.subject, cl.grade,
            (SELECT COUNT(*) FROM class_students cs JOIN students s ON s.student_id = cs.student_id
              WHERE cs.class_id = cl.class_id AND s.is_archived IS NOT TRUE)::int AS student_count
     FROM classes cl
-    WHERE cl.school = $2 AND ($4::uuid IS NULL OR cl.school_year_id = $4)
+    WHERE cl.school = $2 AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
       AND ($3 = 'ADMIN' OR cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))
     ORDER BY cl.grade, cl.subject
   `,
@@ -427,13 +431,15 @@ const announcementQueries = {
     WHERE s.student_id = ANY($1::uuid[]) AND s.school = $2 AND s.is_archived IS NOT TRUE
       AND ($3::uuid IS NULL OR s.school_year_id = $3)
   `,
-  // The picker roster: every student the caller may hand-pick, with classes and guardian names for search.
-  // $1 user_id, $2 school, $3 role, $4 school_year_id|null
+  // The picker roster: every student the caller may hand-pick, with their current-term classes and
+  // guardian names for search. $1 user_id, $2 school, $3 role, $4 school_year_id|null,
+  // $5 current term_id|null, $6 current term name|null
   selectPickableStudents: `
     SELECT s.student_id, s.name, s.grade::text AS grade,
       COALESCE((SELECT json_agg(json_build_object('classId', c.class_id, 'subject', c.subject) ORDER BY c.subject)
                   FROM class_students cs JOIN classes c ON c.class_id = cs.class_id
-                 WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR c.school_year_id = $4)), '[]') AS classes,
+                 WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR c.school_year_id = $4)
+                   AND ${inCurrentTerm('c', '$5', '$6')}), '[]') AS classes,
       COALESCE((SELECT ARRAY_AGG(DISTINCT ge.name) FROM (${GUARDIAN_EMAILS('s')}) ge WHERE ge.name IS NOT NULL), '{}') AS guardian_names,
       EXISTS (SELECT 1 FROM (${GUARDIAN_EMAILS('s')}) ge) AS has_email
     FROM students s
