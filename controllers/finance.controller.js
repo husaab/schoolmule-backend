@@ -15,8 +15,8 @@ const queries = require('../queries/finance.queries');
 const schoolYearQueries = require('../queries/schoolYear.queries');
 const qboAuth = require('../services/finance/qboAuth');
 const { createClient } = require('../services/finance/qboClient');
-const { assembleGrid, buildLinkIndex, monthWindow, toLedgerInvoice, toLedgerApplication, toLedgerPayment } = require('../services/finance/gridAssembly');
-const { loadFamilyYear, toStudent, toContact } = require('../services/finance/familyShape');
+const { assembleGrid, buildLinkIndex, monthWindow, toLedgerInvoice, toLedgerApplication, toLedgerPayment, toLedgerManualCredit } = require('../services/finance/gridAssembly');
+const { loadFamilyYear, toStudent, toContact, toManualCredit } = require('../services/finance/familyShape');
 const { buildFamilyLedger, monthKeys } = require('../services/finance/ledger');
 const { resolveSettings } = require('../services/finance/classify');
 const { num, dateStr, groupBy } = require('../services/finance/util');
@@ -270,11 +270,12 @@ async function loadGridData(req) {
   const { row: connRow, shaped: sync } = await loadSyncState(school);
   const settings = resolveSettings(connRow?.settings || {});
 
-  const [{ families, students, contacts, links }, customers, invoices, missing] = await Promise.all([
+  const [{ families, students, contacts, links }, customers, invoices, missing, manualCredits] = await Promise.all([
     loadFamilyYear(db, school, yearId),
     db.query(queries.selectCustomerSummaries, [school]).then((r) => r.rows),
     db.query(queries.selectInvoicesInWindow, [school, from, to]).then((r) => r.rows),
     db.query(queries.countStudentsWithoutFamily, [school, yearId]).then((r) => r.rows),
+    db.query(queries.selectManualCreditsByYear, [school, yearId]).then((r) => r.rows),
   ]);
 
   const invoiceIds = invoices.map((i) => i.qbo_id);
@@ -287,7 +288,7 @@ async function loadGridData(req) {
 
   const grid = assembleGrid({
     year, today: torontoToday(), settings,
-    families, students, contacts, links, customers, invoices, lines, applications, payments,
+    families, students, contacts, links, customers, invoices, lines, applications, payments, manualCredits,
     studentsWithoutFamily: missing[0]?.count ?? 0,
     sync,
   });
@@ -423,11 +424,12 @@ const getFamily = async (req, res) => {
     const { rows: conn } = await db.query(queries.selectConnection, [school]);
     const settings = resolveSettings(conn[0]?.settings || {});
 
-    const [students, contacts, links, audit] = await Promise.all([
+    const [students, contacts, links, audit, manualCredits] = await Promise.all([
       db.query(queries.selectFamilyStudents, [family.family_id]),
       db.query(queries.selectFamilyContacts, [family.family_id]),
       db.query(queries.selectFamilyLinks, [school, family.family_id]),
       db.query(queries.selectAuditForFamily, [school, family.family_id, 20]),
+      db.query(queries.selectManualCreditsForFamily, [school, family.family_id]),
     ].map((p) => p.then((r) => r.rows)));
 
     const customerIds = [...new Set(links.map((l) => l.qbo_customer_id))];
@@ -454,6 +456,7 @@ const getFamily = async (req, res) => {
       payments: payments.map(toLedgerPayment),
       items: settings.items,
       expected: expectedParent === null ? undefined : { monthlyParent: expectedParent },
+      manualCredits: manualCredits.map(toLedgerManualCredit),
     }) : null;
 
     const current = linkIndex.currentFor(family.family_id);
@@ -478,6 +481,7 @@ const getFamily = async (req, res) => {
         lines: (linesByInvoice.get(i.qbo_id) || []).map((l) => ({ lineNum: l.line_num, description: l.description, amount: num(l.amount), itemRef: l.item_ref, itemName: l.item_name, studentHint: l.student_hint })),
         payments: (appsByInvoice.get(i.qbo_id) || []).map((a) => ({ paymentId: a.payment_qbo_id, amount: num(a.amount), date: dateStr(a.payment_date), ref: a.payment_ref_num ?? null, method: a.payment_method ?? null, deleted: Boolean(a.payment_deleted) })),
       })),
+      manualCredits: manualCredits.map(toManualCredit),
       payments: payments.map((p) => ({ paymentId: p.qbo_id, customerQboId: p.customer_qbo_id, date: dateStr(p.txn_date), total: num(p.total_amt), unapplied: num(p.unapplied_amt), ref: p.payment_ref_num ?? null, method: p.payment_method ?? null, deleted: Boolean(p.deleted_at) })),
       audit: audit.map((a) => ({
         auditId: a.audit_id, action: a.action, oldQboCustomerId: a.old_qbo_customer_id, newQboCustomerId: a.new_qbo_customer_id, studentId: a.student_id,

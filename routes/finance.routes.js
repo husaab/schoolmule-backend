@@ -62,5 +62,7 @@ router.delete('/families/:familyId/students/:studentId', families.removeStudent)
 router.post('/families/:familyId/contacts', families.addContact);
 router.patch('/families/:familyId/contacts/:contactId', families.updateContact);
 router.delete('/families/:familyId/contacts/:contactId', families.removeContact);
+router.put('/families/:familyId/manual-credits/:month', families.setManualCredit);
+router.delete('/families/:familyId/manual-credits/:month', families.removeManualCredit);
 
 module.exports = router;

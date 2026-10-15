@@ -119,7 +119,56 @@ function finishLedger(ledger) {
  * @param {object}   in.items         { tuition, registration, discount } item ids
  * @param {object}   [in.expected]    { monthlyParent } for the amount-differs check (tuition only; registration lines are excluded)
  */
-function buildFamilyLedger({ months, today, invoices = [], applications = [], payments = [], items, expected }) {
+/**
+ * Manual prepaid credits (finance_manual_credits): money the family already
+ * paid that the bookkeeper will apply in QBO by hand later (auto-apply would
+ * land it on a grant invoice). Reduces the PARENT cell only, capped at its open
+ * balance so a credit already applied in QBO is never counted twice. Mutates
+ * the parent ledger's cells before finishLedger() sums them.
+ */
+function applyManualCredits(parentLedger, manualCredits, monthSet, warnings) {
+  for (const c of manualCredits) {
+    if (!monthSet.has(c.month)) {
+      warnings.push({ code: 'MANUAL_CREDIT_OUT_OF_YEAR', month: c.month, creditId: c.creditId });
+      continue;
+    }
+    const amount = round2(Number(c.amount) || 0);
+    const cell = parentLedger.cells[c.month];
+    const base = { creditId: c.creditId, amount, note: c.note ?? null, qboDepositId: c.qboDepositId ?? null };
+    const active = cell.invoices.filter(isActive);
+
+    if (active.length === 0) {
+      // No invoice yet (future month): the credit waits for it.
+      cell.manualCredit = { ...base, applied: 0, pending: true };
+      continue;
+    }
+
+    const open = Math.max(cell.balance, 0);
+    const applied = round2(Math.min(amount, open));
+    cell.manualCredit = { ...base, applied, pending: false };
+    if (applied <= EPSILON) {
+      warnings.push({ code: 'MANUAL_CREDIT_SUPERSEDED', month: c.month, creditId: c.creditId, amount });
+      continue;
+    }
+    if (amount - applied > 0.01) {
+      warnings.push({ code: 'MANUAL_CREDIT_EXCEEDS', month: c.month, creditId: c.creditId, excess: round2(amount - applied) });
+    }
+
+    cell.balance = round2(cell.balance - applied);
+    cell.paid = round2(cell.paid + applied);
+    cell.overdueBalance = round2(Math.min(cell.overdueBalance || 0, cell.balance));
+    if (cell.balance <= EPSILON) cell.status = 'paid';
+    else if (cell.overdueBalance > EPSILON) cell.status = 'overdue';
+    else if (cell.paid > EPSILON) cell.status = 'partial';
+    else cell.status = 'unpaid';
+    if (cell.status !== 'overdue') cell.daysOverdue = 0;
+  }
+}
+
+/**
+ * @param {object[]} [in.manualCredits] creditId, month 'YYYY-MM', amount, note, qboDepositId
+ */
+function buildFamilyLedger({ months, today, invoices = [], applications = [], payments = [], items, expected, manualCredits = [] }) {
   const streams = { parent: emptyLedger(months), grant: emptyLedger(months), schoolSubsidy: emptyLedger(months) };
   const warnings = [];
   const outOfRange = [];
@@ -188,6 +237,8 @@ function buildFamilyLedger({ months, today, invoices = [], applications = [], pa
       }
     }
   }
+
+  applyManualCredits(streams.parent, manualCredits, monthSet, warnings);
 
   const credit = round2(payments.filter((p) => !p.deletedAt).reduce((s, p) => s + (Number(p.unappliedAmt) || 0), 0));
 

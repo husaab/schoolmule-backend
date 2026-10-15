@@ -1209,7 +1209,8 @@ CREATE TABLE IF NOT EXISTS family_link_audit (
                         'customer_link','customer_unlink',
                         'student_add','student_remove',
                         'contact_add','contact_update','contact_remove',
-                        'invoice_kind_override','seed')),
+                        'invoice_kind_override','seed',
+                        'manual_credit_set','manual_credit_remove')),
   old_qbo_customer_id TEXT,
   new_qbo_customer_id TEXT,
   student_id          UUID,
@@ -1368,6 +1369,24 @@ CREATE TABLE IF NOT EXISTS finance_sync_runs (
   triggered_by       UUID REFERENCES users(user_id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_finance_sync_runs_school ON finance_sync_runs (school, started_at DESC);
+
+-- Manual prepaid credits (finance_manual_credits_migration.sql)
+CREATE TABLE IF NOT EXISTS finance_manual_credits (
+  credit_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school          school NOT NULL,
+  school_year_id  UUID NOT NULL REFERENCES school_years(school_year_id) ON DELETE CASCADE,
+  family_id       UUID NOT NULL,
+  month_key       CHAR(7) NOT NULL CHECK (month_key ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+  amount          NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  note            TEXT,
+  qbo_deposit_id  TEXT CHECK (qbo_deposit_id IS NULL OR qbo_deposit_id ~ '^[0-9]+$'),
+  created_by      UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (family_id, month_key),
+  FOREIGN KEY (school, family_id) REFERENCES families(school, family_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_finance_manual_credits_year ON finance_manual_credits (school, school_year_id);
 
 
 

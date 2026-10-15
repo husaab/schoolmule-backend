@@ -297,6 +297,53 @@ describe('finance families CRUD (integration)', () => {
     expect(csv.text.split('\n')[1]).toMatch(/^Rania Saleh,Omar Saleh \(4\),rania@example\.com,Rania Saleh,yes,no,/);
   });
 
+  it('records, applies, supersedes and removes a manual prepaid credit, auditing each step', async () => {
+    const pool = getTestPool();
+    const year = await activeYear(pool);
+    await seedAdminUser(pool);
+    await seedConnection(pool);
+    await seedCustomer(pool, '670', 'Rania Saleh');
+    const fid = await seedFamily(pool, year.school_year_id);
+    await seedInvoice(pool, { id: '10', customer: '670', txnDate: '2025-10-01', dueDate: '2025-10-31', total: 575, balance: 575 });
+    await seedInvoice(pool, { id: '11', customer: '670', txnDate: '2025-10-01', dueDate: '2025-10-31', total: 575, balance: 575, kind: 'subsidy_grant', privateNote: "Al-Ma'arif subsidy portion" });
+    const put = (month, body) => authenticatedRequest('put', `/api/finance/families/${fid}/manual-credits/${month}`, {}).send(body);
+
+    expect((await put('2025-13', { amount: 10 })).status).toBe(400);
+    expect((await put('2025-10', { amount: 0 })).status).toBe(400);
+    expect((await put('2025-10', { amount: 10, qboDepositId: 'abc' })).status).toBe(400);
+    expect((await put('2030-10', { amount: 10 })).status).toBe(400); // outside the school year
+
+    const set = await put('2025-10', { amount: 575, note: 'Prepaid in Sept, deposit 21624', qboDepositId: '21624' });
+    expect(set.status).toBe(200);
+    expect(set.body.data).toMatchObject({ month: '2025-10', amount: 575, qboDepositId: '21624' });
+    expect((await put('2025-11', { amount: 200, note: 'rest of deposit 21624' })).status).toBe(200);
+    // Upsert: re-saving the same month replaces it.
+    expect((await put('2025-11', { amount: 200, note: 'rest of deposit 21624 (Nov)' })).body.data.note).toBe('rest of deposit 21624 (Nov)');
+
+    let fam = (await authenticatedRequest('get', '/api/finance/tuition/grid', {})).body.data.families.find((f) => f.familyId === fid);
+    expect(fam.parent.cells['2025-10']).toMatchObject({ status: 'paid', paid: 575, balance: 0 });
+    expect(fam.parent.cells['2025-10'].manualCredit).toMatchObject({ amount: 575, applied: 575, pending: false });
+    expect(fam.parent.cells['2025-11'].manualCredit).toMatchObject({ amount: 200, pending: true });
+    let grid = (await authenticatedRequest('get', '/api/finance/tuition/grid', {})).body.data;
+    expect(grid.grant.cells['2025-10']).toMatchObject({ balance: 575 }); // grant untouched
+
+    const detail = await authenticatedRequest('get', `/api/finance/families/${fid}`, {});
+    expect(detail.body.data.manualCredits.map((c) => c.month)).toEqual(['2025-10', '2025-11']);
+    expect(detail.body.data.ledger.parent.cells['2025-10'].status).toBe('paid');
+    expect(detail.body.data.audit.filter((a) => a.action === 'manual_credit_set')).toHaveLength(3);
+
+    // Once the bookkeeper applies the real credit in QBO, the manual entry stops counting.
+    await pool.query(`UPDATE qbo_invoices SET balance = 0 WHERE qbo_id = '10'`);
+    fam = (await authenticatedRequest('get', '/api/finance/tuition/grid', {})).body.data.families.find((f) => f.familyId === fid);
+    expect(fam.parent.cells['2025-10']).toMatchObject({ status: 'paid', paid: 575, balance: 0 });
+    expect(fam.warnings).toContainEqual(expect.objectContaining({ code: 'MANUAL_CREDIT_SUPERSEDED', month: '2025-10' }));
+
+    expect((await authenticatedRequest('delete', `/api/finance/families/${fid}/manual-credits/2025-10`, {})).status).toBe(200);
+    expect((await authenticatedRequest('delete', `/api/finance/families/${fid}/manual-credits/2025-10`, {})).status).toBe(404);
+    const { rows: audits } = await pool.query(`SELECT action FROM family_link_audit WHERE family_id = $1 AND action LIKE 'manual_credit_%'`, [fid]);
+    expect(audits.map((a) => a.action).sort()).toEqual(['manual_credit_remove', 'manual_credit_set', 'manual_credit_set', 'manual_credit_set']);
+  });
+
   it('lists customers, suggestions and anomalies', async () => {
     const pool = getTestPool();
     const year = await activeYear(pool);

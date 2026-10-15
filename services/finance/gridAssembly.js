@@ -46,6 +46,10 @@ function toLedgerApplication(row) {
   };
 }
 
+function toLedgerManualCredit(row) {
+  return { creditId: row.credit_id, month: row.month_key, amount: num(row.amount), note: row.note ?? null, qboDepositId: row.qbo_deposit_id ?? null };
+}
+
 function toLedgerPayment(row) {
   return { qboId: row.qbo_id, txnDate: dateStr(row.txn_date), totalAmt: num(row.total_amt), unappliedAmt: num(row.unapplied_amt), deletedAt: row.deleted_at ?? null };
 }
@@ -96,7 +100,7 @@ function buildLinkIndex(links) {
 /**
  * @param {object} in  DB rows (snake_case) — see the controller for the queries
  */
-function assembleGrid({ year, today, settings: rawSettings, families, students, contacts, links, customers, invoices, lines, applications, payments, studentsWithoutFamily = 0, sync = null, now = Date.now() }) {
+function assembleGrid({ year, today, settings: rawSettings, families, students, contacts, links, customers, invoices, lines, applications, payments, manualCredits = [], studentsWithoutFamily = 0, sync = null, now = Date.now() }) {
   const settings = resolveSettings(rawSettings || {});
   const months = monthKeys(dateStr(year.start_date), dateStr(year.end_date));
   const monthSet = new Set(months);
@@ -110,6 +114,7 @@ function assembleGrid({ year, today, settings: rawSettings, families, students, 
   const linesByInvoice = groupBy(lines, 'invoice_qbo_id');
   const appsByInvoice = groupBy(applications, 'invoice_qbo_id');
   const paymentsByCustomer = groupBy(payments, 'customer_qbo_id');
+  const creditsByFamily = groupBy(manualCredits, 'family_id');
 
   // Assign invoices to families, or to the unlinked pile.
   const invoicesByFamily = new Map();
@@ -153,6 +158,7 @@ function assembleGrid({ year, today, settings: rawSettings, families, students, 
       payments: famPayments,
       items: settings.items,
       expected: expectedParent === null ? undefined : { monthlyParent: expectedParent },
+      manualCredits: (creditsByFamily.get(f.family_id) || []).map(toLedgerManualCredit),
     });
 
     const current = linkIndex.currentFor(f.family_id);
@@ -218,4 +224,4 @@ function assembleGrid({ year, today, settings: rawSettings, families, students, 
   };
 }
 
-module.exports = { assembleGrid, buildLinkIndex, monthWindow, dateStr, toLedgerInvoice, toLedgerApplication, toLedgerPayment };
+module.exports = { assembleGrid, buildLinkIndex, monthWindow, dateStr, toLedgerInvoice, toLedgerApplication, toLedgerPayment, toLedgerManualCredit };
