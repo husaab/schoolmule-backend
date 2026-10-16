@@ -153,6 +153,7 @@ async function getAuthorizedClient(school) {
 
 module.exports = {
   SCOPES,
+  googleApi,
   NeedsReconnectError,
   buildAuthUrl,
   exchangeCode,

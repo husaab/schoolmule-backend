@@ -17,6 +17,43 @@ const userQueries = {
 
     touchLastLogin: `UPDATE users SET last_login_at = NOW() WHERE user_id = $1`,
 
+    // Google sign-in candidates: the account already linked to this Google
+    // account, plus every account whose email matches ignoring case (signup
+    // never normalised addresses, so 'Jo@x.com' and 'jo@x.com' can coexist).
+    selectForGoogleSignIn: `
+      SELECT user_id, email, username, password, first_name, last_name,
+            school, role, email_token, is_verified, is_verified_school, is_archived,
+            google_sub, created_at, last_modified_at
+      FROM users
+      WHERE google_sub = $1 OR lower(email) = lower($2)
+    `,
+
+    // First Google sign-in on an existing account. Google has verified the
+    // address, which is what email verification proves. $3 is an unusable
+    // password hash when the stored password can't be trusted (the invite
+    // sentinel '!', or one set before the email was verified); otherwise null.
+    linkGoogleAccount: `
+      UPDATE users
+      SET google_sub = $2,
+          is_verified = true,
+          password = COALESCE($3, password),
+          last_modified_at = NOW()
+      WHERE user_id = $1
+      RETURNING user_id, email, username, password, first_name, last_name,
+            school, role, email_token, is_verified, is_verified_school, is_archived,
+            google_sub, created_at, last_modified_at
+    `,
+
+    // Signup with Google: email already verified by Google, school approval
+    // still pending, no email_token because there is no link to click.
+    createGoogleUser: `
+      INSERT INTO users
+        (user_id, email, username, password, first_name, last_name, school, role,
+         google_sub, is_verified, is_verified_school, created_at, last_modified_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, false, NOW(), NOW())
+      RETURNING *
+    `,
+
     selectById: `
       SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, created_at, last_modified_at
       FROM users 

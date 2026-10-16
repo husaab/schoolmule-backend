@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const db = require("../config/database");
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require("bcrypt");
@@ -15,6 +16,8 @@ const { getResend, sendOrThrow, sendSafely } = require('../utils/emailUtils');
 const { platformSender } = require('../services/email/senderIdentity');
 const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
+const googleSignInService = require('../services/google/googleSignIn');
+const { GoogleSignInError } = googleSignInService;
 
 const SESSION_TTL = '7d';
 
@@ -70,6 +73,89 @@ const recordLogin = (req, { email, user, outcome }) => {
     user_agent: req.headers['user-agent'] || null,
   });
 };
+
+// Everything after "this person proved who they are", shared by the password
+// and Google sign-ins so both apply the same rules: the archive gate, the
+// admin flag repair, the login_events row and the session payload. Throws a
+// { status, message } verdict for an archived account.
+const openSession = async (req, user, { email, message }) => {
+  // Archived accounts keep their history but can't sign in.
+  if (user.is_archived) {
+    recordLogin(req, { email, user, outcome: 'archived' });
+    throw { status: 403, message: "This account has been archived. Contact your school admin." };
+  }
+
+  // Admins skip both checks. Persist it, not just the token: otherwise
+  // /me reads false from the database, sees drift and reissues a token
+  // that every route then rejects as ACCOUNT_NOT_VERIFIED.
+  if (user.role === 'ADMIN' && (!user.is_verified || !user.is_verified_school)) {
+    await db.query(userQueries.markAdminVerified, [user.user_id]);
+    logger.info({ userId: user.user_id, school: user.school }, "Admin account marked verified at login");
+    user.is_verified = true;
+    user.is_verified_school = true;
+  }
+
+  recordLogin(req, { email, user, outcome: user.is_verified && user.is_verified_school ? 'success' : 'not_verified' });
+  db.query(userQueries.touchLastLogin, [user.user_id]).catch((err) => {
+    logger.warn({ observe: true, err }, 'last_login_at update failed');
+  });
+
+  const activeTerm = await getActiveTermForSchool(user.school);
+  const yearContext = await getSchoolYearContext(user.school);
+  // Sign-in always starts in the database role; the parent view is a switch away.
+  const roles = await getRolesForUser(user);
+
+  const token = signSessionToken({ user, role: user.role, roles, activeTerm });
+
+  return {
+    status: 200,
+    message,
+    data: {
+      ...sessionIdentity(user, user.role, roles),
+      activeTerm: activeTerm ? activeTerm.name : false,
+      activeSchoolYear: yearContext.activeSchoolYear,
+      schoolYears: yearContext.schoolYears,
+      token: token
+    }
+  };
+};
+
+// The two emails that follow an address being confirmed, by the link in the
+// verification email or by Google: a note to the person, and the "awaiting
+// approval" heads-up to their school's admins. Courtesy emails only: neither
+// may fail the request that triggered them, so this never throws.
+const notifyAccountVerified = async (user) => {
+  await sendSafely(getResend(), {
+    ...platformSender('verify'),
+    to: user.email,
+    subject: 'Your Email Has Been Verified at School Mule',
+    html: getConfirmedEmailHTML({ name: user.username }),
+  }, "Email-verified confirmation failed to send", { userId: user.user_id });
+
+  let admins;
+  try {
+    admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
+  } catch (err) {
+    logger.error({ err, school: user.school, userId: user.user_id }, "Admin lookup for approval notification failed");
+    return;
+  }
+
+  logger.info({ school: user.school, adminCount: admins.rows.length }, "Admins found for school");
+  const recipients = [...new Set(admins.rows.map(a => a.email).filter(Boolean))];
+
+  logger.info({ recipientCount: recipients.length }, "Notifying admins");
+  await sendSafely(getResend(), {
+    ...platformSender('notification'),
+    to: recipients,
+    subject: 'New User Awaiting School Approval',
+    html: getAdminNotifyEmailHTML({ new_user: user.username, school: user.school }),
+  }, "Admin approval notification failed to send", { school: user.school, userId: user.user_id });
+};
+
+// A password nobody knows. Google-only accounts still need a bcrypt hash in
+// the NOT NULL column, and '!' is taken: it means "invite not yet accepted".
+// "Forgot password" still lets them set a real one later.
+const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('hex'), 10);
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
@@ -220,47 +306,7 @@ const recordLogin = (req, { email, user, outcome }) => {
         throw { status: 401, message: "Invalid credentials" };
       }
 
-      // Archived accounts keep their history but can't sign in.
-      if (user.is_archived) {
-        recordLogin(req, { email, user, outcome: 'archived' });
-        throw { status: 403, message: "This account has been archived. Contact your school admin." };
-      }
-
-      // Admins skip both checks. Persist it, not just the token: otherwise
-      // /me reads false from the database, sees drift and reissues a token
-      // that every route then rejects as ACCOUNT_NOT_VERIFIED.
-      if (user.role === 'ADMIN' && (!user.is_verified || !user.is_verified_school)) {
-        await db.query(userQueries.markAdminVerified, [user.user_id]);
-        logger.info({ userId: user.user_id, school: user.school }, "Admin account marked verified at login");
-        user.is_verified = true;
-        user.is_verified_school = true;
-      }
-
-      recordLogin(req, { email, user, outcome: user.is_verified && user.is_verified_school ? 'success' : 'not_verified' });
-      db.query(userQueries.touchLastLogin, [user.user_id]).catch((err) => {
-        logger.warn({ observe: true, err }, 'last_login_at update failed');
-      });
-
-      // Get active term for the user's school
-      const activeTerm = await getActiveTermForSchool(user.school);
-      const yearContext = await getSchoolYearContext(user.school);
-      // Sign-in always starts in the database role; the parent view is a switch away.
-      const roles = await getRolesForUser(user);
-
-      const token = signSessionToken({ user, role: user.role, roles, activeTerm });
-
-      return {
-        status: 200,
-        message: "User login successful",
-        data: {
-          ...sessionIdentity(user, user.role, roles),
-          activeTerm: activeTerm ? activeTerm.name : false,
-          activeSchoolYear: yearContext.activeSchoolYear,
-          schoolYears: yearContext.schoolYears,
-          token: token
-        }
-      };
-
+      return await openSession(req, user, { email, message: "User login successful" });
     } catch (error) {
       // A thrown { status, message } is a verdict, not a failure: keep its
       // status so a wrong password is a 401 and never counts as a 500.
@@ -272,6 +318,156 @@ const recordLogin = (req, { email, user, outcome }) => {
       };
     }
   };
+
+const GOOGLE_INTENTS = ['login', 'signup'];
+
+// The existing account a Google identity opens, or null when there is none.
+// An account already linked to this Google account wins; otherwise the email
+// decides. Throws a verdict when the email can't pick one account safely.
+const matchGoogleAccount = (rows, google) => {
+  const linked = rows.find((r) => r.google_sub === google.sub);
+  if (linked) return linked;
+
+  const byEmail = rows.filter((r) => r.email.toLowerCase() === google.email.toLowerCase());
+  if (byEmail.length === 0) return null;
+
+  const user = byEmail.length === 1 ? byEmail[0] : byEmail.find((r) => r.email === google.email);
+  if (!user) {
+    throw { status: 409, message: "More than one account uses this email. Sign in with your email and password instead." };
+  }
+  if (user.google_sub) {
+    throw { status: 409, message: "This account is linked to a different Google account. Use that Google account, or sign in with your email and password." };
+  }
+  return user;
+};
+
+// First Google sign-in on an account: remember the Google account, count
+// Google's check as email verification, and accept a pending invite.
+//
+// A password set before anyone proved they own the address can't be trusted
+// once Google proves who does: anyone can sign up with someone else's email
+// and wait for the owner to arrive through Google. So an unverified account's
+// password is replaced along with the invite sentinel '!'. A verified
+// account's password was set by the owner and keeps working.
+const linkGoogleAccount = async (user, google) => {
+  const replacePassword = !user.is_verified || user.password === '!';
+  // Archived: openSession refuses it; leave the row as it is.
+  if (user.is_archived || (user.google_sub === google.sub && !replacePassword)) return user;
+
+  const { rows } = await db.query(userQueries.linkGoogleAccount, [
+    user.user_id,
+    google.sub,
+    replacePassword ? await unusablePasswordHash() : null,
+  ]);
+  const linked = rows[0];
+
+  // Google just did what the verification link would have done, so send what
+  // the link would have sent.
+  if (!user.is_verified && !linked.is_verified_school && linked.role !== 'ADMIN') {
+    await notifyAccountVerified(linked);
+  }
+  return linked;
+};
+
+// Google gives names as parts; some accounts carry only `name`, and a few
+// carry no name at all.
+const namesFromGoogle = (google) => {
+  if (google.givenName || google.familyName) return [google.givenName, google.familyName];
+  const [first = '', ...rest] = google.name.trim().split(/\s+/);
+  return [first || google.email.split('@')[0], rest.join(' ')];
+};
+
+const createGoogleAccount = async ({ google, school, role }) => {
+  const [firstName, lastName] = namesFromGoogle(google);
+  try {
+    const { rows } = await db.query(userQueries.createGoogleUser, [
+      uuidv4(),
+      google.email,
+      [firstName, lastName].filter(Boolean).join(' '),
+      await unusablePasswordHash(),
+      firstName,
+      lastName,
+      school,
+      role,
+      google.sub,
+    ]);
+    return rows[0];
+  } catch (error) {
+    // Lost a race with another signup for this address or Google account.
+    if (error.code === '23505') {
+      throw { status: 409, message: "An account with this email already exists. Try signing in instead." };
+    }
+    // Not a school label Postgres knows.
+    if (error.code === '22P02') throw { status: 400, message: "We couldn't find that school." };
+    throw error;
+  }
+};
+
+// POST /api/auth/google { code, intent: 'login'|'signup', school?, role? }
+//
+// `code` comes from Google's sign-in popup. Signing in opens the account the
+// Google identity matches; with no match, login answers 404 GOOGLE_NO_ACCOUNT
+// and signup creates a pending account for `school` as `role`. A signup whose
+// email already has an account simply signs in (`accountCreated: false`).
+// Either way the response is the login payload, gated the same way: pending
+// accounts get a session that only reaches the waiting page.
+const googleSignIn = async (req) => {
+  const { code, intent = 'login', school, role } = req.body ?? {};
+  let email = null;
+
+  try {
+    if (typeof code !== 'string' || !code) throw { status: 400, message: "Missing Google sign-in code." };
+    if (!GOOGLE_INTENTS.includes(intent)) throw { status: 400, message: "Unknown Google sign-in request." };
+    // Same guard as /register: a public signup is only ever a teacher or a parent.
+    if (intent === 'signup' && (!school || !SIGNUP_ROLES.includes(role))) {
+      throw { status: 400, message: "Please sign up as a teacher or a parent." };
+    }
+
+    const google = await googleSignInService.verifySignInCode(code);
+    email = google.email;
+
+    // Matching accounts by email is only safe when Google vouches for it.
+    if (!google.emailVerified) {
+      recordLogin(req, { email, user: null, outcome: 'google_unverified_email' });
+      throw { status: 403, message: "Google hasn't verified this account's email address, so it can't be used here. Sign in with your email and password instead." };
+    }
+
+    const { rows } = await db.query(userQueries.selectForGoogleSignIn, [google.sub, google.email]);
+    let user = matchGoogleAccount(rows, google);
+    let accountCreated = false;
+
+    if (user) {
+      user = await linkGoogleAccount(user, google);
+    } else if (intent === 'signup') {
+      user = await createGoogleAccount({ google, school, role });
+      accountCreated = true;
+      await notifyAccountVerified(user);
+    } else {
+      recordLogin(req, { email, user: null, outcome: 'unknown_email' });
+      return {
+        status: 404,
+        code: 'GOOGLE_NO_ACCOUNT',
+        message: "There's no SchoolMule account for this Google email.",
+        data: { email: google.email },
+      };
+    }
+
+    const session = await openSession(req, user, {
+      email,
+      message: accountCreated ? "Account created" : "User login successful",
+    });
+    session.data.accountCreated = accountCreated;
+    return session;
+  } catch (error) {
+    if (error instanceof GoogleSignInError) return { status: 400, message: error.message };
+    const status = Number.isInteger(error.status) ? error.status : 500;
+    if (status >= 500) {
+      logger.error({ err: error }, "Google sign-in failed");
+      return { status, message: "Google sign-in failed. Please try again." };
+    }
+    return { status, message: error.message };
+  }
+};
 
   const sendVerificationEmail = async (req, res) => {
     const { email } = req.body;
@@ -345,34 +541,8 @@ const recordLogin = (req, { email, user, outcome }) => {
   
       const user = result.rows[0];
 
-      // The verification itself succeeded above. Neither courtesy email below
-      // may fail the request. Log and carry on.
-      const html = getConfirmedEmailHTML({ name: user.username });
-
-      await sendSafely(getResend(), {
-        ...platformSender('verify'),
-        to: user.email,
-        subject: 'Your Email Has Been Verified at School Mule',
-        html,
-      }, "Email-verified confirmation failed to send", { userId: user.user_id });
-
-      const admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
-
-      logger.info({ school: user.school, adminCount: admins.rows.length }, "Admins found for school");
-      const recipients = [...new Set(admins.rows.map(a => a.email).filter(Boolean))];
-
-      const adminHtml = getAdminNotifyEmailHTML({
-        new_user: user.username,
-        school: user.school,
-      });
-
-      logger.info({ recipientCount: recipients.length }, "Notifying admins");
-      await sendSafely(getResend(), {
-        ...platformSender('notification'),
-        to: recipients,
-        subject: 'New User Awaiting School Approval',
-        html: adminHtml,
-      }, "Admin approval notification failed to send", { school: user.school, userId: user.user_id });
+      // The verification itself succeeded above; the emails can't undo it.
+      await notifyAccountVerified(user);
 
       return res.status(200).json({
         success: true,
@@ -755,6 +925,7 @@ const switchView = async (req, res) => {
 module.exports = {
     registerUser,
     login,
+    googleSignIn,
     switchView,
     sendVerificationEmail,
     verifyEmail,

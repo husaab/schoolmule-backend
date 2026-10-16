@@ -49,10 +49,13 @@ CREATE TABLE users (
   staff_title            TEXT,
   last_seen_at           TIMESTAMPTZ,
   last_login_at          TIMESTAMPTZ,
+  google_sub             TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)
 );
+-- google_sign_in_migration.sql
+CREATE UNIQUE INDEX users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;
 
 -- School years (school-year scoping; from school_years_migration.sql)
 CREATE TABLE school_years (

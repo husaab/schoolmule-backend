@@ -8,6 +8,8 @@ const responseHandler = (controller) => {
                 const status = result.status || 200;
                 return res.status(status).json({
                     success: status < 400,
+                    // A machine-readable reason the client can branch on.
+                    ...(result.code && { code: result.code }),
                     message: result.message || "Request successful",
                     data: result.data || null,
                     ...(result.pagination && { pagination: result.pagination }),
