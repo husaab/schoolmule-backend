@@ -12,8 +12,11 @@
 -- The backfill runs after the triggers are created, inside the same
 -- transaction (CREATE TRIGGER holds a lock on assessments until COMMIT), so
 -- no assessment can be inserted between the two without its row.
+-- lock_timeout: if a long-running query holds assessments, fail fast (and
+-- retry) rather than queue every gradebook request behind this migration.
 -- ============================================================
 BEGIN;
+SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS classwork_topics (
   topic_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -81,13 +84,19 @@ CREATE TABLE IF NOT EXISTS classwork_attachments (
 CREATE INDEX IF NOT EXISTS idx_classwork_attachments_item ON classwork_attachments(item_id, sort_order);
 ALTER TABLE classwork_attachments ENABLE ROW LEVEL SECURITY;
 
--- One function for the three triggers. Each branch is at most one indexed
--- lookup plus one indexed write on classwork_items.
-CREATE OR REPLACE FUNCTION classwork_sync_assessment_item() RETURNS trigger AS $$
+-- One function for the three triggers. Each branch is at most two indexed
+-- writes on classwork_items (by the partial unique index on assessment_id);
+-- nothing in it can raise on a row main writes.
+CREATE OR REPLACE FUNCTION classwork_sync_assessment_item() RETURNS trigger
+SET search_path = public
+AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    -- A plain assessment's row goes with it; a turn-in item keeps its row and
-    -- loses the link (assessment_id ON DELETE SET NULL).
+    -- A turn-in item keeps its row: it takes the column's name (a linked
+    -- item stores no title of its own), then the foreign key drops the link
+    -- (assessment_id ON DELETE SET NULL). A plain assessment's row goes.
+    UPDATE classwork_items SET title = COALESCE(NULLIF(OLD.name, ''), 'Untitled')
+     WHERE assessment_id = OLD.assessment_id AND kind <> 'assessment' AND title IS NULL;
     DELETE FROM classwork_items WHERE assessment_id = OLD.assessment_id AND kind = 'assessment';
     RETURN OLD;
   END IF;
@@ -95,8 +104,11 @@ BEGIN
     -- A brand-new category has no row to remove.
     IF TG_OP = 'UPDATE' THEN
       DELETE FROM classwork_items WHERE assessment_id = NEW.assessment_id AND kind = 'assessment';
-      -- A turn-in item whose column became a category is no longer graded.
-      UPDATE classwork_items SET assessment_id = NULL, edited_at = NOW() WHERE assessment_id = NEW.assessment_id;
+      -- A turn-in item whose column became a category is no longer graded;
+      -- it keeps the column's name.
+      UPDATE classwork_items
+         SET assessment_id = NULL, title = COALESCE(title, NULLIF(NEW.name, ''), 'Untitled'), edited_at = NOW()
+       WHERE assessment_id = NEW.assessment_id;
     END IF;
   ELSIF NEW.class_id IS NOT NULL AND EXISTS (SELECT 1 FROM classes c WHERE c.class_id = NEW.class_id) THEN
     INSERT INTO classwork_items (class_id, kind, assessment_id, status, posted_at, submission_mode)

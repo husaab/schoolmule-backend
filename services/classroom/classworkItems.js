@@ -17,6 +17,7 @@ const assessmentQueries = require('../../queries/assessment.queries');
 const { rescaleForInsert, rescaleForRemoval } = require('./weights');
 const { BUCKET, SIGNED_URL_TTL, youtubeIdOf } = require('../../utils/classworkUpload');
 const { signedUrlMap } = require('../../utils/attachmentUpload');
+const engine = require('../analyticsEngine');
 
 const ITEM_KINDS = ['assessment', 'assignment', 'quiz', 'material'];
 const SUBMISSION_MODES = ['file', 'text', 'done', 'none'];
@@ -30,6 +31,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const D2_MESSAGE = 'Add a category in Grades → Assessments & categories first, or fill an existing column.';
 const GRADES_EXIST_MESSAGE = 'This column already has published grades. Unpublish or clear them in Grades first.';
+const STANDALONE_MOVE_MESSAGE = 'This column counts on its own in Grades. Move it in Grades → Assessments & categories.';
 const COLUMN_TAKEN_MESSAGE = 'Another item already fills that gradebook column. Choose another column.';
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
@@ -248,7 +250,7 @@ function toItemSummary(row) {
     } : null,
     attachmentCount: Number(row.attachment_count) || 0,
     counts: row.counts,
-    classAvgPct: num(row.class_avg_pct),
+    classAvgPct: null, // withClassAverages (the grade engine)
     createdAt: iso(row.created_at),
     editedAt: iso(row.edited_at),
   };
@@ -326,6 +328,20 @@ async function loadAttachments(itemId, runner = db) {
   return rows.map((r) => toAttachment(r, signed.get(r.file_path) ?? null));
 }
 
+/**
+ * classAvgPct for a class's plain published assessments, from the grade
+ * engine (the same per-assessment class average the parent portal shows),
+ * so Classwork never runs a second grade calculation. Other items keep null.
+ */
+async function withClassAverages(summaries, classId) {
+  const wanted = summaries.some((s) => s.kind === 'assessment' && s.gradebook?.isPublished);
+  if (!wanted) return summaries;
+  const averages = await engine.classAssessmentAverages(classId, { publishedOnly: true });
+  return summaries.map((s) => (s.kind === 'assessment' && s.gradebook?.isPublished
+    ? { ...s, classAvgPct: averages.get(s.gradebook.assessmentId) ?? null }
+    : s));
+}
+
 /** The full Item, or null when it is gone. */
 async function loadItem(itemId, runner = db) {
   const { rows } = await runner.query(q.selectItem, [itemId]);
@@ -334,7 +350,8 @@ async function loadItem(itemId, runner = db) {
     runner.query(q.selectItemStudentIds, [itemId]),
     loadAttachments(itemId, runner),
   ]);
-  return toItem(rows[0], students.rows.map((r) => r.student_id), attachments);
+  const [item] = await withClassAverages([toItem(rows[0], students.rows.map((r) => r.student_id), attachments)], rows[0].class_id);
+  return item;
 }
 
 // ── Gradebook writes (inside a transaction) ───────────────────────────────
@@ -384,8 +401,13 @@ async function removeColumn(client, assessmentId) {
   if (col.parent_assessment_id) await refillCategory(client, col.parent_assessment_id);
 }
 
-/** Moves a column under another category: the new one rescales for the insert, the old one refills. */
+/**
+ * Moves a column from one category to another: the new one rescales for the
+ * insert, the old one refills, so both keep their points. Both categories are
+ * locked in id order first.
+ */
 async function moveColumn(client, { assessmentId, classId, fromCategoryId, toCategoryId }) {
+  await client.query(q.lockCategoriesInOrder, [[fromCategoryId, toCategoryId].map(lower).sort()]);
   const { parent, children } = await lockCategoryWithChildren(client, toCategoryId, classId);
   const siblings = children.filter((c) => c.assessment_id !== assessmentId);
   const { updates, newWeight } = rescaleForInsert(Number(parent.weight_points || 0), siblings);
@@ -463,17 +485,23 @@ function contentChanged(value, cur) {
  * ITEM_SELECT row (before), `cur` its toCurrent form.
  * @returns {Promise<{ gradebookChanged: boolean }>}
  */
-async function updateItem(client, { classId, row, cur, value }) {
+async function updateItem(client, { classId, userId, row, cur, value }) {
   const itemId = row.item_id;
   const target = value.gradebook;
   let assessmentId = row.assessment_id ?? null;
-  // Going ungraded, or filling another existing column (the same column was
-  // turned into 'keep' by validation), leaves the current column.
-  const leaving = Boolean(assessmentId) && (target.mode === 'none' || target.mode === 'existing');
+  // Going ungraded removes the column; filling another existing column (the
+  // same column was turned into 'keep' by validation) hands the current one
+  // back to the gradebook as a plain assessment, grades and all.
+  const dropping = Boolean(assessmentId) && target.mode === 'none';
+  const switching = Boolean(assessmentId) && target.mode === 'existing';
+  const moving = Boolean(assessmentId) && target.mode === 'category' && lower(target.categoryId) !== lower(row.category_id ?? '');
   let gradebookChanged = false;
 
   // A column with grades in it is never dropped from under them.
-  if (leaving && (await gradeCount(client, assessmentId)) > 0) throw httpError(409, GRADES_EXIST_MESSAGE);
+  if (dropping && (await gradeCount(client, assessmentId)) > 0) throw httpError(409, GRADES_EXIST_MESSAGE);
+  // A column that counts on its own (no category) holds top-level points;
+  // putting it in a category would take them out of the class's 100.
+  if (moving && !row.category_id) throw httpError(409, STANDALONE_MOVE_MESSAGE);
 
   const willBeLinked = target.mode === 'keep' || target.mode === 'category' || target.mode === 'existing';
   // The item's own columns first, so a kind change is in place before any
@@ -482,10 +510,14 @@ async function updateItem(client, { classId, row, cur, value }) {
     itemId, willBeLinked ? null : value.title, ...itemParams(value), contentChanged(value, cur),
   ]);
 
-  if (leaving) {
+  if (dropping) {
     await removeColumn(client, assessmentId); // the item's link goes NULL with the column
     assessmentId = null;
     gradebookChanged = true;
+  } else if (switching) {
+    await client.query(q.setItemAssessment, [itemId, null]);
+    await client.query(q.insertPlainItem, [classId, assessmentId, userId ?? null]);
+    assessmentId = null;
   }
 
   const newlyLinked = !assessmentId && (target.mode === 'category' || target.mode === 'existing');
@@ -495,11 +527,12 @@ async function updateItem(client, { classId, row, cur, value }) {
         classId, categoryId: target.categoryId, title: value.title, maxScore: target.maxScore, date: gradebookDate(value),
       })
       : target.assessmentId;
+    await client.query(q.movePlainItemAttachments, [assessmentId, itemId]);
     await client.query(q.deletePlainItemOf, [assessmentId, itemId]);
     await client.query(q.setItemAssessment, [itemId, assessmentId]);
     gradebookChanged = true;
-  } else if (assessmentId && target.mode === 'category' && lower(target.categoryId) !== lower(row.category_id ?? '')) {
-    await moveColumn(client, { assessmentId, classId, fromCategoryId: row.category_id ?? null, toCategoryId: target.categoryId });
+  } else if (moving) {
+    await moveColumn(client, { assessmentId, classId, fromCategoryId: row.category_id, toCategoryId: target.categoryId });
     gradebookChanged = true;
   }
 
@@ -664,9 +697,9 @@ async function signedFileUrl(filePath) {
 }
 
 module.exports = {
-  ITEM_KINDS, SUBMISSION_MODES, STATUSES, D2_MESSAGE, GRADES_EXIST_MESSAGE,
+  ITEM_KINDS, SUBMISSION_MODES, STATUSES, D2_MESSAGE, GRADES_EXIST_MESSAGE, STANDALONE_MOVE_MESSAGE,
   httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput,
   toAttachment, toItemSummary, toItem, toCurrent, toCategoryOption, toColumnOption, toTopic,
-  loadContext, loadItem, loadAttachments,
+  loadContext, loadItem, loadAttachments, withClassAverages,
   createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, signedFileUrl,
 };

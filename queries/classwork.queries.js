@@ -44,8 +44,8 @@ const ITEM_COUNTS = `json_build_object('turnedIn', 0, 'missing', 0, 'notYet', 0,
 // A cell that holds a grade: a score, or a confirmed missing/excused status.
 const HAS_GRADE = (sa = 'sa') => `(${sa}.score IS NOT NULL OR ${sa}.status IN ('missing', 'excused'))`;
 
-// Item (and ItemSummary) columns. The class average is for plain published
-// assessments only: missing counts as 0, excused is left out.
+// Item (and ItemSummary) columns. classAvgPct is not computed here: it comes
+// from the grade engine (classworkItems.withClassAverages).
 const ITEM_SELECT = `
 SELECT i.item_id, i.class_id, i.kind, COALESCE(a.name, i.title) AS title, i.topic_id, i.status,
        CASE WHEN i.status = 'scheduled' AND i.publish_at <= NOW() THEN 'posted' ELSE i.status END AS effective_status,
@@ -57,13 +57,7 @@ SELECT i.item_id, i.class_id, i.kind, COALESCE(a.name, i.title) AS title, i.topi
        COALESCE(a.is_published, FALSE) AS is_published,
        (SELECT COUNT(*) FROM student_assessments sa WHERE sa.assessment_id = a.assessment_id AND ${HAS_GRADE()})::int AS score_count,
        (SELECT COUNT(*) FROM classwork_attachments x WHERE x.item_id = i.item_id)::int AS attachment_count,
-       ${ITEM_COUNTS} AS counts,
-       CASE WHEN i.kind = 'assessment' AND COALESCE(a.is_published, FALSE) AND a.max_score > 0 THEN
-         (SELECT ROUND(AVG(CASE WHEN sa.status = 'missing' THEN 0 ELSE sa.score END) * 100 / a.max_score, 1)
-            FROM student_assessments sa
-           WHERE sa.assessment_id = a.assessment_id
-             AND (sa.status = 'missing' OR (sa.status = 'graded' AND sa.score IS NOT NULL)))
-       END AS class_avg_pct
+       ${ITEM_COUNTS} AS counts
 FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 LEFT JOIN assessments p ON p.assessment_id = a.parent_assessment_id`;
@@ -236,6 +230,25 @@ ORDER BY i.created_at, i.item_id`,
 
   setItemAssessment: `UPDATE classwork_items SET assessment_id = $2 WHERE item_id = $1`,
 
+  //  A column handed back to the gradebook gets a plain-assessment row again. $1 class_id, $2 assessment_id, $3 created_by
+  insertPlainItem: `
+    INSERT INTO classwork_items (class_id, kind, assessment_id, status, posted_at, submission_mode, created_by)
+    VALUES ($1, 'assessment', $2, 'posted', NOW(), 'none', $3)
+    ON CONFLICT (assessment_id) WHERE assessment_id IS NOT NULL DO NOTHING`,
+
+  //  Before an item takes over a column, the column's plain-assessment row
+  //  passes its attachments on (as the create path keeps them by converting
+  //  that row in place). $1 assessment_id, $2 the item taking over
+  movePlainItemAttachments: `
+    UPDATE classwork_attachments x SET item_id = $2
+    FROM classwork_items i
+    WHERE x.item_id = i.item_id AND i.assessment_id = $1 AND i.kind = 'assessment' AND i.item_id <> $2`,
+
+  //  Locks categories in id order, so two moves between the same categories
+  //  cannot deadlock. $1 category ids
+  lockCategoriesInOrder: `
+    SELECT assessment_id FROM assessments WHERE assessment_id = ANY($1::uuid[]) ORDER BY assessment_id FOR UPDATE`,
+
   //  Frees a column's plain-assessment row so another item can fill it. $1 assessment_id, $2 the item keeping it
   deletePlainItemOf: `
     DELETE FROM classwork_items WHERE assessment_id = $1 AND kind = 'assessment' AND item_id <> $2`,
@@ -274,6 +287,9 @@ ORDER BY i.created_at, i.item_id`,
   // ── Attachments ────────────────────────────────────────────────────────
 
   countAttachments: `SELECT COUNT(*)::int AS n FROM classwork_attachments WHERE item_id = $1`,
+
+  //  Serializes attachment adds on one item (the per-item cap). $1 item_id
+  lockItemRow: `SELECT item_id FROM classwork_items WHERE item_id = $1 FOR UPDATE`,
 
   //  $1 item_id, $2 file_path, $3 file_name, $4 mime_type, $5 size_bytes, $6 created_by
   insertFileAttachment: `

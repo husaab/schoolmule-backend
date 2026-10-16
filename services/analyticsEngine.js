@@ -369,6 +369,21 @@ async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = fa
 }
 
 /**
+ * One class's per-assessment class averages (classAveragesByAssessment), from
+ * a fresh class-scoped matrix rather than the cached school-wide one, so a
+ * teacher sees an edit at once. publishedOnly prunes exactly as the parent
+ * portal does, so the numbers match its classAvgPct. JK/SK classes and
+ * classes with no enrolled students give an empty map.
+ * @returns {Promise<Map<string, number>>} assessment_id -> average pct (1 dp)
+ */
+async function classAssessmentAverages(classId, { publishedOnly = false } = {}) {
+  const { rows } = await db.query(q.selectClassAnalyticsMatrix, [classId]);
+  const matrix = buildMatrixFromRows(rows, null, ENGINE_NAME, { publishedOnly });
+  const cls = matrix.classes.get(classId);
+  return cls ? classAveragesByAssessment(cls) : new Map();
+}
+
+/**
  * Per-student attendance map for a term: studentId -> { presentDays, totalDays, pct }.
  */
 async function getAttendanceMap(school, termId) {
@@ -447,6 +462,8 @@ module.exports = {
   getAttendanceMap,
   overallAvgForStudent,
   getStudentClassBreakdown,
+  classAveragesByAssessment,
+  classAssessmentAverages,
   invalidateCache,
   normalizeEngine,
   DEFAULT_ENGINE,

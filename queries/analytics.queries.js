@@ -107,6 +107,54 @@ const analyticsQueries = {
   `,
 
   /**
+   * The same matrix for ONE class (any term), uncached, for numbers a teacher
+   * reads right after entering scores (the Classwork list's class average).
+   * Same columns and joins as selectAnalyticsMatrix; keep them in step.
+   * Params: $1 class_id
+   */
+  selectClassAnalyticsMatrix: `
+    SELECT
+      c.class_id,
+      c.grade::text           AS class_grade,
+      c.subject,
+      c.teacher_name,
+      c.term_id,
+      cs.student_id,
+      s.name                  AS student_name,
+      s.grade::text           AS student_grade,
+      s.homeroom_teacher_id,
+      a.assessment_id,
+      a.name                  AS assessment_name,
+      a.weight_percent,
+      a.weight_points,
+      a.max_score,
+      a.is_parent,
+      a.parent_assessment_id,
+      a.date                  AS assessment_date,
+      a.sort_order,
+      a.is_published,
+      a.parent_comment,
+      a.published_at,
+      sa.score,
+      COALESCE(sa.status, 'graded') AS status,
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+    FROM class_students AS cs
+    JOIN classes AS c
+      ON c.class_id = cs.class_id
+    JOIN students AS s
+      ON s.student_id = cs.student_id
+     AND s.is_archived = FALSE
+    JOIN assessments AS a
+      ON a.class_id = c.class_id
+    LEFT JOIN student_assessments AS sa
+      ON sa.student_id    = cs.student_id
+     AND sa.assessment_id = a.assessment_id
+    WHERE c.class_id = $1
+      AND c.grade NOT IN ('JK', 'SK')
+    ORDER BY c.class_id, cs.student_id, a.sort_order NULLS LAST, a.date NULLS LAST
+  `,
+
+  /**
    * Per-student attendance over a term's date window.
    * NOTE: status enum values are UPPERCASE ('PRESENT','LATE','ABSENT') —
    * verified against the live database.

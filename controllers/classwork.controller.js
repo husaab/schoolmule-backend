@@ -54,7 +54,7 @@ const listItems = async (req, res) => {
     ]);
     return ok(res, {
       topics: ctx.topicRows.map(items.toTopic),
-      items: itemRes.rows.map(items.toItemSummary),
+      items: await items.withClassAverages(itemRes.rows.map(items.toItemSummary), classId),
       categories: ctx.categoryRows.map(items.toCategoryOption),
       linkableColumns: ctx.columnRows.map(items.toColumnOption),
     });
@@ -113,7 +113,7 @@ const updateItem = async (req, res) => {
       const ctx = await items.loadContext(client, classId);
       const checked = items.validateItemInput(req.body, { ...ctx, current: cur });
       if (checked.error) throw items.httpError(400, checked.error);
-      return items.updateItem(client, { classId, row, cur, value: checked.value });
+      return items.updateItem(client, { classId, userId: req.user.userId, row, cur, value: checked.value });
     });
     gradebookTouched(school, result.gradebookChanged);
     return ok(res, await items.loadItem(itemId));
@@ -245,11 +245,14 @@ async function attachmentsReply(rows) {
   return rows.map((r) => items.toAttachment(r, signed.get(r.file_path) ?? null));
 }
 
-async function roomFor(itemId, adding) {
-  const { rows } = await db.query(q.countAttachments, [itemId]);
-  return rows[0].n + adding <= MAX_ATTACHMENTS_PER_ITEM;
-}
 const TOO_MANY = `An item holds at most ${MAX_ATTACHMENTS_PER_ITEM} attachments`;
+
+/** Inside the insert's transaction: the item row is locked, so concurrent adds can't pass the cap together. */
+async function assertRoom(client, itemId, adding) {
+  await client.query(q.lockItemRow, [itemId]);
+  const { rows } = await client.query(q.countAttachments, [itemId]);
+  if (rows[0].n + adding > MAX_ATTACHMENTS_PER_ITEM) throw items.httpError(400, TOO_MANY);
+}
 
 // POST /api/classroom/items/:itemId/attachments  multipart "files" (≤ 5 × 10 MB)
 // Objects are stored first, rows written in one transaction; a failure
@@ -259,8 +262,8 @@ const uploadAttachments = async (req, res) => {
   const { school } = req.class;
   const uploaded = [];
   try {
-    if (!(await roomFor(itemId, req.files.length))) return failed(res, 400, TOO_MANY);
     const rows = await items.inTransaction(async (client) => {
+      await assertRoom(client, itemId, req.files.length);
       const out = [];
       for (const f of req.files) {
         const filePath = classworkFilePath(school, itemId, f.originalname);
@@ -288,8 +291,8 @@ const addLink = async (req, res) => {
   const title = parseLinkTitle(req.body?.title);
   if (title.error) return failed(res, 400, title.error);
   try {
-    if (!(await roomFor(itemId, 1))) return failed(res, 400, TOO_MANY);
     const row = await items.inTransaction(async (client) => {
+      await assertRoom(client, itemId, 1);
       const { rows } = await client.query(q.insertLinkAttachment, [itemId, url, title.value, req.user.userId]);
       await client.query(q.touchItem, [itemId]);
       return rows[0];

@@ -13,6 +13,7 @@ const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
 const scheduler = require('../../../services/classroom/scheduler');
+const engine = require('../../../services/analyticsEngine');
 
 const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -31,6 +32,7 @@ const asStudent = {
 const BASE = '/api/classroom';
 const D2 = 'Add a category in Grades → Assessments & categories first, or fill an existing column.';
 const GRADES_EXIST = 'This column already has published grades. Unpublish or clear them in Grades first.';
+const STANDALONE_MOVE = 'This column counts on its own in Grades. Move it in Grades → Assessments & categories.';
 const MIGRATION = path.resolve(__dirname, '../../../database/migrations/student_portal_20_classwork.sql');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -187,11 +189,47 @@ describe('Integration: classwork', () => {
       expect(await itemsOf(standalone)).toHaveLength(1);
     });
 
-    it('an assignment whose column becomes a category keeps its row but loses the link', async () => {
+    it('an assignment whose column becomes a category keeps its row and its name but loses the link', async () => {
       const item = await createItem(sciId, homeworkAssignment());
-      await pool.query(`UPDATE assessments SET is_parent = TRUE WHERE assessment_id = $1`, [item.gradebook.assessmentId]);
+      // Main's own write: PATCH /api/assessments/:id { isParent: true }.
+      const res = await call('patch', `/api/assessments/${item.gradebook.assessmentId}`, asAdmin).send({ isParent: true });
+      expect(res.status).toBe(200);
       const row = (await pool.query(`SELECT * FROM classwork_items WHERE item_id = $1`, [item.itemId])).rows[0];
-      expect(row).toMatchObject({ kind: 'assignment', assessment_id: null, deleted_at: null });
+      expect(row).toMatchObject({ kind: 'assignment', assessment_id: null, deleted_at: null, title: 'Plant cell diagram' });
+      expect(row.edited_at).not.toBeNull();
+      const read = (await call('get', `${BASE}/items/${item.itemId}`)).body.data;
+      expect(read).toMatchObject({ title: 'Plant cell diagram', gradebook: null, status: 'posted' });
+    });
+
+    it("main's column deletes keep a linked assignment live and named: DELETE, batch delete, category delete", async () => {
+      const a = await createItem(sciId, homeworkAssignment({ title: 'Diagram A' }));
+      const b = await createItem(sciId, homeworkAssignment({ title: 'Diagram B' }));
+      const c = await createItem(sciId, { kind: 'quiz', title: 'Cells quiz', gradebook: { mode: 'category', categoryId: quizzesId, maxScore: 8 } });
+
+      expect((await call('delete', `/api/assessments/${a.gradebook.assessmentId}`, asAdmin)).status).toBe(200);
+      expect((await call('patch', '/api/assessments/batch', asAdmin).send({ deleteIds: [b.gradebook.assessmentId] })).status).toBe(200);
+      expect((await call('delete', `/api/assessments/${quizzesId}`, asAdmin)).status).toBe(200); // cascades to c's column
+
+      const { rows } = await pool.query(
+        `SELECT item_id, title, assessment_id, deleted_at, kind FROM classwork_items WHERE item_id = ANY($1::uuid[]) ORDER BY title`,
+        [[a.itemId, b.itemId, c.itemId]],
+      );
+      expect(rows.map((r) => [r.title, r.kind, r.assessment_id, r.deleted_at])).toEqual([
+        ['Cells quiz', 'quiz', null, null], ['Diagram A', 'assignment', null, null], ['Diagram B', 'assignment', null, null],
+      ]);
+      const list = (await call('get', `${BASE}/classes/${sciId}/items`)).body.data.items;
+      expect(list.filter((i) => [a.itemId, b.itemId, c.itemId].includes(i.itemId)).map((i) => i.title).sort())
+        .toEqual(['Cells quiz', 'Diagram A', 'Diagram B']);
+      // Still editable without resending a title.
+      expect((await call('patch', `${BASE}/items/${a.itemId}`).send({ instructions: 'Now ungraded.' })).status).toBe(200);
+    });
+
+    it("deleting a turn-in item through Classwork keeps the column's name on the hidden row", async () => {
+      const item = await createItem(sciId, homeworkAssignment({ title: 'Kept name' }));
+      await call('delete', `${BASE}/items/${item.itemId}`);
+      const row = (await pool.query(`SELECT title, deleted_at FROM classwork_items WHERE item_id = $1`, [item.itemId])).rows[0];
+      expect(row.title).toBe('Kept name');
+      expect(row.deleted_at).not.toBeNull();
     });
 
     it('deleting a class with classwork removes all of it', async () => {
@@ -287,6 +325,42 @@ describe('Integration: classwork', () => {
       const res = await call('get', `${BASE}/items/${item.itemId}`);
       expect(res.body.data.classAvgPct).toBe(40); // (80% + 0%) / 2
       expect(res.body.data.gradebook).toMatchObject({ isPublished: true, scoreCount: 2 });
+    });
+
+    it("classAvgPct is the grade engine's class average: same as the parent portal, enrolled students only, max 100 when unset", async () => {
+      const archived = await student('Withdrawn Student', sciId);
+      await pool.query(`UPDATE students SET is_archived = TRUE WHERE student_id = $1`, [archived]);
+      const excused = await student('Excused Student', sciId);
+      await student('Blank Student', sciId);
+      const noMax = await assessment(sciId, 'Lab check', { parentId: testsId, weight: 0 }); // max_score NULL
+      await pool.query(
+        `INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES
+           ($1, $5, 24, 'graded'), ($2, $5, NULL, 'missing'), ($3, $5, 30, 'graded'), ($4, $5, 10, 'excused'),
+           ($1, $6, 7, 'graded')`,
+        [amalId, samiId, archived, excused, unit1Id, noMax],
+      );
+      await pool.query(`UPDATE assessments SET is_published = TRUE WHERE assessment_id = ANY($1::uuid[])`, [[unit1Id, noMax]]);
+
+      const list = (await call('get', `${BASE}/classes/${sciId}/items`)).body.data.items;
+      const avgOf = (assessmentId) => list.find((i) => i.gradebook?.assessmentId === assessmentId).classAvgPct;
+      expect(avgOf(unit1Id)).toBe(40); // (80 + 0) / 2: the archived 100% and the excused cell do not count
+      expect(avgOf(noMax)).toBe(7); // no max on file counts as 100, as in the engine
+      expect(avgOf(hwIds[0])).toBeNull(); // not published
+
+      // Parity with the parent portal's number for the same columns.
+      engine.invalidateCache('ALHAADIACADEMY');
+      const matrix = await engine.buildAnalyticsMatrix('ALHAADIACADEMY', termId, engine.normalizeEngine(), { publishedOnly: true });
+      const breakdown = engine.getStudentClassBreakdown(matrix, amalId).classes.find((c) => c.classId === sciId);
+      const portalAvg = (id) => breakdown.assessmentScores.find((r) => r.assessmentId === id).classAvgPct;
+      expect([avgOf(unit1Id), avgOf(noMax)]).toEqual([portalAvg(unit1Id), portalAvg(noMax)]);
+      const single = (await call('get', `${BASE}/items/${list.find((i) => i.gradebook?.assessmentId === unit1Id).itemId}`)).body.data;
+      expect(single.classAvgPct).toBe(portalAvg(unit1Id));
+
+      // A published assignment's column is not a plain assessment: no average.
+      const a = await createItem(sciId, homeworkAssignment());
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, 9)`, [amalId, a.gradebook.assessmentId]);
+      await pool.query(`UPDATE assessments SET is_published = TRUE WHERE assessment_id = $1`, [a.gradebook.assessmentId]);
+      expect((await call('get', `${BASE}/items/${a.itemId}`)).body.data.classAvgPct).toBeNull();
     });
 
     it("creating with gradebook 'existing' converts that column's item in place (still one item per assessment)", async () => {
@@ -388,6 +462,50 @@ describe('Integration: classwork', () => {
       expect((await weights(homeworkId)).map((r) => r.w)).toEqual([5, 5, 5, 5]);
       expect((await weights(quizzesId)).map((r) => r.w)).toEqual([40]);
       expect(await topLevelTotal(sciId)).toBe(100);
+    });
+
+    it('PATCH moving a column that counts on its own into a category is 409, and the class keeps 100 points', async () => {
+      // Math: a standalone Midterm (60) and Homework (40).
+      const midterm = await assessment(mathId, 'Midterm', { weight: 60, max: 50 });
+      const mathHomework = await assessment(mathId, 'Homework', { isParent: true, weight: 40 });
+      await assessment(mathId, 'Worksheet 1', { parentId: mathHomework, weight: 40, max: 10 });
+      const plain = (await itemsOf(midterm))[0];
+
+      const res = await call('patch', `${BASE}/items/${plain.item_id}`, asOtherTeacher)
+        .send({ gradebook: { mode: 'category', categoryId: mathHomework, maxScore: 50 } });
+      expect(res.status).toBe(409);
+      expect(res.body.message).toBe(STANDALONE_MOVE);
+      expect(await topLevelTotal(mathId)).toBe(100);
+      expect((await weights(mathHomework)).map((r) => r.w)).toEqual([40]);
+      const col = (await pool.query(`SELECT parent_assessment_id, weight_points::float AS w FROM assessments WHERE assessment_id = $1`, [midterm])).rows[0];
+      expect(col).toEqual({ parent_assessment_id: null, w: 60 });
+
+      // The same for an assignment that fills that standalone column.
+      const quiz = await createItem(mathId, { kind: 'quiz', title: 'Midterm quiz', gradebook: { mode: 'existing', assessmentId: midterm } }, asOtherTeacher);
+      const again = await call('patch', `${BASE}/items/${quiz.itemId}`, asOtherTeacher)
+        .send({ gradebook: { mode: 'category', categoryId: mathHomework, maxScore: 50 } });
+      expect(again.status).toBe(409);
+      expect(await topLevelTotal(mathId)).toBe(100);
+      // Other edits of a standalone column still work.
+      expect((await call('patch', `${BASE}/items/${quiz.itemId}`, asOtherTeacher).send({ title: 'Midterm exam' })).status).toBe(200);
+    });
+
+    it('PATCH filling another existing column hands the old one back to the gradebook and takes over the new one with its attachments', async () => {
+      const quiz = await createItem(sciId, { kind: 'quiz', title: 'Cells quiz', gradebook: { mode: 'existing', assessmentId: hwIds[1] } });
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, 7)`, [amalId, hwIds[1]]);
+      const target = (await itemsOf(hwIds[2]))[0];
+      await call('post', `${BASE}/items/${target.item_id}/links`).send({ title: 'Answer key', url: 'https://example.com/key' });
+
+      const res = await call('patch', `${BASE}/items/${quiz.itemId}`).send({ gradebook: { mode: 'existing', assessmentId: hwIds[2] } });
+      expect(res.status).toBe(200);
+      expect(res.body.data.gradebook.assessmentId).toBe(hwIds[2]);
+      expect(res.body.data.attachments.map((a) => a.title)).toEqual(['Answer key']);
+
+      // The old column is still there, with its grade and a plain item again.
+      expect((await pool.query(`SELECT 1 FROM student_assessments WHERE assessment_id = $1`, [hwIds[1]])).rows).toHaveLength(1);
+      expect(await itemsOf(hwIds[1])).toEqual([expect.objectContaining({ kind: 'assessment', status: 'posted' })]);
+      expect(await itemsOf(hwIds[2])).toEqual([expect.objectContaining({ item_id: quiz.itemId, kind: 'quiz' })]);
+      expect((await weights(homeworkId)).map((r) => r.w)).toEqual([5, 5, 5, 5]);
     });
 
     it('PATCH gradebook none is 409 once scores exist', async () => {
@@ -562,6 +680,24 @@ describe('Integration: classwork', () => {
       expect(res.status).toBe(500);
       expect((await pool.query(`SELECT COUNT(*)::int AS n FROM classwork_attachments`)).rows[0].n).toBe(0);
       expect(supabase._mockStorage.remove).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('attachment cap', () => {
+    it('an item holds at most 20 attachments', async () => {
+      const item = await createItem(sciId, { kind: 'material', title: 'Reading' });
+      await pool.query(
+        `INSERT INTO classwork_attachments (item_id, kind, url, sort_order)
+         SELECT $1, 'link', 'https://example.com/' || g, g FROM generate_series(1, 19) g`, [item.itemId],
+      );
+      const twentieth = await call('post', `${BASE}/items/${item.itemId}/links`).send({ url: 'https://example.com/20' });
+      expect(twentieth.status).toBe(201);
+      const over = await call('post', `${BASE}/items/${item.itemId}/links`).send({ url: 'https://example.com/21' });
+      expect(over.status).toBe(400);
+      const files = await call('post', `${BASE}/items/${item.itemId}/attachments`)
+        .attach('files', Buffer.from('%PDF-1.4'), { filename: 'one.pdf', contentType: 'application/pdf' });
+      expect(files.status).toBe(400);
+      expect(supabase._mockStorage.upload).not.toHaveBeenCalled();
     });
   });
 
