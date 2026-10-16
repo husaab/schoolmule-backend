@@ -181,6 +181,24 @@ describe('Integration: Student accounts', () => {
     expect(lina).toMatchObject({ status: 'not_eligible', account: null, qrEligible: false, grade: 'SK' });
   });
 
+  it("invite only reaches this year's current rows: a past-year or withdrawn row is not found", async () => {
+    const { rows: [lastYear] } = await pool.query(
+      `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+       SELECT 'ALHAADIACADEMY', school_id, '2024-2025', DATE '2024-09-01', DATE '2025-06-30', FALSE
+         FROM schools WHERE school_code = 'ALHAADIACADEMY'
+       RETURNING school_year_id`,
+    );
+    const oldRow = await student('Amal Haddad', '1', { yearId: lastYear.school_year_id, studentEmail: 'amal.old@example.com' });
+    await pool.query(`UPDATE students SET is_archived = true WHERE student_id = $1`, [samiId]);
+
+    const stale = await invite([oldRow]);
+    expect(stale.status).toBe(404);
+    const withdrawn = await invite([amalId, samiId]);
+    expect(withdrawn.status).toBe(404);
+    expect((await pool.query(`SELECT 1 FROM users WHERE role::text = 'STUDENT'`)).rows).toHaveLength(0);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
   // 5
   it('list derives Not invited / Invited / Active and flags conflicts', async () => {
     await invite([amalId, samiId]);
@@ -264,6 +282,15 @@ describe('Integration: Student accounts', () => {
 
     // An account's sign-in address cannot be blanked.
     expect((await authenticatedRequest('patch', `${BASE}/${amalId}`, asAdmin).send({ studentEmail: '' })).status).toBe(400);
+
+    // A login never moves onto a parent's address on file.
+    await pool.query(`UPDATE students SET father_email = 'Dad.Inbox@example.com' WHERE student_id = $1`, [amalId]);
+    const family = await authenticatedRequest('patch', `${BASE}/${amalId}`, asAdmin).send({ studentEmail: 'dad.inbox@example.com' });
+    expect(family.status).toBe(409);
+    expect(family.body).toMatchObject({
+      code: 'FAMILY_ADDRESS', message: "This is a parent's address on file. Use the student's own school address.",
+    });
+    expect((await userOf(amalId)).email).toBe('amal.h@example.com');
 
     // Another school's admin cannot see this student.
     await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
@@ -503,6 +530,42 @@ describe('Integration: Student accounts', () => {
       .send({ name: 'Dalia Haddad', grade: '3', studentEmail: 'Dalia.Haddad@Example.com' });
     expect(created.status).toBe(201);
     expect(created.body.data.studentEmail).toBe('dalia.haddad@example.com');
+  });
+
+  it("only an admin of the student's school can set a student email on the student form", async () => {
+    const studentEmailOf = async (id) =>
+      (await pool.query(`SELECT student_email FROM students WHERE student_id = $1`, [id])).rows[0].student_email;
+
+    for (const who of [asTeacher, asParent]) {
+      const res = await authenticatedRequest('patch', `/api/students/${ramiId}`, who).send({ studentEmail: 'taken.over@example.com' });
+      expect(res.status).toBe(403);
+      expect(res.body.message).toBe("Only admins can set a student's email. Use Admin Panel → Student accounts.");
+      // Clearing it is a change too.
+      expect((await authenticatedRequest('patch', `/api/students/${amalId}`, who).send({ studentEmail: null })).status).toBe(403);
+    }
+    expect(await studentEmailOf(ramiId)).toBeNull();
+    expect(await studentEmailOf(amalId)).toBe('Amal.Haddad@Example.com');
+
+    // The rest of the form still works for a teacher.
+    const rename = await authenticatedRequest('patch', `/api/students/${ramiId}`, asTeacher).send({ name: 'Rami K. Haddad' });
+    expect(rename.status).toBe(200);
+    expect(rename.body.data.studentEmail).toBeNull();
+
+    const created = await authenticatedRequest('post', '/api/students', asTeacher)
+      .send({ name: 'Dalia Haddad', grade: '3', studentEmail: 'taken.over@example.com' });
+    expect(created.status).toBe(403);
+    expect((await pool.query(`SELECT 1 FROM students WHERE name = 'Dalia Haddad'`)).rows).toHaveLength(0);
+
+    // Another school's admin cannot reach this school's student.
+    await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
+    const foreign = await authenticatedRequest('patch', `/api/students/${ramiId}`, { ...asAdmin, school: 'PLAYGROUND' })
+      .send({ studentEmail: 'taken.over@example.com' });
+    expect(foreign.status).toBe(404);
+    expect(await studentEmailOf(ramiId)).toBeNull();
+
+    // No invite can go to an address a non-admin typed.
+    const res = await invite([ramiId]);
+    expect(res.body.data.results[0]).toMatchObject({ outcome: 'skipped', reason: 'no_email' });
   });
 
   it('the registration import offers and saves a student email mapping', async () => {

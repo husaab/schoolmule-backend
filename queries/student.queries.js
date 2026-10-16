@@ -140,8 +140,10 @@ const studentQueries = {
       address              = COALESCE($15, address),
       health_card_number   = COALESCE($16, health_card_number),
       medical_notes        = COALESCE($17, medical_notes),
-      -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value
-      student_email        = CASE WHEN $18::boolean THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
+      -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value,
+      -- $20 = the caller's school: the address is only ever written within it.
+      student_email        = CASE WHEN $18::boolean AND school::text = $20::text
+                                  THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
       last_modified_at     = NOW()
     WHERE student_id = $13
     RETURNING *

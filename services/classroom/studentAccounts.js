@@ -189,8 +189,14 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') {
-      // Another request got there first: the student was linked, or the address was taken.
-      return LINK_CONSTRAINTS.has(err.constraint)
+      // Another request got there first. A double-clicked invite loses on the
+      // users email (the winner created this student's login with it), so
+      // check the link before calling the address taken.
+      if (LINK_CONSTRAINTS.has(err.constraint)) {
+        return skipped(studentId, 'already_has_account', 'This student already has an account.');
+      }
+      const { rows: linked } = await db.query(q.selectLinkByStudent, [studentId]);
+      return linked.length > 0
         ? skipped(studentId, 'already_has_account', 'This student already has an account.')
         : skipped(studentId, 'email_in_use', 'An account already uses this email. Each student needs their own address.');
     }

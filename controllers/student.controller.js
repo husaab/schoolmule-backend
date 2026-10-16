@@ -16,6 +16,14 @@ const parseStudentEmail = (raw) => {
   return { value };
 };
 
+// The student's own address is where their SchoolMule invite goes, so only an
+// admin may set it, and only for a student of their own school. (Other roles
+// can still edit the rest of the student form.)
+const STUDENT_EMAIL_ADMIN_ONLY =
+  "Only admins can set a student's email. Use Admin Panel → Student accounts.";
+const carriesStudentEmail = (body) =>
+  Boolean(body) && Object.prototype.hasOwnProperty.call(body, "studentEmail") && body.studentEmail !== undefined;
+
 // Convert database row to camelCase
 const toCamel = (s) => ({
   studentId: s.student_id,
@@ -111,6 +119,9 @@ const createStudent = async (req, res) => {
       message: "Missing required fields: name, grade, school"
     });
   }
+  if (carriesStudentEmail(req.body) && req.user.role !== "ADMIN") {
+    return res.status(403).json({ status: "failed", message: STUDENT_EMAIL_ADMIN_ONLY });
+  }
   const email = parseStudentEmail(studentEmail);
   if (email.error) {
     return res.status(400).json({ status: "failed", message: email.error });
@@ -170,7 +181,10 @@ const updateStudent = async (req, res) => {
 
   // studentEmail is only touched when the body carries it, so older callers
   // that never send it keep the stored address.
-  const carriesEmail = Object.prototype.hasOwnProperty.call(req.body ?? {}, "studentEmail");
+  const carriesEmail = carriesStudentEmail(req.body);
+  if (carriesEmail && req.user.role !== "ADMIN") {
+    return res.status(403).json({ status: "failed", message: STUDENT_EMAIL_ADMIN_ONLY });
+  }
   const email = carriesEmail ? parseStudentEmail(req.body.studentEmail) : { value: null };
   if (email.error) {
     return res.status(400).json({ status: "failed", message: email.error });
@@ -196,14 +210,21 @@ const updateStudent = async (req, res) => {
     medicalNotes ?? null,
     carriesEmail,
     email.value,
+    req.user.school,
   ];
 
   try {
-    // A student with a SchoolMule login signs in with that address, so it is
-    // changed on Student accounts (which updates both) rather than here.
     if (carriesEmail) {
-      const { rows: linked } = await db.query(studentAccountQueries.selectLinkedAccountEmail, [id]);
-      if (linked.length > 0 && String(linked[0].email || "").toLowerCase() !== (email.value ?? "")) {
+      // Only a student of the admin's own school.
+      const { rows: found } = await db.query(studentAccountQueries.selectStudentWithLogin, [id, req.user.school]);
+      if (found.length === 0) {
+        return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
+      }
+      // A student with a SchoolMule login signs in with that address, so it is
+      // changed on Student accounts (which updates both and revokes open
+      // invite links) rather than here.
+      const login = found[0];
+      if (login.user_id && String(login.email || "").toLowerCase() !== (email.value ?? "")) {
         return res.status(409).json({
           status: "failed",
           message: "This student has a SchoolMule account. Change the email on Admin Panel → Student accounts.",

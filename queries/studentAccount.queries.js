@@ -46,9 +46,10 @@ ORDER BY LENGTH(s.grade::text), s.grade::text, s.name`,
   selectStudentAccountRow: `${ROW_SELECT}
 WHERE s.school = $1 AND s.student_id = $2`,
 
-  //  $1 = school, $2 = student_id[]
+  //  Invite only reaches the year's current (not withdrawn) rows, so a login
+  //  is never linked to a stale row. $1 = school, $2 = student_id[], $3 = school_year_id
   selectStudentAccountRowsByIds: `${ROW_SELECT}
-WHERE s.school = $1 AND s.student_id = ANY($2::uuid[])`,
+WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.school_year_id = $3 AND s.is_archived IS NOT TRUE`,
 
   //  Consent is confirmed by the admin in the invite request and recorded on
   //  the account row created in the same transaction as the login.
@@ -171,13 +172,31 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[])`,
     DELETE FROM users WHERE user_id = $1 AND school = $2 AND role::text = 'STUDENT'
   `,
 
-  //  The linked login of a student row, for the student form's email guard.
+  //  A student of the school and its linked login (user_id NULL when none),
+  //  for the student form's email guard. $1 = student_id, $2 = school
+  selectStudentWithLogin: `
+    SELECT s.student_id, u.user_id, u.email
+    FROM students s
+    LEFT JOIN student_account_links sal ON sal.student_id = s.student_id
+    LEFT JOIN users u ON u.user_id = sal.user_id
+    WHERE s.student_id = $1 AND s.school = $2
+  `,
+
+  //  Is this address a parent's on file for the student (the student row's
+  //  mother/father email, or a linked guardian's)? $1 = student_id, $2 = email
+  selectFamilyAddressMatch: `
+    SELECT 1
+    FROM students s
+    WHERE s.student_id = $1
+      AND (LOWER($2::text) IN (LOWER(TRIM(COALESCE(s.mother_email, ''))), LOWER(TRIM(COALESCE(s.father_email, ''))))
+           OR EXISTS (SELECT 1 FROM parent_students ps LEFT JOIN users pu ON pu.user_id = ps.parent_id
+                       WHERE ps.student_id = s.student_id
+                         AND LOWER($2::text) = LOWER(TRIM(COALESCE(pu.email, ps.parent_email, '')))))
+  `,
+
   //  $1 = student_id
-  selectLinkedAccountEmail: `
-    SELECT u.user_id, u.email
-    FROM student_account_links sal
-    JOIN users u ON u.user_id = sal.user_id
-    WHERE sal.student_id = $1
+  selectLinkByStudent: `
+    SELECT user_id FROM student_account_links WHERE student_id = $1
   `,
 };
 

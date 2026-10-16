@@ -18,6 +18,7 @@ const {
   ACCOUNT_STATUSES,
   normalizeEmail,
   splitName,
+  conflictMessage,
   deriveStatus,
   toStudentAccountRow,
   loadSchoolInfo,
@@ -125,6 +126,11 @@ const updateStudentAccount = async (req, res) => {
     }
     const { rows: others } = await db.query(q.selectOtherUserByEmail, [email, row.user_id]);
     if (others.length > 0) return failed(res, 409, 'An account already uses this email');
+    // The same rule as the list and the invite: a login never moves onto a parent's address.
+    const { rows: family } = await db.query(q.selectFamilyAddressMatch, [studentId, email]);
+    if (family.length > 0) {
+      return failed(res, 409, conflictMessage('family_address'), { code: 'FAMILY_ADDRESS' });
+    }
 
     const changed = String(row.account_email || '').toLowerCase() !== email;
     try {
@@ -171,11 +177,17 @@ const inviteStudents = async (req, res) => {
     const settings = await getSettings(school);
     const version = noticeVersion != null ? noticeVersion.trim() : settings.consentNoticeVersion;
 
-    const { rows } = await db.query(q.selectStudentAccountRowsByIds, [school, ids]);
-    if (rows.length !== ids.length) return failed(res, 404, 'Some of these students were not found');
+    // Only this school year's current rows (the year switcher's year).
+    const schoolYearId = req.schoolYear?.schoolYearId ?? null;
+    const { rows } = schoolYearId
+      ? await db.query(q.selectStudentAccountRowsByIds, [school, ids, schoolYearId])
+      : { rows: [] };
+    if (rows.length !== ids.length) {
+      return failed(res, 404, "Some of these students weren't found in this school year");
+    }
     const byId = new Map(rows.map((r) => [r.student_id, r]));
     const schoolInfo = await loadSchoolInfo(school);
-    const admin = { userId, username, school, schoolYearId: req.schoolYear?.schoolYearId ?? null };
+    const admin = { userId, username, school, schoolYearId };
 
     const results = [];
     for (let i = 0; i < ids.length; i += 1) {

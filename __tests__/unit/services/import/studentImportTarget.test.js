@@ -54,6 +54,12 @@ describe('studentImportTarget: the student email', () => {
     expect(updateSql).toContain("student_email      = COALESCE(NULLIF(TRIM(student_email), ''), $16)");
   });
 
+  it("lists the student's login link among the rows an import undo would cascade", () => {
+    expect(target.dependentTables).toEqual(expect.arrayContaining([
+      { table: 'student_account_links', column: 'student_id', label: 'student login' },
+    ]));
+  });
+
   it('treats a stored student email as filled', () => {
     expect(target.isBlank({ student_email: 'amal.haddad@example.com' }, 'studentEmail')).toBe(false);
     expect(target.isBlank({ student_email: '  ' }, 'studentEmail')).toBe(true);

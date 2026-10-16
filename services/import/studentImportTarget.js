@@ -303,6 +303,7 @@ const dependentTables = [
   { table: 'sk_progress_report_comments', column: 'student_id', label: 'SK progress comments' },
   { table: 'sk_teacher_assistants',       column: 'student_id', label: 'SK teacher assistants' },
   { table: 'students',                    column: 'previous_student_id', label: 'next-year records' },
+  { table: 'student_account_links',       column: 'student_id', label: 'student login' },
 ];
 
 // ─── Optional batch side effects ──────────────────────────────────────
