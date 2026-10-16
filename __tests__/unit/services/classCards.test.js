@@ -1,4 +1,6 @@
-const { classLabel, dedupeParents, toPeopleStudent, peopleCounts, toComingUpRow } = require('../../../services/classroom/classCards');
+const {
+  classLabel, dedupeParents, toPeopleStudent, peopleCounts, toComingUpRow, toDraftRow, toNotice,
+} = require('../../../services/classroom/classCards');
 
 const SETTINGS = { loginFromGrade: '1', qrUntilGrade: '3' };
 
@@ -76,10 +78,43 @@ describe('people shaping', () => {
 });
 
 describe('toComingUpRow', () => {
+  it('an assignment due online counts the students still to turn it in', () => {
+    expect(toComingUpRow({
+      item_id: 'i1', assessment_id: 'a1', kind: 'assignment', submission_mode: 'file', class_id: 'c1', grade: '5', subject: 'Science',
+      title: 'Plant cell diagram', date: '2026-10-23', due_at: new Date('2026-10-24T03:59:00Z'), audience_size: 22,
+    })).toEqual({
+      itemId: 'i1', assessmentId: 'a1', classId: 'c1', classLabel: 'Grade 5 Science', title: 'Plant cell diagram',
+      kind: 'assignment', date: '2026-10-23', dueAt: '2026-10-24T03:59:00.000Z', inClass: false, stillToTurnIn: 22,
+    });
+  });
+
+  it('an assignment with nothing to turn in is done in class; a quiz is not', () => {
+    const base = { item_id: 'i1', class_id: 'c1', grade: '5', subject: 'Science', title: 'T', date: '2026-10-23', audience_size: 3 };
+    expect(toComingUpRow({ ...base, kind: 'assignment', submission_mode: 'none' })).toMatchObject({ inClass: true, stillToTurnIn: null });
+    expect(toComingUpRow({ ...base, kind: 'quiz', submission_mode: 'none' })).toMatchObject({ inClass: false, stillToTurnIn: 3 });
+  });
+
   it('is an in-class assessment with nothing to turn in', () => {
     expect(toComingUpRow({ assessment_id: 'a1', class_id: 'c1', grade: '5', subject: 'Science', title: 'Unit test', date: '2026-10-23' })).toEqual({
       itemId: null, assessmentId: 'a1', classId: 'c1', classLabel: 'Grade 5 Science', title: 'Unit test',
       kind: 'assessment', date: '2026-10-23', dueAt: null, inClass: true, stillToTurnIn: null,
+    });
+  });
+});
+
+describe('toDraftRow and toNotice', () => {
+  it('shape a draft or scheduled item with its class label', () => {
+    expect(toDraftRow({
+      item_id: 'i1', kind: 'quiz', class_id: 'c1', grade: 'JK', subject: 'Science', title: 'Cells quiz',
+      status: 'scheduled', publish_at: new Date('2026-10-19T11:30:00Z'),
+    })).toEqual({
+      itemId: 'i1', classId: 'c1', classLabel: 'JK Science', title: 'Cells quiz', kind: 'quiz', status: 'scheduled', publishAt: '2026-10-19T11:30:00.000Z',
+    });
+  });
+
+  it('shape a stream notice: nothing turned in yet, out of the students it reaches', () => {
+    expect(toNotice({ item_id: 'i1', kind: 'material', title: 'Reading', posted_at: new Date('2026-10-09T12:00:00Z'), due_at: null, total: '22' })).toEqual({
+      itemId: 'i1', kind: 'material', title: 'Reading', postedAt: '2026-10-09T12:00:00.000Z', dueAt: null, turnedInCount: 0, total: 22,
     });
   });
 });

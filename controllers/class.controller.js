@@ -7,6 +7,8 @@ const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { v4: uuidv4 } = require("uuid");
 const { identityOf, optionsOf } = require("../services/classroom/classView");
+const { copyAttachments } = require("../services/classroom/classworkItems");
+const { removeObjects } = require("../utils/attachmentUpload");
 
 // ── Shared helper: fetch additional teachers for a single class ──
 const fetchAdditionalTeachers = async (classId) => {
@@ -702,6 +704,8 @@ const duplicateClass = async (req, res) => {
   }
 
   const client = await db.connect();
+  // Storage objects copied for classwork attachments; removed if the copy rolls back.
+  const copiedFiles = [];
 
   try {
     await client.query("BEGIN");
@@ -786,6 +790,44 @@ const duplicateClass = async (req, res) => {
       assessmentsCopied++;
     }
 
+    // 4b) Classwork, as drafts: topics first (ids mapped), then each live item.
+    //     A linked item reshapes the row the insert trigger gave its copied
+    //     column; an item with no column is inserted. Files are copied in
+    //     storage (best effort; a failed copy is skipped).
+    const { rows: sourceTopics } = await client.query(classQueries.duplicateSelectTopics, [sourceClassId]);
+    const topicMap = {};
+    for (const t of sourceTopics) {
+      const { rows } = await client.query(classQueries.duplicateInsertTopic, [newClass.class_id, t.name, t.sort_order]);
+      topicMap[t.topic_id] = rows[0].topic_id;
+    }
+    const { rows: sourceItems } = await client.query(classQueries.duplicateSelectItems, [sourceClassId]);
+    const copiedBy = req.user?.userId ?? null;
+    let classworkCopied = 0;
+    for (const item of sourceItems) {
+      const topicId = item.topic_id ? topicMap[item.topic_id] ?? null : null;
+      let newItemId = null;
+      if (item.assessment_id) {
+        const newAssessmentId = idMap[item.assessment_id];
+        if (!newAssessmentId) continue;
+        const { rows } = await client.query(classQueries.duplicateConvertLinkedItem, [
+          newAssessmentId, item.kind, item.instructions, topicId, item.submission_mode,
+          item.email_students, item.remind_students, item.show_early, item.sort_order, copiedBy,
+        ]);
+        newItemId = rows[0]?.item_id ?? null;
+      } else if (item.kind !== 'assessment') {
+        const { rows } = await client.query(classQueries.duplicateInsertItem, [
+          newClass.class_id, item.kind, item.title, item.instructions, topicId, item.submission_mode,
+          item.email_students, item.remind_students, item.show_early, item.sort_order, copiedBy,
+        ]);
+        newItemId = rows[0].item_id;
+      }
+      if (!newItemId) continue;
+      classworkCopied++;
+      await copyAttachments(client, {
+        fromItemId: item.item_id, toItemId: newItemId, school: sourceClass.school, userId: copiedBy, copied: copiedFiles,
+      });
+    }
+
     // 5) Copy student enrollments
     const { rows: sourceStudents } = await client.query(
       classQueries.duplicateSelectStudents,
@@ -818,7 +860,7 @@ const duplicateClass = async (req, res) => {
     await client.query("COMMIT");
 
     logger.info(
-      `Class ${sourceClassId} duplicated → ${newClass.class_id} (${assessmentsCopied} assessments, ${studentsCopied} students)`
+      `Class ${sourceClassId} duplicated → ${newClass.class_id} (${assessmentsCopied} assessments, ${classworkCopied} classwork items, ${studentsCopied} students)`
     );
 
     return res.status(201).json({
@@ -835,11 +877,13 @@ const duplicateClass = async (req, res) => {
         createdAt:      newClass.created_at,
         lastModifiedAt: newClass.last_modified_at,
         assessmentsCopied,
+        classworkCopied,
         studentsCopied,
       },
     });
   } catch (error) {
     await client.query("ROLLBACK");
+    await removeObjects(copiedFiles);
     logger.error(error);
     return res
       .status(500)

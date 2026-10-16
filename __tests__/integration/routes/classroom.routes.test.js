@@ -71,6 +71,10 @@ describe('Integration: classroom teacher read API', () => {
      VALUES ($1, $2, (NOW() AT TIME ZONE 'America/Toronto')::date + $3::int, $4, $5) RETURNING assessment_id`,
     [classId, name, days, extra.isParent ?? false, extra.sortOrder ?? 0],
   )).rows[0].assessment_id;
+  // The classwork item the insert trigger gave an assessment (T14).
+  const itemOf = async (assessmentId) => (await pool.query(
+    `SELECT item_id FROM classwork_items WHERE assessment_id = $1`, [assessmentId],
+  )).rows[0]?.item_id ?? null;
   const torontoDate = async (days) => (await pool.query(
     `SELECT TO_CHAR((NOW() AT TIME ZONE 'America/Toronto')::date + $1::int, 'YYYY-MM-DD') AS d`, [days],
   )).rows[0].d;
@@ -165,7 +169,7 @@ describe('Integration: classroom teacher read API', () => {
       await student('Withdrawn Student', '5', { classId: sciId, archived: true });
       await assessment(sciId, 'Last week quiz', -3);
       await assessment(sciId, 'Chapter 2 test', 5, { sortOrder: 2 });
-      await assessment(sciId, 'Chapter 1 test', 2, { sortOrder: 1 });
+      const chapter1 = await assessment(sciId, 'Chapter 1 test', 2, { sortOrder: 1 });
       await assessment(sciId, 'Unit total', 1, { isParent: true });
 
       const data = await cards();
@@ -186,7 +190,7 @@ describe('Integration: classroom teacher read API', () => {
         { userId: CO_TEACHER_ID, name: 'Omar Coteacher', role: 'co', avatar: null },
       ]);
       expect(card.next).toEqual({
-        itemId: null, assessmentId: expect.any(String), title: 'Chapter 1 test', kind: 'assessment', dueAt: null, date: nextDate,
+        itemId: await itemOf(chapter1), assessmentId: chapter1, title: 'Chapter 1 test', kind: 'assessment', dueAt: null, date: nextDate,
       });
     });
 
@@ -234,9 +238,9 @@ describe('Integration: classroom teacher read API', () => {
     });
 
     it('comingUp lists assessments in the next 14 days across the teacher\'s classes', async () => {
-      await assessment(sciId, 'Today quiz', 0);
-      await assessment(mathId, 'Fractions test', 3);
-      await assessment(sciId, 'Edge of window', 14);
+      const today = await assessment(sciId, 'Today quiz', 0);
+      const fractions = await assessment(mathId, 'Fractions test', 3);
+      const edge = await assessment(sciId, 'Edge of window', 14);
       await assessment(sciId, 'Too far out', 15);
       await assessment(sciId, 'Yesterday', -1);
       await assessment(sciId, 'A category', 4, { isParent: true });
@@ -247,15 +251,15 @@ describe('Integration: classroom teacher read API', () => {
       const data = await cards();
       expect(data.comingUp).toEqual([
         {
-          itemId: null, assessmentId: expect.any(String), classId: sciId, classLabel: 'Grade 5 Science', title: 'Today quiz',
+          itemId: await itemOf(today), assessmentId: today, classId: sciId, classLabel: 'Grade 5 Science', title: 'Today quiz',
           kind: 'assessment', date: await torontoDate(0), dueAt: null, inClass: true, stillToTurnIn: null,
         },
         {
-          itemId: null, assessmentId: expect.any(String), classId: mathId, classLabel: 'Grade 4 Math', title: 'Fractions test',
+          itemId: await itemOf(fractions), assessmentId: fractions, classId: mathId, classLabel: 'Grade 4 Math', title: 'Fractions test',
           kind: 'assessment', date: await torontoDate(3), dueAt: null, inClass: true, stillToTurnIn: null,
         },
         {
-          itemId: null, assessmentId: expect.any(String), classId: sciId, classLabel: 'Grade 5 Science', title: 'Edge of window',
+          itemId: await itemOf(edge), assessmentId: edge, classId: sciId, classLabel: 'Grade 5 Science', title: 'Edge of window',
           kind: 'assessment', date: await torontoDate(14), dueAt: null, inClass: true, stillToTurnIn: null,
         },
       ]);

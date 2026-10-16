@@ -18,7 +18,9 @@ const announcementQueries = require('../queries/announcement.queries');
 const { toListItem } = require('./announcement.controller');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
 const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
-const { toClassCard, toHeaderClass, toComingUpRow, toTeacher, toPeopleStudent, peopleCounts } = require('../services/classroom/classCards');
+const {
+  toClassCard, toHeaderClass, toComingUpRow, toDraftRow, toNotice, toTeacher, toPeopleStudent, peopleCounts,
+} = require('../services/classroom/classCards');
 const { getSettings } = require('../services/classroom/classroomSettings');
 const { signedPhotoUrl } = require('../services/profile/photos');
 const { isFamily, isColor } = require('../utils/classIdentity');
@@ -38,24 +40,26 @@ async function loadTeachers(classId) {
 
 // GET /api/classroom/classes?archived=1
 // The Classes home: the caller's class cards for the year, what is coming up
-// across them, and the (later tasks') review and draft lists. Archived classes
-// are left out unless archived=1.
+// across them, their drafts and scheduled items, and (T16) the review list.
+// Archived classes are left out unless archived=1.
 const listClasses = async (req, res) => {
   const { userId, school, role } = req.user;
   const yearId = req.schoolYear?.schoolYearId ?? null;
   const includeArchived = ['1', 'true'].includes(String(req.query.archived));
-  // toReview is T16's TO_REVIEW and draftsAndScheduled is T14's; both empty until then.
+  // toReview is T16's TO_REVIEW; empty until then.
   const empty = { classes: [], toReview: [], comingUp: [], draftsAndScheduled: [] };
   if (!yearId) return ok(res, empty);
   try {
-    const [cardRows, comingRows] = await Promise.all([
+    const [cardRows, comingRows, draftRows] = await Promise.all([
       db.query(classroomQueries.selectClassCards, [userId, school, role, yearId, includeArchived]),
       db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, null]),
+      db.query(classroomQueries.DRAFTS_AND_SCHEDULED, [userId, school, yearId]),
     ]);
     return ok(res, {
       ...empty,
       classes: cardRows.rows.map(toClassCard),
       comingUp: comingRows.rows.map(toComingUpRow),
+      draftsAndScheduled: draftRows.rows.map(toDraftRow),
     });
   } catch (error) {
     logger.error({ err: error, userId }, 'Failed to list the classroom classes');
@@ -130,23 +134,24 @@ const STREAM_LIMIT = 50;
 // with guardian and student seen counts, what is coming up in the class, and
 // who a new post would email. Posts are not limited to the selected year (the
 // class id already scopes them), so a past-year class still shows its own.
-// notices are classwork notices (T14).
+// notices are the class's posted assignments, quizzes and materials.
 const getStream = async (req, res) => {
   const { classId, school } = req.class;
   const { userId, role } = req.user;
   const yearId = req.schoolYear?.schoolYearId ?? null;
   try {
-    const [postRes, comingRes, previewRes] = await Promise.all([
+    const [postRes, comingRes, previewRes, noticeRes] = await Promise.all([
       db.query(announcementQueries.listAnnouncements, [
         userId, school, role, null, classId, 'class', null, null, false, false, null, null, STREAM_LIMIT,
       ]),
       yearId ? db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, classId]) : Promise.resolve({ rows: [] }),
       db.query(announcementQueries.selectAudiencePreview, [school, 'class', classId, null, yearId, null]),
+      db.query(classroomQueries.STREAM_NOTICES, [classId]),
     ]);
     const p = previewRes.rows[0] || {};
     return ok(res, {
       announcements: postRes.rows.map((r) => toListItem(r, req.user)),
-      notices: [],
+      notices: noticeRes.rows.map(toNotice),
       upcoming: comingRes.rows.map(toComingUpRow),
       audience: {
         students: p.students_with_account ?? 0,

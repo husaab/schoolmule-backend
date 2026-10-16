@@ -216,3 +216,27 @@ describe('messageNotifier', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+describe('promoteScheduled (worker tick)', () => {
+  beforeEach(() => { db._reset(); });
+
+  it('returns the classwork it posted', async () => {
+    makeRouter({ "SET status = 'posted'": [{ item_id: 'i1', class_id: 'c1' }] });
+    expect(await notifier.promoteScheduled()).toEqual([{ item_id: 'i1', class_id: 'c1' }]);
+  });
+
+  it('a failure is logged, never thrown', async () => {
+    db.query.mockRejectedValueOnce(new Error('connection reset'));
+    await expect(notifier.promoteScheduled()).resolves.toEqual([]);
+  });
+
+  it('stands down once classwork_items is missing, without querying again', async () => {
+    const err = new Error('relation "classwork_items" does not exist');
+    err.code = '42P01';
+    db.query.mockRejectedValueOnce(err);
+    await expect(notifier.promoteScheduled()).resolves.toEqual([]);
+    db.query.mockClear();
+    await expect(notifier.promoteScheduled()).resolves.toEqual([]);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+});

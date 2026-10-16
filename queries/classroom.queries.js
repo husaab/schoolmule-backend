@@ -3,7 +3,7 @@
 // What the teacher's classroom reads: class cards (Classes home), the class
 // header and the People roster. The pieces later tasks replace are named
 // fragments, so each of them changes exactly one constant:
-//   CARD_NEXT, COMING_UP     T14 reads classwork items instead of assessments
+//   CARD_NEXT, COMING_UP     classwork items (T14); DRAFTS_AND_SCHEDULED, STREAM_NOTICES (T14)
 //   CARD_TO_REVIEW, TO_REVIEW  T16 counts submissions waiting for a grade
 //   PEOPLE_MISSING           T15 counts a student's missing work in the class
 // Fragments that sit inside a SELECT use the aliases of that query: `c` is the
@@ -11,17 +11,22 @@
 
 const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
+const { ISO, EFFECTIVE_POSTED, ITEM_DAY, AUDIENCE_SIZE } = require('./classwork.queries');
 
 const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
 
-// The class's next leaf assessment dated today or later (categories are not
-// leaves). T14 reads the class's next posted classwork item instead.
-const CARD_NEXT = `(SELECT json_build_object('itemId', NULL, 'assessmentId', a.assessment_id, 'title', a.name, 'kind', 'assessment',
-                     'dueAt', NULL, 'date', TO_CHAR(a.date, 'YYYY-MM-DD'))
-                    FROM assessments a
-                   WHERE a.class_id = c.class_id AND COALESCE(a.is_parent, FALSE) = FALSE
-                     AND a.date >= ${TORONTO_TODAY}
-                   ORDER BY a.date, a.sort_order NULLS LAST LIMIT 1)`;
+// The class's next live classwork item (not a material) falling today or
+// later: an assignment or quiz on its Toronto due date, a plain assessment on
+// its gradebook date. Drafts and not-yet-due schedules are not "next".
+const CARD_NEXT = `(SELECT json_build_object('itemId', i.item_id, 'assessmentId', i.assessment_id, 'title', COALESCE(a.name, i.title),
+                     'kind', i.kind, 'dueAt', ${ISO('i.due_at')}, 'date', TO_CHAR(${ITEM_DAY()}, 'YYYY-MM-DD'))
+                    FROM classwork_items i
+                    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+                   WHERE i.class_id = c.class_id AND i.deleted_at IS NULL AND i.kind <> 'material'
+                     AND ${EFFECTIVE_POSTED()}
+                     AND ${ITEM_DAY()} >= ${TORONTO_TODAY}
+                   ORDER BY ${ITEM_DAY()}, i.due_at NULLS FIRST, a.sort_order NULLS LAST, COALESCE(a.name, i.title)
+                   LIMIT 1)`;
 
 // Submissions waiting for the teacher. Nothing is turned in online yet (T16).
 const CARD_TO_REVIEW = '0';
@@ -35,22 +40,58 @@ const PEOPLE_MISSING = '0';
 const CALLER_SCOPE = `($3::text = 'ADMIN' OR c.teacher_id = $1
        OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))`;
 
-// Leaf assessments dated today through two weeks out, earliest first, at most
-// 8, in the caller's active classes. $1 user_id, $2 school, $3 role,
-// $4 school_year_id, $5 class_id (NULL = every class of the caller).
-// T14 reads classwork items (assignment/quiz by due date) instead.
+// Live classwork (not materials) falling today through two weeks out,
+// earliest first, at most 8, in the caller's active classes. audience_size is
+// how many students the item reaches (still to turn in, until T15 counts
+// turn-ins). $1 user_id, $2 school, $3 role, $4 school_year_id, $5 class_id
+// (NULL = every class of the caller).
 const COMING_UP = `
-  SELECT a.assessment_id, c.class_id, c.grade::text AS grade, c.subject, a.name AS title,
-         TO_CHAR(a.date, 'YYYY-MM-DD') AS date
-  FROM assessments a
-  JOIN classes c ON c.class_id = a.class_id
+  SELECT i.item_id, i.assessment_id, i.kind, i.submission_mode, c.class_id, c.grade::text AS grade, c.subject,
+         COALESCE(a.name, i.title) AS title, TO_CHAR(${ITEM_DAY()}, 'YYYY-MM-DD') AS date, i.due_at,
+         ${AUDIENCE_SIZE()} AS audience_size
+  FROM classwork_items i
+  JOIN classes c ON c.class_id = i.class_id
+  LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
   WHERE c.school = $2 AND c.school_year_id = $4 AND c.archived_at IS NULL
     AND ${CALLER_SCOPE}
     AND ($5::uuid IS NULL OR c.class_id = $5::uuid)
-    AND COALESCE(a.is_parent, FALSE) = FALSE
-    AND a.date BETWEEN ${TORONTO_TODAY} AND ${TORONTO_TODAY} + 14
-  ORDER BY a.date, ${GRADE_RANK('c.grade::text')}, c.subject, a.sort_order NULLS LAST, a.name
+    AND i.deleted_at IS NULL AND i.kind <> 'material' AND ${EFFECTIVE_POSTED()}
+    AND ${ITEM_DAY()} BETWEEN ${TORONTO_TODAY} AND ${TORONTO_TODAY} + 14
+  ORDER BY ${ITEM_DAY()}, ${GRADE_RANK('c.grade::text')}, c.subject, i.due_at NULLS FIRST, a.sort_order NULLS LAST,
+           COALESCE(a.name, i.title)
   LIMIT 8`;
+
+// Drafts and future schedules the caller works on: items they created, or in
+// classes they lead or co-teach (so a co-teacher sees the class's drafts and
+// an admin only their own), this year, active classes, scheduled first by
+// publish time, then drafts newest first, at most 10.
+// $1 user_id, $2 school, $3 school_year_id
+const DRAFTS_AND_SCHEDULED = `
+  SELECT i.item_id, i.kind, c.class_id, c.grade::text AS grade, c.subject, COALESCE(a.name, i.title) AS title,
+         i.status, i.publish_at
+  FROM classwork_items i
+  JOIN classes c ON c.class_id = i.class_id
+  LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+  WHERE c.school = $2 AND c.school_year_id = $3 AND c.archived_at IS NULL
+    AND i.deleted_at IS NULL
+    AND (i.status = 'draft' OR (i.status = 'scheduled' AND i.publish_at > NOW()))
+    AND (i.created_by = $1 OR c.teacher_id = $1
+         OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))
+  ORDER BY (i.status = 'scheduled') DESC, i.publish_at, COALESCE(i.edited_at, i.created_at) DESC, i.item_id
+  LIMIT 10`;
+
+// The teacher Stream's classwork notices: live assignments, quizzes and
+// materials of the class, newest first, at most 20. total = the students the
+// item reaches; turnedInCount is 0 until T15. $1 class_id
+const STREAM_NOTICES = `
+  SELECT i.item_id, i.kind, COALESCE(a.name, i.title) AS title,
+         COALESCE(i.posted_at, i.publish_at) AS posted_at, i.due_at, ${AUDIENCE_SIZE()} AS total
+  FROM classwork_items i
+  LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+  WHERE i.class_id = $1 AND i.deleted_at IS NULL AND i.kind IN ('assignment', 'quiz', 'material')
+    AND ${EFFECTIVE_POSTED()}
+  ORDER BY COALESCE(i.posted_at, i.publish_at) DESC, i.created_at DESC, i.item_id
+  LIMIT 20`;
 
 // One ClassCard row. `extraColumns` is the header's additions (options, year).
 const cardSelect = (where, orderBy, extraColumns = '') => `
@@ -76,6 +117,8 @@ const classroomQueries = {
   TO_REVIEW,
   PEOPLE_MISSING,
   COMING_UP,
+  DRAFTS_AND_SCHEDULED,
+  STREAM_NOTICES,
 
   //  The Classes home. $1 user_id, $2 school, $3 role, $4 school_year_id,
   //  $5 include_archived

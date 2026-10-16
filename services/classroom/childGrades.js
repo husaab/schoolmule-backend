@@ -11,6 +11,7 @@
 const db = require('../../config/database');
 const engine = require('../analyticsEngine');
 const q = require('../../queries/childClassroom.queries');
+const classworkQueries = require('../../queries/classwork.queries');
 const termQueries = require('../../queries/term.queries');
 const { resolveTerm } = require('./resolveTerm');
 const { identityOf } = require('./classView');
@@ -42,12 +43,12 @@ function gradeItemsOf(cls, row) {
     .filter((a) => !a.isParent && SHOWN_STATES.has(a.status))
     .map((a) => ({
       assessmentId: a.assessmentId,
-      itemId: null, // T14 maps assessments to classwork items
+      itemId: null, // set by withClasswork from the column's classwork item
       classId: row.class_id,
       subject: row.subject,
       teacherName: row.teacher_name ?? null,
       title: a.name,
-      kind: 'assessment',
+      kind: 'assessment', // withClasswork: the item's real kind
       categoryName: a.parentAssessmentId ? names.get(a.parentAssessmentId) ?? null : null,
       score: a.status === 'graded' ? a.score : null,
       maxScore: a.maxScore,
@@ -74,6 +75,25 @@ function toChildClassGrades(row, cls) {
     latestPublishedAt: items.reduce((latest, i) => (i.publishedAt && (!latest || i.publishedAt > latest) ? i.publishedAt : latest), null),
     items,
   };
+}
+
+/**
+ * Each grade's classwork item: `kind` is the item's kind (an assignment or
+ * quiz graded in this column reads as one), and `itemId` is set only when the
+ * child may open that item (ITEM_VISIBLE), so a link never leads to a 404.
+ */
+async function withClasswork(classes, studentId) {
+  const ids = [...new Set(classes.flatMap((c) => c.items.map((i) => i.assessmentId)))];
+  if (ids.length === 0) return classes;
+  const { rows } = await db.query(classworkQueries.selectItemsForAssessments, [ids, studentId]);
+  const byAssessment = new Map(rows.map((r) => [r.assessment_id, r]));
+  return classes.map((c) => ({
+    ...c,
+    items: c.items.map((i) => {
+      const item = byAssessment.get(i.assessmentId);
+      return item ? { ...i, kind: item.kind, itemId: item.visible ? item.item_id : null } : i;
+    }),
+  }));
 }
 
 /**
@@ -105,7 +125,8 @@ async function buildChildGrades({ studentId, school, req }) {
   ]);
   const breakdown = engine.getStudentClassBreakdown(matrix, studentId);
   const byClass = new Map((breakdown?.classes ?? []).map((c) => [c.classId, c]));
-  return { ...base, classes: classRows.map((row) => toChildClassGrades(row, byClass.get(row.class_id))) };
+  const classes = classRows.map((row) => toChildClassGrades(row, byClass.get(row.class_id)));
+  return { ...base, classes: await withClasswork(classes, studentId) };
 }
 
 /** Every GradeItem of a ChildGrades, newest first. */

@@ -23,6 +23,7 @@ const { scopeLabel, parentLink, studentLink } = require('../utils/announcementSc
 const { avatarPngUrl } = require('../utils/avatar');
 const adminUserQueries = require('../queries/adminUser.queries');
 const { emailAttachments } = require('../utils/attachmentUpload');
+const scheduler = require('./classroom/scheduler');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -43,6 +44,8 @@ let disabledReason = null;
 // Files of one announcement, downloaded once per tick and shared by every recipient's job.
 const announcementFileCache = new Map();
 let announcementsDisabled = null;
+// Set when classwork_items is missing (migration not applied): say so once and stand down.
+let classworkDisabled = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -407,10 +410,31 @@ async function drainAll(limit = 20) {
   return handled;
 }
 
+/**
+ * Posts scheduled classwork whose time has come. Never throws: a failure is
+ * logged and the tick carries on with the email queues.
+ * @returns {Promise<{ item_id: string, class_id: string }[]>} the items posted
+ */
+async function promoteScheduled() {
+  if (classworkDisabled) return [];
+  try {
+    return await scheduler.promoteScheduledItems();
+  } catch (error) {
+    if (error?.code === UNDEFINED_TABLE) {
+      classworkDisabled = 'student_portal_20_classwork.sql has not been applied';
+      logger.error('Scheduled classwork disabled: classwork_items is missing. Apply student_portal_20_classwork.sql and restart.');
+      return [];
+    }
+    logger.error({ err: error }, 'Posting scheduled classwork failed');
+    return [];
+  }
+}
+
 function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   if (timer) return;
   disabledReason = null;
   announcementsDisabled = null;
+  classworkDisabled = null;
   // A restart part-way through the day must not re-run the reminder sweep.
   lastReminderDate = torontoDate();
   timer = setInterval(async () => {
@@ -418,6 +442,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
     if (draining) return;
     draining = true;
     try {
+      await promoteScheduled();
       if (!disabledReason) await remindIfDue();
       await drainAll();
       await drainAnnouncements();
@@ -442,5 +467,5 @@ function stopWorker() {
 
 module.exports = {
   startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS,
-  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH,
+  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled,
 };

@@ -417,6 +417,52 @@ const classQueries = {
       RETURNING *
     `,
 
+    // Classwork copies as drafts: topics (same order), then each live item.
+    duplicateSelectTopics: `
+      SELECT topic_id, name, sort_order
+      FROM classwork_topics
+      WHERE class_id = $1
+      ORDER BY sort_order, created_at, topic_id
+    `,
+
+    duplicateInsertTopic: `
+      INSERT INTO classwork_topics (class_id, name, sort_order)
+      VALUES ($1, $2, $3)
+      RETURNING topic_id
+    `,
+
+    duplicateSelectItems: `
+      SELECT item_id, kind, title, instructions, topic_id, submission_mode, assessment_id,
+             email_students, remind_students, show_early, sort_order
+      FROM classwork_items
+      WHERE class_id = $1 AND deleted_at IS NULL
+      ORDER BY created_at, item_id
+    `,
+
+    // The copied column's item (made by the insert trigger) takes the source
+    // item's shape, as a draft with no dates.
+    // $1 new assessment_id, $2 kind, $3 instructions, $4 topic_id, $5 submission_mode,
+    // $6 email_students, $7 remind_students, $8 show_early, $9 sort_order, $10 created_by
+    duplicateConvertLinkedItem: `
+      UPDATE classwork_items
+      SET kind = $2, title = NULL, instructions = $3, topic_id = $4, submission_mode = $5,
+          status = 'draft', posted_at = NULL, publish_at = NULL, due_at = NULL,
+          email_students = $6, remind_students = $7, show_early = $8, sort_order = $9,
+          created_by = $10, created_at = NOW(), edited_at = NULL
+      WHERE assessment_id = $1
+      RETURNING item_id
+    `,
+
+    // An item with no column, as a draft with no dates.
+    // $1 class_id, $2 kind, $3 title, $4 instructions, $5 topic_id, $6 submission_mode,
+    // $7 email_students, $8 remind_students, $9 show_early, $10 sort_order, $11 created_by
+    duplicateInsertItem: `
+      INSERT INTO classwork_items (class_id, kind, title, instructions, topic_id, submission_mode, status,
+                                   email_students, remind_students, show_early, sort_order, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11)
+      RETURNING item_id
+    `,
+
     duplicateSelectStudents: `
       SELECT student_id
       FROM class_students

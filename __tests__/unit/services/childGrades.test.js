@@ -11,6 +11,7 @@ jest.mock('../../../services/analyticsEngine', () => {
 const db = require('../../__mocks__/config/database');
 const engine = require('../../../services/analyticsEngine');
 const q = require('../../../queries/childClassroom.queries');
+const classworkQueries = require('../../../queries/classwork.queries');
 const termQueries = require('../../../queries/term.queries');
 const { buildChildGrades, newGradesFor } = require('../../../services/classroom/childGrades');
 
@@ -56,6 +57,8 @@ const classRow = (extra = {}) => ({
 let profile;
 let classRows;
 let matrixRows;
+let itemRows;
+let itemQueryArgs;
 
 const req = (query = {}) => ({ query, user: { school: SCHOOL }, schoolYear: { schoolYearId: YEAR_ID } });
 
@@ -63,10 +66,13 @@ beforeEach(() => {
   profile = { student_id: AMAL, name: 'Amal Haddad', grade: '5', school: SCHOOL, school_year_id: YEAR_ID, is_archived: false };
   classRows = [classRow()];
   matrixRows = [row(AMAL, quiz1, 8), row(AMAL, quiz2, 3), row(BILAL, quiz1, 6), row(BILAL, quiz2, 10)];
+  itemRows = [];
+  itemQueryArgs = null;
 
-  db.query.mockImplementation(async (sql) => {
+  db.query.mockImplementation(async (sql, params) => {
     if (sql === q.selectChildProfile) return { rows: [profile] };
     if (sql === q.selectGradeClasses) return { rows: classRows };
+    if (sql === classworkQueries.selectItemsForAssessments) { itemQueryArgs = params; return { rows: itemRows }; }
     if (sql === termQueries.selectTermsBySchool) {
       return { rows: [{ term_id: TERM_ID, name: 'Term 1', is_active: true, start_date: '2026-09-01', end_date: '2026-12-20', school: SCHOOL }] };
     }
@@ -92,6 +98,19 @@ describe('buildChildGrades', () => {
     });
     expect(math).toMatchObject({ gradedCount: 1, missingCount: 0, latestPublishedAt: quiz1.published_at.toISOString() });
     expect(JSON.stringify(grades)).not.toContain(BILAL);
+  });
+
+  it("takes each grade's kind from its classwork item, and its itemId only when the child may open the item", async () => {
+    matrixRows = [row(AMAL, quiz1, 8), row(AMAL, assessment(QUIZ2, 'Quiz 2'), 6)];
+    itemRows = [
+      { assessment_id: QUIZ1, item_id: 'item-1', kind: 'quiz', visible: true },
+      { assessment_id: QUIZ2, item_id: 'item-2', kind: 'assignment', visible: false },
+    ];
+    const grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
+    const byId = Object.fromEntries(grades.classes[0].items.map((i) => [i.assessmentId, i]));
+    expect([byId[QUIZ1].kind, byId[QUIZ1].itemId]).toEqual(['quiz', 'item-1']);
+    expect([byId[QUIZ2].kind, byId[QUIZ2].itemId]).toEqual(['assignment', null]);
+    expect(itemQueryArgs).toEqual([expect.arrayContaining([QUIZ1, QUIZ2]), AMAL]);
   });
 
   it('classAvg is null unless the class shows the class average', async () => {

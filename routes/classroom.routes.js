@@ -1,8 +1,11 @@
 const express = require("express");
 const requireStaff = require("../middleware/requireStaff");
 const requireClassOwnership = require("../middleware/requireClassOwnership");
+const requireClassroomResource = require("../middleware/requireClassroomResource");
 const controller = require("../controllers/classroom.controller");
+const classwork = require("../controllers/classwork.controller");
 const { singleImage } = require("../utils/imageUpload");
+const { uploadFiles, uploadFile } = require("../utils/classworkUpload");
 
 const BANNER_MAX_BYTES = 3 * 1024 * 1024;
 // Checked after requireClassOwnership: a stranger's upload is never read.
@@ -22,6 +25,18 @@ router.param("classId", (req, res, next, id) => {
 });
 router.param("studentId", (req, res, next, id) => {
   if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Student not found" });
+  next();
+});
+router.param("itemId", (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Item not found" });
+  next();
+});
+router.param("topicId", (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Topic not found" });
+  next();
+});
+router.param("attachmentId", (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Attachment not found" });
   next();
 });
 
@@ -51,5 +66,31 @@ router.post("/classes/:classId/archive", requireClassOwnership, controller.archi
 router.post("/classes/:classId/unarchive", requireClassOwnership, controller.unarchiveClass);
 // A teacher picks the avatar of a student who has no login to pick with.
 router.put("/classes/:classId/students/:studentId/avatar", requireClassOwnership, controller.setStudentAvatar);
+
+// Classwork: items, topics, attachments, copy from another class. Routes by
+// item/topic/attachment id run requireClassroomResource (same rule as
+// requireClassOwnership, on the resource's class). Uploads are read only
+// after that check passes, so a stranger's upload is never parsed.
+router.get("/classes/:classId/items", requireClassOwnership, classwork.listItems);
+router.post("/classes/:classId/items", requireClassOwnership, classwork.createItem);
+router.get("/items/:itemId", requireClassroomResource("item"), classwork.getItem);
+router.patch("/items/:itemId", requireClassroomResource("item"), classwork.updateItem);
+router.delete("/items/:itemId", requireClassroomResource("item"), classwork.deleteItem);
+
+router.get("/classes/:classId/topics", requireClassOwnership, classwork.listTopics);
+router.post("/classes/:classId/topics", requireClassOwnership, classwork.createTopic);
+router.post("/classes/:classId/topics/reorder", requireClassOwnership, classwork.reorderTopics);
+router.patch("/topics/:topicId", requireClassroomResource("topic"), classwork.updateTopic);
+router.delete("/topics/:topicId", requireClassroomResource("topic"), classwork.deleteTopic);
+
+router.post("/items/:itemId/attachments", requireClassroomResource("item"), uploadFiles, classwork.uploadAttachments);
+router.post("/items/:itemId/links", requireClassroomResource("item"), classwork.addLink);
+router.patch("/attachments/:attachmentId", requireClassroomResource("attachment"), classwork.updateAttachment);
+router.put("/attachments/:attachmentId/file", requireClassroomResource("attachment"), uploadFile, classwork.replaceAttachmentFile);
+router.delete("/attachments/:attachmentId", requireClassroomResource("attachment"), classwork.deleteAttachment);
+router.get("/attachments/:attachmentId/url", requireClassroomResource("attachment"), classwork.attachmentUrl);
+
+router.get("/classes/:classId/copy-sources", requireClassOwnership, classwork.copySources);
+router.post("/classes/:classId/copy", requireClassOwnership, classwork.copyFromClass);
 
 module.exports = router;

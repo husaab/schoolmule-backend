@@ -499,13 +499,15 @@ describe('Class Controller', () => {
       const newRow = buildClassRow();
 
       // Transaction: BEGIN, selectClassById, createClass, duplicateCopyIdentity,
-      // duplicateSelectAssessments, duplicateSelectStudents,
-      // duplicateSelectClassTeachers, COMMIT
+      // duplicateSelectAssessments, duplicateSelectTopics, duplicateSelectItems,
+      // duplicateSelectStudents, duplicateSelectClassTeachers, COMMIT
       mockTransactionSequence([
         { rows: [sourceRow] },               // selectClassById
         { rows: [newRow] },                   // createClass
         { rows: [] },                         // duplicateCopyIdentity (banner, icon, color, options)
         { rows: [] },                         // duplicateSelectAssessments (no assessments)
+        { rows: [] },                         // duplicateSelectTopics (no classwork topics)
+        { rows: [] },                         // duplicateSelectItems (no classwork)
         { rows: [] },                         // duplicateSelectStudents (no students)
         { rows: [] },                         // duplicateSelectClassTeachers (no additional teachers)
       ]);

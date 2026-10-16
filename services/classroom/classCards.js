@@ -44,21 +44,51 @@ function toClassCard(row) {
 /** The header's card: the ClassCard plus the class options. */
 const toHeaderClass = (row) => ({ ...toClassCard(row), options: optionsOf(row) });
 
-/** COMING_UP row → ComingUpRow. Everything is an in-class assessment until T14 adds turn-in items. */
+/**
+ * Done in class, nothing turned in online: a plain assessment, or an
+ * assignment whose turn-in is "Nothing to turn in". Quizzes are taken online.
+ */
+const isInClass = (kind, submissionMode) => kind === 'assessment' || (kind === 'assignment' && submissionMode === 'none');
+
+/** COMING_UP row → ComingUpRow. Still to turn in = the students the item reaches (T15 subtracts turn-ins). */
 function toComingUpRow(row) {
+  const kind = row.kind ?? 'assessment';
+  const inClass = isInClass(kind, row.submission_mode);
   return {
-    itemId: null,
-    assessmentId: row.assessment_id,
+    itemId: row.item_id ?? null,
+    assessmentId: row.assessment_id ?? null,
     classId: row.class_id,
     classLabel: classLabel(row.grade, row.subject),
     title: row.title,
-    kind: 'assessment',
+    kind,
     date: row.date,
-    dueAt: null,
-    inClass: true,
-    stillToTurnIn: null,
+    dueAt: iso(row.due_at),
+    inClass,
+    stillToTurnIn: inClass ? null : Number(row.audience_size) || 0,
   };
 }
+
+/** DRAFTS_AND_SCHEDULED row → a "Drafts & scheduled" entry. */
+const toDraftRow = (row) => ({
+  itemId: row.item_id,
+  classId: row.class_id,
+  classLabel: classLabel(row.grade, row.subject),
+  title: row.title,
+  kind: row.kind,
+  status: row.status,
+  publishAt: iso(row.publish_at),
+});
+
+/** STREAM_NOTICES row → a teacher Stream classwork notice. */
+const toNotice = (row) => ({
+  itemId: row.item_id,
+  kind: row.kind,
+  title: row.title,
+  postedAt: iso(row.posted_at),
+  dueAt: iso(row.due_at),
+  turnedInCount: 0,
+  total: Number(row.total) || 0,
+});
 
 /** selectClassTeachers row → header/People teacher. `photoUrl` is the signed URL, signed by the caller. */
 const toTeacher = (row, photoUrl) => ({
@@ -116,4 +146,6 @@ const peopleCounts = (students) => ({
   missingWork: students.filter((s) => s.missingCount > 0).length,
 });
 
-module.exports = { classLabel, toClassCard, toHeaderClass, toComingUpRow, toTeacher, dedupeParents, toPeopleStudent, peopleCounts };
+module.exports = {
+  classLabel, isInClass, toClassCard, toHeaderClass, toComingUpRow, toDraftRow, toNotice, toTeacher, dedupeParents, toPeopleStudent, peopleCounts,
+};
