@@ -20,8 +20,21 @@ router.param("attachmentId", (req, res, next, id) => {
   if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Attachment not found" });
   next();
 });
+router.param("classId", (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", code: "NOT_ENROLLED", message: "You aren't in this class" });
+  next();
+});
 
 router.get("/me", controller.getMe);
+
+// Home, class cards, a class (header, Stream, People) and published grades.
+// Every /classes/:classId route first checks the student is on that roster.
+router.get("/home", controller.getHome);
+router.get("/classes", controller.listClasses);
+router.get("/classes/:classId", controller.requireEnrolledClass, controller.getClass);
+router.get("/classes/:classId/stream", controller.requireEnrolledClass, controller.getClassStream);
+router.get("/classes/:classId/people", controller.requireEnrolledClass, controller.getClassPeople);
+router.get("/grades", controller.getGrades);
 
 // The class Stream: announcements whose audience includes this student.
 router.get("/announcements", controller.listAnnouncements);

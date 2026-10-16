@@ -16,6 +16,10 @@ const { getSettings } = require('../services/classroom/classroomSettings');
 const { photoUrlFor } = require('../services/profile/photos');
 const { loadSchoolInfo } = require('../services/classroom/studentAccounts');
 const { getSchoolName } = require('../utils/schoolUtils');
+const {
+  loadChild, listChildClasses, getChildClass, getChildStream, getChildPeople,
+} = require('../services/classroom/childClassroom');
+const { buildChildGrades, newGradesFor, isTermParamValid } = require('../services/classroom/childGrades');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
@@ -23,6 +27,9 @@ const failed = (res, status, message) => res.status(status).json({ status: 'fail
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEED_LIMIT = 30;
 const MAX_FEED_LIMIT = 100;
+
+const feedLimit = (value) => Math.min(Math.max(Number.parseInt(value, 10) || FEED_LIMIT, 1), MAX_FEED_LIMIT);
+const NOT_ENROLLED = { status: 'failed', code: 'NOT_ENROLLED', message: "You aren't in this class" };
 
 // GET /api/student/me
 // Who is signed in: the student row for the request year, the login, the
@@ -61,7 +68,7 @@ const getMe = async (req, res) => {
 const listAnnouncements = async (req, res) => {
   const classId = req.query.classId || null;
   if (classId && !UUID_RE.test(String(classId))) return failed(res, 400, 'Invalid class id');
-  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || FEED_LIMIT, 1), MAX_FEED_LIMIT);
+  const limit = feedLimit(req.query.limit);
   try {
     const items = await listStudentStream({
       studentId: req.student.studentId,
@@ -122,4 +129,102 @@ const announcementAttachmentUrl = async (req, res) => {
   }
 };
 
-module.exports = { getMe, listAnnouncements, requireStudentAnnouncement, markAnnouncementRead, announcementAttachmentUrl };
+// The read model's arguments for the caller's own student row.
+const self = (req) => ({
+  studentId: req.student.studentId,
+  school: req.user.school,
+  schoolYearId: req.student.schoolYearId,
+  readerId: req.user.userId,
+});
+
+// GET /api/student/home
+// Who is signed in, new grades (published in the last 14 days, default term
+// of the year; home takes no ?termId=) and the class cards. dueSoon and
+// missing are classwork (T15).
+const getHome = async (req, res) => {
+  const me = self(req);
+  const gradesReq = { query: {}, user: req.user, schoolYear: req.schoolYear };
+  try {
+    const [child, newGrades, classes] = await Promise.all([
+      loadChild(me.studentId, me.school),
+      newGradesFor({ studentId: me.studentId, school: me.school, req: gradesReq }),
+      listChildClasses(me),
+    ]);
+    const { studentId, name, firstName, grade } = req.student;
+    return ok(res, {
+      student: { studentId, name, firstName, grade, avatar: child?.avatar ?? null },
+      dueSoon: [],
+      missing: [],
+      newGrades,
+      classes,
+    });
+  } catch (error) {
+    logger.error({ err: error, userId: req.user.userId }, 'Failed to load the student home');
+    return failed(res, 500, 'Error loading your home page');
+  }
+};
+
+// GET /api/student/classes
+const listClasses = async (req, res) => {
+  try {
+    return ok(res, { classes: await listChildClasses(self(req)) });
+  } catch (error) {
+    logger.error({ err: error, userId: req.user.userId }, 'Failed to list the student classes');
+    return failed(res, 500, 'Error loading your classes');
+  }
+};
+
+// Guard for /classes/:classId/*: the student must be on the class's roster and
+// the class not archived (404 NOT_ENROLLED otherwise). Sets req.childClass.
+const requireEnrolledClass = async (req, res, next) => {
+  try {
+    const header = await getChildClass({ ...self(req), classId: req.params.classId });
+    if (!header) return res.status(404).json(NOT_ENROLLED);
+    req.childClass = header;
+    return next();
+  } catch (error) {
+    logger.error({ err: error, classId: req.params.classId }, 'Student class check failed');
+    return failed(res, 500, 'Error loading the class');
+  }
+};
+
+// GET /api/student/classes/:classId
+// The class header. upcoming is classwork (T15).
+const getClass = (req, res) => ok(res, { class: req.childClass, upcoming: [] });
+
+// GET /api/student/classes/:classId/stream?limit=30
+const getClassStream = async (req, res) => {
+  try {
+    return ok(res, await getChildStream({ ...self(req), classId: req.params.classId, limit: feedLimit(req.query.limit) }));
+  } catch (error) {
+    logger.error({ err: error, classId: req.params.classId }, 'Failed to load the student class stream');
+    return failed(res, 500, 'Error loading the class stream');
+  }
+};
+
+// GET /api/student/classes/:classId/people: the teachers, never classmates.
+const getClassPeople = async (req, res) => {
+  try {
+    return ok(res, await getChildPeople({ studentId: req.student.studentId, classId: req.params.classId }));
+  } catch (error) {
+    logger.error({ err: error, classId: req.params.classId }, 'Failed to load the student class people');
+    return failed(res, 500, 'Error loading the class');
+  }
+};
+
+// GET /api/student/grades?termId=
+// Published grades only, from the shared grade engine (the parent portal's path).
+const getGrades = async (req, res) => {
+  if (!isTermParamValid(req.query.termId)) return failed(res, 400, 'Invalid term');
+  try {
+    return ok(res, await buildChildGrades({ studentId: req.student.studentId, school: req.user.school, req }));
+  } catch (error) {
+    logger.error({ err: error, userId: req.user.userId }, 'Failed to load the student grades');
+    return failed(res, 500, 'Error loading your grades');
+  }
+};
+
+module.exports = {
+  getMe, listAnnouncements, requireStudentAnnouncement, markAnnouncementRead, announcementAttachmentUrl,
+  getHome, listClasses, requireEnrolledClass, getClass, getClassStream, getClassPeople, getGrades,
+};
