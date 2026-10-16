@@ -457,6 +457,10 @@ const announcementQueries = {
       (($3::uuid IS NULL OR cl.school_year_id = $3) AND (cl.teacher_id = $2 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $2))) AS allowed
     FROM classes cl WHERE cl.class_id = $1
   `,
+  // How many of these students are on the class roster. $1 class_id, $2 student_id[]
+  countStudentsInClass: `
+    SELECT COUNT(*)::int AS n FROM class_students WHERE class_id = $1 AND student_id = ANY($2::uuid[])
+  `,
   // $1 grade, $2 user_id, $3 school, $4 school_year_id|null
   canPostToGrade: `
     SELECT EXISTS (SELECT 1 FROM students s WHERE s.school = $3 AND s.grade::text = $1::text AND s.homeroom_teacher_id = $2

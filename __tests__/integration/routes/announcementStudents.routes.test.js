@@ -370,5 +370,54 @@ describe('Integration: the class Stream reaches students', () => {
       await settings({ student_email_from_grade: null });
       expect((await stream()).audience).toEqual({ students: 0, guardians: 2 });
     });
+
+    it("a 'Choose students…' post composed in a class shows in that class's Stream and keeps its custom audience", async () => {
+      const custom = (who, fields) => {
+        let r = authenticatedRequest('post', '/api/announcements', who)
+          .field('scope', 'custom').field('title', fields.title || 'Picked few').field('body', 'Bring your lab coat.');
+        if (fields.classId !== undefined) r = r.field('classId', fields.classId);
+        for (const id of fields.studentIds) r = r.field('studentIds', id);
+        return r;
+      };
+      const res = await custom(asTeacher, { classId: mathId, studentIds: [amalId] });
+      expect(res.status).toBe(201);
+      const id = res.body.data.announcementId;
+      expect(res.body.data).toMatchObject({ scope: 'custom', classId: mathId, scopeLabel: 'Selected families', studentCount: 1 });
+      expect((await pool.query('SELECT scope, class_id FROM announcements WHERE announcement_id = $1', [id])).rows[0])
+        .toEqual({ scope: 'custom', class_id: mathId });
+
+      // From the Announcements page (no class): not part of any class Stream.
+      const loose = (await custom(asTeacher, { title: 'From Messages', studentIds: [amalId] })).body.data.announcementId;
+
+      const items = (await stream()).announcements;
+      expect(items.map((a) => a.announcementId)).toEqual([id]);
+      expect(items[0]).toMatchObject({ scope: 'custom', classId: mathId, studentAudienceCount: 1, audienceCount: 1, canEdit: true });
+      expect((await stream(mathId, asAdmin)).announcements.map((a) => a.announcementId)).toEqual([id]);
+      expect((await stream(sciId, asOtherTeacher)).announcements).toEqual([]);
+
+      // Audience and emails are the picked student's only: Amal's guardian, not Sami's.
+      expect((await jobs(id)).map((j) => j.recipient_email)).toEqual(['amal.haddad@example.com', 'mona.haddad@example.com']);
+      expect((await feed(asAmal, `?classId=${mathId}`)).map((a) => a.announcementId)).toEqual([id]);
+      expect((await feed(asAmal)).map((a) => a.announcementId).sort()).toEqual([id, loose].sort());
+
+      // Guards: a class the teacher doesn't teach, a student off the roster, a malformed id.
+      expect((await custom(asOtherTeacher, { classId: mathId, studentIds: [ramiId] })).status).toBe(403);
+      const offRoster = await custom(asAdmin, { classId: mathId, studentIds: [amalId, ramiId] });
+      expect(offRoster.status).toBe(400);
+      expect(offRoster.body.message).toBe('Pick students from this class');
+      expect((await custom(asTeacher, { classId: 'nope', studentIds: [amalId] })).status).toBe(400);
+      expect((await custom(asAdmin, { classId: '99999999-9999-4999-8999-999999999999', studentIds: [amalId] })).status).toBe(404);
+
+      // Editing the selection keeps to the class roster and keeps the post in the Stream.
+      const edit = (studentIds) => {
+        let r = authenticatedRequest('patch', `/api/announcements/${id}`, asAdmin);
+        for (const s of studentIds) r = r.field('studentIds', s);
+        return r;
+      };
+      expect((await edit([amalId, ramiId])).status).toBe(400);
+      expect((await edit([amalId, samiId])).status).toBe(200);
+      const after = (await stream()).announcements.find((a) => a.announcementId === id);
+      expect(after).toMatchObject({ scope: 'custom', classId: mathId, studentCount: 2 });
+    });
   });
 });

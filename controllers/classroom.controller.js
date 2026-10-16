@@ -141,8 +141,10 @@ const getStream = async (req, res) => {
   const yearId = req.schoolYear?.schoolYearId ?? null;
   try {
     const [postRes, comingRes, previewRes, noticeRes] = await Promise.all([
+      // Any scope with this class: class posts, and custom posts composed in this
+      // class's Stream (their audience stays the picked students).
       db.query(announcementQueries.listAnnouncements, [
-        userId, school, role, null, classId, 'class', null, null, false, false, null, null, STREAM_LIMIT,
+        userId, school, role, null, classId, null, null, null, false, false, null, null, STREAM_LIMIT,
       ]),
       yearId ? db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, classId]) : Promise.resolve({ rows: [] }),
       db.query(announcementQueries.selectAudiencePreview, [school, 'class', classId, null, yearId, null]),

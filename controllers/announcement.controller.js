@@ -76,12 +76,25 @@ function parseAudience(src) {
   if (scope === 'class' && !isUuid(classId)) return { error: 'classId is required' };
   if (scope === 'grade' && !(typeof grade === 'string' && grade.trim())) return { error: 'grade is required' };
   let studentIds = null;
+  // A custom post composed in a class Stream ("Choose students…") names that
+  // class: the post then shows in the class's Stream, and the audience is still
+  // only the picked students. Posts from the Announcements page send none.
+  let originClassId = null;
   if (scope === 'custom') {
     const parsed = parseStudentIds(src.studentIds);
     if (parsed.error) return { error: parsed.error };
     studentIds = parsed.ids;
+    if (classId != null && classId !== '') {
+      if (!isUuid(classId)) return { error: 'Invalid class id' };
+      originClassId = classId;
+    }
   }
-  return { scope, classId: scope === 'class' ? classId : null, grade: scope === 'grade' ? grade.trim() : null, studentIds };
+  return {
+    scope,
+    classId: scope === 'class' ? classId : originClassId,
+    grade: scope === 'grade' ? grade.trim() : null,
+    studentIds,
+  };
 }
 
 /** Title / body / pinnedUntil rules shared by create and update. `partial` skips absent fields. */
@@ -172,18 +185,28 @@ async function checkScope(user, scope, classId, grade, yearId, studentIds = null
     const { rows: [c] } = await db.query(q.selectPickableCount, [studentIds, user.school, yearId, user.userId, user.role]);
     if ((c?.in_school ?? 0) !== studentIds.length) return { error: [404, 'Student not found'] };
     if ((c?.pickable ?? 0) !== studentIds.length) return { error: [403, 'You can only pick students you teach'] };
-    return {};
+    if (!classId) return {};
+    // Composed in a class Stream: the caller may post there, and every picked
+    // student is on that class's roster, so the post belongs in its Stream.
+    const meta = await checkClass(user, classId, yearId);
+    if (meta.error) return meta;
+    const { rows: [r] } = await db.query(q.countStudentsInClass, [classId, studentIds]);
+    if ((r?.n ?? 0) !== studentIds.length) return { error: [400, 'Pick students from this class'] };
+    return meta;
   }
-  if (scope === 'class') {
-    const { rows } = await db.query(q.canPostToClass, [classId, user.userId, yearId]);
-    const cl = rows[0];
-    if (!cl || cl.school !== user.school) return { error: [404, 'Class not found'] };
-    if (user.role !== 'ADMIN' && !cl.allowed) return { error: [403, 'You can only post to classes you teach this year'] };
-    return { classSubject: cl.subject, classGrade: cl.grade };
-  }
+  if (scope === 'class') return checkClass(user, classId, yearId);
   if (user.role === 'ADMIN') return {};
   const { rows } = await db.query(q.canPostToGrade, [grade, user.userId, user.school, yearId]);
   return rows[0]?.allowed ? {} : { error: [403, 'Only the homeroom teacher of this grade (or an admin) can post to it'] };
+}
+
+/** The caller may post to this class (this year's teacher or co-teacher; admins any). */
+async function checkClass(user, classId, yearId) {
+  const { rows } = await db.query(q.canPostToClass, [classId, user.userId, yearId]);
+  const cl = rows[0];
+  if (!cl || cl.school !== user.school) return { error: [404, 'Class not found'] };
+  if (user.role !== 'ADMIN' && !cl.allowed) return { error: [403, 'You can only post to classes you teach this year'] };
+  return { classSubject: cl.subject, classGrade: cl.grade };
 }
 
 /** Upload files under the announcement's prefix inside an open transaction. */
@@ -511,7 +534,8 @@ const update = async (req, res) => {
   try {
     if (studentIds) {
       // Checked against the post's own year: an old custom post is edited against its own cohort.
-      const check = await checkScope(req.user, 'custom', null, null, ann.schoolYearId ?? yearOf(req), studentIds);
+      // A post composed in a class keeps to that class's roster.
+      const check = await checkScope(req.user, 'custom', ann.classId ?? null, null, ann.schoolYearId ?? yearOf(req), studentIds);
       if (check.error) return failed(res, check.error[0], check.error[1]);
     }
     const client = await db.connect();
