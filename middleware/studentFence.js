@@ -16,8 +16,13 @@ const pathOf = (req) => {
   const trimmed = raw.replace(/\/+$/, '');
   return trimmed === '' ? '/' : trimmed;
 };
+// Matched exactly, not as a prefix: the beacon router answers only POST /, so
+// anything below it would fall through to the /api/observe owner console.
+const EXACT_ONLY = new Set(['/api/observe/client-events']);
+
 const underPrefix = (path, prefix) => path === prefix || path.startsWith(`${prefix}/`);
-const isStudentAllowed = (path) => STUDENT_ALLOWED.some((p) => underPrefix(path, p));
+const isStudentAllowed = (path) =>
+  STUDENT_ALLOWED.some((p) => (EXACT_ONLY.has(p) ? path === p : underPrefix(path, p)));
 // baseRole too: a forged or future view-switch must not lift the fence.
 const isStudentToken = (decoded) => decoded?.role === 'STUDENT' || decoded?.baseRole === 'STUDENT';
 

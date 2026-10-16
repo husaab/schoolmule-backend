@@ -28,6 +28,8 @@ describe('studentFence', () => {
       '/api/classes',
       '/api/observe',              // the owner console, not the beacon
       '/api/observe/events',
+      '/api/observe/client-events/x', // the beacon is an exact path, not a prefix
+      '/api/observe/client-events-x',
       '/api/auth/view',
       '/',
       '',
