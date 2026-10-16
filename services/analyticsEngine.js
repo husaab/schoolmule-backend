@@ -126,6 +126,8 @@ function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = 
         grade: r.class_grade,
         subject: r.subject,
         teacherName: r.teacher_name,
+        // The class shows students and parents its average (classes option).
+        showClassAverage: Boolean(r.show_class_average),
         termId: r.term_id,
         assessments: [],
         _assessmentIds: new Set(),
@@ -230,6 +232,13 @@ function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = 
  * leak in. Keyed by assessment_id; missing when nobody is graded.
  */
 function classAveragesByAssessment(cls) {
+  const averages = new Map();
+  for (const [id, { avg }] of classAverageStats(cls)) averages.set(id, avg);
+  return averages;
+}
+
+/** classAveragesByAssessment with each average's head count: id -> { avg, n }. */
+function classAverageStats(cls) {
   const sums = new Map();
   const add = (id, pct) => {
     const s = sums.get(id) || { total: 0, n: 0 };
@@ -246,10 +255,19 @@ function classAveragesByAssessment(cls) {
     }
   }
 
-  const averages = new Map();
-  for (const [id, { total, n }] of sums) averages.set(id, stats.round1(total / n));
-  return averages;
+  const out = new Map();
+  for (const [id, { total, n }] of sums) out.set(id, { avg: stats.round1(total / n), n });
+  return out;
 }
+
+/**
+ * Students and parents see a class average only when the class shows it
+ * (classes.show_class_average) and at least this many students have a
+ * published, counted score in that scope (the assessment, or the class), so
+ * an average can never give away a classmate's mark (controller ruling,
+ * Task 16 fix round 1).
+ */
+const MIN_STUDENTS_FOR_AVERAGE = 5;
 
 function getStudentClassBreakdown(matrix, studentId) {
   const cross = matrix.students.get(studentId);
@@ -263,17 +281,26 @@ function getStudentClassBreakdown(matrix, studentId) {
     const stu = cls.students.get(studentId);
     const scoreLookup = buildScoreLookup(stu.rows);
     const byId = new Map(cls.assessments.map((a) => [a.assessment_id, a]));
-    const classAvgByAssessment = classAveragesByAssessment(cls);
+    // Averages only where the class shows them and enough students count
+    // (MIN_STUDENTS_FOR_AVERAGE); otherwise null.
+    const showAverages = Boolean(cls.showClassAverage);
+    const classAvgByAssessment = new Map();
+    if (showAverages) {
+      for (const [id, { avg, n }] of classAverageStats(cls)) {
+        if (n >= MIN_STUDENTS_FOR_AVERAGE) classAvgByAssessment.set(id, avg);
+      }
+    }
 
     // Mean of the class's non-null finalPcts (null-skip aware).
     const peerPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
+    const showClassAvg = showAverages && peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE;
 
     classes.push({
       classId: cls.classId,
       subject: cls.subject,
       teacherName: cls.teacherName,
       finalPct: stats.round1(stu.finalPct),
-      classAvg: peerPcts.length ? stats.round1(stats.mean(peerPcts)) : null,
+      classAvg: showClassAvg ? stats.round1(stats.mean(peerPcts)) : null,
       coverage: stu.coverage,
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,
@@ -463,6 +490,8 @@ module.exports = {
   overallAvgForStudent,
   getStudentClassBreakdown,
   classAveragesByAssessment,
+  classAverageStats,
+  MIN_STUDENTS_FOR_AVERAGE,
   classAssessmentAverages,
   invalidateCache,
   normalizeEngine,

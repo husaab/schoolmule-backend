@@ -13,12 +13,34 @@ const gradingQueries = require('../queries/grading.queries');
  * students' submissions until its assessment is published; after that the
  * grid writes live, as Save did. Plain columns are not in either map.
  */
-async function splitTurnInColumns(classId, assessmentIds) {
+const toColumnMaps = (rows) => ({
+  draftCol: new Map(rows.filter((r) => !r.is_published).map((r) => [r.assessment_id, r.item_id])),
+  liveCol: new Map(rows.filter((r) => r.is_published).map((r) => [r.assessment_id, r.item_id])),
+});
+
+/**
+ * Runs `fn(runner, { draftCol, liveCol })`. With no turn-in column among
+ * `assessmentIds` (every plain gradebook save) it runs on the pool exactly as
+ * before. Otherwise it runs in a transaction with those columns locked and
+ * their publish state read under the lock, so a draft can't land on a column
+ * a Publish has just published (the grading view's lock order).
+ */
+async function withTurnInColumns(classId, assessmentIds, fn) {
   const { rows } = await db.query(gradingQueries.selectTurnInColumns, [classId, assessmentIds]);
-  return {
-    draftCol: new Map(rows.filter((r) => !r.is_published).map((r) => [r.assessment_id, r.item_id])),
-    liveCol: new Map(rows.filter((r) => r.is_published).map((r) => [r.assessment_id, r.item_id])),
-  };
+  if (rows.length === 0) return fn(db, toColumnMaps([]));
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: locked } = await client.query(gradingQueries.lockTurnInColumns, [classId, assessmentIds]);
+    const result = await fn(client, toColumnMaps(locked));
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /** A draft as the grid's responses report it. */
@@ -141,16 +163,16 @@ const upsertScoresByClass = async (req, res) => {
     // D3/D17: a turn-in column keeps scores as drafts on the submission until its
     // assessment is published; after that the grid writes live, as Save did.
     const userId = req.user?.userId ?? null;
-    const { draftCol, liveCol } = await splitTurnInColumns(classId, assessmentIds);
-    const draftEntries = scores.filter((e) => draftCol.has(e.assessmentId));
-    const liveEntries = scores.filter((e) => !draftCol.has(e.assessmentId));
-    const drafts = [];
-    for (const e of draftEntries) {
-      const status = e.status || 'graded';
-      const { rows } = await db.query(gradingQueries.upsertDraftScore,
-        [draftCol.get(e.assessmentId), e.studentId, status === 'missing' ? null : e.score ?? null, status, userId]);
-      drafts.push(toDraft(rows[0], e.assessmentId));
-    }
+    const { liveCol, liveEntries, drafts } = await withTurnInColumns(classId, assessmentIds, async (runner, { draftCol, liveCol: live }) => {
+      const out = [];
+      for (const e of scores.filter((x) => draftCol.has(x.assessmentId))) {
+        const status = e.status || 'graded';
+        const { rows } = await runner.query(gradingQueries.upsertDraftScore,
+          [draftCol.get(e.assessmentId), e.studentId, status === 'missing' ? null : e.score ?? null, status, userId]);
+        out.push(toDraft(rows[0], e.assessmentId));
+      }
+      return { liveCol: live, liveEntries: scores.filter((x) => !draftCol.has(x.assessmentId)), drafts: out };
+    });
     if (liveEntries.length === 0) {
       return res.status(200).json({ status: 'success', data: [], drafts });
     }
@@ -229,35 +251,36 @@ async function applyCellStatusSplit({ classId, studentId, assessmentId, status, 
 
   // D3/D17: an unpublished turn-in column takes the flag as a draft.
   const allIds = targets.map((t) => t.assessment_id);
-  const { draftCol, liveCol } = await splitTurnInColumns(classId, allIds);
-  const drafts = [];
-  for (const id of allIds.filter((a) => draftCol.has(a))) {
-    const itemId = draftCol.get(id);
-    const { rows: [current] } = await db.query(gradingQueries.selectDraft, [itemId, studentId]);
-    const score = status === 'missing' ? null : current?.draft_score ?? null;
-    const { rows } = await db.query(gradingQueries.upsertDraftScore, [itemId, studentId, score, status, userId]);
-    drafts.push(toDraft(rows[0], id));
-  }
-  const ids = allIds.filter((a) => !draftCol.has(a));
-  if (ids.length === 0) return { rows: [], drafts, found: true };
-
-  const { rows } = await db.query(
-    `INSERT INTO student_assessments (student_id, assessment_id, score, status)
-     SELECT $1, a.assessment_id, NULL, $3
-     FROM unnest($2::uuid[]) AS a(assessment_id)
-     ON CONFLICT (student_id, assessment_id)
-     DO UPDATE SET
-       status = EXCLUDED.status,
-       score  = CASE WHEN EXCLUDED.status = 'missing' THEN NULL ELSE student_assessments.score END
-     RETURNING student_id, assessment_id, score, status`,
-    [studentId, ids, status]
-  );
-  for (const r of rows) {
-    if (liveCol.has(r.assessment_id)) {
-      await db.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
+  return withTurnInColumns(classId, allIds, async (runner, { draftCol, liveCol }) => {
+    const drafts = [];
+    for (const id of allIds.filter((a) => draftCol.has(a))) {
+      const itemId = draftCol.get(id);
+      const { rows: [current] } = await runner.query(gradingQueries.selectDraft, [itemId, studentId]);
+      const score = status === 'missing' ? null : current?.draft_score ?? null;
+      const { rows } = await runner.query(gradingQueries.upsertDraftScore, [itemId, studentId, score, status, userId]);
+      drafts.push(toDraft(rows[0], id));
     }
-  }
-  return { rows, drafts, found: true };
+    const ids = allIds.filter((a) => !draftCol.has(a));
+    if (ids.length === 0) return { rows: [], drafts, found: true };
+
+    const { rows } = await runner.query(
+      `INSERT INTO student_assessments (student_id, assessment_id, score, status)
+       SELECT $1, a.assessment_id, NULL, $3
+       FROM unnest($2::uuid[]) AS a(assessment_id)
+       ON CONFLICT (student_id, assessment_id)
+       DO UPDATE SET
+         status = EXCLUDED.status,
+         score  = CASE WHEN EXCLUDED.status = 'missing' THEN NULL ELSE student_assessments.score END
+       RETURNING student_id, assessment_id, score, status`,
+      [studentId, ids, status]
+    );
+    for (const r of rows) {
+      if (liveCol.has(r.assessment_id)) {
+        await runner.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
+      }
+    }
+    return { rows, drafts, found: true };
+  });
 }
 
 /**

@@ -6,7 +6,7 @@
 // with no column. Aliases: `i` item, `a` its assessment, `p` the category.
 
 const { GRADE_RANK } = require('../utils/gradeRank');
-const { GRADE_VISIBLE, WORK_STATE_SQL, WORK_JOINS } = require('./workState');
+const { WORK_STATE_SQL, WORK_JOINS, AWAITING_GRADE, NEEDS_PUBLISH } = require('./workState');
 
 // An ISO-8601 UTC string from a timestamptz, for values built inside JSON.
 const ISO = (expr) => `to_char((${expr}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
@@ -51,18 +51,19 @@ const TURNED_IN_COUNT = (i = 'i') => `(SELECT COUNT(*) FROM classwork_submission
 // Turn-in counts per item (aliases `i`, `a`) over the students who can see
 // it (roster, not archived, ITEM_VISIBLE), by the one status rule
 // (WORK_STATE_SQL): turnedIn = turned in (late too), missing = derived +
-// confirmed, notYet = assigned; toReview = turned in with no draft and no
-// visible grade; drafts = a draft score/status not yet published; published =
-// published to the student. A draft or future item reaches no one yet: zeros.
+// confirmed, notYet = assigned; toReview = turned in and waiting for the
+// teacher, and drafts = what "Publish to N" counts (the grading view's own
+// rules, workState.js); published = published to the student. A draft or
+// future item reaches no one yet: zeros.
 const ITEM_COUNTS = `(SELECT json_build_object(
     'turnedIn', COUNT(*) FILTER (WHERE w.state = 'turned_in'),
     'missing', COUNT(*) FILTER (WHERE w.state = 'missing'),
     'notYet', COUNT(*) FILTER (WHERE w.state = 'assigned'),
-    'toReview', COUNT(*) FILTER (WHERE w.turned_in_at IS NOT NULL AND w.draft_score IS NULL AND w.draft_status IS NULL AND NOT w.visible),
-    'drafts', COUNT(*) FILTER (WHERE (w.draft_score IS NOT NULL OR w.draft_status IS NOT NULL) AND w.published_at IS NULL),
+    'toReview', COUNT(*) FILTER (WHERE w.awaiting),
+    'drafts', COUNT(*) FILTER (WHERE w.needs_publish),
     'published', COUNT(*) FILTER (WHERE w.published_at IS NOT NULL))
-  FROM (SELECT ${WORK_STATE_SQL} AS state, ${GRADE_VISIBLE} AS visible,
-               sub.turned_in_at, sub.draft_score, sub.draft_status, sub.published_at
+  FROM (SELECT ${WORK_STATE_SQL} AS state, COALESCE(${AWAITING_GRADE}, FALSE) AS awaiting,
+               COALESCE(${NEEDS_PUBLISH}, FALSE) AS needs_publish, sub.published_at
           FROM class_students ro
           JOIN students st ON st.student_id = ro.student_id AND st.is_archived IS NOT TRUE
           ${WORK_JOINS('ro.student_id')}
@@ -214,6 +215,12 @@ ORDER BY i.created_at, i.item_id`,
 
   countGrades: `
     SELECT COUNT(*)::int AS n FROM student_assessments sa WHERE sa.assessment_id = $1 AND ${HAS_GRADE()}`,
+
+  //  Students' work on this item already graded, as a draft or published
+  //  (T16): how many, and the highest score. $1 item_id
+  selectGradedWork: `
+    SELECT COUNT(*)::int AS n, MAX(draft_score)::float AS max_score
+    FROM classwork_submissions WHERE item_id = $1 AND (draft_score IS NOT NULL OR draft_status IS NOT NULL)`,
 
   // ── Item writes ────────────────────────────────────────────────────────
   // Shared parameter order after the leading ones:

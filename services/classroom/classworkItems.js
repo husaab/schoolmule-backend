@@ -18,6 +18,7 @@ const { rescaleForInsert, rescaleForRemoval } = require('./weights');
 const { BUCKET, SIGNED_URL_TTL, youtubeIdOf } = require('../../utils/classworkUpload');
 const { signedUrlMap } = require('../../utils/attachmentUpload');
 const engine = require('../analyticsEngine');
+const { cellsToDrafts } = require('./publish');
 
 const ITEM_KINDS = ['assessment', 'assignment', 'quiz', 'material'];
 const SUBMISSION_MODES = ['file', 'text', 'done', 'none'];
@@ -33,6 +34,10 @@ const D2_MESSAGE = 'Add a category in Grades → Assessments & categories first,
 const GRADES_EXIST_MESSAGE = 'This column already has published grades. Unpublish or clear them in Grades first.';
 const STANDALONE_MOVE_MESSAGE = 'This column counts on its own in Grades. Move it in Grades → Assessments & categories.';
 const COLUMN_TAKEN_MESSAGE = 'Another item already fills that gradebook column. Choose another column.';
+const GRADED_WORK_CODE = 'GRADED_WORK_EXISTS';
+const GRADED_WORK_MESSAGE = "Students' work on this item is already graded. Clear those grades in the grading view before changing how it counts in the gradebook.";
+const DRAFT_ABOVE_MAX_CODE = 'DRAFT_ABOVE_MAX';
+const TURN_IN_KINDS = new Set(['assignment', 'quiz']);
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
 const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
@@ -41,10 +46,11 @@ const num = (value) => (value === null || value === undefined ? null : Number(va
 const fail = (error) => ({ error });
 
 /** An error the controller answers with its status and message (`expose` marks it as ours). */
-function httpError(status, message) {
+function httpError(status, message, code) {
   const err = new Error(message);
   err.status = status;
   err.expose = true;
+  if (code) err.code = code;
   return err;
 }
 
@@ -455,6 +461,8 @@ async function createItem(client, { classId, userId, value }) {
     item = await one(client, q.insertItem, [classId, value.title, ...params, userId]);
   }
   if (value.audience === 'some') await replaceStudents(client, item.item_id, value);
+  // An assignment or quiz filling an unpublished column takes its cells as drafts (D3).
+  if (assessmentId && TURN_IN_KINDS.has(value.kind)) await cellsToDrafts(client, { itemId: item.item_id, assessmentId });
   return { itemId: item.item_id, gradebookChanged: Boolean(assessmentId) };
 }
 
@@ -497,6 +505,22 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   const moving = Boolean(assessmentId) && target.mode === 'category' && lower(target.categoryId) !== lower(row.category_id ?? '');
   let gradebookChanged = false;
 
+  // Grades on the students' work (drafts, or published through Classwork)
+  // belong to this column: they never move to another column, are never
+  // dropped, and are never left behind by the item becoming a plain
+  // assessment. The teacher clears them first (T16).
+  const leavesTurnIn = TURN_IN_KINDS.has(cur.kind) && !TURN_IN_KINDS.has(value.kind);
+  const newMax = target.mode === 'category' ? target.maxScore : null;
+  const maxChanges = Boolean(assessmentId) && newMax !== null && newMax !== cur.maxScore;
+  if (assessmentId && (dropping || switching || leavesTurnIn || maxChanges)) {
+    const work = await one(client, q.selectGradedWork, [itemId]);
+    if ((work?.n ?? 0) > 0) {
+      if (dropping || switching || leavesTurnIn) throw httpError(409, GRADED_WORK_MESSAGE, GRADED_WORK_CODE);
+      if (work.max_score !== null && work.max_score > newMax) {
+        throw httpError(409, `Some grades on students' work are above ${newMax}. Change them in the grading view first.`, DRAFT_ABOVE_MAX_CODE);
+      }
+    }
+  }
   // A column with grades in it is never dropped from under them.
   if (dropping && (await gradeCount(client, assessmentId)) > 0) throw httpError(409, GRADES_EXIST_MESSAGE);
   // A column that counts on its own (no category) holds top-level points;
@@ -544,6 +568,11 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   }
 
   await replaceStudents(client, itemId, value);
+  // An assignment or quiz newly filling an unpublished column (or a plain
+  // assessment becoming one) takes the column's cells as drafts (D3).
+  if (assessmentId && TURN_IN_KINDS.has(value.kind) && (newlyLinked || !TURN_IN_KINDS.has(cur.kind))) {
+    await cellsToDrafts(client, { itemId, assessmentId });
+  }
   return { gradebookChanged };
 }
 
@@ -698,6 +727,7 @@ async function signedFileUrl(filePath) {
 
 module.exports = {
   ITEM_KINDS, SUBMISSION_MODES, STATUSES, D2_MESSAGE, GRADES_EXIST_MESSAGE, STANDALONE_MOVE_MESSAGE,
+  GRADED_WORK_CODE, GRADED_WORK_MESSAGE, DRAFT_ABOVE_MAX_CODE,
   httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput,
   toAttachment, toItemSummary, toItem, toCurrent, toCategoryOption, toColumnOption, toTopic,
   loadContext, loadItem, loadAttachments, withClassAverages,

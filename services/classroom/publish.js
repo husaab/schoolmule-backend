@@ -55,6 +55,12 @@ async function publishSubmissions(client, { item, studentIds, userId, school }) 
   let assessmentPublished = false;
   let batchId = null;
   if (linked && !isPublished) {
+    // The column's first Publish is for these students only: every other
+    // student's cell becomes a draft and any earlier publish of theirs is
+    // withdrawn, so publishing the column shows exactly these grades.
+    const published = subs.map((s) => s.student_id);
+    await client.query(q.withdrawOthers, [item.item_id, published]);
+    await client.query(q.moveCellsToDrafts, [item.item_id, item.assessment_id, published]);
     const { rows: [batch] } = await client.query(publishQueries.insertBatch,
       [item.class_id, school, 'publish', [item.assessment_id], null, userId, 0]);
     await client.query(publishQueries.markPublished, [[item.assessment_id], userId, batch.batch_id]);
@@ -62,6 +68,19 @@ async function publishSubmissions(client, { item, studentIds, userId, school }) 
     batchId = batch.batch_id;
   }
   return { publishedStudentIds: subs.map((s) => s.student_id), assessmentPublished, batchId };
+}
+
+/**
+ * Spec D3, when an assignment or quiz takes over a gradebook column that is
+ * not published (it fills an existing column, or a plain assessment becomes
+ * one): the column's cells become drafts on the item's submissions, so the
+ * grading view shows them as drafts and they show to a student only once
+ * that student is published. A published column is left as it is. Inside the
+ * caller's transaction.
+ */
+async function cellsToDrafts(client, { itemId, assessmentId }) {
+  if (!assessmentId) return;
+  await client.query(q.moveCellsToDrafts, [itemId, assessmentId, []]);
 }
 
 /**
@@ -78,4 +97,4 @@ async function afterPublish({ school, studentIds, itemId }) {
   }
 }
 
-module.exports = { publishSubmissions, afterPublish };
+module.exports = { publishSubmissions, cellsToDrafts, afterPublish };

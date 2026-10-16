@@ -48,7 +48,9 @@ const num = (value) => (value === null || value === undefined ? null : Number(va
 
 /** A service error (httpError) answers with its own status; anything else is logged as a 500. */
 function fail(res, error, userMessage, context) {
-  if (error && error.expose && error.status) return failed(res, error.status, error.message);
+  if (error && error.expose && error.status) {
+    return res.status(error.status).json({ status: 'failed', message: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
   logger.error({ err: error, ...context }, userMessage);
   return failed(res, 500, userMessage);
 }
@@ -101,7 +103,8 @@ function toGradingRow(r, { linked, assessmentPublished = false }) {
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {
     row: { ...row, label },
-    awaitingGrade: Boolean(turnedInAt) && !hasDraft && !r.sub_published_at && !r.grade_visible,
+    // workState.AWAITING_GRADE: an item with no column also waits on its feedback being published.
+    awaitingGrade: Boolean(turnedInAt) && !hasDraft && !r.grade_visible && (linked || !r.sub_published_at),
   };
 }
 
@@ -345,15 +348,26 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
           [item.class_id, school, 'publish', [item.assessment_id], null, userId, 0]);
         batchId = batch.batch_id;
       }
-      return { item, audience, published, batchId, extra: prepared.extra || {} };
+      // A listed student holding a grade that was not published again: it is
+      // already published and nothing changed since (no second email).
+      const notPublished = Array.isArray(targets) ? targets.filter((id) => !published.publishedStudentIds.includes(id)) : [];
+      const unchanged = requested !== 'graded' && !prepare && notPublished.length
+        ? (await client.query(q.selectPublishHolders, [itemId, notPublished, Boolean(item.assessment_id)])).rows.map((r) => r.student_id)
+        : [];
+      return { item, audience, published, batchId, unchanged, extra: prepared.extra || {} };
     });
 
-    const { item, audience, published, batchId, extra } = outcome;
+    const { item, audience, published, batchId, unchanged, extra } = outcome;
     const publishedSet = new Set(published.publishedStudentIds);
     const audienceSet = new Set(audience);
+    const unchangedSet = new Set(unchanged);
+    const reasonFor = (id) => {
+      if (!audienceSet.has(id)) return 'not_in_audience';
+      return unchangedSet.has(id) ? 'unchanged' : 'no_draft';
+    };
     const skipped = (requested === 'graded' ? audience : requested)
       .filter((id) => !publishedSet.has(id))
-      .map((id) => ({ studentId: id, reason: audienceSet.has(id) ? 'no_draft' : 'not_in_audience' }));
+      .map((id) => ({ studentId: id, reason: reasonFor(id) }));
 
     let emailSummary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
     if (published.publishedStudentIds.length > 0) {

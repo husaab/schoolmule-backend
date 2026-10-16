@@ -9,6 +9,7 @@ jest.mock('resend', () => ({
 
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
+const engine = require('../../../services/analyticsEngine');
 const supabase = require('../../../config/supabaseClient');
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -206,7 +207,7 @@ describe('Integration: the student portal read API', () => {
     await get('/api/student/grades?termId=junk', asAmal, 400);
   });
 
-  it("classAvg shows only when the class turns the class average on, and never names a classmate", async () => {
+  it("classAvg shows only when the class turns the class average on and 5 students count, and never names a classmate", async () => {
     const quiz = await assessment(mathId, 'Quiz 1', { published: true, publishedAt: new Date() });
     await score(amalId, quiz, 8);
     await score(bilalId, quiz, 6);
@@ -214,10 +215,21 @@ describe('Integration: the student portal read API', () => {
     let math = (await get('/api/student/grades')).data.classes.find((c) => c.classId === mathId);
     expect(math).toMatchObject({ finalPct: 80, classAvg: null });
 
+    // On, but 2 students count: an average of 2 would give the other mark away.
     await pool.query(`UPDATE classes SET show_class_average = TRUE WHERE class_id = $1`, [mathId]);
+    engine.invalidateCache();
+    math = (await get('/api/student/grades')).data.classes.find((c) => c.classId === mathId);
+    expect(math).toMatchObject({ finalPct: 80, classAvg: null });
+
+    for (const [name, value] of [['Cora Nadeem', 7], ['Dana Yassin', 9], ['Elie Mansour', 5]]) {
+      const id = await makeStudent(name);
+      await enrol(mathId, id);
+      await score(id, quiz, value);
+    }
+    engine.invalidateCache();
     const grades = (await get('/api/student/grades')).data;
     math = grades.classes.find((c) => c.classId === mathId);
-    expect(math).toMatchObject({ finalPct: 80, classAvg: 70 }); // (80 + 60) / 2 over published work
+    expect(math).toMatchObject({ finalPct: 80, classAvg: 70 }); // (80 + 60 + 70 + 90 + 50) / 5 over published work
     expect(math.items[0]).not.toHaveProperty('classAvgPct');
     expect(JSON.stringify(grades)).not.toContain(bilalId);
   });

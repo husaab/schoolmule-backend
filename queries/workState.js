@@ -32,10 +32,25 @@ const WORK_STATE_SQL = `(CASE
 // The late flag: only graded and turned-in work carries it.
 const WORK_LATE_SQL = `(CASE WHEN ${WORK_STATE_SQL} IN ('graded', 'turned_in') THEN COALESCE(sub.is_late, FALSE) ELSE FALSE END)`;
 
+// A draft on the submission: a score or status saved for a gradebook column.
+const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)`;
+
+// Turned in and waiting for the teacher: no draft and no visible grade; on an
+// item with no gradebook column, no published feedback either (T16).
+const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND NOT ${GRADE_VISIBLE}
+  AND (i.assessment_id IS NOT NULL OR sub.published_at IS NULL))`;
+
+// What "Publish to N students" counts (T16): on a gradebook column, a draft
+// not published yet, or any draft while the column itself is unpublished; on
+// an item with no column, feedback not published yet.
+const NEEDS_PUBLISH = `(CASE WHEN i.assessment_id IS NOT NULL
+    THEN ${HAS_DRAFT} AND (sub.published_at IS NULL OR NOT COALESCE(a.is_published, FALSE))
+    ELSE sub.feedback IS NOT NULL AND sub.published_at IS NULL END)`;
+
 // The joins that give one student's `sub` and `sa` for item `i`. `student`
 // is a SQL expression for the student id (an alias column or a parameter).
 const WORK_JOINS = (student) => `
 LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = ${student}
 LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = ${student}`;
 
-module.exports = { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS };
+module.exports = { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH };

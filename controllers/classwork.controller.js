@@ -30,7 +30,9 @@ const isObject = (body) => Boolean(body) && typeof body === 'object' && !Array.i
 
 /** A service error (httpError) answers with its own status; anything else is logged as a 500. */
 function fail(res, error, userMessage, context) {
-  if (error && error.expose && error.status) return failed(res, error.status, error.message);
+  if (error && error.expose && error.status) {
+    return res.status(error.status).json({ status: 'failed', message: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
   logger.error({ err: error, ...context }, userMessage);
   return failed(res, 500, userMessage);
 }

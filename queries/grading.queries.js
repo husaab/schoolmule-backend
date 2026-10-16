@@ -11,7 +11,7 @@
 // submission, `sa` the gradebook cell.
 
 const { studentAvatarSql } = require('../utils/avatar');
-const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL } = require('./workState');
+const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, HAS_DRAFT, AWAITING_GRADE } = require('./workState');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
 // The item's students: the class roster (not archived), narrowed to the
@@ -22,11 +22,8 @@ const IN_ITEM_AUDIENCE = `(i.audience = 'all' OR EXISTS (SELECT 1 FROM classwork
 // A cell that holds a grade (a score, or a confirmed missing/excused).
 const SA_HAS_GRADE = `(sa.score IS NOT NULL OR sa.status IN ('missing', 'excused'))`;
 
-// A pending draft: a score or status saved but not published.
-const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)`;
-
-// Turned in, nothing graded yet: no draft, never published, no visible grade.
-const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND sub.published_at IS NULL AND NOT ${GRADE_VISIBLE})`;
+// HAS_DRAFT (a draft score or status) and AWAITING_GRADE (turned in, waiting
+// for the teacher) live in workState.js, shared with ITEM_COUNTS.
 
 // One grading row per student of item $1 ($2 = one student, NULL = all).
 const GRADING_ROWS = `
@@ -127,10 +124,13 @@ const gradingQueries = {
 
   //  The submission mirrors a live gradebook write (the assessment is
   //  published): the draft equals the cell and the work counts as published.
-  //  $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
+  //  A cleared cell (no score, no flag) is no draft, so the work is back in
+  //  To review. $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
   syncLiveSubmission: `
     INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, published_at, published_by, updated_at)
-    VALUES ($1, $2, $3, $4, $5, NOW(), $5, NOW())
+    VALUES ($1, $2, $3::numeric,
+            CASE WHEN $3::numeric IS NULL AND COALESCE($4::text, 'graded') = 'graded' THEN NULL ELSE $4::text END,
+            $5, NOW(), $5, NOW())
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
         published_at = COALESCE(classwork_submissions.published_at, NOW()),
@@ -177,10 +177,54 @@ const gradingQueries = {
       AND ($2::uuid[] IS NULL OR sub.student_id = ANY($2::uuid[]))
       AND ($2::uuid[] IS NOT NULL OR sub.published_at IS NULL
            OR (i.assessment_id IS NOT NULL AND NOT COALESCE(a.is_published, FALSE)))
+      -- A listed student already published, with nothing changed since (no
+      -- regrade, no new feedback): publishing again would only re-send the email.
+      AND NOT ($2::uuid[] IS NOT NULL AND sub.published_at IS NOT NULL AND sub.updated_at <= sub.published_at
+               AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE)))
       AND ${IN_ITEM_AUDIENCE}
       AND (${HAS_DRAFT} OR (NOT $3::boolean AND sub.feedback IS NOT NULL))
     ORDER BY sub.student_id
     FOR UPDATE OF sub`,
+
+  //  Of these students, the ones holding something to publish (a draft, or
+  //  feedback on an item with no column), to tell "unchanged" from "no draft".
+  //  $1 item_id, $2 student_id[], $3 linked to a gradebook column
+  selectPublishHolders: `
+    SELECT sub.student_id FROM classwork_submissions sub
+    WHERE sub.item_id = $1 AND sub.student_id = ANY($2::uuid[])
+      AND (${HAS_DRAFT} OR (NOT $3::boolean AND sub.feedback IS NOT NULL))`,
+
+  //  Spec D3, for an unpublished column only: its gradebook cells become
+  //  drafts on the item's submissions (a turn-in item took the column over,
+  //  or its first Publish is for some students only), so nothing in the
+  //  column shows before that student is published. A newer draft wins over
+  //  the cell. $3 = students whose cells stay (the ones being published).
+  //  $1 item_id, $2 assessment_id, $3 student_id[]
+  moveCellsToDrafts: `
+    WITH moved AS (
+      DELETE FROM student_assessments sa
+      WHERE sa.assessment_id = $2 AND NOT (sa.student_id = ANY($3::uuid[]))
+        AND (sa.score IS NOT NULL OR sa.status IN ('missing', 'excused'))
+        AND EXISTS (SELECT 1 FROM assessments a WHERE a.assessment_id = $2 AND NOT COALESCE(a.is_published, FALSE))
+      RETURNING sa.student_id, sa.score, sa.status
+    )
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, updated_at)
+    SELECT $1, m.student_id, CASE WHEN m.status = 'missing' THEN NULL ELSE m.score END, m.status, NOW() FROM moved m
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = CASE WHEN classwork_submissions.draft_score IS NULL AND classwork_submissions.draft_status IS NULL
+                           THEN EXCLUDED.draft_score ELSE classwork_submissions.draft_score END,
+        draft_status = CASE WHEN classwork_submissions.draft_score IS NULL AND classwork_submissions.draft_status IS NULL
+                            THEN EXCLUDED.draft_status ELSE classwork_submissions.draft_status END,
+        published_at = NULL,
+        updated_at = NOW()`,
+
+  //  Before an unpublished column's first Publish for some students: the
+  //  other students' earlier publishes (from before the column was
+  //  unpublished in the gradebook) are withdrawn, so their feedback stays
+  //  hidden too. $1 item_id, $2 student_id[] (the ones being published)
+  withdrawOthers: `
+    UPDATE classwork_submissions SET published_at = NULL, updated_at = NOW()
+    WHERE item_id = $1 AND published_at IS NOT NULL AND NOT (student_id = ANY($2::uuid[]))`,
 
   //  $1 submission_id[], $2 published_by
   markSubmissionsPublished: `
@@ -206,7 +250,7 @@ const gradingQueries = {
   //  Of these students, the ones excused on this item (as a draft, or in the
   //  gradebook), with their draft score. $1 item_id, $2 student_id[]
   selectExcused: `
-    SELECT s.student_id, sub.draft_score,
+    SELECT s.student_id, COALESCE(sub.draft_score, sa.score) AS draft_score,
            (sa.student_id IS NOT NULL AND sa.status = 'excused') AS live_excused
     FROM classwork_items i
     JOIN students s ON s.student_id = ANY($2::uuid[])
@@ -242,6 +286,16 @@ const gradingQueries = {
     FROM classwork_items i
     JOIN assessments a ON a.assessment_id = i.assessment_id
     WHERE i.class_id = $1 AND i.assessment_id = ANY($2::uuid[]) AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL`,
+  //  The same, with the columns locked (the grading writers' order: the
+  //  assessment before the submissions), so a draft-or-live decision can't
+  //  race a Publish. $1 class_id, $2 assessment_id[]
+  lockTurnInColumns: `
+    SELECT i.item_id, i.assessment_id, a.is_published
+    FROM classwork_items i
+    JOIN assessments a ON a.assessment_id = i.assessment_id
+    WHERE i.class_id = $1 AND i.assessment_id = ANY($2::uuid[]) AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL
+    ORDER BY a.assessment_id
+    FOR SHARE OF a`,
 
   //  The grid's classwork layer: the class's turn-in columns, and per student
   //  a pending draft, work turned in and awaiting a grade, or work missing by

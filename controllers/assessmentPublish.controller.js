@@ -481,6 +481,13 @@ const publishAssessments = async (req, res) => {
       publishQueries.selectAllAssessmentsInClass,
       [classId],
     );
+    // Classwork drafts were copied under lock inside the transaction: the
+    // email reads the committed gradebook, so it says exactly what was
+    // published (a draft edited meanwhile is never emailed unpublished).
+    if (classworkStudents.size > 0) {
+      const { rows: committedRows } = await db.query(publishQueries.selectClassScoreRows, [classId]);
+      committedScoreRows = groupScoreRowsByStudent(committedRows);
+    }
     const tasks = buildEmailTasks(cascade.finalIds, freshAssessments, committedScoreRows);
     tasksWithEmails = await resolveRecipients(tasks);
 

@@ -376,10 +376,11 @@ describe('Integration: grading and per-student Publish', () => {
     expect(again.publishedStudentIds).toEqual([]);
     expect(again.assessmentPublished).toBe(false);
 
-    // Explicit ids: a student of another class is not in the audience.
+    // Explicit ids: a student of another class is not in the audience; Amal
+    // is already published with nothing changed (fix round 1, M3).
     const explicit = (await publish([amalId, outsiderId])).data;
-    expect(explicit.publishedStudentIds).toEqual([amalId]);
-    expect(explicit.skipped).toEqual([{ studentId: outsiderId, reason: 'not_in_audience' }]);
+    expect(explicit.publishedStudentIds).toEqual([]);
+    expect(explicit.skipped).toEqual([{ studentId: amalId, reason: 'unchanged' }, { studentId: outsiderId, reason: 'not_in_audience' }]);
     await publish('everyone', 400);
     await publish([], 400);
   });
@@ -591,5 +592,167 @@ describe('Integration: grading and per-student Publish', () => {
     expect((await authenticatedRequest('get', '/api/classroom/items/99999999-9999-4999-8999-999999999999/submissions', asTeacher)).status).toBe(404);
     expect((await authenticatedRequest('get', `${itemUrl}/submissions/nope`, asTeacher)).status).toBe(404);
     expect(await gradebook()).toEqual([]);
+  });
+
+  // ── Fix round 1 (task-16-review.md) ────────────────────────────────────
+  describe('fix round 1', () => {
+    const editItem = (url, body, status) => expectStatus(authenticatedRequest('patch', url, asTeacher).send(body), status);
+    const patchOn = (url, studentId, body, status = 200) =>
+      expectStatus(authenticatedRequest('patch', `${url}/submissions/${studentId}`, asTeacher).send(body), status);
+
+    it("C1: an assignment filling an unpublished column that has scores takes them as drafts; publish [A] shows A's grade and nothing else", async () => {
+      // Today's model: scores typed in the grid on an unpublished plain column.
+      const labId = await assessment(sciId, 'Lab two', { weight: 20, max: 20 });
+      await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+        scores: [
+          { studentId: amalId, assessmentId: labId, score: 5 },
+          { studentId: bilalId, assessmentId: labId, score: 6 },
+          { studentId: daliaId, assessmentId: labId, score: null, status: 'missing' },
+        ],
+      });
+      const lab = await createItem({
+        kind: 'assignment', title: 'Lab two', submissionMode: 'done', dueAt: inDays(2), gradebook: { mode: 'existing', assessmentId: labId },
+      });
+      const labUrl = `/api/classroom/items/${lab.itemId}`;
+      expect(await gradebook(labId)).toEqual([]); // the cells are drafts now
+      const before = (await get(`${labUrl}/submissions`)).data;
+      expect(before.students.map((r) => [r.name, r.label, r.draftScore, r.draftStatus, r.needsPublish])).toEqual([
+        ['Amal Haddad', 'Graded · draft', 5, 'graded', true],
+        ['Bilal Karim', 'Graded · draft', 6, 'graded', true],
+        ['Dalia Nassar', 'Graded · draft', null, 'missing', true],
+      ]);
+
+      await patchOn(labUrl, amalId, { draftScore: 17 });
+      const { data } = await post(`${labUrl}/publish`, { studentIds: [amalId] });
+      expect(data).toMatchObject({ publishedStudentIds: [amalId], assessmentPublished: true });
+      expect(await gradebook(labId)).toEqual([{ student_id: amalId, score: 17, status: 'graded' }]);
+
+      // The reviewer's probe: Bilal and Bilal's parent see nothing of 6.
+      expect(await studentGrade(asBilal, labId)).toBeNull();
+      expect((await studentItem(asBilal, lab.itemId)).grade).toBeNull();
+      const parentB = await parentGrades(asParentB, bilalId);
+      expect(parentScore(parentB, labId)?.score ?? null).toBeNull();
+      expect((await studentItem(asDalia, lab.itemId)).grade).toBeNull();
+      expect(await studentGrade(asAmal, labId)).toMatchObject({ score: 17 });
+
+      // A plain assessment turned into an assignment in place takes its cells the same way.
+      const quizId = await assessment(sciId, 'Quiz three', { weight: 10, max: 10 });
+      await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: bilalId, assessmentId: quizId, score: 7 }] });
+      const plainItem = (await pool.query(`SELECT item_id FROM classwork_items WHERE assessment_id = $1`, [quizId])).rows[0].item_id;
+      await editItem(`/api/classroom/items/${plainItem}`, { kind: 'assignment', submissionMode: 'done', dueAt: inDays(2) }, 200);
+      expect(await gradebook(quizId)).toEqual([]);
+      expect(await submission(bilalId, plainItem)).toMatchObject({ draft_score: 7, draft_status: 'graded', published_at: null });
+    });
+
+    it("C1: a column's first per-student Publish withholds every other cell, and after an unpublish shows only the student published", async () => {
+      // A cell that reached the gradebook outside the draft paths (defence in depth).
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, 4, 'graded')`, [daliaId, columnId]);
+      await patch(amalId, { draftScore: 8, feedback: 'Well labelled.' });
+      await publish([amalId]);
+      expect(await gradebook()).toEqual([{ student_id: amalId, score: 8, status: 'graded' }]);
+      expect(await submission(daliaId)).toMatchObject({ draft_score: 4, draft_status: 'graded', published_at: null });
+      expect(await studentGrade(asDalia)).toBeNull();
+
+      // Unpublished in the gradebook, then one student published: only that one shows.
+      await patch(bilalId, { draftScore: 6 }); // live
+      await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [columnId] });
+      await publish([bilalId]);
+      expect(await gradebook()).toEqual([{ student_id: bilalId, score: 6, status: 'graded' }]);
+      expect(await studentGrade(asBilal)).toMatchObject({ score: 6 });
+      expect(await studentGrade(asAmal)).toBeNull();
+      expect((await studentItem(asAmal)).grade).toBeNull(); // the feedback too
+      expect(await submission(amalId)).toMatchObject({ draft_score: 8, published_at: null, feedback: 'Well labelled.' });
+      const amal = (await get(`${itemUrl}/submissions`)).data.students.find((r) => r.studentId === amalId);
+      expect(amal).toMatchObject({ label: 'Graded · draft', needsPublish: true });
+    });
+
+    it("I1: a per-student Publish never gives the published mark away as a class average", async () => {
+      await pool.query(`UPDATE classes SET show_class_average = TRUE WHERE class_id = $1`, [sciId]);
+      await patch(amalId, { draftScore: 8 });
+      await publish([amalId]);
+      const parentB = await parentGrades(asParentB, bilalId);
+      expect(parentScore(parentB)).toMatchObject({ classAvgPct: null });
+      expect(parentB.classes.find((c) => c.classId === sciId).classAvg).toBeNull();
+      const parentA = await parentGrades(asParentA, amalId);
+      expect(parentScore(parentA)).toMatchObject({ score: 8, classAvgPct: null });
+      engine.invalidateCache();
+      const own = (await get('/api/student/grades', asBilal)).data.classes.find((c) => c.classId === sciId);
+      expect(own?.classAvg ?? null).toBeNull();
+    });
+
+    it("I2: an item whose students' work is graded keeps its column (409); with no grades the change is allowed", async () => {
+      const spare = await assessment(sciId, 'Spare column', { parentId: homeworkId, weight: 0, max: 10 });
+      await patch(amalId, { draftScore: 8 });
+
+      let res = await editItem(itemUrl, { gradebook: { mode: 'none' } }, 409);
+      expect(res.code).toBe('GRADED_WORK_EXISTS');
+      res = await editItem(itemUrl, { gradebook: { mode: 'existing', assessmentId: spare } }, 409);
+      expect(res).toMatchObject({ code: 'GRADED_WORK_EXISTS', message: expect.stringContaining('already graded') });
+      res = await editItem(itemUrl, { gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 5 } }, 409);
+      expect(res.code).toBe('DRAFT_ABOVE_MAX');
+      await editItem(itemUrl, { gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 20 } }, 200);
+      expect(await submission(amalId)).toMatchObject({ draft_score: 8 });
+      expect((await pool.query(`SELECT assessment_id FROM classwork_items WHERE item_id = $1`, [item.itemId])).rows[0].assessment_id).toBe(columnId);
+
+      // Cleared, nothing is graded: switching is allowed.
+      await patch(amalId, { draftScore: null });
+      expect(await submission(amalId)).toMatchObject({ draft_score: null, draft_status: null });
+      await editItem(itemUrl, { gradebook: { mode: 'existing', assessmentId: spare } }, 200);
+      expect((await pool.query(`SELECT assessment_id FROM classwork_items WHERE item_id = $1`, [item.itemId])).rows[0].assessment_id).toBe(spare);
+
+      // A published grade blocks too, until it is cleared.
+      await patch(bilalId, { draftScore: 6 });
+      await publish([bilalId]);
+      res = await editItem(itemUrl, { gradebook: { mode: 'none' } }, 409);
+      expect(res.code).toBe('GRADED_WORK_EXISTS');
+    });
+
+    it('M7 and M4: clearing a published cell puts the work back in To review everywhere', async () => {
+      await patch(amalId, { draftScore: 8 });
+      await publish([amalId]);
+      expect((await get(`${itemUrl}/submissions`)).data.counts).toMatchObject({ toGrade: 2, drafts: 0, published: 1 });
+
+      const { data } = await patch(amalId, { draftScore: null }); // live clear
+      expect(data.row).toMatchObject({ label: 'Turned in', needsPublish: false, draftScore: null });
+      expect(await submission(amalId)).toMatchObject({ draft_score: null, draft_status: null });
+      expect((await get(`${itemUrl}/submissions`)).data.counts).toMatchObject({ toGrade: 3, drafts: 0, published: 0 });
+      expect((await get(`/api/classroom/items/${item.itemId}`)).data.counts).toMatchObject({ toReview: 3, drafts: 0 });
+      expect((await get('/api/classroom/classes')).data.classes.find((c) => c.classId === sciId).toReviewCount).toBe(3);
+
+      // ITEM_COUNTS uses the grading view's rules: a draft counts once, as in "Publish to N".
+      await patch(bilalId, { draftScore: 6 }); // live on the published column
+      await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+        .send({ studentId: daliaId, assessmentId: columnId, status: 'excused' }), 200);
+      expect((await get(`/api/classroom/items/${item.itemId}`)).data.counts).toMatchObject({ toReview: 1, drafts: 0 });
+    });
+
+    it('M3: publishing a student again with nothing changed is skipped (no second email); a regrade publishes again', async () => {
+      const solo = await createItem({
+        kind: 'assignment', title: 'Science fair board', submissionMode: 'done', dueAt: inDays(5),
+        gradebook: { mode: 'existing', assessmentId: await assessment(sciId, 'Science fair board', { weight: 100, max: 20 }) },
+      });
+      const soloUrl = `/api/classroom/items/${solo.itemId}`;
+      await patchOn(soloUrl, amalId, { draftScore: 18 });
+      expect((await post(`${soloUrl}/publish`, { studentIds: [amalId] })).data.emailSummary).toMatchObject({ sent: 1 });
+
+      const again = (await post(`${soloUrl}/publish`, { studentIds: [amalId, daliaId] })).data;
+      expect(again.publishedStudentIds).toEqual([]);
+      expect(again.skipped).toEqual([{ studentId: amalId, reason: 'unchanged' }, { studentId: daliaId, reason: 'no_draft' }]);
+      expect(sent()).toHaveLength(1);
+
+      await patchOn(soloUrl, amalId, { draftScore: 19 }); // live regrade
+      const regraded = (await post(`${soloUrl}/publish`, { studentIds: [amalId] })).data;
+      expect(regraded.publishedStudentIds).toEqual([amalId]);
+      expect(sent()).toHaveLength(2);
+    });
+
+    it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {
+      await patch(amalId, { draftScore: 8 });
+      await publish([amalId]);
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, 6, 'excused')`, [daliaId, columnId]);
+      const { data } = await post(`${itemUrl}/excuse`, { studentIds: [daliaId], excused: false });
+      expect(data.publishedStudentIds).toEqual([daliaId]);
+      expect(await cell(daliaId)).toEqual({ student_id: daliaId, score: 6, status: 'graded' });
+    });
   });
 });

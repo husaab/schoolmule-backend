@@ -119,13 +119,22 @@ describe('buildChildGrades', () => {
     expect(itemQueryArgs).toEqual([expect.arrayContaining([QUIZ1, QUIZ2]), AMAL]);
   });
 
-  it('classAvg is null unless the class shows the class average', async () => {
+  it('classAvg shows only when the class shows the class average and at least 5 students count', async () => {
     let grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
     expect(grades.classes[0].classAvg).toBeNull();
 
+    // Shown, but only 2 students have a published, counted score.
     classRows = [classRow({ show_class_average: true })];
+    matrixRows = matrixRows.map((r) => ({ ...r, show_class_average: true }));
     grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
-    expect(grades.classes[0].classAvg).toBe(70); // (80 + 60) / 2, published work only
+    expect(grades.classes[0].classAvg).toBeNull();
+
+    matrixRows = [
+      ...matrixRows,
+      ...[['s-c', 7], ['s-d', 9], ['s-e', 5]].map(([id, score]) => ({ ...row(id, quiz1, score), show_class_average: true })),
+    ];
+    grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
+    expect(grades.classes[0].classAvg).toBe(70); // (80 + 60 + 70 + 90 + 50) / 5, published work only
   });
 
   it('a JK or SK student does not use marks: no classes, and the engine is never asked', async () => {
