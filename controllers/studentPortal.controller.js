@@ -17,7 +17,7 @@ const { photoUrlFor } = require('../services/profile/photos');
 const { loadSchoolInfo } = require('../services/classroom/studentAccounts');
 const { getSchoolName } = require('../utils/schoolUtils');
 const {
-  loadChild, listChildClasses, getChildClass, getChildStream, getChildPeople,
+  loadChild, listChildClasses, getChildClass, getChildStream,
 } = require('../services/classroom/childClassroom');
 const { buildChildGrades, newGradesFor, isTermParamValid } = require('../services/classroom/childGrades');
 
@@ -203,14 +203,9 @@ const getClassStream = async (req, res) => {
 };
 
 // GET /api/student/classes/:classId/people: the teachers, never classmates.
-const getClassPeople = async (req, res) => {
-  try {
-    return ok(res, await getChildPeople({ studentId: req.student.studentId, classId: req.params.classId }));
-  } catch (error) {
-    logger.error({ err: error, classId: req.params.classId }, 'Failed to load the student class people');
-    return failed(res, 500, 'Error loading the class');
-  }
-};
+// requireEnrolledClass already loaded them (getChildClass's teachers are
+// getChildPeople's), so they are not read and signed a second time.
+const getClassPeople = (req, res) => ok(res, { teachers: req.childClass.teachers });
 
 // GET /api/student/grades?termId=
 // Published grades only, from the shared grade engine (the parent portal's path).

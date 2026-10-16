@@ -206,6 +206,22 @@ describe('Integration: the student portal read API', () => {
     await get('/api/student/grades?termId=junk', asAmal, 400);
   });
 
+  it("classAvg shows only when the class turns the class average on, and never names a classmate", async () => {
+    const quiz = await assessment(mathId, 'Quiz 1', { published: true, publishedAt: new Date() });
+    await score(amalId, quiz, 8);
+    await score(bilalId, quiz, 6);
+
+    let math = (await get('/api/student/grades')).data.classes.find((c) => c.classId === mathId);
+    expect(math).toMatchObject({ finalPct: 80, classAvg: null });
+
+    await pool.query(`UPDATE classes SET show_class_average = TRUE WHERE class_id = $1`, [mathId]);
+    const grades = (await get('/api/student/grades')).data;
+    math = grades.classes.find((c) => c.classId === mathId);
+    expect(math).toMatchObject({ finalPct: 80, classAvg: 70 }); // (80 + 60) / 2 over published work
+    expect(math.items[0]).not.toHaveProperty('classAvgPct');
+    expect(JSON.stringify(grades)).not.toContain(bilalId);
+  });
+
   it('newGrades only includes the last 14 days', async () => {
     const DAY = 24 * 60 * 60 * 1000;
     const recent = await assessment(mathId, 'Fractions quiz', { published: true, publishedAt: new Date(Date.now() - 3 * DAY) });

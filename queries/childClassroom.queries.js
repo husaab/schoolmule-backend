@@ -38,16 +38,23 @@ const HAS_NEW_POST = (c, reader) => `EXISTS (
        AND a.published_at >= NOW() - INTERVAL '7 days'
        AND NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.announcement_id AND r.user_id = ${reader}))`;
 
-// The child can sign in: a linked login that is live (not archived, not
-// invite-pending) with consent on file, classrooms on, and the child's grade at
-// or above the school's login grade (the sign-in gate's own rules).
+// The child can sign in by some route the sign-in gate allows
+// (services/classroom/studentLogin.js#assertStudentCanSignIn): a linked login
+// that is not archived, with consent on file, classrooms on and the child's
+// grade at or above the school's login grade, AND a way in: a password that is
+// set (not the invite-pending '!'), or a live QR card (issued, not voided) in a
+// grade the school gives cards to. A card works for an invite-pending login,
+// so a Grade 1-3 child who only ever scans a card still signs in.
 const SIGNS_IN = (s) => `EXISTS (
     SELECT 1 FROM student_account_links sal
-      JOIN users su ON su.user_id = sal.user_id AND su.is_archived IS NOT TRUE AND su.password <> '!'
+      JOIN users su ON su.user_id = sal.user_id AND su.is_archived IS NOT TRUE
       JOIN student_accounts sa ON sa.user_id = su.user_id AND sa.consent_at IS NOT NULL
       JOIN school_classroom_settings scs ON scs.school = ${s}.school AND scs.enabled
      WHERE sal.student_id = ${s}.student_id
-       AND ${GRADE_RANK(`${s}.grade::text`)} >= ${GRADE_RANK('scs.login_from_grade')})`;
+       AND ${GRADE_RANK(`${s}.grade::text`)} >= ${GRADE_RANK('scs.login_from_grade')}
+       AND (su.password <> '!'
+            OR (sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL
+                AND ${GRADE_RANK(`${s}.grade::text`)} <= ${GRADE_RANK('scs.qr_until_grade')})))`;
 
 const childClassroomQueries = {
   // One student row as the portal shows it. $1 student_id
@@ -129,7 +136,8 @@ const childClassroomQueries = {
 
   // "Needs you": posts asking for a "Got it" in the last 30 days, in the
   // audience of at least one of the parent's children for the year, that the
-  // parent has not acknowledged. student_ids = those children.
+  // parent has not acknowledged. student_ids = those children. A post in an
+  // archived class is left out, like the class itself.
   // $1 parent_id, $2 school, $3 school_year_id|null
   selectAckNeeded: `
     WITH kids AS (
@@ -145,6 +153,7 @@ const childClassroomQueries = {
     LEFT JOIN users au ON au.user_id = a.author_id
     JOIN kids s ON ${IN_AUDIENCE('s')}
     WHERE a.school = $2 AND a.deleted_at IS NULL AND a.ack_requested
+      AND cl.archived_at IS NULL
       AND a.published_at >= NOW() - INTERVAL '30 days'
       AND ($3::uuid IS NULL OR a.school_year_id IS NULL OR a.school_year_id = $3)
       AND NOT EXISTS (SELECT 1 FROM announcement_acks k WHERE k.announcement_id = a.announcement_id AND k.user_id = $1)

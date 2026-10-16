@@ -16,6 +16,7 @@ const OTHER_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440003';
 const MONA_ID = '550e8400-e29b-41d4-a716-446655440004';
 const OMAR_ID = '550e8400-e29b-41d4-a716-446655440005';
 const AMAL_USER_ID = '550e8400-e29b-41d4-a716-446655440010';
+const SARA_USER_ID = '550e8400-e29b-41d4-a716-446655440011';
 
 const asMona = { userId: MONA_ID, username: 'Mona Haddad', email: 'mona.haddad@example.com', role: 'PARENT' };
 const asTeacher = { userId: TEACHER_ID, username: 'Ziad Teacher', email: 'ziad.teacher@example.com', role: 'TEACHER' };
@@ -153,6 +154,7 @@ describe("Integration: the parent's Classes page and lens", () => {
     await announce({ classId: mathId, title: 'No ack wanted' });
     await announce({ classId: mathId, title: 'Too old to need you', daysAgo: 31, ack: true });
     await announce({ classId: mathId, title: 'Removed', ack: true, deleted: true });
+    await announce({ classId: archivedId, title: 'From an archived class', ack: true }); // Amal is on its roster
 
     let { needsYou } = (await get('/api/parent-portal/classroom/summary')).data;
     expect(needsYou).toEqual([
@@ -172,6 +174,69 @@ describe("Integration: the parent's Classes page and lens", () => {
 
     ({ needsYou } = (await get('/api/parent-portal/classroom/summary')).data);
     expect(needsYou.map((n) => n.announcementId)).toEqual([schoolAck]);
+  });
+
+  it('signsIn is true for a password or a live QR card, and false when the sign-in gate would refuse', async () => {
+    // Sara (Grade 2) gets a login: invite pending (no password yet), consent on file, a live card.
+    await user(SARA_USER_ID, 'sara.haddad@example.com', 'Sara', 'Haddad', 'STUDENT');
+    await pool.query(`UPDATE users SET password = '!' WHERE user_id = $1`, [SARA_USER_ID]);
+    await pool.query(
+      `INSERT INTO student_accounts (user_id, school, consent_at, consent_notice_version, qr_secret_hash, qr_issued_at)
+       VALUES ($1, 'ALHAADIACADEMY', NOW(), '2026-10', 'card-hash', NOW())`, [SARA_USER_ID],
+    );
+    await pool.query(
+      `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [SARA_USER_ID, saraId, yearId],
+    );
+    const signsIn = async () => (await get('/api/parent-portal/classroom/summary')).data.children
+      .find((c) => c.studentId === saraId).signsIn;
+    const account = (sql) => pool.query(`UPDATE student_accounts SET ${sql} WHERE user_id = $1`, [SARA_USER_ID]);
+    const settings = (sql) => pool.query(`UPDATE school_classroom_settings SET ${sql} WHERE school = 'ALHAADIACADEMY'`);
+
+    expect(await signsIn()).toBe(true); // QR-only invitee: the card is the way in
+
+    await account('qr_voided_at = NOW()');
+    expect(await signsIn()).toBe(false); // voided card, no password
+
+    await account('qr_voided_at = NULL, qr_secret_hash = NULL, qr_issued_at = NULL');
+    expect(await signsIn()).toBe(false); // invite pending, no card
+
+    await pool.query(`UPDATE users SET password = 'hashed' WHERE user_id = $1`, [SARA_USER_ID]);
+    expect(await signsIn()).toBe(true); // password set
+
+    await account('consent_at = NULL');
+    expect(await signsIn()).toBe(false); // no consent
+    await account('consent_at = NOW()');
+
+    await settings(`login_from_grade = '3'`);
+    expect(await signsIn()).toBe(false); // Grade 2 is below the login grade
+    await settings(`login_from_grade = '1'`);
+
+    await settings('enabled = FALSE');
+    expect(await signsIn()).toBe(false); // classrooms off
+    await settings('enabled = TRUE');
+
+    await pool.query(`UPDATE users SET is_archived = TRUE WHERE user_id = $1`, [SARA_USER_ID]);
+    expect(await signsIn()).toBe(false); // archived login
+    await pool.query(`UPDATE users SET is_archived = FALSE, password = '!' WHERE user_id = $1`, [SARA_USER_ID]);
+
+    await account(`qr_secret_hash = 'card-hash', qr_issued_at = NOW()`);
+    expect(await signsIn()).toBe(true);
+    await settings(`qr_until_grade = '1'`);
+    expect(await signsIn()).toBe(false); // a card only works up to the school's QR grade
+  });
+
+  it("lens endpoints 404 for a linked child whose row is archived or in another school", async () => {
+    await pool.query(`UPDATE students SET is_archived = TRUE WHERE student_id = $1`, [saraId]);
+    const elsewhere = (await pool.query(
+      `INSERT INTO students (name, grade, school) VALUES ('Lina Haddad', '5', 'PLAYGROUND') RETURNING student_id`,
+    )).rows[0].student_id;
+    await guardian(elsewhere, MONA_ID, 'Mona Haddad', 'mona.haddad@example.com');
+    for (const id of [saraId, elsewhere]) {
+      for (const path of ['/classes', `/classes/${readingId}`, `/classes/${readingId}/stream`, '/grades']) {
+        const body = await get(lens(id, path), asMona, 404);
+        expect(body.message).toBe('Student not found');
+      }
+    }
   });
 
   it("lens endpoints 403 for another family's child", async () => {
