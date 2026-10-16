@@ -981,6 +981,86 @@ describe('Integration: grading and per-student Publish', () => {
         const back = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
         expect(back).toMatchObject({ label: 'Published', publishedScore: 7, draftScore: null, needsPublish: false });
       });
+
+      // Fix round 5 (N4): an audience change never unpublishes what was published.
+      it('N4: a student taken off an item keeps their published grade and feedback, and back on it they still show', async () => {
+        const lensGrade = async (assessmentId = columnId) => {
+          engine.invalidateCache();
+          const { data } = await get(`/api/parent-portal/students/${bilalId}/classroom/grades`, asParentB);
+          return data.classes.flatMap((c) => c.items).find((i) => i.assessmentId === assessmentId) ?? null;
+        };
+        const shows = { score: 6, feedback: 'Neat labels.' };
+        await patch(amalId, { draftScore: 8 });
+        await patch(bilalId, { draftScore: 6, feedback: 'Neat labels.' });
+        await publish([amalId, bilalId]);
+        expect(await studentGrade(asBilal)).toMatchObject(shows);
+        expect(await lensGrade()).toMatchObject(shows);
+
+        // Off the item he is graded like a plain column, and what was published still shows.
+        await editItem(itemUrl, { audience: 'some', studentIds: [amalId, daliaId] }, 200);
+        expect(await cell(bilalId)).toEqual({ student_id: bilalId, score: 6, status: 'graded' });
+        expect(await submission(bilalId)).toMatchObject({ draft_score: null, draft_status: null, published_at: expect.any(Date) });
+        expect(await studentGrade(asBilal)).toMatchObject(shows);
+        expect(await lensGrade()).toMatchObject(shows);
+
+        // Back on the item: the same, the grading view agrees, and a feedback edit is live.
+        await editItem(itemUrl, { audience: 'all' }, 200);
+        expect((await studentItem(asBilal)).grade).toMatchObject(shows);
+        expect(await lensGrade()).toMatchObject(shows);
+        const row = (await get(`${itemUrl}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+        expect(row).toMatchObject({ label: 'Published', publishedScore: 6, feedback: 'Neat labels.', needsPublish: false });
+        const { data } = await patch(bilalId, { feedback: 'Neat labels, well done.' });
+        expect(data.live).toBe(true);
+        expect((await studentItem(asBilal)).grade).toMatchObject({ score: 6, feedback: 'Neat labels, well done.' });
+
+        // FB2: on a column unpublished in Grades, the column's Publish shows his feedback again with his grade.
+        const { colId } = await someItem('Lab G');
+        const lab = await createItem({
+          kind: 'assignment', title: 'Lab G', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, bilalId, { draftScore: 6, feedback: 'Neat labels.' });
+        await post(`${url}/publish`, { studentIds: [bilalId] });
+        await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [colId] });
+        await editItem(url, { audience: 'some', studentIds: [amalId] }, 200);
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        await trayPublish([colId]);
+        expect(await studentGrade(asBilal, colId)).toMatchObject(shows);
+      });
+
+      // Fix round 5 (N5): only the students taken off the item in this edit are checked.
+      it("N5: a returning student's old unpublished draft doesn't block other audience changes, and still shows only once published", async () => {
+        const { colId } = await someItem('Lab H');
+        const lab = await createItem({
+          kind: 'assignment', title: 'Lab H', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, amalId, { draftScore: 8 });
+        await patchOn(url, bilalId, { draftScore: 6 });
+        await post(`${url}/publish`, { studentIds: [amalId] }); // the column is published; Bilal's 6 is held
+
+        // Bilal leaves the class, is taken off the item, and comes back to the class.
+        await pool.query(`DELETE FROM class_students WHERE class_id = $1 AND student_id = $2`, [sciId, bilalId]);
+        await editItem(url, { audience: 'some', studentIds: [amalId] }, 200);
+        await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [sciId, bilalId]);
+
+        // Adding Dalia is not about Bilal: allowed, and his 6 stays a draft nobody sees.
+        await editItem(url, { audience: 'some', studentIds: [amalId, daliaId] }, 200);
+        expect(await cell(bilalId, colId)).toBeUndefined();
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: 6, draft_status: 'graded', published_at: null });
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        expect(parentScore(await parentGrades(asParentB, bilalId), colId)?.score ?? null).toBeNull();
+
+        // Back on the item, the draft is in the grading view, and only his Publish shows it.
+        await editItem(url, { audience: 'some', studentIds: [amalId, bilalId, daliaId] }, 200);
+        const row = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+        expect(row).toMatchObject({ label: 'Graded · draft', draftScore: 6, needsPublish: true });
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        await post(`${url}/publish`, { studentIds: [bilalId] });
+        expect(await studentGrade(asBilal, colId)).toMatchObject({ score: 6 });
+      });
     });
 
     it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {

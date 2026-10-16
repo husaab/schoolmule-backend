@@ -113,23 +113,28 @@ function unpublishedDraftsMessage(names) {
 }
 
 /**
- * After an item's audience changes (fix rounds 3 and 4), inside the caller's
+ * After an item's audience changes (fix rounds 3 to 5), inside the caller's
  * transaction. A student of the class who left it is graded like a plain
- * assessment, and an unpublished draft never shows without a Publish (D3):
+ * assessment. An unpublished draft never shows without a Publish (D3), and
+ * what was published stays published (its published_at is never cleared):
  * - unpublished column: their draft becomes their gradebook cell, which shows
  *   only once the column is published (in Grades, as on main);
- * - published column: a draft already published is in their cell, so it is
- *   just cleared; a draft not published yet refuses the change (409
+ * - published column: a draft already published is in their cell, so its
+ *   copy on the submission is cleared and the grade and feedback stay
+ *   published; a draft not published yet refuses the change (409
  *   UNPUBLISHED_DRAFTS_OUTSIDE) until the teacher publishes or clears it.
+ *   Only the students this edit takes off are checked: an older draft of a
+ *   student who was off the roster or archived then is left as a draft.
  * A student who joined an unpublished column has their cell taken as a draft.
+ * `wasFor`: the students the item was for before the edit (null = the class).
  */
-async function reconcileAudience(client, { itemId, assessmentId }) {
+async function reconcileAudience(client, { itemId, assessmentId, wasFor = null }) {
   if (!assessmentId) return;
   // The grading writers' lock order (the column before the submissions), so
   // a Publish can't flip the column between this check and the moves.
   const { rows: [a] } = await client.query(q.lockAssessmentShare, [assessmentId]);
   if (a?.is_published) {
-    const { rows: held } = await client.query(q.selectUnpublishedDraftsOutside, [itemId]);
+    const { rows: held } = await client.query(q.selectUnpublishedDraftsOutside, [itemId, wasFor]);
     if (held.length > 0) throw conflict(unpublishedDraftsMessage(held.map((r) => r.name)), 'UNPUBLISHED_DRAFTS_OUTSIDE');
   }
   await client.query(q.draftsOutsideToCells, [itemId]); // writes unpublished columns only

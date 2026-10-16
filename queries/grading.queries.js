@@ -248,9 +248,13 @@ const gradingQueries = {
   //  After an audience change (publish.reconcileAudience), the students of
   //  the class the item is no longer for are graded like a plain assessment.
   //
-  //  Those holding a draft not published yet, on a published column: making
-  //  it their gradebook cell would show it with no Publish (D3), so the
-  //  change is refused while there are any (fix round 4). $1 item_id
+  //  Those taken off the item by this edit who hold a draft not published
+  //  yet, on a published column: making it their gradebook cell would show
+  //  it with no Publish (D3), so the change is refused while there are any
+  //  (fix round 4). Only this edit's students are checked (round 5): a
+  //  student who was off the roster or archived at an earlier change isn't
+  //  in the grading view, and their draft is left as it is.
+  //  $1 item_id, $2 the students the item was for before the edit (NULL = the whole class)
   selectUnpublishedDraftsOutside: `
     SELECT s.student_id, s.name
     FROM classwork_submissions sub
@@ -258,6 +262,7 @@ const gradingQueries = {
     JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
     JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
     WHERE sub.item_id = $1 AND sub.published_at IS NULL AND ${HAS_DRAFT} AND NOT ${IN_ITEM_AUDIENCE}
+      AND ($2::uuid[] IS NULL OR sub.student_id = ANY($2::uuid[]))
     ORDER BY s.name, s.student_id`,
   //  On an unpublished column only, their drafts become their gradebook
   //  cells (released by the column's Publish in Grades, as on main). On a
@@ -275,12 +280,16 @@ const gradingQueries = {
     JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
     WHERE sub.item_id = $1 AND NOT COALESCE(a.is_published, FALSE) AND ${HAS_DRAFT} AND NOT ${IN_ITEM_AUDIENCE}
     ON CONFLICT (student_id, assessment_id) DO UPDATE SET score = EXCLUDED.score, status = EXCLUDED.status`,
-  //  Then their drafts are cleared (moved to the cell above, or, on a
-  //  published column, already published to it). $1 item_id
+  //  Then the drafts moved to the cell above, and the drafts already
+  //  published (a copy of the cell, which a later edit of the plain cell
+  //  would leave stale), are cleared. published_at is kept: a grade and
+  //  feedback already published stay published (round 5). An unpublished
+  //  draft on a published column is never cleared. $1 item_id
   clearDraftsOutside: `
-    UPDATE classwork_submissions sub SET draft_score = NULL, draft_status = NULL, published_at = NULL, updated_at = NOW()
-    FROM classwork_items i, class_students cs, students s
-    WHERE sub.item_id = $1 AND i.item_id = sub.item_id AND ${HAS_DRAFT}
+    UPDATE classwork_submissions sub SET draft_score = NULL, draft_status = NULL, updated_at = NOW()
+    FROM classwork_items i, assessments a, class_students cs, students s
+    WHERE sub.item_id = $1 AND i.item_id = sub.item_id AND a.assessment_id = i.assessment_id AND ${HAS_DRAFT}
+      AND (NOT COALESCE(a.is_published, FALSE) OR sub.published_at IS NOT NULL)
       AND cs.class_id = i.class_id AND cs.student_id = sub.student_id
       AND s.student_id = sub.student_id AND s.is_archived IS NOT TRUE AND NOT ${IN_ITEM_AUDIENCE}`,
 

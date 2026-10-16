@@ -576,7 +576,9 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
       || !sameList(value.studentIds, cur.audience === 'some' ? cur.studentIds.map(lower) : []);
     if (newlyLinked || !TURN_IN_KINDS.has(cur.kind)) await cellsToDrafts(client, { itemId, assessmentId });
     if (audienceChanged) {
-      await reconcileAudience(client, { itemId, assessmentId });
+      await reconcileAudience(client, {
+        itemId, assessmentId, wasFor: cur.audience === 'some' ? cur.studentIds.map(lower) : null,
+      });
       gradebookChanged = true;
     }
   }
