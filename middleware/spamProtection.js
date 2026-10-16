@@ -68,17 +68,55 @@ const contactFormLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// Rate limiter for login - 10 per 15 minutes per IP (to prevent brute force)
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  message: {
-    success: false,
-    message: 'Too many login attempts. Please try again later.'
-  },
+// ─── Sign-in limits (/api/auth/login, /google, /student-qr) ────────────────
+//
+// A whole school signs in from one public IP (the school network's NAT): a
+// class of 25 scanning QR cards or typing passwords at the start of a lesson
+// must all get in. So successful sign-ins never count, and guessing is
+// throttled per account:
+//   - loginAccountLimiter / qrCardLimiter: 10 FAILED attempts per 15 minutes
+//     per network per account (the email typed, or the card's user id). That
+//     is the old per-IP budget, now for each account, so guessing one
+//     account is exactly as slow as before.
+//   - loginLimiter: 100 FAILED sign-ins per 15 minutes per network, across
+//     every account and every sign-in route, so one network can't spray
+//     guesses at many accounts.
+const SIGN_IN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const TOO_MANY_SIGN_INS = {
+  success: false,
+  message: 'Too many login attempts. Please try again later.'
+};
+const UUID_PREFIX_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\./i;
+
+const failedSignInLimiter = ({ max, key }) => rateLimit({
+  windowMs: SIGN_IN_WINDOW_MS,
+  max,
+  // Only failures count (status >= 400): a classroom's successful sign-ins
+  // from one network never use up anyone's budget.
+  skipSuccessfulRequests: true,
+  message: TOO_MANY_SIGN_INS,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  ...(key && { keyGenerator: (req) => `${req.ip}|${key(req)}` }),
 });
+
+// The account a password sign-in is for: the address as typed, normalised.
+const typedEmail = (req) => {
+  const email = req.body && typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  return `email:${email}`;
+};
+// The account a QR card is for: its user id (malformed tokens share one bucket).
+const cardUser = (req) => {
+  const m = UUID_PREFIX_RE.exec(String((req.body && req.body.token) || '').trim());
+  return m ? `card:${m[1].toLowerCase()}` : 'card:invalid';
+};
+
+// Per network, failed sign-ins on every route (see above).
+const loginLimiter = failedSignInLimiter({ max: 100 });
+// Per network and account, failed password sign-ins.
+const loginAccountLimiter = failedSignInLimiter({ max: 10, key: typedEmail });
+// Per network and card, failed QR sign-ins.
+const qrCardLimiter = failedSignInLimiter({ max: 10, key: cardUser });
 
 // Honeypot validation middleware (for contact form)
 // Expects a hidden field named 'website' that should be empty
@@ -150,6 +188,8 @@ module.exports = {
   passwordResetLimiter,
   contactFormLimiter,
   loginLimiter,
+  loginAccountLimiter,
+  qrCardLimiter,
   honeypotValidation,
   validateInput
 };

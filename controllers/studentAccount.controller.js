@@ -22,6 +22,7 @@ const {
   toStudentAccountRow,
   loadSchoolInfo,
   inviteStudent,
+  MAX_STUDENT_BATCH,
   parseStudentIds,
   resendInviteFor,
   resetPasswordFor,
@@ -30,7 +31,7 @@ const {
 } = require('../services/classroom/studentAccounts');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_INVITE_BATCH = 200;
+const MAX_INVITE_BATCH = MAX_STUDENT_BATCH;
 // Resend allows ~2 requests/second; the same pause the publish digests use.
 const EMAIL_GAP_MS = 600;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -255,8 +256,13 @@ const voidQrCards = async (req, res) => {
   }
 };
 
+// Response headers stay small for proxies: the count always, the ids only
+// for a short list (the full list is in the 404 body when nothing printed).
+const MAX_SKIPPED_IN_HEADER = 50;
+
 /**
- * Send a cards PDF from issueQrCards. Ineligible students are listed in
+ * Send a cards PDF from issueQrCards. Students who got no card are counted in
+ * X-Skipped-Count and, up to MAX_SKIPPED_IN_HEADER, listed in
  * X-Skipped-Students; nothing printable is a 404. Shared with the teacher's
  * class route (controllers/classroom.controller.js).
  */
@@ -270,7 +276,10 @@ async function sendQrCards(res, { school, studentIds, requestedBy }) {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="student-sign-in-cards.pdf"');
   res.setHeader('Content-Length', pdf.length);
-  if (skippedIds.length > 0) res.setHeader('X-Skipped-Students', skippedIds.join(','));
+  if (skippedIds.length > 0) {
+    res.setHeader('X-Skipped-Count', String(skippedIds.length));
+    if (skippedIds.length <= MAX_SKIPPED_IN_HEADER) res.setHeader('X-Skipped-Students', skippedIds.join(','));
+  }
   return res.status(200).send(Buffer.from(pdf));
 }
 

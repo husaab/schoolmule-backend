@@ -10,6 +10,8 @@ const {
   passwordResetLimiter,
   contactFormLimiter,
   loginLimiter,
+  loginAccountLimiter,
+  qrCardLimiter,
   honeypotValidation,
   validateInput,
 } = require('../../../middleware/spamProtection');
@@ -34,6 +36,11 @@ describe('spamProtection middleware', () => {
 
     it('exports loginLimiter as a function', () => {
       expect(typeof loginLimiter).toBe('function');
+    });
+
+    it('exports the per-account sign-in limiters as functions', () => {
+      expect(typeof loginAccountLimiter).toBe('function');
+      expect(typeof qrCardLimiter).toBe('function');
     });
   });
 

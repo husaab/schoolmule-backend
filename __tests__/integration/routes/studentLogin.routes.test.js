@@ -20,11 +20,13 @@ jest.mock('puppeteer', () => ({
   })),
 }));
 
-// The sign-in routes share loginLimiter (10 per 15 min per IP), which this
-// file's requests would exhaust; the limiter has its own suite.
+// The sign-in limits count this file's deliberate failures per account; they
+// have their own suite (signInLimits.routes.test.js).
 jest.mock('../../../middleware/spamProtection', () => ({
   ...jest.requireActual('../../../middleware/spamProtection'),
   loginLimiter: (req, res, next) => next(),
+  loginAccountLimiter: (req, res, next) => next(),
+  qrCardLimiter: (req, res, next) => next(),
 }));
 
 // Google itself is out of scope: each test picks the identity the popup returns.
@@ -167,6 +169,12 @@ describe('Integration: student sign-in', () => {
     expect(decoded).toMatchObject({ userId: AMAL_USER, role: 'STUDENT', baseRole: 'STUDENT', roles: ['STUDENT'] });
     expect(decoded.exp - decoded.iat).toBe(12 * 60 * 60);
     expect(decoded.exp).toBeLessThanOrEqual(before + 12 * 60 * 60 + 5);
+  });
+
+  it('a student who types capitals (and spaces) can sign in', async () => {
+    const res = await login('  Amal.Haddad@Example.COM ');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ userId: AMAL_USER, role: 'STUDENT', email: 'amal.haddad@example.com' });
   });
 
   // 2
@@ -393,6 +401,7 @@ describe('Integration: student sign-in', () => {
     expect(res.headers['content-disposition']).toMatch(/^attachment; filename=".+\.pdf"$/);
     // Grade 5 is past qrUntilGrade '3': no card, and the caller is told.
     expect(res.headers['x-skipped-students']).toBe(samiId);
+    expect(res.headers['x-skipped-count']).toBe('1');
     expect(res.body.toString()).toBe('%PDF-1.4 student cards');
 
     const now = await qrState(AMAL_USER);
@@ -446,6 +455,20 @@ describe('Integration: student sign-in', () => {
     const otherClass = await authenticatedRequest('post', `/api/classroom/classes/${classA}/qr-cards.pdf`, asOtherTeacher)
       .send({ studentIds: [amalId] });
     expect(otherClass.status).toBe(403);
+
+    // A past year's class never mints a card, even for a student it still lists.
+    const hashNow = (await qrState(AMAL_USER)).qr_secret_hash;
+    const pastRow = await student('Amal Haddad', '1', pastYearId);
+    const { rows: [past] } = await pool.query(
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+       VALUES ('ALHAADIACADEMY', '1', 'Math', 'Rana Teacher', $1, $2) RETURNING class_id`,
+      [OTHER_TEACHER_ID, pastYearId],
+    );
+    await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [past.class_id, pastRow]);
+    const pastYear = await authenticatedRequest('post', `/api/classroom/classes/${past.class_id}/qr-cards.pdf`, asOtherTeacher)
+      .send({ studentIds: [pastRow] });
+    expect(pastYear.status).toBe(404);
+    expect((await qrState(AMAL_USER)).qr_secret_hash).toBe(hashNow);
   });
 
   // 10

@@ -66,6 +66,23 @@ const sessionIdentity = (user, role, roles) => ({
   lastModifiedAt: user.last_modified_at,
 });
 
+// Sign-in addresses match ignoring case, so "Amal.Haddad@Example.com" opens
+// amal.haddad@example.com. users.email is unique only as typed, so two old
+// accounts can differ by case alone: the exact spelling wins, and with no
+// exact match among several candidates no account is picked.
+const typedEmail = (raw) => (typeof raw === 'string' ? raw.trim() : '');
+const AMBIGUOUS_EMAIL = Object.freeze({
+  status: 409,
+  code: 'EMAIL_AMBIGUOUS',
+  message: "More than one account uses this email address with different capital letters. Type it exactly as it was set up, or ask your school to fix the account.",
+});
+/** loginUser-style rows → { user } (null when none) or { ambiguous: true }. */
+const matchAccountByEmail = (rows, typed) => {
+  if (rows.length <= 1) return { user: rows[0] || null };
+  const exact = rows.find((r) => r.email === typed);
+  return exact ? { user: exact } : { user: null, ambiguous: true };
+};
+
 // Every sign-in attempt, however it ends, becomes a login_events row.
 const recordLogin = (req, { email, user, outcome }) => {
   observeBuffer.push('login_events', {
@@ -307,15 +324,20 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
     let user = null;
 
     try {
-      const sql = userQueries.loginUser;
-      const result = await db.query(sql, [email]);
+      const typed = typedEmail(email);
+      const result = await db.query(userQueries.loginUser, [typed]);
+      const match = matchAccountByEmail(result.rows, typed);
 
-      if (result.rows.length === 0) {
+      if (match.ambiguous) {
+        recordLogin(req, { email, user: null, outcome: 'ambiguous_email' });
+        throw { ...AMBIGUOUS_EMAIL };
+      }
+      if (!match.user) {
         recordLogin(req, { email, user: null, outcome: 'unknown_email' });
         throw { status: 404, message: "User not found" };
       }
 
-      user = result.rows[0];
+      user = match.user;
       const isPasswordValid = await bcrypt.compare(password, user.password);
 
       if (!isPasswordValid) {
@@ -752,15 +774,20 @@ const logout = async (req, res) => {
 };
 
 const requestPasswordReset = async (req, res) => {
-  const { email } = req.body;
+  const typed = typedEmail(req.body?.email);
 
   try {
-    const userResult = await db.query(userQueries.selectByEmail, [email]);
-    if (userResult.rowCount === 0) {
+    // Same match as sign-in. The link always goes to the stored address.
+    const userResult = await db.query(userQueries.selectByEmailIgnoringCase, [typed]);
+    const match = matchAccountByEmail(userResult.rows, typed);
+    if (match.ambiguous) {
+      return res.status(409).json({ success: false, code: AMBIGUOUS_EMAIL.code, message: AMBIGUOUS_EMAIL.message });
+    }
+    if (!match.user) {
       return res.status(404).json({ success: false, message: 'No user found with this email.' });
     }
 
-    const user = userResult.rows[0];
+    const user = match.user;
 
     const tokenResult = await db.query(passwordQueries.createPasswordResetToken, [user.user_id]);
     const token = tokenResult.rows[0].token;

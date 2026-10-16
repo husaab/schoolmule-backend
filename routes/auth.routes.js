@@ -5,18 +5,22 @@ validateResetToken, resetPassword, validateSession, switchView} = require("../co
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
-const { signupLimiter, loginLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
+const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
 
 const router = express.Router();
 
 router.post( "/register", signupLimiter, responseParser(registerUser));
-router.post( "/login", loginLimiter, responseParser(login));
-// Sign in or sign up with Google (code from the Google popup). Same limiter as
-// a password sign-in: every attempt still needs a real Google account.
+// Sign-in limits count failures only, per account and per network, so a
+// class signing in together from one school IP isn't locked out
+// (middleware/spamProtection.js). The account check runs first, so hammering
+// one account doesn't drain the whole network's budget.
+router.post( "/login", loginAccountLimiter, loginLimiter, responseParser(login));
+// Sign in or sign up with Google (code from the Google popup). Per network
+// only: every attempt needs a real Google account, so it can't guess.
 router.post( "/google", loginLimiter, responseParser(googleSignIn));
-// A student's printed QR card (the /qr page posts its token). Same limiter
-// and same response as a password sign-in.
-router.post('/student-qr', loginLimiter, responseParser(studentQrLogin));
+// A student's printed QR card (the /qr page posts its token). Same response
+// as a password sign-in.
+router.post('/student-qr', qrCardLimiter, loginLimiter, responseParser(studentQrLogin));
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 

@@ -121,9 +121,11 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.school_year_id = $3
     RETURNING user_id
   `,
 
-  //  Rows for printing QR cards: any year's rows the caller picked (a student
-  //  row id names its year), never a withdrawn one. $1 = school, $2 = student_id[]
+  //  Rows for printing QR cards: only current rows of the ACTIVE year, the
+  //  row the sign-in gate judges the grade on. A past year's row (or a past
+  //  year's class roster) never mints a card. $1 = school, $2 = student_id[]
   selectStudentAccountRowsForCards: `${ROW_SELECT}
+JOIN school_years cur ON cur.school_year_id = s.school_year_id AND cur.is_active
 WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT TRUE`,
 
   //  Printing a card always reissues it: only the hash is stored, so the

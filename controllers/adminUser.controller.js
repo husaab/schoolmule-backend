@@ -27,7 +27,7 @@ const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT", "STUDENT"];
 const STUDENT_PREVIEW_REFUSALS = {
   NO_STUDENT_LINK: "This student account isn't linked to this school year.",
   CLASSROOM_DISABLED: "Student sign-in is turned off for your school, so there is nothing to preview yet. Turn it on in Classroom settings first.",
-  CONSENT_REQUIRED: "This student has no parental consent on file, so they can't sign in yet.",
+  CONSENT_REQUIRED: "This student has no parental consent on file, so the account can't sign in yet.",
   GRADE_NOT_ENABLED: "This student's grade doesn't use student sign-in yet.",
 };
 // The portals a preview can open in. A dual-role teacher (also a parent) may

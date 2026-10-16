@@ -82,7 +82,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
   // Lets the browser read download filenames (CSV/PDF exports) across origins,
   // and which students a QR-card print skipped.
-  exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Skipped-Students'],
+  exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Skipped-Students', 'X-Skipped-Count'],
 };
 
 // core modules

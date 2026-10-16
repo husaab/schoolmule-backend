@@ -235,7 +235,7 @@ const byClassroom = (a, b) =>
 
 /**
  * Print QR sign-in cards. Every eligible student (a login that is invited or
- * active, a QR grade, a current row) gets a NEW secret: only its hash is
+ * active, a QR grade, a current row of the active year) gets a NEW secret: only its hash is
  * stored, so printing always voids the student's previous card. The hashes
  * are written only after the PDF rendered, so a failed print leaves the
  * cards already in students' hands working.

@@ -161,6 +161,59 @@ describe('Integration: Auth Routes', () => {
       expect(res.status).toBe(401);
       expect(res.body.success).toBe(false);
     });
+
+    it('matches the email ignoring case and surrounding spaces', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email: ' Admin@TEST.com ', password: 'correctpassword' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ userId: TEST_USER_ID, email: 'admin@test.com' });
+    });
+
+    describe('two accounts whose addresses differ only by case', () => {
+      const UPPER_ID = '550e8400-e29b-41d4-a716-446655440031';
+      const LOWER_ID = '550e8400-e29b-41d4-a716-446655440032';
+      const signIn = (email, password) => request(app).post('/api/auth/login').send({ email, password });
+
+      beforeEach(async () => {
+        const [upperHash, lowerHash] = await Promise.all([bcrypt.hash('upper-pass-1', 4), bcrypt.hash('lower-pass-2', 4)]);
+        await pool.query(
+          `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+           VALUES ($1, 'Pat.Kareem@example.com', 'Pat Kareem', $2, 'Pat', 'Kareem', 'ALHAADIACADEMY', 'PARENT', true, true),
+                  ($3, 'pat.kareem@example.com', 'Pat Kareem', $4, 'Pat', 'Kareem', 'ALHAADIACADEMY', 'TEACHER', true, true)`,
+          [UPPER_ID, upperHash, LOWER_ID, lowerHash],
+        );
+      });
+
+      it('opens the account with the exact spelling, and only with its own password', async () => {
+        expect((await signIn('Pat.Kareem@example.com', 'upper-pass-1')).body.data.userId).toBe(UPPER_ID);
+        expect((await signIn('pat.kareem@example.com', 'lower-pass-2')).body.data.userId).toBe(LOWER_ID);
+        // The exact spelling picks the account; the other one's password doesn't open it.
+        const crossed = await signIn('pat.kareem@example.com', 'upper-pass-1');
+        expect(crossed.status).toBe(401);
+        expect(crossed.body.data).toBeNull();
+      });
+
+      it('refuses a third spelling instead of picking one (409 EMAIL_AMBIGUOUS)', async () => {
+        for (const password of ['upper-pass-1', 'lower-pass-2']) {
+          const res = await signIn('PAT.KAREEM@EXAMPLE.COM', password);
+          expect(res.status).toBe(409);
+          expect(res.body).toMatchObject({ success: false, code: 'EMAIL_AMBIGUOUS', data: null });
+        }
+      });
+
+      it('"Forgot password" follows the same rule', async () => {
+        const ambiguous = await request(app).post('/api/auth/request-password-reset').send({ email: 'PAT.KAREEM@example.com' });
+        expect(ambiguous.status).toBe(409);
+        expect(ambiguous.body.code).toBe('EMAIL_AMBIGUOUS');
+
+        const exact = await request(app).post('/api/auth/request-password-reset').send({ email: 'Pat.Kareem@example.com' });
+        expect(exact.status).toBe(200);
+        const { rows } = await pool.query(`SELECT user_id FROM password_reset_tokens`);
+        expect(rows).toEqual([{ user_id: UPPER_ID }]);
+      });
+    });
   });
 
   describe('POST /api/auth/logout', () => {

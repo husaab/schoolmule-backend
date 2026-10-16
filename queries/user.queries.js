@@ -7,12 +7,18 @@ const userQueries = {
       RETURNING *
     `,
   
+    // Every account whose address matches the typed one ignoring case
+    // (students' addresses are stored lowercased; older staff and parent rows
+    // keep the capitals they signed up with). users.email is unique only as
+    // typed, so this can return a few rows: the caller picks the exact
+    // spelling and refuses to guess between the others. $1 = the typed
+    // address, trimmed.
     loginUser: `
       SELECT user_id, email, username, password, first_name, last_name,
             school, role, email_token, is_verified, is_verified_school, is_archived,
             created_at, last_modified_at
       FROM users 
-      WHERE email = $1
+      WHERE LOWER(email) = LOWER($1)
     `,
 
     touchLastLogin: `UPDATE users SET last_login_at = NOW() WHERE user_id = $1`,
@@ -64,6 +70,14 @@ const userQueries = {
       SELECT user_id, email, username, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at
       FROM users
       WHERE email = $1
+    `,
+
+    // "Forgot password": the same case-insensitive match as loginUser.
+    // $1 = the typed address, trimmed.
+    selectByEmailIgnoringCase: `
+      SELECT user_id, email, username, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at
+      FROM users
+      WHERE LOWER(email) = LOWER($1)
     `,
   
     selectAllUsers: `
