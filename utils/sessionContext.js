@@ -16,9 +16,11 @@ const parentStudentQueries = require("../queries/parentStudent.queries");
 // staff member (teacher or admin) linked to a current student also holds
 // PARENT. A parent account is only ever a parent, so no lookup is made.
 // The result is the `roles` claim; the token's `role` is one of these.
+// A student account likewise holds only its own view, so it can never switch
+// into a staff or parent view.
 const getRolesForUser = async (user) => {
   const base = user.role;
-  if (base === 'PARENT') return ['PARENT'];
+  if (base === 'PARENT' || base === 'STUDENT') return [base];
   try {
     const { rows } = await db.query(parentStudentQueries.hasActiveYearLinks, [user.user_id]);
     return rows.length > 0 ? [base, 'PARENT'] : [base];

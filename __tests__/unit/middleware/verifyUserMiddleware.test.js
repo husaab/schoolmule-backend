@@ -247,3 +247,102 @@ describe('verifyUser: admin "view as" preview tokens are read-only', () => {
     expect(next).toHaveBeenCalledWith();
   });
 });
+
+describe('verifyUser: the student fence', () => {
+  const SECRET = process.env.JWT_SECRET;
+  const sign = (claims) => jwt.sign(
+    { userId: 'student-1', school: 'ALHAADIACADEMY', isVerified: true, isVerifiedSchool: true, ...claims },
+    SECRET,
+    { expiresIn: '1h' }
+  );
+
+  const run = (token, { method = 'GET', originalUrl, verifier = verifyUser } = {}) => {
+    const req = { method, originalUrl, url: originalUrl, headers: { authorization: `Bearer ${token}` } };
+    const res = { statusCode: null, body: null };
+    res.status = (c) => { res.statusCode = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    const next = jest.fn();
+    verifier(req, res, next);
+    return { req, res, next };
+  };
+
+  const FORBIDDEN = {
+    success: false,
+    status: 'failed',
+    code: 'STUDENT_FORBIDDEN',
+    message: 'This page is not available to student accounts.',
+  };
+
+  it('STUDENT token on /api/classes -> 403 STUDENT_FORBIDDEN and next not called', () => {
+    const { res, next } = run(sign({ role: 'STUDENT' }), { originalUrl: '/api/classes' });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual(FORBIDDEN);
+  });
+
+  it('STUDENT token on /api/student/me -> next called', () => {
+    const { req, res, next } = run(sign({ role: 'STUDENT' }), { originalUrl: '/api/student/me' });
+    expect(next).toHaveBeenCalledWith();
+    expect(res.statusCode).toBeNull();
+    expect(req.user.role).toBe('STUDENT');
+  });
+
+  it('STUDENT token on /api/students (prefix boundary) -> 403', () => {
+    const { res, next } = run(sign({ role: 'STUDENT' }), { originalUrl: '/api/students/abc' });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('TEACHER token on /api/classes -> next called', () => {
+    const { next } = run(sign({ role: 'TEACHER' }), { originalUrl: '/api/classes' });
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('a token whose base role is STUDENT is fenced whatever its active view claims', () => {
+    const { res, next } = run(sign({ role: 'TEACHER', baseRole: 'STUDENT' }), { originalUrl: '/api/classes' });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('STUDENT preview token (impersonator) GET /api/student/home -> next called; POST -> 403 IMPERSONATION_READ_ONLY', () => {
+    const preview = sign({ role: 'STUDENT', impersonator: { userId: 'admin-1', username: 'admin', fullName: 'Amal Haddad' } });
+
+    const get = run(preview, { method: 'GET', originalUrl: '/api/student/home' });
+    expect(get.next).toHaveBeenCalledWith();
+    expect(get.req.user.impersonator.userId).toBe('admin-1');
+
+    const post = run(preview, { method: 'POST', originalUrl: '/api/student/home' });
+    expect(post.next).not.toHaveBeenCalled();
+    expect(post.res.statusCode).toBe(403);
+    expect(post.res.body.code).toBe('IMPERSONATION_READ_ONLY');
+  });
+
+  it('STUDENT preview token on a staff path is fenced, not merely read-only', () => {
+    const preview = sign({ role: 'STUDENT', impersonator: { userId: 'admin-1' } });
+    const { res, next } = run(preview, { method: 'GET', originalUrl: '/api/classes' });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('unverified STUDENT token on a staff path -> STUDENT_FORBIDDEN (fence runs before the verified check)', () => {
+    const { res, next } = run(sign({ role: 'STUDENT', isVerified: false, isVerifiedSchool: false }), { originalUrl: '/api/classes' });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('tokenOnly fences students too (e.g. DELETE /api/auth/delete-user)', () => {
+    const { res, next } = run(sign({ role: 'STUDENT' }), {
+      method: 'DELETE', originalUrl: '/api/auth/delete-user', verifier: verifyUser.tokenOnly,
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('tokenOnly lets a STUDENT token post client error reports', () => {
+    const { next } = run(sign({ role: 'STUDENT' }), {
+      method: 'POST', originalUrl: '/api/observe/client-events', verifier: verifyUser.tokenOnly,
+    });
+    expect(next).toHaveBeenCalledWith();
+  });
+});

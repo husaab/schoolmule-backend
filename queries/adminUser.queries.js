@@ -2,7 +2,8 @@
 // pinned to a school so an admin can only ever see or touch their own tenant.
 
 const adminUserQueries = {
-  //  $1 = school
+  //  $1 = school. Student logins are managed on Student accounts, not here.
+  //  role::text so the filter parses even before the enum has 'STUDENT'.
   selectUsersBySchool: `
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
@@ -10,7 +11,7 @@ const adminUserQueries = {
       created_at, last_modified_at,
       (password = '!') AS invite_pending
     FROM users
-    WHERE school = $1
+    WHERE school = $1 AND role::text <> 'STUDENT'
     ORDER BY is_archived, lower(last_name), lower(first_name)
   `,
 
@@ -92,7 +93,10 @@ const adminUserQueries = {
   `,
 
   //  $1 = first_name, $2 = last_name, $3 = role, $4 = is_verified_school,
-  //  $5 = user_id, $6 = school, $7 = staff_title|null (admins only; shown to parents)
+  //  $5 = user_id, $6 = school, $7 = staff_title|null (admins only; shown to
+  //  parents; the controller sends null for any other role). $3 is used only
+  //  as the role: users.role is the enum "role" in prod, and a second, text
+  //  use of $3 fails with "inconsistent types deduced for parameter $3".
   updateUserInSchool: `
     UPDATE users
     SET first_name = $1::text,
@@ -100,7 +104,7 @@ const adminUserQueries = {
         username = trim($1::text || ' ' || $2::text),
         role = $3,
         is_verified_school = $4,
-        staff_title = CASE WHEN $3 = 'ADMIN' THEN $7 ELSE NULL END,
+        staff_title = $7,
         last_modified_at = NOW()
     WHERE user_id = $5 AND school = $6 AND is_archived = false
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,

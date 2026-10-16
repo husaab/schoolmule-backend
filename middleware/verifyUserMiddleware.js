@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { isStudentToken, isStudentAllowed, pathOf } = require('./studentFence');
 
 // Requests that only read. An admin "view as" preview token (payload carries
 // `impersonator`) may do nothing else, so an admin can look around as a
@@ -27,6 +28,18 @@ const createVerifier = ({ requireVerified }) => (req, res, next) => {
     
     // Add user info to request object for downstream use
     req.user = decoded;
+
+    // The student fence (middleware/studentFence.js): a STUDENT token reaches
+    // only the student allowlist. First, ahead of the verified and read-only
+    // checks, so no other answer ever tells a student a staff route exists.
+    if (isStudentToken(decoded) && !isStudentAllowed(pathOf(req))) {
+      return res.status(403).json({
+        success: false,
+        status: 'failed',
+        code: 'STUDENT_FORBIDDEN',
+        message: 'This page is not available to student accounts.',
+      });
+    }
 
     // Not fully verified (email and school). A token minted before approval
     // keeps the old claims, so the client keys off `code` to sign out.

@@ -249,7 +249,7 @@ const updateUser = async (req, res) => {
 
   try {
     const { rows } = await db.query(adminUserQueries.updateUserInSchool, [
-      firstName, lastName, role, isVerifiedSchool, id, school, staffTitle,
+      firstName, lastName, role, isVerifiedSchool, id, school, role === "ADMIN" ? staffTitle : null,
     ]);
     if (rows.length === 0) {
       // Either not ours, or archived (the update only touches active accounts).

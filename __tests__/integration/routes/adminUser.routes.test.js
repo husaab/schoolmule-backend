@@ -50,6 +50,17 @@ describe('Integration: Admin Users Routes', () => {
       expect(res.body.data[0]).toHaveProperty('isVerifiedSchool');
     });
 
+    it('leaves student logins out (they are managed on Student accounts)', async () => {
+      await insertUser(pool, ['550e8400-e29b-41d4-a716-446655440010', 'amal.haddad@example.com', 'Amal', 'Haddad', 'ALHAADIACADEMY', 'STUDENT']);
+
+      const res = await authenticatedRequest('get', '/api/admin/users');
+
+      expect(res.status).toBe(200);
+      const emails = res.body.data.map((u) => u.email);
+      expect(emails).toContain('teacher@test.com');
+      expect(emails).not.toContain('amal.haddad@example.com');
+    });
+
     it('rejects non-admins', async () => {
       const res = await authenticatedRequest('get', '/api/admin/users', { userId: TEACHER_ID, role: 'TEACHER' });
       expect(res.status).toBe(403);
@@ -193,6 +204,19 @@ describe('Integration: Admin Users Routes', () => {
         firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: 'x'.repeat(61),
       });
       expect(tooLong.status).toBe(400);
+    });
+
+    it('keeps a staff title for admins only', async () => {
+      await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
+        firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: 'Vice Principal',
+      });
+
+      const demoted = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
+        firstName: 'Tina', lastName: 'Teacher', role: 'TEACHER', isVerifiedSchool: true, staffTitle: 'Vice Principal',
+      });
+      expect(demoted.status).toBe(200);
+      expect(demoted.body.data.role).toBe('TEACHER');
+      expect(demoted.body.data.staffTitle).toBeNull();
     });
 
     it('stops an admin demoting themselves', async () => {

@@ -9,6 +9,7 @@ CREATE TYPE attendance_status AS ENUM ('PRESENT', 'ABSENT', 'LATE', 'EXCUSED');
 -- Production types students/classes/report_cards/progress_reports.grade as this
 -- enum; announcements.grade is TEXT, so cross-table comparisons must cast.
 CREATE TYPE "GRADE" AS ENUM ('1', '2', '3', '4', '5', '6', '7', '8', 'JK', 'SK');
+CREATE TYPE role AS ENUM ('ADMIN', 'TEACHER', 'PARENT', 'STUDENT');  -- prod: enum "role" (2026-10-15)
 
 -- ─── Tier 0: Foundation Tables (no FKs) ──────────────────────
 
@@ -38,7 +39,7 @@ CREATE TABLE users (
   first_name             VARCHAR NOT NULL,
   last_name              VARCHAR NOT NULL,
   school                 school NOT NULL,
-  role                   TEXT NOT NULL,
+  role                   role NOT NULL,
   email_token            UUID,
   is_verified            BOOLEAN DEFAULT FALSE,
   is_verified_school     BOOLEAN DEFAULT FALSE,

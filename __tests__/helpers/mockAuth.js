@@ -6,6 +6,7 @@ const TEST_ADMIN_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEST_TEACHER_USER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const TEST_PARENT_USER_ID = '550e8400-e29b-41d4-a716-446655440002';
 const TEST_STAFF_USER_ID = '550e8400-e29b-41d4-a716-446655440003';
+const TEST_STUDENT_USER_ID = '550e8400-e29b-41d4-a716-446655440010';
 
 const TEST_SCHOOL = 'ALHAADIACADEMY';
 
@@ -73,6 +74,19 @@ function mockStaffUser(overrides = {}) {
   });
 }
 
+function mockStudentUser(overrides = {}) {
+  return generateTestToken({
+    userId: TEST_STUDENT_USER_ID,
+    username: 'Student User',
+    email: 'student@example.com',
+    role: 'STUDENT',
+    roles: ['STUDENT'],
+    isVerified: true,
+    isVerifiedSchool: true,
+    ...overrides,
+  });
+}
+
 function mockUnverifiedUser(overrides = {}) {
   return generateTestToken({
     isVerified: false,
@@ -95,12 +109,14 @@ module.exports = {
   TEST_TEACHER_USER_ID,
   TEST_PARENT_USER_ID,
   TEST_STAFF_USER_ID,
+  TEST_STUDENT_USER_ID,
   TEST_SCHOOL,
   generateTestToken,
   mockAdminUser,
   mockTeacherUser,
   mockParentUser,
   mockStaffUser,
+  mockStudentUser,
   mockUnverifiedUser,
   mockUnverifiedSchoolUser,
 };
