@@ -42,6 +42,8 @@ const {
   cellState,
 } = require('../services/gradeEngine');
 const { invalidateWeeklySummaries } = require('../services/aiWeeklySummary.service');
+const gradingQueries = require('../queries/grading.queries');
+const { publishSubmissions, afterPublish } = require('../services/classroom/publish');
 
 // Resend allows ~2 requests/second. Matches sendBulkReportEmails.
 const EMAIL_RATE_LIMIT_MS = 600;
@@ -64,6 +66,28 @@ function groupScoreRowsByStudent(rows) {
     entry.rows.push(r);
   }
   return byStudent;
+}
+
+/**
+ * The score rows as they will stand once these classwork drafts are published
+ * (spec D3: a turn-in column's scores wait on the submissions until Publish
+ * copies them into the gradebook). Returns a new map; `scoreRowsByStudent` is
+ * not changed. A draft of a student not in the map (archived) is ignored.
+ */
+function overlayDrafts(scoreRowsByStudent, drafts) {
+  if (!drafts || drafts.length === 0) return scoreRowsByStudent;
+  const byKey = new Map(drafts.map((d) => [`${d.student_id}:${d.assessment_id}`, d]));
+  const out = new Map();
+  for (const [studentId, entry] of scoreRowsByStudent) {
+    const rows = entry.rows.map((r) => {
+      const d = byKey.get(`${studentId}:${r.assessment_id}`);
+      if (!d) return r;
+      const status = d.draft_status || 'graded';
+      return { ...r, score: status === 'missing' ? null : d.draft_score, status, is_excluded: status === 'excused' };
+    });
+    out.set(studentId, { ...entry, rows });
+  }
+  return out;
 }
 
 /**
@@ -216,8 +240,8 @@ const previewPublish = async (req, res) => {
       return res.status(400).json({ status: 'failed', message: resolved.error, data: resolved.data });
     }
 
-    const { requested, allAssessments, scoreRowsByStudent } = resolved;
-    const cascade = expandCascade(requested, allAssessments, scoreRowsByStudent);
+    const { requested, allAssessments } = resolved;
+    const { cascade, scoreRowsByStudent } = planPublish(resolved);
     const warnings = countUngradedStudents(requested, allAssessments, scoreRowsByStudent);
     const tasks = buildEmailTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
     const recipients = await resolveRecipients(tasks);
@@ -245,10 +269,11 @@ const previewPublish = async (req, res) => {
  * to the class. Returns everything the publish/preview paths need.
  */
 async function resolveSelection(classId, assessmentIds) {
-  const [{ rows: requested }, { rows: allAssessments }, { rows: scoreRows }] = await Promise.all([
+  const [{ rows: requested }, { rows: allAssessments }, { rows: scoreRows }, { rows: pendingDrafts }] = await Promise.all([
     db.query(publishQueries.selectAssessmentsInClass, [classId, assessmentIds]),
     db.query(publishQueries.selectAllAssessmentsInClass, [classId]),
     db.query(publishQueries.selectClassScoreRows, [classId]),
+    db.query(gradingQueries.selectPendingDrafts, [classId]),
   ]);
 
   if (requested.length !== assessmentIds.length) {
@@ -263,7 +288,24 @@ async function resolveSelection(classId, assessmentIds) {
     requested,
     allAssessments,
     scoreRowsByStudent: groupScoreRowsByStudent(scoreRows),
+    pendingDrafts,
   };
+}
+
+/**
+ * The cascade and the score rows a publish works from. A turn-in column whose
+ * scores are still classwork drafts counts as graded for the cascade, and the
+ * drafts of the columns being published stand in for their gradebook cells
+ * (Publish copies them there), so the preview, the warnings and the digest
+ * show what parents will see. Drafts of columns outside the selection stay
+ * out of every figure, the running grade included. With no drafts this is
+ * exactly the plain-assessment behaviour.
+ */
+function planPublish({ requested, allAssessments, scoreRowsByStudent, pendingDrafts = [] }) {
+  const cascade = expandCascade(requested, allAssessments, overlayDrafts(scoreRowsByStudent, pendingDrafts));
+  const published = new Set(cascade.finalIds);
+  const drafts = pendingDrafts.filter((d) => published.has(d.assessment_id));
+  return { cascade, scoreRowsByStudent: overlayDrafts(scoreRowsByStudent, drafts) };
 }
 
 /**
@@ -349,6 +391,10 @@ const publishAssessments = async (req, res) => {
   let cascade;
   let tasksWithEmails;
   let committedScoreRows;
+  // Turn-in columns in the batch: their drafts are published in the same
+  // transaction (spec D3), so "Publish" means the same here and in Classwork.
+  const classworkPublished = [];
+  const classworkStudents = new Map();
 
   try {
     const resolved = await resolveSelection(classId, assessmentIds);
@@ -356,8 +402,10 @@ const publishAssessments = async (req, res) => {
       return res.status(400).json({ status: 'failed', message: resolved.error, data: resolved.data });
     }
 
-    const { requested, allAssessments, scoreRowsByStudent } = resolved;
-    cascade = expandCascade(requested, allAssessments, scoreRowsByStudent);
+    const { requested, allAssessments } = resolved;
+    const plan = planPublish(resolved);
+    cascade = plan.cascade;
+    const { scoreRowsByStudent } = plan;
     const warnings = countUngradedStudents(requested, allAssessments, scoreRowsByStudent);
 
     // ── Transaction: publish state only. No email inside. ──
@@ -384,6 +432,25 @@ const publishAssessments = async (req, res) => {
           assessmentId,
           classId,
         ]);
+      }
+
+      const { rows: turnInItems } = await client.query(gradingQueries.selectTurnInItemsForAssessments, [
+        classId,
+        cascade.finalIds,
+      ]);
+      for (const row of turnInItems) {
+        const result = await publishSubmissions(client, {
+          item: { ...row, is_published: true },
+          studentIds: 'graded',
+          userId,
+          school,
+        });
+        classworkPublished.push({
+          assessmentId: row.assessment_id,
+          itemId: row.item_id,
+          studentCount: result.publishedStudentIds.length,
+        });
+        if (result.publishedStudentIds.length > 0) classworkStudents.set(row.item_id, result.publishedStudentIds);
       }
 
       await client.query('COMMIT');
@@ -419,6 +486,9 @@ const publishAssessments = async (req, res) => {
 
     // New marks invalidate this week's AI summary for the affected students.
     await invalidateWeeklySummaries(tasks.map((t) => t.studentId));
+    for (const [itemId, studentIds] of classworkStudents) {
+      await afterPublish({ school, studentIds, itemId });
+    }
   } catch (error) {
     logger.error('Publish committed, but preparing notifications failed:', error);
     return res.status(201).json({
@@ -429,6 +499,7 @@ const publishAssessments = async (req, res) => {
         publishedAssessmentIds: cascade.finalIds,
         cascadedChildIds: cascade.cascadedChildIds,
         skippedUngradedChildIds: cascade.skippedUngradedChildIds,
+        classworkPublished,
         emailSummary: {
           attempted: 0,
           sent: 0,
@@ -460,10 +531,36 @@ const publishAssessments = async (req, res) => {
       publishedAssessmentIds: cascade.finalIds,
       cascadedChildIds: cascade.cascadedChildIds,
       skippedUngradedChildIds: cascade.skippedUngradedChildIds,
+      classworkPublished,
       emailSummary,
     },
   });
 };
+
+/**
+ * Today's publish digest for a publish made from Classwork (the grading
+ * view's Publish, Mark missing, Excuse): the same email the gradebook's
+ * Publish sends, for `assessmentIds`, to the guardians of `studentIds` only.
+ * Built from the committed gradebook, so another student's draft never
+ * enters it. After COMMIT; never throws.
+ */
+async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds, studentIds }) {
+  const none = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
+  if (!batchId || !studentIds || studentIds.length === 0) return none;
+  try {
+    const wanted = new Set(studentIds);
+    const [{ rows: freshAssessments }, { rows: scoreRows }] = await Promise.all([
+      db.query(publishQueries.selectAllAssessmentsInClass, [classId]),
+      db.query(publishQueries.selectClassScoreRows, [classId]),
+    ]);
+    const byStudent = groupScoreRowsByStudent(scoreRows.filter((r) => wanted.has(r.student_id)));
+    const tasks = await resolveRecipients(buildEmailTasks(assessmentIds, freshAssessments, byStudent));
+    return await sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment: null });
+  } catch (error) {
+    logger.error('Classwork publish committed, but the parent digest failed:', error);
+    return { ...none, notificationError: 'Grades were published, but parents could not be emailed.' };
+  }
+}
 
 /**
  * Send one digest per (guardian set, child), sequentially, respecting
@@ -523,8 +620,8 @@ const previewPublishEmail = async (req, res) => {
       const draft = comments[a.assessment_id];
       return typeof draft === 'string' && draft.trim() ? { ...a, parent_comment: draft.trim() } : a;
     });
-    const cascade = expandCascade(resolved.requested, allAssessments, resolved.scoreRowsByStudent);
-    const tasks = buildEmailTasks(cascade.finalIds, allAssessments, resolved.scoreRowsByStudent);
+    const { cascade, scoreRowsByStudent } = planPublish({ ...resolved, allAssessments });
+    const tasks = buildEmailTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
     if (tasks.length === 0) {
       return res.status(400).json({ status: 'failed', message: 'Nobody has a score for this selection yet, so there is no email to preview' });
     }
@@ -815,8 +912,11 @@ module.exports = {
   unpublishAssessments,
   updateAssessmentComment,
   getPublicationHistory,
+  sendGradeDigest,
   // exported for unit testing
   expandCascade,
   countUngradedStudents,
   buildEmailTasks,
+  overlayDrafts,
+  planPublish,
 };

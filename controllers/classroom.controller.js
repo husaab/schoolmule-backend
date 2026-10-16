@@ -19,7 +19,7 @@ const { toListItem } = require('./announcement.controller');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
 const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
 const {
-  toClassCard, toHeaderClass, toComingUpRow, toDraftRow, toNotice, toTeacher, toPeopleStudent, peopleCounts,
+  toClassCard, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, toPeopleStudent, peopleCounts,
 } = require('../services/classroom/classCards');
 const { getSettings } = require('../services/classroom/classroomSettings');
 const { signedPhotoUrl } = require('../services/profile/photos');
@@ -39,25 +39,26 @@ async function loadTeachers(classId) {
 }
 
 // GET /api/classroom/classes?archived=1
-// The Classes home: the caller's class cards for the year, what is coming up
-// across them, their drafts and scheduled items, and (T16) the review list.
-// Archived classes are left out unless archived=1.
+// The Classes home: the caller's class cards for the year, the work waiting
+// for a grade, what is coming up across them, and their drafts and scheduled
+// items. Archived classes are left out unless archived=1.
 const listClasses = async (req, res) => {
   const { userId, school, role } = req.user;
   const yearId = req.schoolYear?.schoolYearId ?? null;
   const includeArchived = ['1', 'true'].includes(String(req.query.archived));
-  // toReview is T16's TO_REVIEW; empty until then.
   const empty = { classes: [], toReview: [], comingUp: [], draftsAndScheduled: [] };
   if (!yearId) return ok(res, empty);
   try {
-    const [cardRows, comingRows, draftRows] = await Promise.all([
+    const [cardRows, reviewRows, comingRows, draftRows] = await Promise.all([
       db.query(classroomQueries.selectClassCards, [userId, school, role, yearId, includeArchived]),
+      db.query(classroomQueries.TO_REVIEW, [userId, school, role, yearId]),
       db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, null]),
       db.query(classroomQueries.DRAFTS_AND_SCHEDULED, [userId, school, yearId]),
     ]);
     return ok(res, {
       ...empty,
       classes: cardRows.rows.map(toClassCard),
+      toReview: reviewRows.rows.map(toReviewRow),
       comingUp: comingRows.rows.map(toComingUpRow),
       draftsAndScheduled: draftRows.rows.map(toDraftRow),
     });

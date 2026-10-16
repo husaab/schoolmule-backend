@@ -55,7 +55,7 @@ function gradeItemsOf(cls, row) {
       maxScore: a.maxScore,
       status: a.status,
       publishedAt: iso(a.publishedAt),
-      feedback: null, // T16: submission feedback
+      feedback: null, // withClasswork: the submission's feedback once visible
       parentComment: a.parentComment ?? null,
     }))
     .sort(newestFirst);
@@ -82,19 +82,30 @@ function toChildClassGrades(row, cls) {
  * Each grade's classwork item: `kind` is the item's kind (an assignment or
  * quiz graded in this column reads as one), and `itemId` is set only when the
  * child may open that item (ITEM_VISIBLE), so a link never leads to a 404.
+ * `feedback` is the submission's once visible (spec 0.8), and a grade
+ * published to this child on its own (a per-student Publish, spec D3) is
+ * dated by that publish, as the child's work page dates it.
  */
 async function withClasswork(classes, studentId) {
   const ids = [...new Set(classes.flatMap((c) => c.items.map((i) => i.assessmentId)))];
   if (ids.length === 0) return classes;
   const { rows } = await db.query(classworkQueries.selectItemsForAssessments, [ids, studentId]);
   const byAssessment = new Map(rows.map((r) => [r.assessment_id, r]));
-  return classes.map((c) => ({
-    ...c,
-    items: c.items.map((i) => {
+  return classes.map((c) => {
+    const items = c.items.map((i) => {
       const item = byAssessment.get(i.assessmentId);
-      return item ? { ...i, kind: item.kind, itemId: item.visible ? item.item_id : null } : i;
-    }),
-  }));
+      if (!item) return i;
+      return {
+        ...i,
+        kind: item.kind,
+        itemId: item.visible ? item.item_id : null,
+        feedback: item.feedback ?? null,
+        publishedAt: item.sub_published_at ? iso(item.sub_published_at) : i.publishedAt,
+      };
+    });
+    const latestPublishedAt = items.reduce((latest, i) => (i.publishedAt && (!latest || i.publishedAt > latest) ? i.publishedAt : latest), null);
+    return { ...c, items: items.sort(newestFirst), latestPublishedAt };
+  });
 }
 
 /**

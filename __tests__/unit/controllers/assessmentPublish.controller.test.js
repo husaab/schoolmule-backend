@@ -2,6 +2,8 @@ const {
   expandCascade,
   countUngradedStudents,
   buildEmailTasks,
+  overlayDrafts,
+  planPublish,
 } = require('../../../controllers/assessmentPublish.controller');
 
 // Shape matches selectAllAssessmentsInClass.
@@ -175,5 +177,69 @@ describe('buildEmailTasks', () => {
   it('produces no tasks when nothing published is graded', () => {
     const scores = new Map([student('s1', 'Alice', [scoreRow('q1', null)])]);
     expect(buildEmailTasks(['q1'], [quiz], scores)).toEqual([]);
+  });
+});
+
+// Spec D3: a turn-in column's scores wait as drafts on the submissions until
+// Publish copies them into the gradebook. The publish plan reads them as the
+// cells they will become, for the columns being published only. Per the
+// controller ruling, a turn-in column keeps today's digest (it is not left
+// out of the email).
+describe('planPublish (classwork drafts)', () => {
+  const category = assessment({ assessment_id: 'cat', name: 'Homework', is_parent: true, weight_points: 40, max_score: null });
+  const hw = assessment({ assessment_id: 'hw', name: 'Plant cell diagram', parent_assessment_id: 'cat', max_score: 10 });
+  const test = assessment({ assessment_id: 't1', name: 'Unit Test', max_score: 50, is_published: true });
+  const solo = assessment({ assessment_id: 'solo', name: 'Fair board', max_score: 20 });
+  const all = [category, hw, test, solo];
+  const draft = (studentId, assessmentId, score, status = 'graded') =>
+    ({ student_id: studentId, assessment_id: assessmentId, draft_score: score, draft_status: status });
+  const scores = () => new Map([
+    student('s1', 'Alice', [scoreRow('hw', null), scoreRow('t1', 40), scoreRow('solo', null)]),
+    student('s2', 'Bilal', [scoreRow('hw', null), scoreRow('t1', null), scoreRow('solo', null)]),
+  ]);
+
+  it('a column holding only drafts cascades from its category and its drafts reach the digest', () => {
+    const plan = planPublish({
+      requested: [category], allAssessments: all, scoreRowsByStudent: scores(),
+      pendingDrafts: [draft('s1', 'hw', 8), draft('s2', 'hw', null, 'missing')],
+    });
+    expect(plan.cascade.finalIds).toEqual(expect.arrayContaining(['cat', 'hw']));
+    expect(plan.cascade.cascadedChildIds).toEqual(['hw']);
+
+    const tasks = buildEmailTasks(plan.cascade.finalIds, all, plan.scoreRowsByStudent);
+    expect(tasks.map((t) => [t.studentName, t.lines])).toEqual([
+      ['Alice', [{ name: 'Homework', scoreLabel: '', pctLabel: '(80%)', comment: null }]],
+      ['Bilal', [{ name: 'Homework', scoreLabel: '', pctLabel: '(0%)', comment: null }]],
+    ]);
+  });
+
+  it("drafts of a column outside the selection never enter a figure, the running grade included", () => {
+    // Fair board is already published (another student's Publish); Alice's draft there is still pending.
+    const withSolo = [category, hw, test, { ...solo, is_published: true }];
+    const plan = planPublish({
+      requested: [test], allAssessments: withSolo, scoreRowsByStudent: scores(),
+      pendingDrafts: [draft('s1', 'solo', 2)],
+    });
+    expect(plan.cascade.finalIds).toEqual(['t1']);
+    const [alice] = buildEmailTasks(plan.cascade.finalIds, withSolo, plan.scoreRowsByStudent);
+    expect(alice.lines).toEqual([{ name: 'Unit Test', scoreLabel: '40/50', pctLabel: '(80%)', comment: null }]);
+    expect(alice.runningGradeLabel).toMatch(/^80% /); // the 2/20 draft would pull it down
+    expect(plan.scoreRowsByStudent.get('s1').rows.find((r) => r.assessment_id === 'solo').score).toBeNull();
+  });
+
+  it('with no drafts the plan is exactly the plain-assessment one', () => {
+    const rows = scores();
+    const plan = planPublish({ requested: [test], allAssessments: all, scoreRowsByStudent: rows, pendingDrafts: [] });
+    expect(plan.scoreRowsByStudent).toBe(rows);
+    expect(plan.cascade).toEqual(expandCascade([test], all, rows));
+  });
+
+  it('overlayDrafts maps missing to no score and excused to excluded, without touching the input', () => {
+    const rows = scores();
+    const out = overlayDrafts(rows, [draft('s1', 'solo', 15, 'excused'), draft('s2', 'solo', 9, 'missing'), draft('gone', 'solo', 1)]);
+    expect(out.get('s1').rows.find((r) => r.assessment_id === 'solo')).toMatchObject({ score: 15, status: 'excused', is_excluded: true });
+    expect(out.get('s2').rows.find((r) => r.assessment_id === 'solo')).toMatchObject({ score: null, status: 'missing', is_excluded: false });
+    expect(out.has('gone')).toBe(false);
+    expect(rows.get('s1').rows.find((r) => r.assessment_id === 'solo').score).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { ISO, EFFECTIVE_POSTED, ITEM_DAY, AUDIENCE_SIZE, TURNED_IN_COUNT, ITEM_VISIBLE } = require('./classwork.queries');
 const { WORK_STATE_SQL, WORK_JOINS } = require('./workState');
+const { AWAITING_FROM } = require('./grading.queries');
 
 const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
 
@@ -29,9 +30,28 @@ const CARD_NEXT = `(SELECT json_build_object('itemId', i.item_id, 'assessmentId'
                    ORDER BY ${ITEM_DAY()}, i.due_at NULLS FIRST, a.sort_order NULLS LAST, COALESCE(a.name, i.title)
                    LIMIT 1)`;
 
-// Submissions waiting for the teacher. Nothing is turned in online yet (T16).
-const CARD_TO_REVIEW = '0';
-const TO_REVIEW = null; // T16: a query returning the "to review" list; T7 answers [].
+// Work waiting for the teacher: submissions turned in with no draft grade,
+// never published and no visible grade, from students the item is for.
+const CARD_TO_REVIEW = `(SELECT COUNT(*) ${AWAITING_FROM('c.class_id')})::int`;
+
+// The Classes home's "To review" rail: the items with work waiting, most
+// first (then the longest waiting), at most 8, in the caller's active
+// classes of the year. $1 user_id, $2 school, $3 role, $4 school_year_id
+const TO_REVIEW = `
+  SELECT w.item_id, w.title, w.turned_in_count, c.class_id, c.subject, c.grade::text AS grade,
+         c.banner_key, c.banner_path, c.icon_key, c.color
+  FROM classes c
+  CROSS JOIN LATERAL (
+    SELECT i.item_id, COALESCE(a.name, i.title) AS title, COUNT(*)::int AS turned_in_count,
+           MIN(sub.turned_in_at) AS oldest
+    ${AWAITING_FROM('c.class_id')}
+    GROUP BY i.item_id, a.name, i.title
+  ) w
+  WHERE c.school = $2 AND c.school_year_id = $4 AND c.archived_at IS NULL
+    AND ($3::text = 'ADMIN' OR c.teacher_id = $1
+         OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))
+  ORDER BY w.turned_in_count DESC, w.oldest, w.item_id
+  LIMIT 8`;
 
 // A student's missing work in the class (`cs` the roster row, `s` the
 // student): the items they can see whose status is missing, derived (past

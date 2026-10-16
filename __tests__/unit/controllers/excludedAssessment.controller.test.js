@@ -15,6 +15,7 @@ describe('Excluded Assessment Controller', () => {
       const token = mockAdminUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]); // target leaf lookup
+      mockQueryResponse([]); // no turn-in columns among them (D3/D17)
       mockQueryResponse([{ student_id: row.student_id, assessment_id: row.assessment_id, score: 7, status: 'excused' }]); // upsert
 
       const res = await request(app)
@@ -109,6 +110,7 @@ describe('Excluded Assessment Controller', () => {
       const token = mockTeacherUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]);
+      mockQueryResponse([]); // no turn-in columns
       mockQueryResponse([{ student_id: row.student_id, assessment_id: row.assessment_id, score: null, status: 'excused' }]);
 
       const res = await request(app)
@@ -129,6 +131,7 @@ describe('Excluded Assessment Controller', () => {
     it('should delete an exclusion successfully', async () => {
       const token = mockAdminUser();
       mockQueryResponse([{ assessment_id: 'aid' }]); // target leaf lookup
+      mockQueryResponse([]); // no turn-in columns
       mockQueryResponse([{ student_id: 'sid', assessment_id: 'aid', score: 7, status: 'graded' }]); // upsert
 
       const res = await request(app)

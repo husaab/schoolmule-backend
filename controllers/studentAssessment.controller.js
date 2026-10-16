@@ -5,6 +5,29 @@ const { selectScoresByClass, upsertStudentAssessments, selectStudentAssessment }
 const logger = require('../logger');
 const ExcelJS = require('exceljs');
 const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, STATUSES } = require('../services/gradeEngine');
+const gradingQueries = require('../queries/grading.queries');
+
+/**
+ * D3/D17: which of these columns are turn-in columns (an assessment filled by
+ * an assignment or quiz). A turn-in column keeps grid scores as drafts on the
+ * students' submissions until its assessment is published; after that the
+ * grid writes live, as Save did. Plain columns are not in either map.
+ */
+async function splitTurnInColumns(classId, assessmentIds) {
+  const { rows } = await db.query(gradingQueries.selectTurnInColumns, [classId, assessmentIds]);
+  return {
+    draftCol: new Map(rows.filter((r) => !r.is_published).map((r) => [r.assessment_id, r.item_id])),
+    liveCol: new Map(rows.filter((r) => r.is_published).map((r) => [r.assessment_id, r.item_id])),
+  };
+}
+
+/** A draft as the grid's responses report it. */
+const toDraft = (row, assessmentId) => ({
+  student_id: row.student_id,
+  assessment_id: assessmentId,
+  draft_score: row.draft_score,
+  draft_status: row.draft_status,
+});
 
 /**
  * GET /classes/:classId/scores
@@ -115,12 +138,29 @@ const upsertScoresByClass = async (req, res) => {
       });
     }
 
+    // D3/D17: a turn-in column keeps scores as drafts on the submission until its
+    // assessment is published; after that the grid writes live, as Save did.
+    const userId = req.user?.userId ?? null;
+    const { draftCol, liveCol } = await splitTurnInColumns(classId, assessmentIds);
+    const draftEntries = scores.filter((e) => draftCol.has(e.assessmentId));
+    const liveEntries = scores.filter((e) => !draftCol.has(e.assessmentId));
+    const drafts = [];
+    for (const e of draftEntries) {
+      const status = e.status || 'graded';
+      const { rows } = await db.query(gradingQueries.upsertDraftScore,
+        [draftCol.get(e.assessmentId), e.studentId, status === 'missing' ? null : e.score ?? null, status, userId]);
+      drafts.push(toDraft(rows[0], e.assessmentId));
+    }
+    if (liveEntries.length === 0) {
+      return res.status(200).json({ status: 'success', data: [], drafts });
+    }
+
     // Build a single INSERT … VALUES ($1,$2,$3),($4,$5,$6), … ON CONFLICT … DO UPDATE …
     // We’ll flatten out all parameters into paramsArray = [ sId1, aId1, score1, sId2, aId2, score2, … ]
     const valuePlaceholders = [];
     const paramsArray = [];
 
-    scores.forEach((entry, idx) => {
+    liveEntries.forEach((entry, idx) => {
       const { studentId, assessmentId, score } = entry;
       // A typed score is evidence, so it always resets the status to
       // 'graded' unless the client explicitly sent one. 'missing' never
@@ -143,10 +183,18 @@ const upsertScoresByClass = async (req, res) => {
     `;
 
     const { rows: upsertedRows } = await db.query(upsQuery, paramsArray);
+    // A published turn-in column: the submission mirrors the live cell (and
+    // counts as published), so the grading view and the grid agree.
+    for (const r of upsertedRows) {
+      if (liveCol.has(r.assessment_id)) {
+        await db.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
+      }
+    }
     // upsertedRows is an array of { student_id, assessment_id, score }
     return res.status(200).json({
       status: 'success',
       data: upsertedRows,
+      drafts,
     });
   } catch (err) {
     logger.error(err);
@@ -169,7 +217,7 @@ const upsertScoresByClass = async (req, res) => {
  *
  * @returns {Promise<Array<{student_id, assessment_id, score, status}>>}
  */
-async function applyCellStatus({ classId, studentId, assessmentId, status }) {
+async function applyCellStatusSplit({ classId, studentId, assessmentId, status, userId = null }) {
   const { rows: targets } = await db.query(
     `SELECT assessment_id FROM assessments
      WHERE class_id = $1
@@ -177,9 +225,22 @@ async function applyCellStatus({ classId, studentId, assessmentId, status }) {
        AND is_parent = FALSE`,
     [classId, assessmentId]
   );
-  if (targets.length === 0) return [];
+  if (targets.length === 0) return { rows: [], drafts: [], found: false };
 
-  const ids = targets.map((t) => t.assessment_id);
+  // D3/D17: an unpublished turn-in column takes the flag as a draft.
+  const allIds = targets.map((t) => t.assessment_id);
+  const { draftCol, liveCol } = await splitTurnInColumns(classId, allIds);
+  const drafts = [];
+  for (const id of allIds.filter((a) => draftCol.has(a))) {
+    const itemId = draftCol.get(id);
+    const { rows: [current] } = await db.query(gradingQueries.selectDraft, [itemId, studentId]);
+    const score = status === 'missing' ? null : current?.draft_score ?? null;
+    const { rows } = await db.query(gradingQueries.upsertDraftScore, [itemId, studentId, score, status, userId]);
+    drafts.push(toDraft(rows[0], id));
+  }
+  const ids = allIds.filter((a) => !draftCol.has(a));
+  if (ids.length === 0) return { rows: [], drafts, found: true };
+
   const { rows } = await db.query(
     `INSERT INTO student_assessments (student_id, assessment_id, score, status)
      SELECT $1, a.assessment_id, NULL, $3
@@ -191,7 +252,24 @@ async function applyCellStatus({ classId, studentId, assessmentId, status }) {
      RETURNING student_id, assessment_id, score, status`,
     [studentId, ids, status]
   );
-  return rows;
+  for (const r of rows) {
+    if (liveCol.has(r.assessment_id)) {
+      await db.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
+    }
+  }
+  return { rows, drafts, found: true };
+}
+
+/**
+ * The cells a status change touched: live gradebook rows, then the drafts of
+ * unpublished turn-in columns in the same shape (for the legacy callers).
+ */
+async function applyCellStatus(args) {
+  const { rows, drafts } = await applyCellStatusSplit(args);
+  return [
+    ...rows,
+    ...drafts.map((d) => ({ student_id: d.student_id, assessment_id: d.assessment_id, score: d.draft_score, status: d.draft_status ?? 'graded' })),
+  ];
 }
 
 /**
@@ -210,11 +288,11 @@ const setScoreStatus = async (req, res) => {
   }
 
   try {
-    const rows = await applyCellStatus({ classId, studentId, assessmentId, status });
-    if (rows.length === 0) {
+    const { rows, drafts, found } = await applyCellStatusSplit({ classId, studentId, assessmentId, status, userId: req.user?.userId ?? null });
+    if (!found) {
       return res.status(404).json({ status: 'failed', message: 'Assessment not found in this class' });
     }
-    return res.status(200).json({ status: 'success', data: rows });
+    return res.status(200).json({ status: 'success', data: rows, drafts });
   } catch (err) {
     logger.error(err);
     return res.status(500).json({ status: 'failed', message: 'Error updating score status' });

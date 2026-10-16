@@ -316,6 +316,23 @@ function permissions(row, { turnedInAt, textAnswer, fileCount }) {
 }
 
 /**
+ * The item's grade block, only when visible (spec 0.8), with the teacher's
+ * feedback once that is visible too. An item with no gradebook column has no
+ * grade, but its feedback is published the same way: it comes as a block
+ * with no score and no maximum.
+ */
+function gradeBlock(row, w) {
+  const feedback = row.visible_feedback ?? null;
+  if (row.grade_visible) {
+    return { score: visibleScore(row), maxScore: num(row.max_score), status: row.grade_status, feedback, publishedAt: w.publishedAt };
+  }
+  if (!row.assessment_id && feedback !== null) {
+    return { score: null, maxScore: null, status: 'graded', feedback, publishedAt: iso(row.sub_published_at) };
+  }
+  return null;
+}
+
+/**
  * The StudentItem payload. `canAct` is false for the parent lens (every can*
  * false). No grade or feedback leaves unless visible (spec 0.8).
  */
@@ -361,13 +378,7 @@ async function buildStudentItem(row, { canAct }) {
     points: num(row.max_score),
     attachments,
     submission,
-    grade: row.grade_visible ? {
-      score: visibleScore(row),
-      maxScore: num(row.max_score),
-      status: row.grade_status,
-      feedback: null, // T16: the submission's feedback once visible
-      publishedAt: w.publishedAt,
-    } : null,
+    grade: gradeBlock(row, w),
     thread: null, // T17
   };
 }

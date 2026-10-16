@@ -1,0 +1,287 @@
+// queries/grading.queries.js
+//
+// Grading turned-in work (spec D3, D17). A score for a turn-in column (an
+// assessment linked to an assignment or quiz) waits as a draft on the
+// student's classwork_submissions row until it is published; Publish copies
+// it into student_assessments. Once the assessment is published, grid and
+// grading-view edits write student_assessments live and keep the submission
+// in step. Plain assessments never come here.
+//
+// Aliases: `i` item, `a` its assessment, `s` the student, `sub` the
+// submission, `sa` the gradebook cell.
+
+const { studentAvatarSql } = require('../utils/avatar');
+const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL } = require('./workState');
+const { ITEM_VISIBLE } = require('./classwork.queries');
+
+// The item's students: the class roster (not archived), narrowed to the
+// chosen students when the audience is "some". `i` is the item, `s` the student.
+const IN_ITEM_AUDIENCE = `(i.audience = 'all' OR EXISTS (SELECT 1 FROM classwork_item_students x
+                                         WHERE x.item_id = i.item_id AND x.student_id = s.student_id))`;
+
+// A cell that holds a grade (a score, or a confirmed missing/excused).
+const SA_HAS_GRADE = `(sa.score IS NOT NULL OR sa.status IN ('missing', 'excused'))`;
+
+// A pending draft: a score or status saved but not published.
+const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)`;
+
+// Turned in, nothing graded yet: no draft, never published, no visible grade.
+const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND sub.published_at IS NULL AND NOT ${GRADE_VISIBLE})`;
+
+// One grading row per student of item $1 ($2 = one student, NULL = all).
+const GRADING_ROWS = `
+SELECT s.student_id, s.name, ${studentAvatarSql('s')},
+       sub.submission_id, sub.turned_in_at, COALESCE(sub.is_late, FALSE) AS sub_is_late, sub.text_answer,
+       sub.draft_score, sub.draft_status, sub.feedback, sub.published_at AS sub_published_at,
+       ${WORK_STATE_SQL} AS work_status,
+       ${GRADE_VISIBLE} AS grade_visible,
+       CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS visible_score,
+       CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS visible_status,
+       CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS visible_published_at
+FROM classwork_items i
+LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+JOIN class_students cs ON cs.class_id = i.class_id
+JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
+LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
+LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+WHERE i.item_id = $1 AND ($2::uuid IS NULL OR s.student_id = $2::uuid) AND ${IN_ITEM_AUDIENCE}
+ORDER BY s.name, s.student_id`;
+
+const gradingQueries = {
+  IN_ITEM_AUDIENCE,
+  HAS_DRAFT,
+  AWAITING_GRADE,
+
+  // ── Grading view ───────────────────────────────────────────────────────
+
+  //  The item and its gradebook column. $1 item_id
+  selectGradingItem: `
+    SELECT i.item_id, i.class_id, i.kind, i.submission_mode, i.assessment_id,
+           a.max_score, COALESCE(a.is_published, FALSE) AS is_published
+    FROM classwork_items i
+    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+    WHERE i.item_id = $1 AND i.deleted_at IS NULL`,
+
+  //  $1 item_id, $2 student_id|null
+  selectGradingRows: GRADING_ROWS,
+
+  //  Of these students, the ones the item is for (roster, not archived, audience). $1 item_id, $2 student_id[]
+  selectAudienceIds: `
+    SELECT s.student_id
+    FROM classwork_items i
+    JOIN class_students cs ON cs.class_id = i.class_id
+    JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
+    WHERE i.item_id = $1 AND s.student_id = ANY($2::uuid[]) AND ${IN_ITEM_AUDIENCE}`,
+
+  //  Every student the item is for. $1 item_id
+  selectAllAudienceIds: `
+    SELECT s.student_id
+    FROM classwork_items i
+    JOIN class_students cs ON cs.class_id = i.class_id
+    JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
+    WHERE i.item_id = $1 AND ${IN_ITEM_AUDIENCE}`,
+
+  //  Locks the column's publish state, so a draft-or-live decision cannot race
+  //  a publish (every writer locks the assessment before submissions).
+  //  $1 assessment_id
+  lockAssessmentShare: `SELECT is_published FROM assessments WHERE assessment_id = $1 FOR SHARE`,
+  lockAssessmentUpdate: `SELECT is_published FROM assessments WHERE assessment_id = $1 FOR UPDATE`,
+
+  //  The submission a grade is written on, created when missing (the teacher
+  //  may grade work never opened online), then locked. $1 item_id, $2 student_id
+  ensureSubmission: `
+    INSERT INTO classwork_submissions (item_id, student_id) VALUES ($1, $2)
+    ON CONFLICT (item_id, student_id) DO NOTHING`,
+  lockSubmission: `
+    SELECT sub.submission_id, sub.draft_score, sub.draft_status, sub.feedback, sub.published_at,
+           sa.score AS live_score, sa.status AS live_status,
+           (sa.student_id IS NOT NULL AND ${SA_HAS_GRADE}) AS live_has_grade
+    FROM classwork_submissions sub
+    JOIN classwork_items i ON i.item_id = sub.item_id
+    LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = sub.student_id
+    WHERE sub.item_id = $1 AND sub.student_id = $2
+    FOR UPDATE OF sub`,
+
+  //  A draft write. A cleared cell (no score, no flag) is no draft at all,
+  //  unless the gradebook still holds a grade for the student (a column
+  //  unpublished after a publish): then it is an explicit clear for the next
+  //  Publish. A changed draft is unpublished again (it needs a Publish).
+  //  $1 item_id, $2 student_id, $3 score|null, $4 status|null, $5 graded_by
+  upsertDraftScore: `
+    WITH v AS (
+      SELECT $3::numeric AS score,
+             CASE WHEN $3::numeric IS NULL AND COALESCE($4::text, 'graded') = 'graded'
+                       AND NOT EXISTS (SELECT 1 FROM student_assessments sa JOIN classwork_items i ON i.assessment_id = sa.assessment_id
+                                        WHERE i.item_id = $1 AND sa.student_id = $2 AND ${SA_HAS_GRADE})
+                  THEN NULL ELSE COALESCE($4::text, 'graded') END AS status
+    )
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, updated_at)
+    SELECT $1, $2, v.score, v.status, $5, NOW() FROM v
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        published_at = CASE WHEN (classwork_submissions.draft_score, classwork_submissions.draft_status)
+                                 IS DISTINCT FROM (EXCLUDED.draft_score, EXCLUDED.draft_status)
+                            THEN NULL ELSE classwork_submissions.published_at END,
+        updated_at = NOW()
+    RETURNING student_id, draft_score, draft_status`,
+
+  //  The submission mirrors a live gradebook write (the assessment is
+  //  published): the draft equals the cell and the work counts as published.
+  //  $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
+  syncLiveSubmission: `
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, published_at, published_by, updated_at)
+    VALUES ($1, $2, $3, $4, $5, NOW(), $5, NOW())
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        published_at = COALESCE(classwork_submissions.published_at, NOW()),
+        published_by = COALESCE(classwork_submissions.published_by, EXCLUDED.published_by),
+        updated_at = NOW()`,
+
+  //  A live cell write, as the grid's upsert does. $1 student_id, $2 assessment_id, $3 score|null, $4 status
+  upsertStudentAssessment: `
+    INSERT INTO student_assessments (student_id, assessment_id, score, status)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (student_id, assessment_id) DO UPDATE SET score = EXCLUDED.score, status = EXCLUDED.status
+    RETURNING student_id, assessment_id, score, status`,
+
+  //  The files of one submission, with their storage paths (signed by the caller). $1 submission_id
+  selectSubmissionFiles: `
+    SELECT file_id, file_path, file_name, mime_type, size_bytes FROM submission_files
+    WHERE submission_id = $1 ORDER BY created_at, file_id`,
+
+  //  One student's current draft (status changes keep the draft score). $1 item_id, $2 student_id
+  selectDraft: `
+    SELECT draft_score, draft_status FROM classwork_submissions WHERE item_id = $1 AND student_id = $2`,
+
+  //  $1 submission_id, $2 feedback|null
+  saveFeedback: `
+    UPDATE classwork_submissions SET feedback = $2, feedback_saved_at = NOW(), updated_at = NOW()
+    WHERE submission_id = $1`,
+
+  // ── Publish (services/classroom/publish.js) ────────────────────────────
+
+  //  The drafts a Publish copies, locked. $2 NULL = every pending draft
+  //  ("Publish to N students": not published yet, or the column is
+  //  unpublished); a list = those students, published again even when
+  //  already published (a re-publish after a regrade). Only students the
+  //  item is for. An unlinked item publishes its feedback.
+  //  $1 item_id, $2 student_id[]|null, $3 linked to a gradebook column
+  lockPublishable: `
+    SELECT sub.submission_id, sub.student_id, sub.draft_score, sub.draft_status
+    FROM classwork_submissions sub
+    JOIN classwork_items i ON i.item_id = sub.item_id
+    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE sub.item_id = $1
+      AND ($2::uuid[] IS NULL OR sub.student_id = ANY($2::uuid[]))
+      AND ($2::uuid[] IS NOT NULL OR sub.published_at IS NULL
+           OR (i.assessment_id IS NOT NULL AND NOT COALESCE(a.is_published, FALSE)))
+      AND ${IN_ITEM_AUDIENCE}
+      AND (${HAS_DRAFT} OR (NOT $3::boolean AND sub.feedback IS NOT NULL))
+    ORDER BY sub.student_id
+    FOR UPDATE OF sub`,
+
+  //  $1 submission_id[], $2 published_by
+  markSubmissionsPublished: `
+    UPDATE classwork_submissions SET published_at = NOW(), published_by = $2, updated_at = NOW()
+    WHERE submission_id = ANY($1::uuid[])`,
+
+  //  Sets one student's draft status (Mark missing, Excuse), keeping the
+  //  draft score (else the gradebook's) except for missing, as the grid's
+  //  status menu does. Created when missing.
+  //  $1 item_id, $2 student_id, $3 status, $4 graded_by
+  setDraftStatus: `
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, updated_at)
+    VALUES ($1, $2,
+            CASE WHEN $3::text = 'missing' THEN NULL
+                 ELSE (SELECT sa.score FROM student_assessments sa JOIN classwork_items i ON i.assessment_id = sa.assessment_id
+                        WHERE i.item_id = $1 AND sa.student_id = $2) END,
+            $3::text, $4, NOW())
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = CASE WHEN EXCLUDED.draft_status = 'missing' THEN NULL
+                           ELSE COALESCE(classwork_submissions.draft_score, EXCLUDED.draft_score) END,
+        draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by, updated_at = NOW()`,
+
+  //  Of these students, the ones excused on this item (as a draft, or in the
+  //  gradebook), with their draft score. $1 item_id, $2 student_id[]
+  selectExcused: `
+    SELECT s.student_id, sub.draft_score,
+           (sa.student_id IS NOT NULL AND sa.status = 'excused') AS live_excused
+    FROM classwork_items i
+    JOIN students s ON s.student_id = ANY($2::uuid[])
+    LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
+    LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+    WHERE i.item_id = $1 AND (sub.draft_status = 'excused' OR sa.status = 'excused')`,
+
+  //  The live turn-in items among these columns (publishAssessments).
+  //  $1 class_id, $2 assessment_id[]
+  selectTurnInItemsForAssessments: `
+    SELECT i.item_id, i.class_id, i.assessment_id, i.kind
+    FROM classwork_items i
+    WHERE i.class_id = $1 AND i.assessment_id = ANY($2::uuid[]) AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL`,
+
+  //  Every pending draft on the class's turn-in columns, as the score rows a
+  //  Publish would write (publishAssessments' preview, cascade and digest).
+  //  $1 class_id
+  selectPendingDrafts: `
+    SELECT sub.student_id, i.assessment_id, sub.draft_score, sub.draft_status
+    FROM classwork_items i
+    JOIN classwork_submissions sub ON sub.item_id = i.item_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE i.class_id = $1 AND i.assessment_id IS NOT NULL AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL
+      AND sub.published_at IS NULL AND ${HAS_DRAFT} AND ${IN_ITEM_AUDIENCE}`,
+
+  // ── The gradebook grid (studentAssessment.controller) ──────────────────
+
+  //  Which of these columns are turn-in columns, and whether each is published.
+  //  $1 class_id, $2 assessment_id[]
+  selectTurnInColumns: `
+    SELECT i.item_id, i.assessment_id, a.is_published
+    FROM classwork_items i
+    JOIN assessments a ON a.assessment_id = i.assessment_id
+    WHERE i.class_id = $1 AND i.assessment_id = ANY($2::uuid[]) AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL`,
+
+  //  The grid's classwork layer: the class's turn-in columns, and per student
+  //  a pending draft, work turned in and awaiting a grade, or work missing by
+  //  its due date with nothing published yet. $1 class_id
+  selectOverlayItems: `
+    SELECT i.item_id, i.assessment_id, i.kind, i.submission_mode
+    FROM classwork_items i
+    WHERE i.class_id = $1 AND i.assessment_id IS NOT NULL AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL
+    ORDER BY i.created_at, i.item_id`,
+  selectOverlayCells: `
+    SELECT * FROM (
+    SELECT s.student_id, s.name, i.created_at, i.item_id, i.assessment_id, sub.draft_score, sub.draft_status,
+           (sub.turned_in_at IS NOT NULL AND COALESCE(sub.is_late, FALSE)) AS is_late,
+           CASE
+             WHEN sub.published_at IS NULL AND ${HAS_DRAFT} THEN 'draft'
+             WHEN ${AWAITING_GRADE} THEN 'turned_in'
+             WHEN ${WORK_STATE_SQL} = 'missing' AND NOT ${GRADE_VISIBLE} AND ${ITEM_VISIBLE('i', 'a', 's')} THEN 'missing_derived'
+           END AS state
+    FROM classwork_items i
+    JOIN assessments a ON a.assessment_id = i.assessment_id
+    JOIN class_students cs ON cs.class_id = i.class_id
+    JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
+    LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
+    LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+    WHERE i.class_id = $1 AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL AND ${IN_ITEM_AUDIENCE}
+    ) c
+    WHERE c.state IS NOT NULL
+    ORDER BY c.name, c.student_id, c.created_at, c.item_id`,
+};
+
+// Turned in and awaiting a grade on a live turn-in item of class `cls`, from
+// students the item is for (CARD_TO_REVIEW, TO_REVIEW).
+const AWAITING_FROM = (cls) => `
+  FROM classwork_items i
+  JOIN classwork_submissions sub ON sub.item_id = i.item_id
+  JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+  JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+  LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+  LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = sub.student_id
+  WHERE i.class_id = ${cls} AND i.deleted_at IS NULL AND ${TURN_IN_ITEM} AND ${IN_ITEM_AUDIENCE} AND ${AWAITING_GRADE}`;
+
+module.exports = gradingQueries;
+module.exports.AWAITING_FROM = AWAITING_FROM;

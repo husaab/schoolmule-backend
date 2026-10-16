@@ -86,9 +86,12 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   const mockAssessmentLookup = (assessments) => {
     mockQueryResponse(assessments);
   };
+  // D3/D17: the upsert asks which columns are turn-in columns; none here.
+  const mockNoTurnInColumns = () => mockQueryResponse([]);
 
   it('upserts scores successfully', async () => {
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+    mockNoTurnInColumns();
     const upsertedRows = [
       { student_id: 's1', assessment_id: 'a1', score: 85 },
       { student_id: 's2', assessment_id: 'a1', score: 90 },
@@ -112,6 +115,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
 
   it('allows null scores for deletion', async () => {
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+    mockNoTurnInColumns();
     const upsertedRows = [
       { student_id: 's1', assessment_id: 'a1', score: null },
     ];

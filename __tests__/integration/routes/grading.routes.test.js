@@ -1,0 +1,595 @@
+// Grading turned-in work (spec D3, D17): drafts on the submission, Publish per
+// student, Mark missing, Excuse, feedback, the gradebook grid's draft/live
+// branch, the existing Publish flow on a turn-in column, the grid overlay and
+// the To review counts. A draft never reaches student_assessments, so no
+// student, parent or report card can see it. Synthetic identities only
+// (@example.com).
+
+jest.mock('resend', () => ({
+  Resend: jest.fn(() => ({ emails: { send: jest.fn().mockResolvedValue({ data: { id: 'email-1' } }) } })),
+}));
+
+const { getApp, authenticatedRequest } = require('../setup/integrationApp');
+const { getTestPool } = require('../setup/setupTestDB');
+const supabase = require('../../../config/supabaseClient');
+const engine = require('../../../services/analyticsEngine');
+const { getResend } = require('../../../utils/emailUtils');
+
+const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
+const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
+const OTHER_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440003';
+const PARENT_A_ID = '550e8400-e29b-41d4-a716-446655440004';
+const PARENT_B_ID = '550e8400-e29b-41d4-a716-446655440005';
+const AMAL_USER_ID = '550e8400-e29b-41d4-a716-446655440010';
+const BILAL_USER_ID = '550e8400-e29b-41d4-a716-446655440011';
+const DALIA_USER_ID = '550e8400-e29b-41d4-a716-446655440012';
+
+const asAdmin = { userId: ADMIN_ID, username: 'Office Admin', email: 'office.admin@example.com', role: 'ADMIN' };
+const asTeacher = { userId: TEACHER_ID, username: 'Ziad Teacher', email: 'ziad.teacher@example.com', role: 'TEACHER' };
+const asOtherTeacher = { userId: OTHER_TEACHER_ID, username: 'Dina Teacher', email: 'dina.teacher@example.com', role: 'TEACHER' };
+const asParentA = { userId: PARENT_A_ID, username: 'Mona Haddad', email: 'mona.haddad@example.com', role: 'PARENT' };
+const asParentB = { userId: PARENT_B_ID, username: 'Rania Karim', email: 'rania.karim@example.com', role: 'PARENT' };
+const student = (userId, username, email) => ({ userId, username, email, role: 'STUDENT', roles: ['STUDENT'] });
+const asAmal = student(AMAL_USER_ID, 'Amal Haddad', 'amal.haddad@example.com');
+const asBilal = student(BILAL_USER_ID, 'Bilal Karim', 'bilal.karim@example.com');
+const asDalia = student(DALIA_USER_ID, 'Dalia Nassar', 'dalia.nassar@example.com');
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const inDays = (n) => new Date(Date.now() + n * DAY_MS).toISOString();
+
+describe('Integration: grading and per-student Publish', () => {
+  let pool, yearId, termId, sciId, mathId;
+  let amalId, bilalId, daliaId, outsiderId, homeworkId, item, itemUrl, columnId;
+
+  beforeAll(() => { getApp(); pool = getTestPool(); });
+
+  const user = (id, email, first, last, role) => pool.query(
+    `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+     VALUES ($1, $2, $3, 'hashed', $4, $5, 'ALHAADIACADEMY', $6, true, true)`,
+    [id, email, `${first} ${last}`, first, last, role],
+  );
+  const makeClass = async (subject, teacherId) => (await pool.query(
+    `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
+     VALUES ('ALHAADIACADEMY', '5', $1, 'Lead Name', $2, $3, 'Term 1', $4) RETURNING class_id`,
+    [subject, teacherId, termId, yearId],
+  )).rows[0].class_id;
+  const makeStudent = async (name, classId, loginId) => {
+    const id = (await pool.query(
+      `INSERT INTO students (name, grade, school, school_year_id) VALUES ($1, '5', 'ALHAADIACADEMY', $2) RETURNING student_id`,
+      [name, yearId],
+    )).rows[0].student_id;
+    await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, id]);
+    if (loginId) {
+      await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [loginId, id, yearId]);
+    }
+    return id;
+  };
+  const assessment = async (classId, name, o = {}) => (await pool.query(
+    `INSERT INTO assessments (class_id, name, parent_assessment_id, is_parent, weight_points, max_score)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING assessment_id`,
+    [classId, name, o.parentId ?? null, o.isParent ?? false, o.weight ?? null, o.max ?? null],
+  )).rows[0].assessment_id;
+
+  const expectStatus = async (req, status) => {
+    const res = await req;
+    if (res.status !== status) throw new Error(`expected ${status}, got ${res.status}: ${JSON.stringify(res.body)}`);
+    return res.body;
+  };
+  const get = (url, who = asTeacher, status = 200) => expectStatus(authenticatedRequest('get', url, who), status);
+  const post = (url, body, who = asTeacher, status = 200) => expectStatus(authenticatedRequest('post', url, who).send(body), status);
+  const patch = (studentId, body, who = asTeacher, status = 200) =>
+    expectStatus(authenticatedRequest('patch', `${itemUrl}/submissions/${studentId}`, who).send(body), status);
+  const publish = (studentIds, status = 200) => post(`${itemUrl}/publish`, { studentIds }, asTeacher, status);
+  const createItem = async (body) => (await post(`/api/classroom/classes/${sciId}/items`, body, asTeacher, 201)).data;
+  const turnIn = (itemId, who) => post(`/api/student/items/${itemId}/turn-in`, undefined, who);
+
+  const gradebook = async (assessmentId = columnId) => (await pool.query(
+    `SELECT student_id, score::float AS score, status FROM student_assessments WHERE assessment_id = $1 ORDER BY student_id`,
+    [assessmentId],
+  )).rows;
+  const cell = async (studentId, assessmentId = columnId) => (await gradebook(assessmentId)).find((r) => r.student_id === studentId);
+  const submission = async (studentId, itemId = item.itemId) => (await pool.query(
+    `SELECT draft_score::float AS draft_score, draft_status, feedback, published_at FROM classwork_submissions WHERE item_id = $1 AND student_id = $2`,
+    [itemId, studentId],
+  )).rows[0];
+  const isPublished = async (assessmentId = columnId) => (await pool.query(
+    `SELECT is_published FROM assessments WHERE assessment_id = $1`, [assessmentId],
+  )).rows[0].is_published;
+  // Fresh reads: the grade matrices are cached per school, and a draft must
+  // not show even when nothing is cached.
+  const studentGrade = async (who, assessmentId = columnId) => {
+    engine.invalidateCache();
+    const { data } = await get('/api/student/grades', who);
+    return data.classes.flatMap((c) => c.items).find((i) => i.assessmentId === assessmentId) ?? null;
+  };
+  const parentGrades = async (who, studentId) => {
+    engine.invalidateCache();
+    return (await get(`/api/parent-portal/students/${studentId}/grades`, who)).data;
+  };
+  const parentScore = (grades, assessmentId = columnId) => (grades.classes || [])
+    .flatMap((c) => c.assessmentScores || c.assessments || [])
+    .find((a) => a.assessmentId === assessmentId) ?? null;
+  const studentItem = async (who, itemId = item.itemId) => (await get(`/api/student/items/${itemId}`, who)).data;
+  const sent = () => getResend().emails.send.mock.calls.map(([msg]) => msg);
+
+  beforeEach(async () => {
+    supabase._reset();
+    getResend().emails.send.mockClear();
+    engine.invalidateCache();
+    yearId = (await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = 'ALHAADIACADEMY' AND is_active LIMIT 1`,
+    )).rows[0].school_year_id;
+    termId = (await pool.query(
+      `INSERT INTO terms (school, name, start_date, end_date, is_active, school_year_id)
+       VALUES ('ALHAADIACADEMY', 'Term 1', DATE '2026-09-01', DATE '2027-01-31', TRUE, $1) RETURNING term_id`, [yearId],
+    )).rows[0].term_id;
+
+    await user(ADMIN_ID, 'office.admin@example.com', 'Office', 'Admin', 'ADMIN');
+    await user(TEACHER_ID, 'ziad.teacher@example.com', 'Ziad', 'Teacher', 'TEACHER');
+    await user(OTHER_TEACHER_ID, 'dina.teacher@example.com', 'Dina', 'Teacher', 'TEACHER');
+    await user(PARENT_A_ID, 'mona.haddad@example.com', 'Mona', 'Haddad', 'PARENT');
+    await user(PARENT_B_ID, 'rania.karim@example.com', 'Rania', 'Karim', 'PARENT');
+    await user(AMAL_USER_ID, 'amal.haddad@example.com', 'Amal', 'Haddad', 'STUDENT');
+    await user(BILAL_USER_ID, 'bilal.karim@example.com', 'Bilal', 'Karim', 'STUDENT');
+    await user(DALIA_USER_ID, 'dalia.nassar@example.com', 'Dalia', 'Nassar', 'STUDENT');
+    await pool.query(`INSERT INTO school_classroom_settings (school, enabled) VALUES ('ALHAADIACADEMY', TRUE)`);
+
+    sciId = await makeClass('Science', TEACHER_ID);
+    mathId = await makeClass('Math', OTHER_TEACHER_ID);
+    amalId = await makeStudent('Amal Haddad', sciId, AMAL_USER_ID);
+    bilalId = await makeStudent('Bilal Karim', sciId, BILAL_USER_ID);
+    daliaId = await makeStudent('Dalia Nassar', sciId, DALIA_USER_ID);
+    outsiderId = await makeStudent('Omar Saleh', mathId, null);
+    await pool.query(
+      `INSERT INTO parent_students (parent_id, student_id, parent_name, parent_email, relation, school) VALUES
+       ($1, $2, 'Mona Haddad', 'mona.haddad@example.com', 'Mother', 'ALHAADIACADEMY'),
+       ($3, $4, 'Rania Karim', 'rania.karim@example.com', 'Mother', 'ALHAADIACADEMY')`,
+      [PARENT_A_ID, amalId, PARENT_B_ID, bilalId],
+    );
+
+    homeworkId = await assessment(sciId, 'Homework', { isParent: true, weight: 40 });
+    item = await createItem({
+      kind: 'assignment', title: 'Plant cell diagram', instructions: 'Label six parts.', submissionMode: 'done',
+      dueAt: inDays(2), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    });
+    itemUrl = `/api/classroom/items/${item.itemId}`;
+    columnId = item.gradebook.assessmentId;
+    for (const who of [asAmal, asBilal, asDalia]) await turnIn(item.itemId, who);
+  });
+
+  it("PATCH draftScore stores a draft; student_assessments has no row; the parent's grades and the student's grades are unchanged", async () => {
+    const parentBefore = await parentGrades(asParentA, amalId);
+    const studentBefore = (await get('/api/student/grades', asAmal)).data;
+
+    const { data } = await patch(amalId, { draftScore: 8 });
+    expect(data.live).toBe(false);
+    expect(data.row).toMatchObject({
+      studentId: amalId, name: 'Amal Haddad', status: 'turned_in', isLate: false, draftScore: 8, draftStatus: 'graded',
+      publishedScore: null, publishedStatus: null, publishedAt: null, feedback: null, needsPublish: true, hasThread: false,
+      label: 'Graded · draft',
+    });
+    expect(data.row.turnedInAt).toEqual(expect.any(String));
+    expect(await gradebook()).toEqual([]);
+    expect(await submission(amalId)).toMatchObject({ draft_score: 8, draft_status: 'graded', published_at: null });
+    expect(await isPublished()).toBe(false);
+
+    expect(await parentGrades(asParentA, amalId)).toEqual(parentBefore);
+    engine.invalidateCache();
+    expect((await get('/api/student/grades', asAmal)).data).toEqual(studentBefore);
+    expect((await studentItem(asAmal)).grade).toBeNull();
+    expect((await studentItem(asAmal)).submission.status).toBe('turned_in');
+
+    // The list: counts and labels.
+    const list = (await get(`${itemUrl}/submissions`)).data;
+    expect(list.item).toMatchObject({ itemId: item.itemId, kind: 'assignment', title: 'Plant cell diagram', maxScore: 10, categoryName: 'Homework' });
+    expect(list.isAssessmentPublished).toBe(false);
+    expect(list.counts).toEqual({ all: 3, turnedIn: 3, toGrade: 2, missing: 0, drafts: 1, published: 0 });
+    expect(list.students.map((s) => [s.name, s.label])).toEqual([
+      ['Amal Haddad', 'Graded · draft'], ['Bilal Karim', 'Turned in'], ['Dalia Nassar', 'Turned in'],
+    ]);
+    const one = (await get(`${itemUrl}/submissions/${bilalId}`)).data;
+    expect(one).toMatchObject({ row: { studentId: bilalId, label: 'Turned in' }, textAnswer: null, files: [], quiz: null, thread: null });
+
+    // Validation: out of range, too long, not on the roster, nothing sent.
+    await patch(amalId, { draftScore: 11 }, asTeacher, 400);
+    await patch(amalId, { draftScore: -1 }, asTeacher, 400);
+    await patch(amalId, { draftStatus: 'late' }, asTeacher, 400);
+    await patch(amalId, { feedback: 'x'.repeat(5001) }, asTeacher, 400);
+    await patch(amalId, {}, asTeacher, 400);
+    await patch(outsiderId, { draftScore: 5 }, asTeacher, 404);
+    expect(await gradebook()).toEqual([]);
+  });
+
+  it("publish [A] writes A's score, flips is_published, and B's draft stays out of student_assessments; B's parent sees nothing", async () => {
+    await patch(amalId, { draftScore: 8 });
+    await patch(bilalId, { draftScore: 6 });
+    const parentBBefore = await parentGrades(asParentB, bilalId);
+
+    const { data } = await publish([amalId]);
+    expect(data).toMatchObject({ publishedStudentIds: [amalId], skipped: [], assessmentPublished: true });
+    expect(await gradebook()).toEqual([{ student_id: amalId, score: 8, status: 'graded' }]);
+    expect(await isPublished()).toBe(true);
+    expect((await submission(amalId)).published_at).not.toBeNull();
+    expect(await submission(bilalId)).toMatchObject({ draft_score: 6, published_at: null });
+
+    // Amal and her parent see the grade; Bilal and his parent see nothing.
+    expect(await studentGrade(asAmal)).toMatchObject({ score: 8, status: 'graded', kind: 'assignment', itemId: item.itemId });
+    expect((await studentItem(asAmal)).grade).toMatchObject({ score: 8, maxScore: 10, status: 'graded' });
+    expect((await studentItem(asAmal)).submission.status).toBe('graded');
+    expect(Number(parentScore(await parentGrades(asParentA, amalId)).score)).toBe(8);
+    expect(await studentGrade(asBilal)).toBeNull();
+    expect((await studentItem(asBilal)).grade).toBeNull();
+    const parentB = await parentGrades(asParentB, bilalId);
+    expect(parentScore(parentB)?.score ?? null).toBeNull();
+    expect(JSON.stringify(parentB)).not.toContain('"score":6');
+    expect(parentBBefore).toBeDefined();
+
+    // The list now: Amal published, Bilal still a draft.
+    const list = (await get(`${itemUrl}/submissions`)).data;
+    expect(list.isAssessmentPublished).toBe(true);
+    expect(list.counts).toMatchObject({ drafts: 1, published: 1, toGrade: 1 });
+    const amal = list.students.find((s) => s.studentId === amalId);
+    expect(amal).toMatchObject({ label: 'Published', publishedScore: 8, publishedStatus: 'graded', needsPublish: false });
+    expect(amal.publishedAt).toEqual(expect.any(String));
+  });
+
+  it("after the first publish, PATCH B's draft writes live (live: true)", async () => {
+    await patch(amalId, { draftScore: 8 });
+    await publish([amalId]);
+
+    const { data } = await patch(bilalId, { draftScore: 7 });
+    expect(data.live).toBe(true);
+    expect(data.row).toMatchObject({ label: 'Published', publishedScore: 7, needsPublish: false, draftScore: 7 });
+    expect(await cell(bilalId)).toEqual({ student_id: bilalId, score: 7, status: 'graded' });
+    expect((await submission(bilalId)).published_at).not.toBeNull();
+    expect(await studentGrade(asBilal)).toMatchObject({ score: 7 });
+
+    // A status change on the live cell keeps the score the student sees.
+    await patch(bilalId, { draftStatus: 'excused' });
+    expect(await cell(bilalId)).toEqual({ student_id: bilalId, score: 7, status: 'excused' });
+  });
+
+  it('grid upsert on the unpublished column returns drafts and writes no student_assessments row', async () => {
+    const testId = await assessment(sciId, 'Unit test', { weight: 60, max: 50 });
+    const res = await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+      scores: [
+        { studentId: amalId, assessmentId: columnId, score: 9 },
+        { studentId: bilalId, assessmentId: columnId, score: 4, status: 'missing' },
+        { studentId: amalId, assessmentId: testId, score: 40 },
+      ],
+    });
+    expect(res.data).toEqual([{ student_id: amalId, assessment_id: testId, score: '40.00', status: 'graded' }]);
+    expect(res.drafts).toEqual([
+      { student_id: amalId, assessment_id: columnId, draft_score: '9.00', draft_status: 'graded' },
+      { student_id: bilalId, assessment_id: columnId, draft_score: null, draft_status: 'missing' },
+    ]);
+    expect(await gradebook()).toEqual([]);
+    expect(await submission(amalId)).toMatchObject({ draft_score: 9, published_at: null });
+
+    // The grid's status menu takes the same branch; clearing a draft leaves no draft.
+    const status = await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+      .send({ studentId: daliaId, assessmentId: columnId, status: 'excused' }), 200);
+    expect(status.data).toEqual([]);
+    expect(status.drafts).toEqual([{ student_id: daliaId, assessment_id: columnId, draft_score: null, draft_status: 'excused' }]);
+    const cleared = await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: amalId, assessmentId: columnId, score: null }] });
+    expect(cleared.drafts).toEqual([{ student_id: amalId, assessment_id: columnId, draft_score: null, draft_status: null }]);
+    expect(await gradebook()).toEqual([]);
+
+    // The grid's GET still reads the gradebook only.
+    const matrix = await get(`/api/studentAssessments/classes/${sciId}/scores`);
+    expect(matrix.data.filter((r) => r.assessment_id === columnId).every((r) => r.score === null && r.status === 'graded')).toBe(true);
+  });
+
+  it('grid upsert after publish writes student_assessments and syncs the submission', async () => {
+    await patch(amalId, { draftScore: 8 });
+    await publish([amalId]);
+
+    const res = await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+      scores: [{ studentId: daliaId, assessmentId: columnId, score: 5 }, { studentId: amalId, assessmentId: columnId, score: 9 }],
+    });
+    expect(res.drafts).toEqual([]);
+    expect(res.data).toHaveLength(2);
+    expect(await cell(daliaId)).toEqual({ student_id: daliaId, score: 5, status: 'graded' });
+    expect(await cell(amalId)).toEqual({ student_id: amalId, score: 9, status: 'graded' });
+    expect(await submission(daliaId)).toMatchObject({ draft_score: 5, draft_status: 'graded' });
+    expect((await submission(daliaId)).published_at).not.toBeNull();
+    expect(await submission(amalId)).toMatchObject({ draft_score: 9 });
+    expect(await studentGrade(asDalia)).toMatchObject({ score: 5 });
+
+    // The status menu goes live too, and the submission follows.
+    const status = await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+      .send({ studentId: daliaId, assessmentId: columnId, status: 'missing' }), 200);
+    expect(status.data).toEqual([{ student_id: daliaId, assessment_id: columnId, score: null, status: 'missing' }]);
+    expect(await submission(daliaId)).toMatchObject({ draft_score: null, draft_status: 'missing' });
+    const list = (await get(`${itemUrl}/submissions`)).data;
+    expect(list.students.find((s) => s.studentId === daliaId)).toMatchObject({ label: 'Missing', needsPublish: false });
+  });
+
+  it("mark-missing writes status missing and the student's status reads Missing", async () => {
+    await patch(daliaId, { draftScore: 6 });
+    const { data } = await post(`${itemUrl}/mark-missing`, { studentIds: [daliaId, outsiderId] });
+    expect(data).toMatchObject({
+      publishedStudentIds: [daliaId], assessmentPublished: true, updatedStudentIds: [daliaId],
+      skipped: [{ studentId: outsiderId, reason: 'not_in_audience' }],
+    });
+    expect(await gradebook()).toEqual([{ student_id: daliaId, score: null, status: 'missing' }]);
+    expect(await submission(daliaId)).toMatchObject({ draft_score: null, draft_status: 'missing' });
+    const work = await studentItem(asDalia);
+    expect(work.submission.status).toBe('missing');
+    expect(work.grade).toMatchObject({ score: null, status: 'missing' });
+    expect((await get(`${itemUrl}/submissions`)).data.students.find((s) => s.studentId === daliaId).label).toBe('Missing');
+
+    // An item with no gradebook column can't take a Missing.
+    const loose = await createItem({ kind: 'assignment', title: 'Reading log', submissionMode: 'done', dueAt: inDays(3) });
+    const refused = await post(`/api/classroom/items/${loose.itemId}/mark-missing`, { studentIds: [daliaId] }, asTeacher, 400);
+    expect(refused.message).toBe('Missing needs a gradebook column.');
+    await post(`${itemUrl}/mark-missing`, { studentIds: [] }, asTeacher, 400);
+    await post(`${itemUrl}/mark-missing`, { studentIds: ['nope'] }, asTeacher, 400);
+  });
+
+  it('excuse then un-excuse', async () => {
+    await patch(bilalId, { draftScore: 6 });
+    let { data } = await post(`${itemUrl}/excuse`, { studentIds: [bilalId], excused: true });
+    expect(data).toMatchObject({ publishedStudentIds: [bilalId], assessmentPublished: true, updatedStudentIds: [bilalId] });
+    expect(await gradebook()).toEqual([{ student_id: bilalId, score: 6, status: 'excused' }]);
+    let work = await studentItem(asBilal);
+    expect(work.submission.status).toBe('excused');
+    expect(work.grade).toMatchObject({ score: null, status: 'excused' });
+
+    ({ data } = await post(`${itemUrl}/excuse`, { studentIds: [bilalId, daliaId], excused: false }));
+    expect(data).toMatchObject({
+      publishedStudentIds: [bilalId], updatedStudentIds: [bilalId], skipped: [{ studentId: daliaId, reason: 'no_draft' }],
+    });
+    expect(await gradebook()).toEqual([{ student_id: bilalId, score: 6, status: 'graded' }]);
+    work = await studentItem(asBilal);
+    expect(work.grade).toMatchObject({ score: 6, status: 'graded' });
+
+    // On an unpublished column, an un-excuse of a draft excuse stays a draft.
+    const quizCol = await createItem({
+      kind: 'assignment', title: 'Lab sheet', submissionMode: 'done', dueAt: inDays(4), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 5 },
+    });
+    await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+      .send({ studentId: daliaId, assessmentId: quizCol.gradebook.assessmentId, status: 'excused' }), 200);
+    ({ data } = await post(`/api/classroom/items/${quizCol.itemId}/excuse`, { studentIds: [daliaId], excused: false }));
+    expect(data).toMatchObject({ publishedStudentIds: [], updatedStudentIds: [daliaId], assessmentPublished: false });
+    expect(await gradebook(quizCol.gradebook.assessmentId)).toEqual([]);
+    expect(await isPublished(quizCol.gradebook.assessmentId)).toBe(false);
+    expect(await submission(daliaId, quizCol.itemId)).toMatchObject({ draft_score: null, draft_status: null });
+    await post(`${itemUrl}/excuse`, { studentIds: [bilalId] }, asTeacher, 400);
+  });
+
+  it("publish 'graded' publishes every student with a draft and skips the rest with no_draft", async () => {
+    await patch(amalId, { draftScore: 8 });
+    await patch(bilalId, { draftScore: 6, feedback: 'Check your labels.' });
+    await patch(daliaId, { feedback: 'Neat work.' }); // feedback alone is not a grade to publish
+
+    const { data } = await publish('graded');
+    expect(data.publishedStudentIds.sort()).toEqual([amalId, bilalId].sort());
+    expect(data.skipped).toEqual([{ studentId: daliaId, reason: 'no_draft' }]);
+    expect(data.assessmentPublished).toBe(true);
+    expect(await gradebook()).toEqual(
+      [{ student_id: amalId, score: 8, status: 'graded' }, { student_id: bilalId, score: 6, status: 'graded' }]
+        .sort((x, y) => x.student_id.localeCompare(y.student_id)),
+    );
+    // Nothing pending now: a second 'graded' publishes no one.
+    const again = (await publish('graded')).data;
+    expect(again.publishedStudentIds).toEqual([]);
+    expect(again.assessmentPublished).toBe(false);
+
+    // Explicit ids: a student of another class is not in the audience.
+    const explicit = (await publish([amalId, outsiderId])).data;
+    expect(explicit.publishedStudentIds).toEqual([amalId]);
+    expect(explicit.skipped).toEqual([{ studentId: outsiderId, reason: 'not_in_audience' }]);
+    await publish('everyone', 400);
+    await publish([], 400);
+  });
+
+  it('republishing after a regrade updates the stored score', async () => {
+    await patch(amalId, { draftScore: 8 });
+    await publish([amalId]);
+
+    // Unpublished in the gradebook, the grading view drafts again, and the
+    // graded work needs a Publish to show.
+    await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [columnId] });
+    const unpublishedList = (await get(`${itemUrl}/submissions`)).data;
+    expect(unpublishedList.isAssessmentPublished).toBe(false);
+    expect(unpublishedList.students.find((s) => s.studentId === amalId)).toMatchObject({
+      needsPublish: true, label: 'Graded · draft', publishedAt: null,
+    });
+    expect(unpublishedList.counts).toMatchObject({ drafts: 1, published: 0 });
+    const { data } = await patch(amalId, { draftScore: 9 });
+    expect(data.live).toBe(false);
+    expect(data.row).toMatchObject({ label: 'Graded · draft', needsPublish: true, draftScore: 9 });
+    expect(await cell(amalId)).toEqual({ student_id: amalId, score: 8, status: 'graded' });
+    expect(await studentGrade(asAmal)).toBeNull();
+
+    const published = (await publish([amalId])).data;
+    expect(published).toMatchObject({ publishedStudentIds: [amalId], assessmentPublished: true });
+    expect(await cell(amalId)).toEqual({ student_id: amalId, score: 9, status: 'graded' });
+    expect(await studentGrade(asAmal)).toMatchObject({ score: 9 });
+
+    // Clearing the cell while unpublished is an explicit clear on the next Publish.
+    await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [columnId] });
+    await patch(amalId, { draftScore: null });
+    expect(await submission(amalId)).toMatchObject({ draft_score: null, draft_status: 'graded', published_at: null });
+    await publish('graded');
+    expect(await cell(amalId)).toEqual({ student_id: amalId, score: null, status: 'graded' });
+  });
+
+  it('feedback is hidden from the student until published, then shown', async () => {
+    await patch(amalId, { draftScore: 8, feedback: '  Great labelling.  ' });
+    expect(await submission(amalId)).toMatchObject({ feedback: 'Great labelling.' });
+    expect((await studentItem(asAmal)).grade).toBeNull();
+    expect(await studentGrade(asAmal)).toBeNull();
+
+    await publish([amalId]);
+    expect((await studentItem(asAmal)).grade).toMatchObject({ score: 8, feedback: 'Great labelling.' });
+    expect(await studentGrade(asAmal)).toMatchObject({ score: 8, feedback: 'Great labelling.' });
+
+    // Bilal's feedback on the now-published column waits for Bilal's own publish.
+    await patch(bilalId, { feedback: 'Label the nucleus.' });
+    expect((await studentItem(asBilal)).grade).toBeNull();
+    await patch(bilalId, { draftScore: 7 }); // live: Bilal is published with this save
+    expect((await studentItem(asBilal)).grade).toMatchObject({ score: 7, feedback: 'Label the nucleus.' });
+
+    // An item with no gradebook column: feedback only, published the same way.
+    const loose = await createItem({ kind: 'assignment', title: 'Reading log', submissionMode: 'done', dueAt: inDays(3) });
+    await turnIn(loose.itemId, asDalia);
+    const looseUrl = `/api/classroom/items/${loose.itemId}`;
+    await expectStatus(authenticatedRequest('patch', `${looseUrl}/submissions/${daliaId}`, asTeacher).send({ draftScore: 5 }), 400);
+    const saved = await expectStatus(authenticatedRequest('patch', `${looseUrl}/submissions/${daliaId}`, asTeacher).send({ feedback: 'Lovely summary.' }), 200);
+    expect(saved.data).toMatchObject({ live: false, row: { needsPublish: true, feedback: 'Lovely summary.' } });
+    expect((await studentItem(asDalia, loose.itemId)).grade).toBeNull();
+    const out = (await post(`${looseUrl}/publish`, { studentIds: 'graded' })).data;
+    expect(out).toMatchObject({ publishedStudentIds: [daliaId], assessmentPublished: false });
+    expect((await studentItem(asDalia, loose.itemId)).grade).toMatchObject({ score: null, maxScore: null, feedback: 'Lovely summary.' });
+    const edited = await expectStatus(authenticatedRequest('patch', `${looseUrl}/submissions/${daliaId}`, asTeacher).send({ feedback: 'Lovely summary!' }), 200);
+    expect(edited.data.live).toBe(true);
+    expect((await studentItem(asDalia, loose.itemId)).grade.feedback).toBe('Lovely summary!');
+  });
+
+  it('the existing publish flow on the turn-in column publishes its drafts and still sends the parent digest, as for a plain assessment', async () => {
+    const testId = await assessment(sciId, 'Unit test', { weight: 60, max: 50 });
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: amalId, assessmentId: testId, score: 40 }] });
+    await patch(amalId, { draftScore: 8 });
+    await patch(bilalId, { draftScore: 6 });
+
+    // The preview counts the drafts that Publish will copy.
+    const preview = (await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [homeworkId, testId] })).data;
+    expect(preview.publishAssessmentIds.sort()).toEqual([homeworkId, testId, columnId].sort());
+    expect(preview.cascadedChildIds).toEqual([columnId]);
+    expect(preview.studentCount).toBe(2);
+
+    const res = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+      .send({ assessmentIds: [homeworkId, testId] }), 201);
+    expect(res.data.classworkPublished).toEqual([{ assessmentId: columnId, itemId: item.itemId, studentCount: 2 }]);
+    expect(await gradebook()).toEqual(
+      [{ student_id: amalId, score: 8, status: 'graded' }, { student_id: bilalId, score: 6, status: 'graded' }]
+        .sort((x, y) => x.student_id.localeCompare(y.student_id)),
+    );
+    expect((await submission(amalId)).published_at).not.toBeNull();
+    expect(res.data.emailSummary).toMatchObject({ sent: 2, failed: 0 });
+
+    const emails = sent();
+    const toAmal = emails.find((m) => m.to.includes('mona.haddad@example.com'));
+    const toBilal = emails.find((m) => m.to.includes('rania.karim@example.com'));
+    expect(toAmal.subject).toBe('Amal Haddad — New Grades Posted (Science)');
+    expect(toAmal.html).toContain('Homework');
+    expect(toAmal.html).toContain('80%'); // the published draft, as the Homework rollup
+    expect(toAmal.html).toContain('Unit test');
+    expect(toBilal.html).toContain('Homework');
+    expect(toBilal.html).toContain('60%');
+    expect(toBilal.html).not.toContain('Unit test');
+    expect(emails).toHaveLength(2);
+
+    // A plain assessment alone still sends today's digest, unchanged.
+    getResend().emails.send.mockClear();
+    const quizId = await assessment(sciId, 'Pop quiz', { weight: 0, max: 10 });
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: daliaId, assessmentId: quizId, score: 7 }] });
+    await pool.query(
+      `INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Lina Nassar', 'lina.nassar@example.com', 'Mother', 'ALHAADIACADEMY')`,
+      [daliaId],
+    );
+    const plain = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+      .send({ assessmentIds: [quizId] }), 201);
+    expect(plain.data.classworkPublished).toEqual([]);
+    expect(sent().map((m) => m.to)).toEqual([['lina.nassar@example.com']]);
+  });
+
+  it("a grading-view Publish of a column that counts on its own sends today's digest to the published students' parents only", async () => {
+    const solo = await createItem({
+      kind: 'assignment', title: 'Science fair board', submissionMode: 'done', dueAt: inDays(5),
+      gradebook: { mode: 'existing', assessmentId: await assessment(sciId, 'Science fair board', { weight: 100, max: 20 }) },
+    });
+    const soloUrl = `/api/classroom/items/${solo.itemId}`;
+    await expectStatus(authenticatedRequest('patch', `${soloUrl}/submissions/${amalId}`, asTeacher).send({ draftScore: 18 }), 200);
+    await expectStatus(authenticatedRequest('patch', `${soloUrl}/submissions/${bilalId}`, asTeacher).send({ draftScore: 10 }), 200);
+    const { data } = await post(`${soloUrl}/publish`, { studentIds: [amalId] });
+    expect(data.emailSummary).toMatchObject({ sent: 1 });
+    const emails = sent();
+    expect(emails.map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
+    expect(emails[0].html).toContain('18/20');
+    expect(emails[0].html).not.toContain('10/20');
+    // The publish is in the class's history.
+    const history = (await get(`/api/assessment-publications/classes/${sciId}/history`)).data;
+    expect(history[0]).toMatchObject({ action: 'publish', emailSummary: { sent: 1 } });
+  });
+
+  it('grid-overlay reports turned_in, draft and missing_derived cells', async () => {
+    await patch(amalId, { draftScore: 8 });
+    const late = await createItem({
+      kind: 'assignment', title: 'Lab sheet', submissionMode: 'done', dueAt: inDays(1), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 5 },
+    });
+    await pool.query(`UPDATE classwork_items SET due_at = NOW() - INTERVAL '1 day' WHERE item_id = $1`, [late.itemId]);
+    await turnIn(late.itemId, asAmal); // late
+    const testId = await assessment(sciId, 'Unit test', { weight: 60, max: 50 });
+
+    const { data } = await get(`/api/classroom/classes/${sciId}/grid-overlay`);
+    expect(data.items).toEqual([
+      { assessmentId: columnId, itemId: item.itemId, kind: 'assignment', submissionMode: 'done' },
+      { assessmentId: late.gradebook.assessmentId, itemId: late.itemId, kind: 'assignment', submissionMode: 'done' },
+    ]);
+    const key = (c) => `${c.studentId}:${c.assessmentId}`;
+    const cells = new Map(data.cells.map((c) => [key(c), c]));
+    expect(cells.get(`${amalId}:${columnId}`)).toEqual({ studentId: amalId, assessmentId: columnId, state: 'draft', draftScore: 8, draftStatus: 'graded', isLate: false });
+    expect(cells.get(`${bilalId}:${columnId}`)).toMatchObject({ state: 'turned_in', draftScore: null, isLate: false });
+    expect(cells.get(`${amalId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'turned_in', isLate: true });
+    expect(cells.get(`${bilalId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'missing_derived' });
+    expect(cells.get(`${daliaId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'missing_derived' });
+    expect(data.cells.some((c) => c.assessmentId === testId)).toBe(false);
+    expect(data.cells).toHaveLength(6);
+
+    // Once published, a graded student drops out of the overlay.
+    await publish([amalId]);
+    const after = (await get(`/api/classroom/classes/${sciId}/grid-overlay`)).data;
+    expect(after.cells.some((c) => c.studentId === amalId && c.assessmentId === columnId)).toBe(false);
+  });
+
+  it('class card toReviewCount and the toReview rail count turned-in, ungraded work', async () => {
+    let { data } = await get('/api/classroom/classes');
+    expect(data.classes.find((c) => c.classId === sciId).toReviewCount).toBe(3);
+    expect(data.toReview).toEqual([{
+      itemId: item.itemId, classId: sciId, classLabel: 'Grade 5 Science', iconUrl: '/class-icons/science.svg',
+      title: 'Plant cell diagram', turnedInCount: 3,
+    }]);
+
+    await patch(amalId, { draftScore: 8 });
+    await patch(bilalId, { draftScore: 0 });
+    ({ data } = await get('/api/classroom/classes'));
+    expect(data.classes.find((c) => c.classId === sciId).toReviewCount).toBe(1);
+    expect(data.toReview[0]).toMatchObject({ itemId: item.itemId, turnedInCount: 1 });
+
+    await patch(daliaId, { draftScore: 9 });
+    ({ data } = await get('/api/classroom/classes'));
+    expect(data.classes.find((c) => c.classId === sciId).toReviewCount).toBe(0);
+    expect(data.toReview).toEqual([]);
+    // Another teacher's home doesn't carry this class's work.
+    expect((await get('/api/classroom/classes', asOtherTeacher)).data.toReview).toEqual([]);
+  });
+
+  it('another teacher 403; student token STUDENT_FORBIDDEN', async () => {
+    const calls = [
+      ['get', `${itemUrl}/submissions`],
+      ['get', `${itemUrl}/submissions/${amalId}`],
+      ['patch', `${itemUrl}/submissions/${amalId}`, { draftScore: 5 }],
+      ['post', `${itemUrl}/publish`, { studentIds: 'graded' }],
+      ['post', `${itemUrl}/mark-missing`, { studentIds: [amalId] }],
+      ['post', `${itemUrl}/excuse`, { studentIds: [amalId], excused: true }],
+      ['get', `/api/classroom/classes/${sciId}/grid-overlay`],
+    ];
+    for (const [method, url, body] of calls) {
+      expect((await authenticatedRequest(method, url, asOtherTeacher).send(body)).status).toBe(403);
+      const fenced = await authenticatedRequest(method, url, asAmal).send(body);
+      expect(fenced.status).toBe(403);
+      expect(fenced.body.code).toBe('STUDENT_FORBIDDEN');
+      expect((await authenticatedRequest(method, url, asParentA).send(body)).status).toBe(403);
+    }
+    // The admin may grade; a material is not graded here; unknown ids are 404.
+    expect((await authenticatedRequest('get', `${itemUrl}/submissions`, asAdmin)).status).toBe(200);
+    const material = await createItem({ kind: 'material', title: 'Cells reading' });
+    expect((await authenticatedRequest('get', `/api/classroom/items/${material.itemId}/submissions`, asTeacher)).status).toBe(400);
+    expect((await authenticatedRequest('get', '/api/classroom/items/99999999-9999-4999-8999-999999999999/submissions', asTeacher)).status).toBe(404);
+    expect((await authenticatedRequest('get', `${itemUrl}/submissions/nope`, asTeacher)).status).toBe(404);
+    expect(await gradebook()).toEqual([]);
+  });
+});

@@ -68,6 +68,16 @@ function toComingUpRow(row) {
   };
 }
 
+/** TO_REVIEW row → a "To review" entry: an item with turned-in work waiting for a grade. */
+const toReviewRow = (row) => ({
+  itemId: row.item_id,
+  classId: row.class_id,
+  classLabel: classLabel(row.grade, row.subject),
+  iconUrl: identityOf(row).iconUrl,
+  title: row.title,
+  turnedInCount: Number(row.turned_in_count) || 0,
+});
+
 /** DRAFTS_AND_SCHEDULED row → a "Drafts & scheduled" entry. */
 const toDraftRow = (row) => ({
   itemId: row.item_id,
@@ -147,5 +157,5 @@ const peopleCounts = (students) => ({
 });
 
 module.exports = {
-  classLabel, isInClass, toClassCard, toHeaderClass, toComingUpRow, toDraftRow, toNotice, toTeacher, dedupeParents, toPeopleStudent, peopleCounts,
+  classLabel, isInClass, toClassCard, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, dedupeParents, toPeopleStudent, peopleCounts,
 };

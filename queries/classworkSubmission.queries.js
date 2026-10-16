@@ -73,6 +73,9 @@ ORDER BY i.sort_order, COALESCE(i.posted_at, i.publish_at, i.created_at) DESC, i
 SELECT ${WORK_COLUMNS},
        i.instructions, c.accept_late,
        ${TURN_IN_ITEM} AS turn_in,
+       CASE WHEN sub.published_at IS NOT NULL AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE))
+            THEN sub.feedback END AS visible_feedback,
+       sub.published_at AS sub_published_at,
        (i.due_at IS NOT NULL AND NOW() > i.due_at AND NOT c.accept_late) AS closed,
        sub.submission_id, sub.text_answer, sub.text_saved_at
 ${WORK_FROM}

@@ -4,6 +4,7 @@ const requireClassOwnership = require("../middleware/requireClassOwnership");
 const requireClassroomResource = require("../middleware/requireClassroomResource");
 const controller = require("../controllers/classroom.controller");
 const classwork = require("../controllers/classwork.controller");
+const grading = require("../controllers/grading.controller");
 const { singleImage } = require("../utils/imageUpload");
 const { uploadFiles, uploadFile } = require("../utils/classworkUpload");
 
@@ -92,5 +93,17 @@ router.get("/attachments/:attachmentId/url", requireClassroomResource("attachmen
 
 router.get("/classes/:classId/copy-sources", requireClassOwnership, classwork.copySources);
 router.post("/classes/:classId/copy", requireClassOwnership, classwork.copyFromClass);
+
+// Grading turned-in work (spec D3, D17): scores and feedback wait as drafts
+// on the submission until Publish (one student, a few, or every graded one);
+// Mark missing and Excuse publish at once. The grid overlay is the gradebook
+// grid's classwork layer (drafts, work to grade, missing by due date).
+router.get("/items/:itemId/submissions", requireClassroomResource("item"), grading.listSubmissions);
+router.get("/items/:itemId/submissions/:studentId", requireClassroomResource("item"), grading.getSubmission);
+router.patch("/items/:itemId/submissions/:studentId", requireClassroomResource("item"), grading.updateSubmission);
+router.post("/items/:itemId/publish", requireClassroomResource("item"), grading.publish);
+router.post("/items/:itemId/mark-missing", requireClassroomResource("item"), grading.markMissing);
+router.post("/items/:itemId/excuse", requireClassroomResource("item"), grading.excuse);
+router.get("/classes/:classId/grid-overlay", requireClassOwnership, grading.getGridOverlay);
 
 module.exports = router;

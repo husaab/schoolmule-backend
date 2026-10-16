@@ -412,14 +412,19 @@ ORDER BY t.sort_order NULLS LAST, i.sort_order, i.created_at, i.item_id`,
 
   // ── Child grades (itemId and kind for a graded column) ─────────────────
 
-  //  Each assessment's live item, and whether the student may open it.
+  //  Each assessment's live item, whether the student may open it, and the
+  //  student's submission: its feedback once visible (published to the
+  //  student, on a published assessment; spec 0.8) and its publish time.
   //  $1 assessment ids, $2 student_id
   selectItemsForAssessments: `
     SELECT i.assessment_id, i.item_id, i.kind,
-           (${ITEM_VISIBLE('i', 'a', 'st')}) AS visible
+           (${ITEM_VISIBLE('i', 'a', 'st')}) AS visible,
+           CASE WHEN sub.published_at IS NOT NULL AND COALESCE(a.is_published, FALSE) THEN sub.feedback END AS feedback,
+           sub.published_at AS sub_published_at
     FROM classwork_items i
     JOIN assessments a ON a.assessment_id = i.assessment_id
     CROSS JOIN (SELECT $2::uuid AS student_id) st
+    LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = st.student_id
     WHERE i.assessment_id = ANY($1::uuid[]) AND i.deleted_at IS NULL`,
 };
 

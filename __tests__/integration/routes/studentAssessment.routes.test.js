@@ -257,6 +257,75 @@ describe('Integration: Student Assessment Routes', () => {
     });
   });
 
+  // Spec D3/D17: a column filled by an assignment or quiz (a turn-in column)
+  // keeps grid scores as drafts on the student's submission until its
+  // assessment is published; then the grid writes live, as Save did. Plain
+  // columns answer exactly as before, with an empty drafts list.
+  describe('turn-in columns (drafts until published)', () => {
+    const makeTurnIn = async (assessmentId) => (await pool.query(
+      `UPDATE classwork_items SET kind = 'assignment', submission_mode = 'file' WHERE assessment_id = $1 RETURNING item_id`,
+      [assessmentId]
+    )).rows[0].item_id;
+    const draftOf = async (itemId, studentId) => (await pool.query(
+      `SELECT draft_score::float AS draft_score, draft_status, published_at FROM classwork_submissions WHERE item_id = $1 AND student_id = $2`,
+      [itemId, studentId]
+    )).rows[0];
+    const cells = async (studentId) => (await pool.query(
+      `SELECT assessment_id, score::float AS score, status FROM student_assessments WHERE student_id = $1 ORDER BY assessment_id`,
+      [studentId]
+    )).rows;
+
+    it('a grid score on an unpublished turn-in column is a draft; the plain column beside it writes as before', async () => {
+      const { classId, assessmentId1, assessmentId2 } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+      const itemId = await makeTurnIn(assessmentId1);
+
+      const res = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({ scores: [{ studentId, assessmentId: assessmentId1, score: 85 }, { studentId, assessmentId: assessmentId2, score: 92 }] });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ student_id: studentId, assessment_id: assessmentId2, score: '92.00', status: 'graded' }]);
+      expect(res.body.drafts).toEqual([{ student_id: studentId, assessment_id: assessmentId1, draft_score: '85.00', draft_status: 'graded' }]);
+      expect(await cells(studentId)).toEqual([{ assessment_id: assessmentId2, score: 92, status: 'graded' }]);
+      expect(await draftOf(itemId, studentId)).toEqual({ draft_score: 85, draft_status: 'graded', published_at: null });
+
+      // The status menu drafts too: missing clears the draft score.
+      const status = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: assessmentId1, status: 'missing' });
+      expect(status.status).toBe(200);
+      expect(status.body.data).toEqual([]);
+      expect(status.body.drafts).toEqual([{ student_id: studentId, assessment_id: assessmentId1, draft_score: null, draft_status: 'missing' }]);
+      expect(await cells(studentId)).toHaveLength(1);
+
+      // A plain-only request answers as it always did, plus an empty drafts list.
+      const plain = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({ scores: [{ studentId, assessmentId: assessmentId2, score: 70 }] });
+      expect(plain.body).toEqual({ status: 'success', data: [{ student_id: studentId, assessment_id: assessmentId2, score: '70.00', status: 'graded' }], drafts: [] });
+    });
+
+    it('once the turn-in column is published, grid scores and statuses write live and the submission follows', async () => {
+      const { classId, assessmentId1 } = await seedClassWithAssessments();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+      const itemId = await makeTurnIn(assessmentId1);
+      await pool.query('UPDATE assessments SET is_published = TRUE, published_at = NOW() WHERE assessment_id = $1', [assessmentId1]);
+
+      const res = await authenticatedRequest('post', `/api/studentAssessments/classes/${classId}/scores`)
+        .send({ scores: [{ studentId, assessmentId: assessmentId1, score: 77 }] });
+      expect(res.body.data).toEqual([{ student_id: studentId, assessment_id: assessmentId1, score: '77.00', status: 'graded' }]);
+      expect(res.body.drafts).toEqual([]);
+      const synced = await draftOf(itemId, studentId);
+      expect(synced).toMatchObject({ draft_score: 77, draft_status: 'graded' });
+      expect(synced.published_at).not.toBeNull();
+
+      const excused = await authenticatedRequest('patch', `/api/studentAssessments/classes/${classId}/status`)
+        .send({ studentId, assessmentId: assessmentId1, status: 'excused' });
+      expect(excused.body.data).toEqual([{ student_id: studentId, assessment_id: assessmentId1, score: '77.00', status: 'excused' }]);
+      expect(excused.body.drafts).toEqual([]);
+      expect(await draftOf(itemId, studentId)).toMatchObject({ draft_score: 77, draft_status: 'excused' });
+    });
+  });
+
   describe('GET /api/studentAssessments/classes/:classId/scores', () => {
     it('returns scores matrix for a class', async () => {
       const { classId, assessmentId1 } = await seedClassWithAssessments();
