@@ -892,6 +892,95 @@ describe('Integration: grading and per-student Publish', () => {
         const list = (await get(`${url}/submissions`)).data;
         expect(list.students.map((r) => [r.name, r.label])).toEqual([['Amal Haddad', 'Not turned in yet'], ['Dalia Nassar', 'Graded · draft']]);
       });
+
+      // Fix round 4 (N2, probe P14): an audience change never shows a draft
+      // that wasn't published. On a published column a student holding one
+      // can't be taken off the item until it is published or cleared.
+      it("N2 (P14): taking a student with an unpublished draft off a published column's item is refused, and nothing of theirs shows", async () => {
+        const { colId } = await someItem('Lab E');
+        const lab = await createItem({
+          kind: 'assignment', title: 'Lab E', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, amalId, { draftScore: 8 });
+        await patchOn(url, bilalId, { draftScore: 6 });
+        await post(`${url}/publish`, { studentIds: [amalId] });
+        expect(await isPublished(colId)).toBe(true);
+        const emails = sent().length;
+
+        const res = await editItem(url, { audience: 'some', studentIds: [amalId] }, 409);
+        expect(res).toMatchObject({ code: 'UNPUBLISHED_DRAFTS_OUTSIDE', message: expect.stringContaining('Bilal Karim') });
+        // Nothing changed: Bilal is still on the item, his 6 is still a draft, and he and his parent see nothing.
+        const onItem = (await pool.query(`SELECT student_id FROM classwork_item_students WHERE item_id = $1`, [lab.itemId])).rows;
+        expect(onItem.map((r) => r.student_id).sort()).toEqual([amalId, bilalId].sort());
+        expect(await gradebook(colId)).toEqual([{ student_id: amalId, score: 8, status: 'graded' }]);
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: 6, draft_status: 'graded', published_at: null });
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        expect(parentScore(await parentGrades(asParentB, bilalId), colId)?.score ?? null).toBeNull();
+        expect(sent()).toHaveLength(emails);
+        const bilal = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+        expect(bilal).toMatchObject({ label: 'Graded · draft', draftScore: 6, needsPublish: true });
+
+        // P14b: a whole-class item narrowed to some students.
+        await patch(amalId, { draftScore: 9 });
+        await patch(bilalId, { draftScore: 5 });
+        await publish([amalId]);
+        const narrowed = await editItem(itemUrl, { audience: 'some', studentIds: [amalId, daliaId] }, 409);
+        expect(narrowed.code).toBe('UNPUBLISHED_DRAFTS_OUTSIDE');
+        expect(await cell(bilalId)).toBeUndefined();
+        expect(await studentGrade(asBilal)).toBeNull();
+        expect(parentScore(await parentGrades(asParentB, bilalId))?.score ?? null).toBeNull();
+
+        // Cleared in the grading view (live on a published column: nothing to show), the change goes through.
+        await patch(bilalId, { draftScore: null });
+        await editItem(itemUrl, { audience: 'some', studentIds: [amalId, daliaId] }, 200);
+        expect((await studentGrade(asBilal))?.score ?? null).toBeNull();
+      });
+
+      it('N2: a student taken off an item and put back keeps a draft as a draft; only a Publish shows it', async () => {
+        const { colId } = await someItem('Lab F');
+        const lab = await createItem({
+          kind: 'assignment', title: 'Lab F', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, amalId, { draftScore: 8 });
+        await patchOn(url, bilalId, { draftScore: 6 });
+
+        // Unpublished column: off the item, Bilal's 6 is his gradebook cell, which nobody sees until the
+        // column is published; back on the item, it is a draft again.
+        await editItem(url, { audience: 'some', studentIds: [amalId] }, 200);
+        expect(await cell(bilalId, colId)).toEqual({ student_id: bilalId, score: 6, status: 'graded' });
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        await editItem(url, { audience: 'some', studentIds: [amalId, bilalId] }, 200);
+        expect(await gradebook(colId)).toEqual([]);
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: 6, draft_status: 'graded', published_at: null });
+
+        // Publishing Amal keeps Bilal's 6 held.
+        await post(`${url}/publish`, { studentIds: [amalId] });
+        expect(await gradebook(colId)).toEqual([{ student_id: amalId, score: 8, status: 'graded' }]);
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+
+        // Published column: Bilal leaves only once his grade is published; what was published stays.
+        expect((await editItem(url, { audience: 'some', studentIds: [amalId] }, 409)).code).toBe('UNPUBLISHED_DRAFTS_OUTSIDE');
+        expect(await studentGrade(asBilal, colId)).toBeNull();
+        await post(`${url}/publish`, { studentIds: [bilalId] });
+        expect(await studentGrade(asBilal, colId)).toMatchObject({ score: 6 });
+        await editItem(url, { audience: 'some', studentIds: [amalId] }, 200);
+        expect(await cell(bilalId, colId)).toEqual({ student_id: bilalId, score: 6, status: 'graded' });
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: null, draft_status: null });
+
+        // Off the item he is graded like a plain column: a grid edit is live.
+        await grid([{ studentId: bilalId, assessmentId: colId, score: 7 }]);
+        expect(await studentGrade(asBilal, colId)).toMatchObject({ score: 7 });
+
+        // Back on the item: his grade stays as it is, with nothing to publish.
+        await editItem(url, { audience: 'some', studentIds: [amalId, bilalId] }, 200);
+        expect(await cell(bilalId, colId)).toEqual({ student_id: bilalId, score: 7, status: 'graded' });
+        const back = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+        expect(back).toMatchObject({ label: 'Published', publishedScore: 7, draftScore: null, needsPublish: false });
+      });
     });
 
     it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {

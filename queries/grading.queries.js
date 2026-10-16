@@ -245,25 +245,44 @@ const gradingQueries = {
     JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
     WHERE i.item_id = ANY($1::uuid[]) AND s.student_id = ANY($2::uuid[]) AND ${IN_ITEM_AUDIENCE}`,
 
-  //  A student who leaves an item's audience is graded like a plain
-  //  assessment: a draft they hold becomes their gradebook cell, then the
-  //  draft is cleared. $1 item_id
+  //  After an audience change (publish.reconcileAudience), the students of
+  //  the class the item is no longer for are graded like a plain assessment.
+  //
+  //  Those holding a draft not published yet, on a published column: making
+  //  it their gradebook cell would show it with no Publish (D3), so the
+  //  change is refused while there are any (fix round 4). $1 item_id
+  selectUnpublishedDraftsOutside: `
+    SELECT s.student_id, s.name
+    FROM classwork_submissions sub
+    JOIN classwork_items i ON i.item_id = sub.item_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE sub.item_id = $1 AND sub.published_at IS NULL AND ${HAS_DRAFT} AND NOT ${IN_ITEM_AUDIENCE}
+    ORDER BY s.name, s.student_id`,
+  //  On an unpublished column only, their drafts become their gradebook
+  //  cells (released by the column's Publish in Grades, as on main). On a
+  //  published column the cell already holds what was published, and is
+  //  never written here. Students off the roster or archived are left alone,
+  //  as they are when they leave the class. $1 item_id
   draftsOutsideToCells: `
     INSERT INTO student_assessments (student_id, assessment_id, score, status)
     SELECT sub.student_id, i.assessment_id,
            CASE WHEN sub.draft_status = 'missing' THEN NULL ELSE sub.draft_score END, COALESCE(sub.draft_status, 'graded')
     FROM classwork_submissions sub
     JOIN classwork_items i ON i.item_id = sub.item_id
-    WHERE sub.item_id = $1 AND i.assessment_id IS NOT NULL AND ${HAS_DRAFT}
-      AND NOT EXISTS (SELECT 1 FROM class_students cs JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
-                       WHERE cs.class_id = i.class_id AND cs.student_id = sub.student_id AND ${IN_ITEM_AUDIENCE})
+    JOIN assessments a ON a.assessment_id = i.assessment_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE sub.item_id = $1 AND NOT COALESCE(a.is_published, FALSE) AND ${HAS_DRAFT} AND NOT ${IN_ITEM_AUDIENCE}
     ON CONFLICT (student_id, assessment_id) DO UPDATE SET score = EXCLUDED.score, status = EXCLUDED.status`,
+  //  Then their drafts are cleared (moved to the cell above, or, on a
+  //  published column, already published to it). $1 item_id
   clearDraftsOutside: `
     UPDATE classwork_submissions sub SET draft_score = NULL, draft_status = NULL, published_at = NULL, updated_at = NOW()
-    FROM classwork_items i
+    FROM classwork_items i, class_students cs, students s
     WHERE sub.item_id = $1 AND i.item_id = sub.item_id AND ${HAS_DRAFT}
-      AND NOT EXISTS (SELECT 1 FROM class_students cs JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
-                       WHERE cs.class_id = i.class_id AND cs.student_id = sub.student_id AND ${IN_ITEM_AUDIENCE})`,
+      AND cs.class_id = i.class_id AND cs.student_id = sub.student_id
+      AND s.student_id = sub.student_id AND s.is_archived IS NOT TRUE AND NOT ${IN_ITEM_AUDIENCE}`,
 
   //  Before an unpublished column's first Publish for some students: the
   //  other students' earlier publishes (from before the column was

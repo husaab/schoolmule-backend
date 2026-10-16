@@ -101,15 +101,38 @@ async function cellsToDrafts(client, { itemId, assessmentId }) {
   await client.query(q.moveCellsToDrafts, [itemId, assessmentId, []]);
 }
 
+/** "Bilal Karim has a grade …" / "A, B and 2 more have grades …" (UNPUBLISHED_DRAFTS_OUTSIDE). */
+function unpublishedDraftsMessage(names) {
+  const shown = names.slice(0, 3);
+  const more = names.length - shown.length;
+  const who = more > 0 ? `${shown.join(', ')} and ${more} more`
+    : shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0];
+  return names.length === 1
+    ? `${who} has a grade on this item that isn't published yet. Publish it or clear it in the grading view first, then take them off this item.`
+    : `${who} have grades on this item that aren't published yet. Publish or clear them in the grading view first, then take them off this item.`;
+}
+
 /**
- * After an item's audience changes (fix round 3): a student who left it is
- * graded like a plain assessment (their draft becomes their gradebook cell),
- * and a student who joined an unpublished column has their cell taken as a
- * draft. Inside the caller's transaction.
+ * After an item's audience changes (fix rounds 3 and 4), inside the caller's
+ * transaction. A student of the class who left it is graded like a plain
+ * assessment, and an unpublished draft never shows without a Publish (D3):
+ * - unpublished column: their draft becomes their gradebook cell, which shows
+ *   only once the column is published (in Grades, as on main);
+ * - published column: a draft already published is in their cell, so it is
+ *   just cleared; a draft not published yet refuses the change (409
+ *   UNPUBLISHED_DRAFTS_OUTSIDE) until the teacher publishes or clears it.
+ * A student who joined an unpublished column has their cell taken as a draft.
  */
 async function reconcileAudience(client, { itemId, assessmentId }) {
   if (!assessmentId) return;
-  await client.query(q.draftsOutsideToCells, [itemId]);
+  // The grading writers' lock order (the column before the submissions), so
+  // a Publish can't flip the column between this check and the moves.
+  const { rows: [a] } = await client.query(q.lockAssessmentShare, [assessmentId]);
+  if (a?.is_published) {
+    const { rows: held } = await client.query(q.selectUnpublishedDraftsOutside, [itemId]);
+    if (held.length > 0) throw conflict(unpublishedDraftsMessage(held.map((r) => r.name)), 'UNPUBLISHED_DRAFTS_OUTSIDE');
+  }
+  await client.query(q.draftsOutsideToCells, [itemId]); // writes unpublished columns only
   await client.query(q.clearDraftsOutside, [itemId]);
   await cellsToDrafts(client, { itemId, assessmentId });
 }
