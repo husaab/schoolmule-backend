@@ -13,14 +13,126 @@ const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const identityQueries = require('../queries/classIdentity.queries');
+const classroomQueries = require('../queries/classroom.queries');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
 const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
+const { toClassCard, toHeaderClass, toComingUpRow, toTeacher, toPeopleStudent, peopleCounts } = require('../services/classroom/classCards');
+const { getSettings } = require('../services/classroom/classroomSettings');
+const { signedPhotoUrl } = require('../services/profile/photos');
 const { isFamily, isColor } = require('../utils/classIdentity');
 const { AVATAR_ERROR, validateAvatar } = require('../utils/avatar');
 const { sendQrCards } = require('./studentAccount.controller');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
+
+const isAdminUser = (req) => req.user.role === 'ADMIN';
+
+/** The class's teachers (lead first) with signed photo URLs, for the header and People. */
+async function loadTeachers(classId) {
+  const { rows } = await db.query(classroomQueries.selectClassTeachers, [classId]);
+  return Promise.all(rows.map(async (row) => toTeacher(row, await signedPhotoUrl(row.photo_path))));
+}
+
+// GET /api/classroom/classes?archived=1
+// The Classes home: the caller's class cards for the year, what is coming up
+// across them, and the (later tasks') review and draft lists. Archived classes
+// are left out unless archived=1.
+const listClasses = async (req, res) => {
+  const { userId, school, role } = req.user;
+  const yearId = req.schoolYear?.schoolYearId ?? null;
+  const includeArchived = ['1', 'true'].includes(String(req.query.archived));
+  // toReview is T16's TO_REVIEW and draftsAndScheduled is T14's; both empty until then.
+  const empty = { classes: [], toReview: [], comingUp: [], draftsAndScheduled: [] };
+  if (!yearId) return ok(res, empty);
+  try {
+    const [cardRows, comingRows] = await Promise.all([
+      db.query(classroomQueries.selectClassCards, [userId, school, role, yearId, includeArchived]),
+      db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, null]),
+    ]);
+    return ok(res, {
+      ...empty,
+      classes: cardRows.rows.map(toClassCard),
+      comingUp: comingRows.rows.map(toComingUpRow),
+    });
+  } catch (error) {
+    logger.error({ err: error, userId }, 'Failed to list the classroom classes');
+    return failed(res, 500, 'Error loading your classes');
+  }
+};
+
+// GET /api/classroom/classes/:classId
+// The class header. An archived class is still returned (with archivedAt) so
+// it can be reopened and unarchived; only the list hides archived classes.
+const getClass = async (req, res) => {
+  const { classId, school } = req.class;
+  try {
+    const [cardRes, teachers, settings] = await Promise.all([
+      db.query(classroomQueries.selectClassCard, [classId]),
+      loadTeachers(classId),
+      getSettings(school),
+    ]);
+    const row = cardRes.rows[0];
+    if (!row) return failed(res, 404, 'Class not found');
+    const isAdmin = isAdminUser(req);
+    return ok(res, {
+      class: toHeaderClass(row),
+      teachers,
+      // A past school year is read-only for teachers (the write middleware refuses them).
+      permissions: { canEdit: isAdmin || row.year_is_active !== false, canDelete: isAdmin, isAdmin },
+      settings: {
+        parentsReadPrivateComments: settings.parentsReadPrivateComments,
+        studentPhotos: settings.studentPhotos,
+        enabled: settings.enabled,
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error, classId }, 'Failed to load the class header');
+    return failed(res, 500, 'Error loading the class');
+  }
+};
+
+// GET /api/classroom/classes/:classId/people
+// Teachers and the student roster with each login's status and the parents on
+// file. Inviting is the admin's; teachers reset, resend and print cards.
+const getPeople = async (req, res) => {
+  const { classId, school } = req.class;
+  try {
+    const [teachers, studentRes, settings] = await Promise.all([
+      loadTeachers(classId),
+      db.query(classroomQueries.selectPeopleStudents, [classId]),
+      getSettings(school),
+    ]);
+    const students = studentRes.rows.map((row) => toPeopleStudent(row, settings));
+    return ok(res, {
+      teachers,
+      students,
+      counts: peopleCounts(students),
+      canInvite: isAdminUser(req),
+      canManageAccounts: true,
+    });
+  } catch (error) {
+    logger.error({ err: error, classId }, 'Failed to load the class people');
+    return failed(res, 500, 'Error loading the class roster');
+  }
+};
+
+// GET /api/classroom/settings: the school's classroom settings, read-only, for staff UI copy.
+const getClassroomSettings = async (req, res) => {
+  try {
+    const s = await getSettings(req.user.school);
+    return ok(res, {
+      enabled: s.enabled,
+      loginFromGrade: s.loginFromGrade,
+      qrUntilGrade: s.qrUntilGrade,
+      parentsReadPrivateComments: s.parentsReadPrivateComments,
+      studentPhotos: s.studentPhotos,
+    });
+  } catch (error) {
+    logger.error({ err: error, school: req.user.school }, 'Failed to load the classroom settings');
+    return failed(res, 500, 'Error loading the classroom settings');
+  }
+};
 
 /** The subset of these student ids on the class roster. */
 async function enrolledIn(classId, studentIds) {
@@ -241,6 +353,7 @@ const setStudentAvatar = async (req, res) => {
 };
 
 module.exports = {
+  listClasses, getClass, getPeople, getClassroomSettings,
   resetStudentPassword, resendStudentInvite, printClassQrCards,
   updateIdentity, uploadBanner, deleteBanner, resetIdentity, updateOptions,
   archiveClass, unarchiveClass, setStudentAvatar,

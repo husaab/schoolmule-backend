@@ -1,0 +1,116 @@
+// services/classroom/classCards.js
+//
+// How the teacher's classroom reads are shown: ClassCard, ComingUpRow, the
+// teacher list and the People roster. Pure shaping of query rows, so the
+// controller stays small and every payload agrees.
+
+const { identityOf, optionsOf } = require('./classView');
+const { deriveStatus, isQrEligible } = require('./studentAccounts');
+
+const iso = (value) => (value ? new Date(value).toISOString() : null);
+
+const KINDERGARTEN_RE = /kindergarten|^[js]k\b/i;
+
+/** "Grade 5 Science"; a JK or SK class reads "JK Science" (and just its own name when that already says so). */
+function classLabel(grade, subject) {
+  const g = String(grade ?? '');
+  const name = String(subject ?? '').trim();
+  if (g === 'JK' || g === 'SK') return KINDERGARTEN_RE.test(name) ? name : `${g} ${name}`.trim();
+  return `Grade ${g} ${name}`.trim();
+}
+
+/** selectClassCards / selectClassCard row → ClassCard. */
+function toClassCard(row) {
+  return {
+    classId: row.class_id,
+    subject: row.subject,
+    grade: row.grade,
+    termId: row.term_id ?? null,
+    termName: row.term_name ?? null,
+    teacherId: row.teacher_id ?? null,
+    teacherName: row.teacher_name ?? null,
+    teachers: (row.teachers || []).map((t) => ({
+      userId: t.userId, name: t.name, role: t.role, avatar: t.avatar ?? null,
+    })),
+    studentCount: Number(row.student_count) || 0,
+    identity: identityOf(row),
+    archivedAt: iso(row.archived_at),
+    toReviewCount: Number(row.to_review_count) || 0,
+    next: row.next ?? null,
+  };
+}
+
+/** The header's card: the ClassCard plus the class options. */
+const toHeaderClass = (row) => ({ ...toClassCard(row), options: optionsOf(row) });
+
+/** COMING_UP row → ComingUpRow. Everything is an in-class assessment until T14 adds turn-in items. */
+function toComingUpRow(row) {
+  return {
+    itemId: null,
+    assessmentId: row.assessment_id,
+    classId: row.class_id,
+    classLabel: classLabel(row.grade, row.subject),
+    title: row.title,
+    kind: 'assessment',
+    date: row.date,
+    dueAt: null,
+    inClass: true,
+    stillToTurnIn: null,
+  };
+}
+
+/** selectClassTeachers row → header/People teacher. `photoUrl` is the signed URL, signed by the caller. */
+const toTeacher = (row, photoUrl) => ({
+  userId: row.user_id,
+  name: row.name,
+  role: row.role,
+  avatar: row.avatar ?? null,
+  photoUrl: photoUrl ?? null,
+  homeroomGrade: row.homeroom_grade ?? null,
+});
+
+/**
+ * One entry per parent address (case-insensitive). Rows arrive account-holders
+ * first, so the copy with a login is the one kept. A row with no address
+ * dedupes on its name; one with neither is dropped.
+ */
+function dedupeParents(parents) {
+  const seen = new Set();
+  const out = [];
+  for (const p of parents || []) {
+    if (!p.name) continue;
+    const key = p.emailKey || `name:${p.name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: p.name, relation: p.relation ?? null, hasAccount: Boolean(p.hasAccount) });
+  }
+  return out;
+}
+
+/** selectPeopleStudents row → a People student. `settings` are the school's classroom settings. */
+function toPeopleStudent(row, settings) {
+  const status = deriveStatus(row, settings);
+  return {
+    studentId: row.student_id,
+    name: row.name,
+    avatar: row.avatar ?? null,
+    photoUrl: null,
+    account: {
+      status,
+      userId: row.user_id ?? null,
+      lastSeenAt: iso(row.last_seen_at),
+      qrEligible: isQrEligible(status, row.grade, settings),
+    },
+    parents: dedupeParents(row.parents),
+    missingCount: Number(row.missing_count) || 0,
+  };
+}
+
+/** Header counts of the People roster. */
+const peopleCounts = (students) => ({
+  students: students.length,
+  notSignedIn: students.filter((s) => s.account.status === 'not_invited' || s.account.status === 'invited').length,
+  missingWork: students.filter((s) => s.missingCount > 0).length,
+});
+
+module.exports = { classLabel, toClassCard, toHeaderClass, toComingUpRow, toTeacher, dedupeParents, toPeopleStudent, peopleCounts };

@@ -72,10 +72,15 @@ const deriveStatus = (row, settings) => {
   return 'active';
 };
 
+/** A QR card goes to a student with a login (invited or active) at or below the school's QR grade ceiling. */
+const isQrEligible = (status, grade, settings) => {
+  const rank = gradeRank(grade);
+  return (status === 'invited' || status === 'active') && rank !== null && rank <= gradeRank(settings.qrUntilGrade);
+};
+
 /** selectStudentAccountRow(s) row → StudentAccountRow. */
 const toStudentAccountRow = (row, settings) => {
   const status = deriveStatus(row, settings);
-  const rank = gradeRank(row.grade);
   return {
     studentId: row.student_id,
     name: row.name,
@@ -96,7 +101,7 @@ const toStudentAccountRow = (row, settings) => {
           qr: { active: Boolean(row.qr_active), issuedAt: iso(row.qr_issued_at), voidedAt: iso(row.qr_voided_at) },
         }
       : null,
-    qrEligible: (status === 'invited' || status === 'active') && rank !== null && rank <= gradeRank(settings.qrUntilGrade),
+    qrEligible: isQrEligible(status, row.grade, settings),
     conflict: row.conflict_kind ? { kind: row.conflict_kind, message: conflictMessage(row.conflict_kind, row.conflict_role) } : null,
   };
 };
@@ -401,6 +406,7 @@ module.exports = {
   isBelowLoginGrade,
   conflictMessage,
   deriveStatus,
+  isQrEligible,
   toStudentAccountRow,
   loadSchoolInfo,
   sendStudentInvite,
