@@ -16,7 +16,7 @@ const userQueries = {
     loginUser: `
       SELECT user_id, email, username, password, first_name, last_name,
             school, role, email_token, is_verified, is_verified_school, is_archived,
-            created_at, last_modified_at
+            avatar, photo_path, created_at, last_modified_at
       FROM users 
       WHERE LOWER(email) = LOWER($1)
     `,
@@ -29,7 +29,7 @@ const userQueries = {
     selectForGoogleSignIn: `
       SELECT user_id, email, username, password, first_name, last_name,
             school, role, email_token, is_verified, is_verified_school, is_archived,
-            google_sub, created_at, last_modified_at
+            google_sub, avatar, photo_path, created_at, last_modified_at
       FROM users
       WHERE google_sub = $1 OR lower(email) = lower($2)
     `,
@@ -47,7 +47,7 @@ const userQueries = {
       WHERE user_id = $1
       RETURNING user_id, email, username, password, first_name, last_name,
             school, role, email_token, is_verified, is_verified_school, is_archived,
-            google_sub, created_at, last_modified_at
+            google_sub, avatar, photo_path, created_at, last_modified_at
     `,
 
     // Signup with Google: email already verified by Google, school approval
@@ -61,7 +61,7 @@ const userQueries = {
     `,
 
     selectById: `
-      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, created_at, last_modified_at
+      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, avatar, photo_path, created_at, last_modified_at
       FROM users 
       WHERE user_id = $1
     `,

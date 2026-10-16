@@ -4,13 +4,19 @@
   whole router and requireClassOwnership on every :classId route, so a
   teacher reaches only classes they teach (admins reach any class of their
   school). Student actions also require the student to be on that class's
-  roster: a teacher manages only their own students' logins.
+  roster: a teacher manages only their own students' logins and avatars.
 */
 
+const { v4: uuidv4 } = require('uuid');
 const db = require('../config/database');
+const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
+const identityQueries = require('../queries/classIdentity.queries');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
+const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
+const { isFamily, isColor } = require('../utils/classIdentity');
+const { AVATAR_ERROR, validateAvatar } = require('../utils/avatar');
 const { sendQrCards } = require('./studentAccount.controller');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
@@ -74,4 +80,168 @@ const printClassQrCards = async (req, res) => {
   }
 };
 
-module.exports = { resetStudentPassword, resendStudentInvite, printClassQrCards };
+const has = (body, key) => Boolean(body) && Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined;
+
+/** Delete an upload nothing points at any more (a duplicate or a rolled-over copy may share it). */
+async function removeBannerIfUnused(path) {
+  if (!path) return;
+  try {
+    const { rows } = await db.query(identityQueries.selectBannerReference, [path]);
+    if (rows.length === 0) await removeBannerObject(path);
+  } catch (error) {
+    logger.warn({ path, err: error?.message || error }, 'Checking a class banner before removing it failed');
+  }
+}
+
+// The reply to every identity change: the class and its resolved identity.
+const identityReply = (res, row) => ok(res, { classId: row.class_id, identity: identityOf(row) });
+
+// PATCH /api/classroom/classes/:classId/identity  { bannerKey?, iconKey?, color? }
+// A key set to null goes back to the subject default. Choosing a banner drops
+// any uploaded one.
+const updateIdentity = async (req, res) => {
+  const body = req.body || {};
+  const set = { banner: has(body, 'bannerKey'), icon: has(body, 'iconKey'), color: has(body, 'color') };
+  if (!set.banner && !set.icon && !set.color) {
+    return failed(res, 400, 'Send a bannerKey, iconKey or color');
+  }
+  if (set.banner && body.bannerKey !== null && !isFamily(body.bannerKey)) return failed(res, 400, 'Choose a banner from the library');
+  if (set.icon && body.iconKey !== null && !isFamily(body.iconKey)) return failed(res, 400, 'Choose an icon from the library');
+  if (set.color && body.color !== null && !isColor(body.color)) return failed(res, 400, 'Choose a color from the palette');
+
+  try {
+    const { rows } = await db.query(identityQueries.updateIdentity, [
+      req.class.classId,
+      set.banner, set.banner ? body.bannerKey : null,
+      set.icon, set.icon ? body.iconKey : null,
+      set.color, set.color ? body.color : null,
+    ]);
+    if (!rows[0]) return failed(res, 404, 'Class not found');
+    if (set.banner) await removeBannerIfUnused(rows[0].old_banner_path);
+    return identityReply(res, rows[0]);
+  } catch (error) {
+    logger.error({ err: error, classId: req.class.classId }, 'Failed to update the class identity');
+    return failed(res, 500, 'Error updating the class look');
+  }
+};
+
+// POST /api/classroom/classes/:classId/banner  (multipart "banner")
+// The file goes to the public school-assets bucket first; the row changes only
+// once the upload succeeded, and the replaced upload is removed afterwards.
+const uploadBanner = async (req, res) => {
+  const { classId, school } = req.class;
+  const { buffer, contentType, ext } = req.image;
+  const path = `${school}/class-banners/${classId}/${uuidv4()}.${ext}`;
+
+  try {
+    const { error } = await supabase.storage.from(BANNER_BUCKET).upload(path, buffer, { contentType, upsert: false });
+    if (error) throw error;
+  } catch (error) {
+    logger.error({ err: error, classId }, 'Failed to store a class banner');
+    return failed(res, 500, 'Error uploading the banner');
+  }
+
+  try {
+    const { rows } = await db.query(identityQueries.setBannerPath, [classId, path]);
+    if (!rows[0]) {
+      await removeBannerObject(path);
+      return failed(res, 404, 'Class not found');
+    }
+    await removeBannerIfUnused(rows[0].old_banner_path);
+    return identityReply(res, rows[0]);
+  } catch (error) {
+    await removeBannerObject(path);
+    logger.error({ err: error, classId }, 'Failed to save a class banner');
+    return failed(res, 500, 'Error saving the banner');
+  }
+};
+
+const resetter = (query, what) => async (req, res) => {
+  const { classId } = req.class;
+  try {
+    const { rows } = await db.query(query, [classId]);
+    if (!rows[0]) return failed(res, 404, 'Class not found');
+    await removeBannerIfUnused(rows[0].old_banner_path);
+    return identityReply(res, rows[0]);
+  } catch (error) {
+    logger.error({ err: error, classId }, `Failed to ${what}`);
+    return failed(res, 500, `Error trying to ${what}`);
+  }
+};
+
+// DELETE /api/classroom/classes/:classId/banner: back to the family banner.
+const deleteBanner = resetter(identityQueries.clearBanner, 'remove the class banner');
+
+// POST /api/classroom/classes/:classId/identity/reset: banner, icon and color all back to the subject default.
+const resetIdentity = resetter(identityQueries.resetIdentity, 'reset the class look');
+
+// PATCH /api/classroom/classes/:classId/options  { acceptLate?, emailNewPosts?, showClassAverage? }
+const updateOptions = async (req, res) => {
+  const body = req.body || {};
+  const keys = ['acceptLate', 'emailNewPosts', 'showClassAverage'];
+  if (!keys.some((k) => has(body, k))) return failed(res, 400, 'Send acceptLate, emailNewPosts or showClassAverage');
+  for (const k of keys) {
+    if (has(body, k) && typeof body[k] !== 'boolean') return failed(res, 400, `${k} must be true or false`);
+  }
+  try {
+    const { rows } = await db.query(identityQueries.updateOptions, [
+      req.class.classId,
+      has(body, 'acceptLate') ? body.acceptLate : null,
+      has(body, 'emailNewPosts') ? body.emailNewPosts : null,
+      has(body, 'showClassAverage') ? body.showClassAverage : null,
+    ]);
+    if (!rows[0]) return failed(res, 404, 'Class not found');
+    return ok(res, { classId: rows[0].class_id, options: optionsOf(rows[0]) });
+  } catch (error) {
+    logger.error({ err: error, classId: req.class.classId }, 'Failed to update the class options');
+    return failed(res, 500, 'Error updating the class options');
+  }
+};
+
+const archiver = (archive) => async (req, res) => {
+  const { classId } = req.class;
+  try {
+    const { rows } = archive
+      ? await db.query(identityQueries.archive, [classId, req.user.userId])
+      : await db.query(identityQueries.unarchive, [classId]);
+    if (!rows[0]) return failed(res, 404, 'Class not found');
+    return ok(res, { classId: rows[0].class_id, archivedAt: rows[0].archived_at });
+  } catch (error) {
+    logger.error({ err: error, classId }, `Failed to ${archive ? 'archive' : 'unarchive'} the class`);
+    return failed(res, 500, `Error trying to ${archive ? 'archive' : 'unarchive'} the class`);
+  }
+};
+
+// POST /api/classroom/classes/:classId/archive and /unarchive
+const archiveClass = archiver(true);
+const unarchiveClass = archiver(false);
+
+// PUT /api/classroom/classes/:classId/students/:studentId/avatar  { avatar: AvatarSpec | null }
+// For a child with no login of their own to pick with (JK/SK). Once the
+// student has a login with an avatar, that pick is the one shown.
+const setStudentAvatar = async (req, res) => {
+  const { classId } = req.params;
+  const studentId = req.params.studentId.toLowerCase();
+  if (!has(req.body, 'avatar')) return failed(res, 400, AVATAR_ERROR);
+  const parsed = validateAvatar(req.body.avatar);
+  if (parsed.error) return failed(res, 400, parsed.error);
+  try {
+    if (!(await enrolledIn(classId, [studentId])).has(studentId)) {
+      return failed(res, 404, "This student isn't in this class");
+    }
+    const { rows } = await db.query(identityQueries.updateStudentAvatar, [
+      studentId, req.class.school, parsed.value === null ? null : JSON.stringify(parsed.value),
+    ]);
+    if (!rows[0]) return failed(res, 404, 'Student not found');
+    return ok(res, { studentId: rows[0].student_id, avatar: rows[0].avatar ?? null });
+  } catch (error) {
+    logger.error({ err: error, classId, studentId }, "Failed to set a student's avatar");
+    return failed(res, 500, "Error saving the student's avatar");
+  }
+};
+
+module.exports = {
+  resetStudentPassword, resendStudentInvite, printClassQrCards,
+  updateIdentity, uploadBanner, deleteBanner, resetIdentity, updateOptions,
+  archiveClass, unarchiveClass, setStudentAvatar,
+};

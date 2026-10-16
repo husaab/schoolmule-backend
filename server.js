@@ -49,6 +49,7 @@ const studentAccountRoutes = require("./routes/studentAccount.routes")
 const classroomSettingsRoutes = require("./routes/classroomSettings.routes")
 const classroomRoutes = require("./routes/classroom.routes")
 const studentPortalRoutes = require("./routes/studentPortal.routes")
+const profileRoutes = require("./routes/profile.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
@@ -170,6 +171,7 @@ app.use("/api/admin/student-accounts", studentAccountRoutes);
 app.use("/api/admin/classroom-settings", classroomSettingsRoutes);
 app.use("/api/classroom", classroomRoutes);
 app.use("/api/student", studentPortalRoutes);
+app.use("/api/profile", profileRoutes);
 app.use("/api/finance", financeRoutes);
 
 // Global error handler — must be after all routes

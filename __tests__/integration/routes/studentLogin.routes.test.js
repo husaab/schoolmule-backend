@@ -291,7 +291,7 @@ describe('Integration: student sign-in', () => {
       status: 'success',
       data: {
         student: { studentId: amalId, name: 'Amal Haddad', firstName: 'Amal', grade: '2' },
-        user: { userId: AMAL_USER, email: 'amal.haddad@example.com' },
+        user: { userId: AMAL_USER, email: 'amal.haddad@example.com', avatar: null, photoUrl: null },
         school: { code: 'ALHAADIACADEMY', name: 'Al Haadi Academy' },
         settings: { studentPhotos: false },
         schoolYear: { schoolYearId: yearId, label: '2025-2026' },

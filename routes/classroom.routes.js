@@ -2,6 +2,11 @@ const express = require("express");
 const requireStaff = require("../middleware/requireStaff");
 const requireClassOwnership = require("../middleware/requireClassOwnership");
 const controller = require("../controllers/classroom.controller");
+const { singleImage } = require("../utils/imageUpload");
+
+const BANNER_MAX_BYTES = 3 * 1024 * 1024;
+// Checked after requireClassOwnership: a stranger's upload is never read.
+const bannerImage = singleImage({ field: "banner", maxBytes: BANNER_MAX_BYTES });
 
 // The teacher's classroom. Staff only; every :classId route also passes
 // requireClassOwnership (the caller teaches the class, or is an admin).
@@ -25,5 +30,18 @@ router.post("/classes/:classId/students/:studentId/reset-password", requireClass
 router.post("/classes/:classId/students/:studentId/resend-invite", requireClassOwnership, controller.resendStudentInvite);
 // QR sign-in cards for students on the class roster.
 router.post("/classes/:classId/qr-cards.pdf", requireClassOwnership, controller.printClassQrCards);
+
+
+// The class's look: banner, icon and color (NULL = the subject default).
+router.patch("/classes/:classId/identity", requireClassOwnership, controller.updateIdentity);
+router.post("/classes/:classId/identity/reset", requireClassOwnership, controller.resetIdentity);
+router.post("/classes/:classId/banner", requireClassOwnership, bannerImage, controller.uploadBanner);
+router.delete("/classes/:classId/banner", requireClassOwnership, controller.deleteBanner);
+// Class options and archive.
+router.patch("/classes/:classId/options", requireClassOwnership, controller.updateOptions);
+router.post("/classes/:classId/archive", requireClassOwnership, controller.archiveClass);
+router.post("/classes/:classId/unarchive", requireClassOwnership, controller.unarchiveClass);
+// A teacher picks the avatar of a student who has no login to pick with.
+router.put("/classes/:classId/students/:studentId/avatar", requireClassOwnership, controller.setStudentAvatar);
 
 module.exports = router;

@@ -6,6 +6,7 @@ const bulkQueries = require("../queries/bulk.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { v4: uuidv4 } = require("uuid");
+const { identityOf, optionsOf } = require("../services/classroom/classView");
 
 // ── Shared helper: fetch additional teachers for a single class ──
 const fetchAdditionalTeachers = async (classId) => {
@@ -54,6 +55,9 @@ const mapClassRow = (c, additionalTeachers = []) => ({
   createdAt:      c.created_at,
   lastModifiedAt: c.last_modified_at,
   additionalTeachers,
+  identity:       identityOf(c),
+  options:        optionsOf(c),
+  archivedAt:     c.archived_at ?? null,
 });
 
 //
@@ -729,6 +733,9 @@ const duplicateClass = async (req, res) => {
       sourceClass.school_year_id,
     ]);
     const newClass = newClassRows[0];
+
+    // 2b) Carry over the source's banner, icon, color and class options
+    await client.query(classQueries.duplicateCopyIdentity, [newClass.class_id, sourceClassId]);
 
     // 3) Fetch all assessments for source class (parents first)
     const { rows: sourceAssessments } = await client.query(

@@ -54,6 +54,7 @@ const toItem = (r) => ({
   lastMessageAt: r.last_message_at,
   createdAt: r.created_at,
   leadTeacherName: r.lead_teacher_name ?? null,
+  leadTeacherAvatar: r.lead_teacher_avatar ?? null,
   termName: r.term_name ?? null,
   guardianNames: r.guardian_names ?? [],
   unreadCount: r.unread_count ?? 0,
@@ -339,6 +340,7 @@ async function buildThread(conv, user) {
       last_message_at: conv.lastMessageAt,
       created_at: conv.createdAt,
       lead_teacher_name: leadTeacher?.name ?? null,
+      lead_teacher_avatar: leadTeacher?.avatar ?? null,
     }),
   };
 
@@ -346,11 +348,12 @@ async function buildThread(conv, user) {
     conversation,
     context,
     student,
-    participants: parts.map((p) => ({ userId: p.user_id, name: p.name, role: p.role, relation: p.relation, invitePending: Boolean(p.invite_pending) })),
+    participants: parts.map((p) => ({ userId: p.user_id, name: p.name, role: p.role, relation: p.relation, invitePending: Boolean(p.invite_pending), avatar: p.avatar ?? null })),
     messages: msgRows.map((m) => ({
       messageId: m.message_id,
       senderId: m.sender_id,
       senderName: m.sender_name,
+      senderAvatar: m.sender_avatar ?? null,
       senderRole: m.sender_role,
       senderRelation: m.sender_relation,
       kind: m.kind,

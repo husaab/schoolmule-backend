@@ -9,6 +9,7 @@ const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const { getSettings } = require('../services/classroom/classroomSettings');
+const { photoUrlFor } = require('../services/profile/photos');
 const { loadSchoolInfo } = require('../services/classroom/studentAccounts');
 const { getSchoolName } = require('../utils/schoolUtils');
 
@@ -27,9 +28,15 @@ const getMe = async (req, res) => {
       getSettings(school),
     ]);
     const { studentId, name, firstName, grade, schoolYearId } = req.student;
+    const login = rows[0];
     return ok(res, {
       student: { studentId, name, firstName, grade },
-      user: { userId, email: rows[0]?.email ?? req.user.email ?? null },
+      user: {
+        userId,
+        email: login?.email ?? req.user.email ?? null,
+        avatar: login?.avatar ?? null,
+        photoUrl: await photoUrlFor({ photo_path: login?.photo_path, role: 'STUDENT', school }),
+      },
       school: { code: school, name: (schoolInfo && schoolInfo.name) || getSchoolName(String(school)) },
       settings: { studentPhotos: settings.studentPhotos },
       schoolYear: { schoolYearId, label: req.schoolYear?.label ?? null },

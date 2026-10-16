@@ -19,6 +19,7 @@ const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { GoogleSignInError } = googleSignInService;
 const { assertStudentCanSignIn, parseQrToken, secretMatches } = require('../services/classroom/studentLogin');
+const { photoUrlFor } = require('../services/profile/photos');
 const studentAccountQueries = require('../queries/studentAccount.queries');
 
 const SESSION_TTL = '7d';
@@ -50,7 +51,7 @@ const signSessionToken = ({ user, role, roles, activeTerm }) =>
 
 // The identity half of a session response, shared by login, /me and /view so
 // the client hydrates its stores the same way whichever one it called.
-const sessionIdentity = (user, role, roles) => ({
+const sessionIdentity = (user, role, roles, photoUrl = null) => ({
   userId: user.user_id,
   username: user.username,
   fullName: `${user.first_name} ${user.last_name}`,
@@ -62,6 +63,10 @@ const sessionIdentity = (user, role, roles) => ({
   isVerified: user.is_verified,
   isVerifiedSchool: user.is_verified_school,
   isPlatformOwner: isPlatformOwner(user.email),
+  // The picked avatar ({style, skin, bg}, null = neutral) and a signed URL for
+  // the optional photo (null without one, or for a student while photos are off).
+  avatar: user.avatar ?? null,
+  photoUrl,
   createdAt: user.created_at,
   lastModifiedAt: user.last_modified_at,
 });
@@ -140,12 +145,13 @@ const openSession = async (req, user, { email, message, via = 'password' }) => {
   const roles = await getRolesForUser(user);
 
   const token = signSessionToken({ user, role: user.role, roles, activeTerm });
+  const photoUrl = await photoUrlFor(user);
 
   return {
     status: 200,
     message,
     data: {
-      ...sessionIdentity(user, user.role, roles),
+      ...sessionIdentity(user, user.role, roles, photoUrl),
       activeTerm: activeTerm ? activeTerm.name : false,
       activeSchoolYear: yearContext.activeSchoolYear,
       schoolYears: yearContext.schoolYears,
@@ -930,6 +936,7 @@ const validateSession = async (req, res) => {
         (decoded.baseRole ?? decoded.role) !== user.role);
     const role = viewStillHeld ? decoded.role : user.role;
     const refreshedToken = claimsDrifted ? signSessionToken({ user, role, roles, activeTerm }) : undefined;
+    const photoUrl = await photoUrlFor(user);
 
     return res.status(200).json({
       success: true,
@@ -937,7 +944,7 @@ const validateSession = async (req, res) => {
       data: {
         // Present only when the claims drifted; the client stores it.
         ...(refreshedToken && { token: refreshedToken }),
-        ...sessionIdentity(user, role, roles),
+        ...sessionIdentity(user, role, roles, photoUrl),
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,
@@ -999,12 +1006,13 @@ const switchView = async (req, res) => {
     }
 
     logger.info({ userId: user.user_id, school: user.school, from: req.user.role, to: view }, 'User switched view');
+    const photoUrl = await photoUrlFor(user);
 
     return res.status(200).json({
       status: 'success',
       message: view === 'PARENT' ? "You're now in Parent view" : `You're back in ${view === 'ADMIN' ? 'Administrator' : 'Teacher'} view`,
       data: {
-        ...sessionIdentity(user, view, roles),
+        ...sessionIdentity(user, view, roles, photoUrl),
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,

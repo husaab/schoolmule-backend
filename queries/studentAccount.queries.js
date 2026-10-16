@@ -161,9 +161,9 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
     SELECT student_id FROM class_students WHERE class_id = $1 AND student_id = ANY($2::uuid[])
   `,
 
-  //  The sign-in address of a student login. $1 = user_id
+  //  The sign-in address, avatar and photo of a student login. $1 = user_id
   selectStudentUserEmail: `
-    SELECT email FROM users WHERE user_id = $1
+    SELECT email, avatar, photo_path FROM users WHERE user_id = $1
   `,
 
   //  An issued, not yet voided QR card stops working. $1 = user_id

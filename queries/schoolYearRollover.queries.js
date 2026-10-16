@@ -3,7 +3,7 @@ const rolloverQueries = {
     SELECT student_id, name, grade::text AS grade, oen, homeroom_teacher_id,
            mother_name, mother_email, mother_number,
            father_name, father_email, father_number, emergency_contact,
-           student_email
+           student_email, avatar
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
     ORDER BY name
@@ -20,8 +20,8 @@ const rolloverQueries = {
       name, homeroom_teacher_id, grade, oen, school,
       mother_name, mother_email, mother_number,
       father_name, father_email, father_number, emergency_contact,
-      school_year_id, previous_student_id, student_email
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      school_year_id, previous_student_id, student_email, avatar
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
     RETURNING student_id
   `,
 
@@ -42,15 +42,20 @@ const rolloverQueries = {
   `,
 
   selectSourceClasses: `
-    SELECT class_id, grade, subject, teacher_name, teacher_id, term_name
+    SELECT class_id, grade, subject, teacher_name, teacher_id, term_name,
+           banner_key, banner_path, icon_key, color,
+           accept_late, email_new_posts, show_class_average
     FROM classes
     WHERE school = $1 AND school_year_id = $2
     ORDER BY grade, subject
   `,
 
+  // The copy keeps the class's look and options (banner, icon, color, switches);
+  // an archived class is not archived again in the new year.
   insertRolledClass: `
-    INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id,
+                         banner_key, banner_path, icon_key, color, accept_late, email_new_posts, show_class_average)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING class_id
   `,
 

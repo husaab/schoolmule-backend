@@ -1,3 +1,5 @@
+const { studentAvatarSql } = require("../utils/avatar");
+
 const studentQueries = {
   // GET    /students
   selectAllStudents: `
@@ -57,7 +59,8 @@ const studentQueries = {
       archived_at,
       archived_by,
       school_year_id,
-      previous_student_id
+      previous_student_id,
+      ${studentAvatarSql('students')}
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
   `,
@@ -88,7 +91,8 @@ const studentQueries = {
       last_modified_at,
       is_archived,
       archived_at,
-      archived_by
+      archived_by,
+      ${studentAvatarSql('students')}
     FROM students
     WHERE student_id = $1
   `,

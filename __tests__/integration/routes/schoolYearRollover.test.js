@@ -53,6 +53,47 @@ describe('school year rollover', () => {
        ('ALHAADIACADEMY', 'JK', 'Math', 'Ms T', $1, $2)`, [TEACHER_USER_ID, year25]);
   });
 
+  it("rollover carries a class's banner, icon, color and options (not the archive) and a student's avatar", async () => {
+    const spec = { style: 'curly', skin: 2, bg: 5 };
+    await pool.query(`UPDATE students SET avatar = $2::jsonb WHERE student_id = $1`, [movingKid, JSON.stringify(spec)]);
+    await pool.query(
+      `UPDATE classes SET banner_key = 'art', icon_key = 'science', color = 'purple', accept_late = FALSE,
+              email_new_posts = FALSE, show_class_average = TRUE, archived_at = NOW()
+       WHERE school_year_id = $1`, [year25]);
+
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },
+      classes:  { mode: 'duplicate', excludeClassIds: [] },
+      terms:    [{ name: 'Term 1', startDate: '2026-09-01', endDate: '2027-01-31' }],
+      copyPlanner: false,
+      copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+
+    const { rows: [cls] } = await pool.query(`SELECT * FROM classes WHERE school_year_id = $1`, [year26]);
+    expect(cls).toMatchObject({
+      banner_key: 'art', banner_path: null, icon_key: 'science', color: 'purple', accept_late: false,
+      email_new_posts: false, show_class_average: true, archived_at: null,
+    });
+    const { rows: [kid] } = await pool.query(`SELECT avatar FROM students WHERE school_year_id = $1`, [year26]);
+    expect(kid.avatar).toEqual(spec);
+  });
+
+  it('rollover leaves classes on the defaults and students without an avatar when none was set', async () => {
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },
+      classes:  { mode: 'duplicate', excludeClassIds: [] },
+      terms:    [{ name: 'Term 1', startDate: '2026-09-01', endDate: '2027-01-31' }],
+      copyPlanner: false,
+      copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+    const { rows: [cls] } = await pool.query(`SELECT * FROM classes WHERE school_year_id = $1`, [year26]);
+    expect(cls).toMatchObject({ banner_key: null, icon_key: null, color: null, accept_late: true, email_new_posts: true, show_class_average: false });
+    const { rows: [kid] } = await pool.query(`SELECT avatar FROM students WHERE school_year_id = $1`, [year26]);
+    expect(kid.avatar).toBeNull();
+  });
+
   it('preview proposes advanced grades and flags graduates', async () => {
     const res = await authenticatedRequest('get', `/api/school-years/rollover/preview?sourceYearId=${year25}`);
     expect(res.status).toBe(200);

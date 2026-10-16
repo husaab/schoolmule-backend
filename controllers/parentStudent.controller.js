@@ -158,6 +158,7 @@ const getStudentsByParentId = async (req, res) => {
           name: ps.student_name,
           grade: ps.student_grade,
           oen: ps.student_oen,
+          avatar: ps.student_avatar ?? null,
           homeroomTeacherId: ps.homeroom_teacher_id,
           homeroomTeacher: ps.homeroom_teacher_first_name && ps.homeroom_teacher_last_name ? {
             firstName: ps.homeroom_teacher_first_name,

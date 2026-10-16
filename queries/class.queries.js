@@ -16,6 +16,14 @@ const classQueries = {
       term_id,
       term_name,
       school_year_id,
+      banner_key,
+      banner_path,
+      icon_key,
+      color,
+      accept_late,
+      email_new_posts,
+      show_class_average,
+      archived_at,
       created_at,
       last_modified_at
     FROM public.classes
@@ -50,6 +58,14 @@ const classQueries = {
       term_id,
       term_name,
       school_year_id,
+      banner_key,
+      banner_path,
+      icon_key,
+      color,
+      accept_late,
+      email_new_posts,
+      show_class_average,
+      archived_at,
       created_at,
       last_modified_at
     FROM public.classes
@@ -72,6 +88,14 @@ const classQueries = {
       term_id,
       term_name,
       school_year_id,
+      banner_key,
+      banner_path,
+      icon_key,
+      color,
+      accept_late,
+      email_new_posts,
+      show_class_average,
+      archived_at,
       created_at,
       last_modified_at
     FROM public.classes
@@ -97,6 +121,14 @@ const classQueries = {
       term_id,
       term_name,
       school_year_id,
+      banner_key,
+      banner_path,
+      icon_key,
+      color,
+      accept_late,
+      email_new_posts,
+      show_class_average,
+      archived_at,
       created_at,
       last_modified_at
     FROM public.classes
@@ -246,6 +278,14 @@ const classQueries = {
         c.term_id,
         c.term_name,
         c.school_year_id,
+        c.banner_key,
+        c.banner_path,
+        c.icon_key,
+        c.color,
+        c.accept_late,
+        c.email_new_posts,
+        c.show_class_average,
+        c.archived_at,
         c.created_at,
         c.last_modified_at
       FROM classes c
@@ -264,6 +304,14 @@ const classQueries = {
         c.term_id,
         c.term_name,
         c.school_year_id,
+        c.banner_key,
+        c.banner_path,
+        c.icon_key,
+        c.color,
+        c.accept_late,
+        c.email_new_posts,
+        c.show_class_average,
+        c.archived_at,
         c.created_at,
         c.last_modified_at
       FROM classes c
@@ -314,6 +362,22 @@ const classQueries = {
       DELETE FROM class_teachers
       WHERE class_id = $1
         AND teacher_id = $2
+    `,
+
+    // The copy keeps the source's explicit picks (banner, icon, color) and options.
+    // A pick left at the default stays NULL, so it follows the copy's own subject.
+    // $1 = new class_id, $2 = source class_id
+    duplicateCopyIdentity: `
+      UPDATE classes n
+      SET banner_key         = s.banner_key,
+          banner_path        = s.banner_path,
+          icon_key           = s.icon_key,
+          color              = s.color,
+          accept_late        = s.accept_late,
+          email_new_posts    = s.email_new_posts,
+          show_class_average = s.show_class_average
+      FROM classes s
+      WHERE n.class_id = $1 AND s.class_id = $2
     `,
 
     duplicateSelectClassTeachers: `

@@ -82,6 +82,37 @@ describe('Class Controller', () => {
       expect(res.body.data.classId).toBe(row.class_id);
     });
 
+    it('carries the class identity, options and archive state, defaulting from the subject', async () => {
+      const row = buildClassRow({ subject: 'Quran Teaching', grade: '3' });
+      mockQueryResponse([row]);
+      mockQueryResponse([]);
+      const res = await authGet(`/api/classes/${row.class_id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.identity).toMatchObject({
+        family: 'quran', bannerKey: 'quran', bannerIsUpload: false, bannerUrl: '/class-banners/quran.svg',
+        iconKey: 'quran', iconUrl: '/class-icons/quran.svg', color: 'emerald',
+        isDefault: { banner: true, icon: true, color: true },
+      });
+      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false });
+      expect(res.body.data.archivedAt).toBeNull();
+    });
+
+    it('reports a stored pick, option and archive time', async () => {
+      const row = buildClassRow({
+        subject: 'Math', banner_key: 'art', color: 'rose', accept_late: false, show_class_average: true,
+        archived_at: '2026-10-01T12:00:00.000Z',
+      });
+      mockQueryResponse([row]);
+      mockQueryResponse([]);
+      const res = await authGet(`/api/classes/${row.class_id}`);
+      expect(res.body.data.identity).toMatchObject({
+        family: 'math', bannerKey: 'art', color: 'rose', iconKey: 'math',
+        isDefault: { banner: false, icon: true, color: false },
+      });
+      expect(res.body.data.options).toEqual({ acceptLate: false, emailNewPosts: true, showClassAverage: true });
+      expect(res.body.data.archivedAt).toBe('2026-10-01T12:00:00.000Z');
+    });
+
     it('should return 400 for invalid UUID', async () => {
       const res = await authGet('/api/classes/not-a-uuid');
       expect(res.status).toBe(400);
@@ -467,11 +498,13 @@ describe('Class Controller', () => {
       const sourceRow = buildClassRow({ class_id: sourceId });
       const newRow = buildClassRow();
 
-      // Transaction: BEGIN, selectClassById, createClass, duplicateSelectAssessments,
-      // duplicateSelectStudents, duplicateSelectClassTeachers, COMMIT
+      // Transaction: BEGIN, selectClassById, createClass, duplicateCopyIdentity,
+      // duplicateSelectAssessments, duplicateSelectStudents,
+      // duplicateSelectClassTeachers, COMMIT
       mockTransactionSequence([
         { rows: [sourceRow] },               // selectClassById
         { rows: [newRow] },                   // createClass
+        { rows: [] },                         // duplicateCopyIdentity (banner, icon, color, options)
         { rows: [] },                         // duplicateSelectAssessments (no assessments)
         { rows: [] },                         // duplicateSelectStudents (no students)
         { rows: [] },                         // duplicateSelectClassTeachers (no additional teachers)

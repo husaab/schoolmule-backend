@@ -71,6 +71,7 @@ const listBody = (scopeSql) => `
     c.last_message_at, c.created_at,
     s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
+    lt.avatar AS lead_teacher_avatar,
     cl.term_name,
     COALESCE((SELECT ARRAY_AGG(DISTINCT COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name))
               FROM parent_students ps LEFT JOIN users gu ON gu.user_id = ps.parent_id
@@ -211,6 +212,7 @@ const messagingQueries = {
   selectMessages: `
     SELECT m.message_id, m.sender_id, m.sender_role, m.kind, m.body, m.created_at, m.edited_at, m.deleted_at,
            TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
+           u.avatar AS sender_avatar,
            (SELECT ps.relation FROM parent_students ps
              JOIN conversations c ON c.conversation_id = m.conversation_id
              WHERE ps.parent_id = m.sender_id AND ps.student_id = c.student_id LIMIT 1) AS sender_relation
@@ -236,22 +238,22 @@ const messagingQueries = {
 
   // Display list: guardians with accounts, lead + co-teachers, admins who joined. $1 conversation_id
   selectParticipants: `
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.role, ps.relation, (u.password = '!') AS invite_pending
+    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.role, ps.relation, (u.password = '!') AS invite_pending, u.avatar
     FROM conversations c
     JOIN parent_students ps ON ps.student_id = c.student_id AND ps.parent_id IS NOT NULL
     JOIN users u ON u.user_id = ps.parent_id
     WHERE c.conversation_id = $1
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE
+    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar
     FROM conversations c LEFT JOIN classes cl ON cl.class_id = c.class_id
     JOIN users u ON u.user_id = COALESCE(cl.teacher_id, c.teacher_id)
     WHERE c.conversation_id = $1
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE
+    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar
     FROM conversations c JOIN class_teachers ct ON ct.class_id = c.class_id JOIN users u ON u.user_id = ct.teacher_id
     WHERE c.conversation_id = $1
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE
+    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar
     FROM conversation_participants cp JOIN users u ON u.user_id = cp.user_id
     WHERE cp.conversation_id = $1 AND u.role = 'ADMIN'
   `,

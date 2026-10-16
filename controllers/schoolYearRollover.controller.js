@@ -111,6 +111,7 @@ const executeRollover = async (req, res, next) => {
           s.mother_name, s.mother_email, s.mother_number,
           s.father_name, s.father_email, s.father_number, s.emergency_contact,
           targetYearId, s.student_id, s.student_email,
+          s.avatar == null ? null : JSON.stringify(s.avatar),
         ]);
         await client.query(rolloverQueries.copyParentLinks, [inserted.rows[0].student_id, s.student_id]);
         await client.query(rolloverQueries.copyStudentAccountLink, [
@@ -131,6 +132,8 @@ const executeRollover = async (req, res, next) => {
         const { rows } = await client.query(rolloverQueries.insertRolledClass, [
           req.user.school, c.grade, c.subject, c.teacher_name, c.teacher_id,
           termId, termName, targetYearId,
+          c.banner_key, c.banner_path, c.icon_key, c.color,
+          c.accept_late, c.email_new_posts, c.show_class_average,
         ]);
         await client.query(rolloverQueries.copyClassTeachers, [rows[0].class_id, c.class_id]);
         summary.classesCreated += 1;

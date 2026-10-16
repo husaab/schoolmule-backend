@@ -98,6 +98,28 @@ describe('Integration: Messaging routes', () => {
     expect((await authenticatedRequest('get', '/api/messaging/conversations', asStranger)).body.data).toEqual([]);
   });
 
+  it('avatars ride along: sender on each message, participants, and the lead teacher on the list and thread', async () => {
+    const teacherAvatar = { style: 'long', skin: 0, bg: 2 };
+    const momAvatar = { style: 'hijab', skin: 3, bg: 6 };
+    await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [TEACHER_ID, JSON.stringify(teacherAvatar)]);
+    await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [MOM_ID, JSON.stringify(momAvatar)]);
+
+    const created = await start(asMom, publishedId, 'Can we talk about the quiz?');
+    const id = created.body.data.conversation.conversationId;
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'Sure');
+
+    const thread = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asDad);
+    expect(thread.status).toBe(200);
+    const byId = Object.fromEntries(thread.body.data.participants.map((p) => [p.userId, p.avatar]));
+    expect(byId).toEqual({ [MOM_ID]: momAvatar, [DAD_ID]: null, [TEACHER_ID]: teacherAvatar, [CO_TEACHER_ID]: null });
+    const senders = thread.body.data.messages.filter((m) => m.kind === 'message').map((m) => [m.senderName, m.senderAvatar]);
+    expect(senders).toEqual([['Mom Test', momAvatar], ['Teacher One', teacherAvatar]]);
+    expect(thread.body.data.conversation.leadTeacherAvatar).toEqual(teacherAvatar);
+
+    const list = await authenticatedRequest('get', '/api/messaging/conversations', asDad);
+    expect(list.body.data[0]).toMatchObject({ leadTeacherName: 'Teacher One', leadTeacherAvatar: teacherAvatar });
+  });
+
   it('queues one email job per other participant and reading cancels your own', async () => {
     const created = await start(asMom, publishedId);
     const id = created.body.data.conversation.conversationId;

@@ -50,6 +50,18 @@ describe('Integration: Admin Users Routes', () => {
       expect(res.body.data[0]).toHaveProperty('isVerifiedSchool');
     });
 
+    it('carries each person\'s avatar (null = neutral)', async () => {
+      const spec = { style: 'beard', skin: 3, bg: 1 };
+      await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [TEACHER_ID, JSON.stringify(spec)]);
+
+      const res = await authenticatedRequest('get', '/api/admin/users');
+
+      const byEmail = Object.fromEntries(res.body.data.map((u) => [u.email, u.avatar]));
+      expect(byEmail['teacher@test.com']).toEqual(spec);
+      expect(byEmail['parent@test.com']).toBeNull();
+      expect(res.body.data[0]).not.toHaveProperty('photoPath');
+    });
+
     it('leaves student logins out (they are managed on Student accounts)', async () => {
       await insertUser(pool, ['550e8400-e29b-41d4-a716-446655440010', 'amal.haddad@example.com', 'Amal', 'Haddad', 'ALHAADIACADEMY', 'STUDENT']);
 

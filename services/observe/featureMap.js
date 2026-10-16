@@ -31,6 +31,7 @@ const FEATURES = [
   ['/api/admin/classroom-settings', 'Student accounts'],
   ['/api/classroom', 'Classroom'],
   ['/api/student', 'Student portal'],
+  ['/api/profile', 'Profile'],
   ['/api/students', 'Students'],
   ['/api/classes', 'Classes'],
   ['/api/teachers', 'Teachers'],

@@ -497,6 +497,7 @@ const impersonateUser = async (req, res) => {
         roles,
         isVerified: target.isVerified,
         isVerifiedSchool: target.isVerifiedSchool,
+        avatar: user.avatar ?? null,
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,

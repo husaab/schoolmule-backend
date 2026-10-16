@@ -8,7 +8,7 @@ const adminUserQueries = {
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
-      created_at, last_modified_at,
+      avatar, created_at, last_modified_at,
       (password = '!') AS invite_pending
     FROM users
     WHERE school = $1 AND role::text <> 'STUDENT'
@@ -21,7 +21,7 @@ const adminUserQueries = {
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
-      created_at, last_modified_at,
+      avatar, created_at, last_modified_at,
       (password = '!') AS invite_pending
     FROM users
     WHERE user_id = $1 AND school = $2

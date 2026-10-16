@@ -33,6 +33,8 @@ const toCamel = (s) => ({
   grade: s.grade,
   oen: s.oen,
   studentEmail: s.student_email ?? null,
+  // The student's own pick, else the one a teacher set ({style, skin, bg}; null = neutral)
+  avatar: s.avatar ?? null,
   mother: {
     name: s.mother_name,
     email: s.mother_email,

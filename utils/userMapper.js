@@ -19,6 +19,8 @@ const toUser = (row) => ({
   archivedAt: row.archived_at,
   declinedAt: row.declined_at ?? null,
   invitePending: row.invite_pending,
+  /** {style, skin, bg}; null = the neutral avatar (and for rows from queries that do not select it). */
+  avatar: row.avatar ?? null,
   createdAt: row.created_at,
   lastModifiedAt: row.last_modified_at,
 });
