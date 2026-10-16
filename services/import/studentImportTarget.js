@@ -28,6 +28,7 @@ const MAPPABLE_FIELDS = [
   { targetField: 'healthCardNumber', column: 'health_card_number', label: 'Health card number',      dataType: 'text',     group: 'Student', required: false },
   { targetField: 'medicalNotes',     column: 'medical_notes',      label: 'Medical / allergy notes', dataType: 'textarea', group: 'Student', required: false },
   { targetField: 'emergencyContact', column: 'emergency_contact',  label: 'Emergency contact',       dataType: 'textarea', group: 'Student', required: false },
+  { targetField: 'studentEmail',     column: 'student_email',      label: 'Student — email',         dataType: 'email',    group: 'Student', required: false },
 
   { targetField: 'motherName',       column: 'mother_name',        label: 'Mother — name',           dataType: 'text',     group: 'Mother',  required: false },
   { targetField: 'motherEmail',      column: 'mother_email',       label: 'Mother — email',          dataType: 'email',    group: 'Mother',  required: false },
@@ -46,6 +47,8 @@ const FIELD_BY_TARGET = new Map(MAPPABLE_FIELDS.map(f => [f.targetField, f]));
 // parent rules get a chance. Each target can only be claimed once.
 const SUGGEST_RULES = [
   { targetField: 'name',             test: l => /name of (the )?(student|child)|student.{0,10}name|child.{0,10}name|full name of/.test(l) },
+  // The student's own address, before the parent rules can claim "email".
+  { targetField: 'studentEmail',     test: l => /(student|child).{0,15}e-?mail/.test(l) },
   { targetField: 'grade',            test: l => /grade|kindergarten|which class/.test(l) },
   { targetField: 'dateOfBirth',      test: l => /date of birth|birth ?date|\bdob\b/.test(l) },
   { targetField: 'oen',              test: l => /\boen\b|ontario education number/.test(l) },
@@ -237,6 +240,7 @@ async function applyCreate(client, values, { school, schoolYearId, submissionId,
     values.fatherEmail ?? null,
     values.fatherPhone ?? null,
     submissionId,
+    values.studentEmail ?? null,
   ]);
   return rows[0];
 }
@@ -267,6 +271,7 @@ async function applyUpdate(client, studentId, diff) {
     param('fatherName'),
     param('fatherEmail'),
     param('fatherPhone'),
+    param('studentEmail'),
   ]);
   return rows[0] || null;
 }

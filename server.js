@@ -45,6 +45,8 @@ const schedulePlannerRoutes = require("./routes/schedulePlanner.routes")
 const parentPortalRoutes = require("./routes/parentPortal.routes")
 const messagingRoutes = require("./routes/messaging.routes")
 const announcementRoutes = require("./routes/announcement.routes")
+const studentAccountRoutes = require("./routes/studentAccount.routes")
+const classroomSettingsRoutes = require("./routes/classroomSettings.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
@@ -161,6 +163,8 @@ app.use("/api/schedule-planner", schedulePlannerRoutes);
 app.use("/api/parent-portal", parentPortalRoutes);
 app.use("/api/messaging", messagingRoutes);
 app.use("/api/announcements", announcementRoutes);
+app.use("/api/admin/student-accounts", studentAccountRoutes);
+app.use("/api/admin/classroom-settings", classroomSettingsRoutes);
 app.use("/api/finance", financeRoutes);
 
 // Global error handler — must be after all routes

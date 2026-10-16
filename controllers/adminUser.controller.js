@@ -28,6 +28,10 @@ const PREVIEW_VIEWS = ["TEACHER", "PARENT"];
 const IMPERSONATION_TTL = "2h";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Student logins are managed on Admin Panel → Student accounts. To the Users
+// page routes they do not exist: every :id that is a STUDENT answers 404, so
+// a student can never be re-roled into staff or archived from here.
+const isStudentLogin = (user) => String(user?.role ?? "") === "STUDENT";
 
 const toBlockers = (row) => ({
   classes: row?.classes ?? [],
@@ -88,7 +92,7 @@ const getUserDetails = async (req, res) => {
 
   try {
     const { rows } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-    if (rows.length === 0) {
+    if (rows.length === 0 || isStudentLogin(rows[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
     const user = rows[0];
@@ -202,7 +206,7 @@ const resendInvite = async (req, res) => {
   const { id } = req.params;
   try {
     const { rows } = await db.query(adminUserQueries.selectUserInSchool, [id, req.user.school]);
-    if (rows.length === 0) {
+    if (rows.length === 0 || isStudentLogin(rows[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
     if (!rows[0].invite_pending) {
@@ -254,7 +258,7 @@ const updateUser = async (req, res) => {
     if (rows.length === 0) {
       // Either not ours, or archived (the update only touches active accounts).
       const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-      if (existing.rows[0]?.is_archived) {
+      if (existing.rows[0]?.is_archived && !isStudentLogin(existing.rows[0])) {
         return res.status(409).json({ status: "failed", message: "This account is archived. Restore it before editing." });
       }
       return res.status(404).json({ status: "failed", message: "User not found" });
@@ -280,7 +284,7 @@ const archiveUser = async (req, res) => {
 
   try {
     const { rows: existing } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-    if (existing.length === 0) {
+    if (existing.length === 0 || isStudentLogin(existing[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
     if (existing[0].is_archived) {
@@ -319,7 +323,7 @@ const unarchiveUser = async (req, res) => {
     const { rows } = await db.query(adminUserQueries.unarchiveUserInSchool, [id, school]);
     if (rows.length === 0) {
       const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-      if (existing.rows.length === 0) {
+      if (existing.rows.length === 0 || isStudentLogin(existing.rows[0])) {
         return res.status(404).json({ status: "failed", message: "User not found" });
       }
       return res.status(409).json({ status: "failed", message: "This account isn't archived" });

@@ -1,6 +1,20 @@
 const db = require("../config/database");
 const studentQueries = require("../queries/student.queries");
+const studentAccountQueries = require("../queries/studentAccount.queries");
 const logger = require("../logger");
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// The student's own address (students.student_email): trimmed and lowercased,
+// '' and null both mean "none". { error } when it is not an address.
+const parseStudentEmail = (raw) => {
+  if (raw === null || raw === undefined) return { value: null };
+  if (typeof raw !== "string") return { error: "Enter a valid student email address" };
+  const value = raw.trim().toLowerCase();
+  if (value === "") return { value: null };
+  if (!EMAIL_RE.test(value)) return { error: "Enter a valid student email address" };
+  return { value };
+};
 
 // Convert database row to camelCase
 const toCamel = (s) => ({
@@ -10,6 +24,7 @@ const toCamel = (s) => ({
   school: s.school,
   grade: s.grade,
   oen: s.oen,
+  studentEmail: s.student_email ?? null,
   mother: {
     name: s.mother_name,
     email: s.mother_email,
@@ -83,7 +98,8 @@ const createStudent = async (req, res) => {
     dateOfBirth,
     address,
     healthCardNumber,
-    medicalNotes
+    medicalNotes,
+    studentEmail
     } = req.body;
   const school = req.user.school;
   const schoolYearId = req.schoolYear?.schoolYearId || null;
@@ -94,6 +110,10 @@ const createStudent = async (req, res) => {
       status: "failed",
       message: "Missing required fields: name, grade, school"
     });
+  }
+  const email = parseStudentEmail(studentEmail);
+  if (email.error) {
+    return res.status(400).json({ status: "failed", message: email.error });
   }
 
   try {
@@ -114,7 +134,8 @@ const createStudent = async (req, res) => {
       dateOfBirth || null,
       address || null,
       healthCardNumber || null,
-      medicalNotes || null
+      medicalNotes || null,
+      email.value
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
@@ -147,6 +168,14 @@ const updateStudent = async (req, res) => {
     medicalNotes,
   } = req.body;
 
+  // studentEmail is only touched when the body carries it, so older callers
+  // that never send it keep the stored address.
+  const carriesEmail = Object.prototype.hasOwnProperty.call(req.body ?? {}, "studentEmail");
+  const email = carriesEmail ? parseStudentEmail(req.body.studentEmail) : { value: null };
+  if (email.error) {
+    return res.status(400).json({ status: "failed", message: email.error });
+  }
+
   const vals = [
     name ?? null,
     homeroomTeacherId ?? null,
@@ -165,9 +194,23 @@ const updateStudent = async (req, res) => {
     address ?? null,
     healthCardNumber ?? null,
     medicalNotes ?? null,
+    carriesEmail,
+    email.value,
   ];
 
   try {
+    // A student with a SchoolMule login signs in with that address, so it is
+    // changed on Student accounts (which updates both) rather than here.
+    if (carriesEmail) {
+      const { rows: linked } = await db.query(studentAccountQueries.selectLinkedAccountEmail, [id]);
+      if (linked.length > 0 && String(linked[0].email || "").toLowerCase() !== (email.value ?? "")) {
+        return res.status(409).json({
+          status: "failed",
+          message: "This student has a SchoolMule account. Change the email on Admin Panel → Student accounts.",
+        });
+      }
+    }
+
     const { rows, rowCount } = await db.query(studentQueries.updateStudentById, vals);
 
     if (rowCount === 0) {

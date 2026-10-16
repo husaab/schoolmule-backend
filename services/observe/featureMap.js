@@ -27,6 +27,8 @@ const FEATURES = [
   ['/api/patch-notes', "What's new"],
   ['/api/jk', 'JK/SK grading'],
   ['/api/sk', 'JK/SK grading'],
+  ['/api/admin/student-accounts', 'Student accounts'],
+  ['/api/admin/classroom-settings', 'Student accounts'],
   ['/api/students', 'Students'],
   ['/api/classes', 'Classes'],
   ['/api/teachers', 'Teachers'],

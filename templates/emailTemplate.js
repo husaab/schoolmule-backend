@@ -131,6 +131,40 @@ const getInviteEmailHTML = ({ name, schoolName, invitedBy, role, url }) =>
     ].join(''),
   });
 
+// ─── Student accounts (Admin Panel → Student accounts) ─────────────────────
+// Both speak in the school's voice. `invitedBy` / `requestedBy` is the admin
+// who clicked the button; the invite copy names the school instead.
+
+/** Sent when an admin invites a student; the link sets a first password. */
+const getStudentInviteEmailHTML = ({ firstName, schoolName, schoolInfo, url }) =>
+  renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: 'Your SchoolMule student account',
+    preheader: `${schoolName} set up a SchoolMule account for you.`,
+    content: [
+      paragraph(`Hi ${escapeHtml(firstName)},`),
+      paragraph(`${escapeHtml(schoolName)} set up a SchoolMule account for you. You'll see your classes, what's due and your grades there. Choose a password to get started.`),
+      button('Set your password', url),
+      finePrint('This link expires in 7 days. If it has expired, ask your teacher or the school office for a new one.'),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+
+/** Sent when an admin (or, later, a teacher) asks for a new password link for a student. */
+const getStudentPasswordResetEmailHTML = ({ firstName, schoolName, schoolInfo, requestedBy, url }) =>
+  renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: 'Reset your SchoolMule password',
+    preheader: 'Choose a new password for your SchoolMule account.',
+    content: [
+      paragraph(`Hi ${escapeHtml(firstName)},`),
+      paragraph(`${escapeHtml(requestedBy)} asked for a new password link for your account.`),
+      button('Choose a new password', url),
+      finePrint("This link expires in 7 days. If you didn't expect this, tell your teacher."),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+
 // ─── To the SchoolMule team ────────────────────────────────────────────────
 
 function getContactEmailHTML({ name, email, message }) {
@@ -483,6 +517,8 @@ module.exports = {
   getDeclineEmailHTML,
   getResetEmailHTML,
   getInviteEmailHTML,
+  getStudentInviteEmailHTML,
+  getStudentPasswordResetEmailHTML,
   getContactEmailHTML,
   getTicketEmailHTML,
   getConversationDigestEmailHTML,

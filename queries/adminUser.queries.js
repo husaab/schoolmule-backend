@@ -15,7 +15,8 @@ const adminUserQueries = {
     ORDER BY is_archived, lower(last_name), lower(first_name)
   `,
 
-  //  $1 = user_id, $2 = school
+  //  $1 = user_id, $2 = school. Any role: the controller answers 404 for a
+  //  STUDENT login on the Users page routes (they live on Student accounts).
   selectUserInSchool: `
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
@@ -106,7 +107,7 @@ const adminUserQueries = {
         is_verified_school = $4,
         staff_title = $7,
         last_modified_at = NOW()
-    WHERE user_id = $5 AND school = $6 AND is_archived = false
+    WHERE user_id = $5 AND school = $6 AND is_archived = false AND role::text <> 'STUDENT'
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
@@ -139,7 +140,7 @@ const adminUserQueries = {
         archived_by = $3,
         is_verified_school = false,
         last_modified_at = NOW()
-    WHERE user_id = $1 AND school = $2 AND is_archived = false
+    WHERE user_id = $1 AND school = $2 AND is_archived = false AND role::text <> 'STUDENT'
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
@@ -156,7 +157,7 @@ const adminUserQueries = {
         declined_at = NULL,
         is_verified_school = true,
         last_modified_at = NOW()
-    WHERE user_id = $1 AND school = $2 AND is_archived = true
+    WHERE user_id = $1 AND school = $2 AND is_archived = true AND role::text <> 'STUDENT'
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
@@ -171,9 +172,9 @@ const adminUserQueries = {
     SELECT COUNT(*)::int AS count FROM classes WHERE teacher_id = $1
   `,
 
-  //  $1 = user_id, $2 = school
+  //  $1 = user_id, $2 = school. Student logins are deleted on Student accounts.
   deleteUserInSchool: `
-    DELETE FROM users WHERE user_id = $1 AND school = $2
+    DELETE FROM users WHERE user_id = $1 AND school = $2 AND role::text <> 'STUDENT'
   `,
 
   //  $1 = school

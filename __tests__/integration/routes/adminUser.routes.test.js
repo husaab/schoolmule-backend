@@ -383,4 +383,34 @@ describe('Integration: Admin Users Routes', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('student logins', () => {
+    const STUDENT_ID = '550e8400-e29b-41d4-a716-446655440010';
+
+    beforeEach(async () => {
+      await pool.query(
+        `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ($1, 'amal.haddad@example.com', 'Amal Haddad', '!', 'Amal', 'Haddad', 'ALHAADIACADEMY', 'STUDENT', true, true)`,
+        [STUDENT_ID]
+      );
+    });
+
+    it('do not exist to the Users page routes: every :id route answers 404 and changes nothing', async () => {
+      const url = `/api/admin/users/${STUDENT_ID}`;
+      expect((await authenticatedRequest('get', url)).status).toBe(404);
+      expect((await authenticatedRequest('patch', url)
+        .send({ firstName: 'Amal', lastName: 'Haddad', role: 'TEACHER', isVerifiedSchool: true })).status).toBe(404);
+      expect((await authenticatedRequest('post', `${url}/resend-invite`)).status).toBe(404);
+      expect((await authenticatedRequest('post', `${url}/archive`)).status).toBe(404);
+      expect((await authenticatedRequest('delete', url)).status).toBe(404);
+
+      await pool.query(`UPDATE users SET is_archived = true WHERE user_id = $1`, [STUDENT_ID]);
+      expect((await authenticatedRequest('post', `${url}/unarchive`)).status).toBe(404);
+      expect((await authenticatedRequest('patch', url)
+        .send({ firstName: 'Amal', lastName: 'Haddad', role: 'TEACHER', isVerifiedSchool: true })).status).toBe(404);
+
+      const { rows } = await pool.query(`SELECT role::text AS role, is_archived FROM users WHERE user_id = $1`, [STUDENT_ID]);
+      expect(rows).toEqual([{ role: 'STUDENT', is_archived: true }]);
+    });
+  });
 });

@@ -41,7 +41,8 @@ const registrationImportQueries = {
       student_id, name, grade, oen, date_of_birth, address, health_card_number,
       medical_notes, emergency_contact,
       mother_name, mother_email, mother_number,
-      father_name, father_email, father_number
+      father_name, father_email, father_number,
+      student_email
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
   `,
@@ -66,14 +67,16 @@ const registrationImportQueries = {
       emergency_contact,
       mother_name, mother_email, mother_number,
       father_name, father_email, father_number,
-      source_submission_id
+      source_submission_id,
+      student_email
     ) VALUES (
       $1, $2, $3, $4, $5,
       $6, $7, $8, $9, $10,
       $11,
       $12, $13, $14,
       $15, $16, $17,
-      $18
+      $18,
+      $19
     )
     RETURNING *
   `,
@@ -98,6 +101,7 @@ const registrationImportQueries = {
       father_name        = COALESCE(NULLIF(TRIM(father_name), ''), $13),
       father_email       = COALESCE(NULLIF(TRIM(father_email), ''), $14),
       father_number      = COALESCE(NULLIF(TRIM(father_number), ''), $15),
+      student_email      = COALESCE(NULLIF(TRIM(student_email), ''), $16),
       last_modified_at   = NOW()
     WHERE student_id = $1
     RETURNING *

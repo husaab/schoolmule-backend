@@ -8,6 +8,7 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
+      student_email,
       mother_name,
       mother_email,
       mother_number,
@@ -37,6 +38,7 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
+      student_email,
       mother_name,
       mother_email,
       mother_number,
@@ -69,6 +71,7 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
+      student_email,
       mother_name,
       mother_email,
       mother_number,
@@ -109,9 +112,10 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
-      medical_notes
+      medical_notes,
+      student_email
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
     )
     RETURNING *
   `,
@@ -136,6 +140,8 @@ const studentQueries = {
       address              = COALESCE($15, address),
       health_card_number   = COALESCE($16, health_card_number),
       medical_notes        = COALESCE($17, medical_notes),
+      -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value
+      student_email        = CASE WHEN $18::boolean THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
       last_modified_at     = NOW()
     WHERE student_id = $13
     RETURNING *
@@ -162,6 +168,7 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
+      student_email,
       mother_name,
       mother_email,
       mother_number,
@@ -217,6 +224,7 @@ const studentQueries = {
       homeroom_teacher_id,
       grade,
       oen,
+      student_email,
       mother_name,
       mother_email,
       mother_number,
