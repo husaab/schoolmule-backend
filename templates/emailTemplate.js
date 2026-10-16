@@ -321,10 +321,55 @@ function getGuardianInviteEmailHTML({
  * ackRequested + ackLink: the author asked for a "Got it"; the button opens the
  * portal with &ack=1 so the acknowledgement is recorded once signed in.
  */
+// The author's avatar (a hosted 96px PNG shown at 40px) beside a line of trusted markup.
+function avatarLine(avatarUrl, html) {
+  if (!avatarUrl) return paragraph(html);
+  return `
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px;">
+    <tr>
+      <td style="padding:0 12px 0 0;vertical-align:middle;"><img src="${escapeHtml(avatarUrl)}" width="40" height="40" alt="" style="display:block;border:0;outline:none;border-radius:20px;"></td>
+      <td style="vertical-align:middle;font-family:${FONT_BODY};font-size:15px;line-height:1.6;color:${COLORS.text};">${html}</td>
+    </tr>
+  </table>`;
+}
+
+// A student's copy of a Stream post: their own words, no "Got it" (guardians
+// acknowledge) and no reply-by-email (students ask in SchoolMule, D14).
+function studentAnnouncementEmailHTML({
+  recipientFirstName, authorName, authorAvatarUrl, scopeLabel, title, body, attachmentCount, attachments, link, schoolName, schoolInfo,
+}) {
+  const author = escapeHtml(authorName);
+  const where = scopeLabel === 'Selected families' ? 'a selected group of students' : escapeHtml(scopeLabel);
+  const attach = attachmentLine(attachments, attachmentCount, 'open SchoolMule to download');
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: title,
+    preheader: `${scopeLabel} · ${schoolName}`,
+    content: [
+      paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
+      avatarLine(authorAvatarUrl, `<strong>${author}</strong> posted in <strong>${where}</strong>.`),
+      facts([
+        ['For', escapeHtml(scopeLabel)],
+        ['Posted by', author],
+      ]),
+      note(authorName, `${multiline(body)}${attach}`),
+      button('Open in SchoolMule', link),
+      finePrint('Questions? Ask your teacher in SchoolMule. Your parents get this announcement too.'),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+}
+
 function getAnnouncementEmailHTML({
-  recipientFirstName, authorName, scopeLabel, childNames = [], title, body, attachmentCount = 0, attachments = [], link,
+  recipientFirstName, authorName, authorAvatarUrl = null, scopeLabel, childNames = [], title, body, attachmentCount = 0, attachments = [], link,
   kind = 'account', ackRequested = false, ackLink = null, schoolName, schoolInfo,
 }) {
+  if (kind === 'student') {
+    return studentAnnouncementEmailHTML({
+      recipientFirstName, authorName, authorAvatarUrl, scopeLabel, title, body, attachmentCount, attachments, link, schoolName, schoolInfo,
+    });
+  }
   const children = childNames.filter(Boolean).map(escapeHtml);
   const custom = scopeLabel === 'Selected families';
   const whose = children.length === 0 ? '' : custom

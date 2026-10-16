@@ -19,7 +19,8 @@ const { schoolSender } = require('./email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { getConversationDigestEmailHTML, getGuardianInviteEmailHTML, getAnnouncementEmailHTML } = require('../templates/emailTemplate');
 const aq = require('../queries/announcement.queries');
-const { scopeLabel, parentLink } = require('../utils/announcementScope');
+const { scopeLabel, parentLink, studentLink } = require('../utils/announcementScope');
+const { avatarPngUrl } = require('../utils/avatar');
 const adminUserQueries = require('../queries/adminUser.queries');
 const { emailAttachments } = require('../utils/attachmentUpload');
 
@@ -229,6 +230,7 @@ async function remindIfDue(today = torontoDate()) {
 
 function announcementLink(kind, ctx, token) {
   const base = process.env.FRONTEND_URL || '';
+  if (kind === 'student') return studentLink(ctx);
   if (kind === 'signup') return `${base}/signup/${String(ctx.school).toLowerCase()}/parent`;
   if (kind === 'invite') {
     return `${base}/reset-password?token=${token}&invite=1&next=${encodeURIComponent(`/parent/messages?tab=announcements&announcement=${ctx.announcement_id}`)}`;
@@ -251,14 +253,20 @@ async function announcementFiles(ctx) {
 async function processAnnouncementJob(job) {
   const { rows } = await db.query(aq.selectAnnouncementJobContext, [job.job_id]);
   const ctx = rows[0];
+  const isStudent = ctx?.kind === 'student';
   // child_names is derived through IN_AUDIENCE per recipient, so an empty list
   // means this address no longer belongs to anyone in the audience (a family
-  // removed from a custom post, or an archived student) — do not send.
+  // removed from a custom post, or an archived student) — do not send. A
+  // student job asks the same of the student's own row, and re-checks the
+  // school's student-email switch, which may have been turned off since.
+  const outOfAudience = isStudent
+    ? (!ctx.student_in_audience ? 'removed from audience' : !ctx.student_email_on ? 'student email off' : null)
+    : (!(ctx?.child_names && ctx.child_names.length) ? 'removed from audience' : null);
   const skip = !ctx ? 'job context missing'
     : ctx.deleted_at ? 'announcement removed'
       : ctx.recipient_archived ? 'recipient archived'
         : !ctx.recipient_email ? 'no recipient'
-          : !(ctx.child_names && ctx.child_names.length) ? 'removed from audience' : null;
+          : outOfAudience;
   if (skip) {
     await db.query(aq.finishAnnouncementJob, [job.job_id, 'skipped', skip]);
     return 'skipped';
@@ -281,10 +289,11 @@ async function processAnnouncementJob(job) {
   const { attachments, files } = await announcementFiles(ctx);
   const link = announcementLink(ctx.kind, ctx, token);
   const html = getAnnouncementEmailHTML({
-    recipientFirstName: ctx.recipient_first_name,
+    recipientFirstName: isStudent ? (ctx.student_first_name || ctx.recipient_first_name) : ctx.recipient_first_name,
     authorName: ctx.author_name || 'SchoolMule',
+    authorAvatarUrl: isStudent ? avatarPngUrl(ctx.author_avatar) : null,
     scopeLabel: label,
-    childNames: ctx.scope === 'school' ? [] : ctx.child_names || [],
+    childNames: ctx.scope === 'school' || isStudent ? [] : ctx.child_names || [],
     title: ctx.title,
     body: ctx.body,
     attachmentCount: ctx.attachment_count,
@@ -298,7 +307,9 @@ async function processAnnouncementJob(job) {
   });
   // A reply to a teacher's post should reach the teacher as well as the office.
   // Admin authors are the office; an archived author has no inbox to reach.
-  const extraReplyTo = ctx.author_role === 'TEACHER' && !ctx.author_archived && ctx.author_email ? [ctx.author_email] : [];
+  // Never for a student: a student must not open an email side-channel to a
+  // teacher without the parents (D14); students ask in SchoolMule.
+  const extraReplyTo = !isStudent && ctx.author_role === 'TEACHER' && !ctx.author_archived && ctx.author_email ? [ctx.author_email] : [];
   await sendOrThrow(getResend(), {
     ...schoolSender({ school: ctx.school, schoolInfo, role: 'messages', extraReplyTo }),
     to: [ctx.recipient_email],

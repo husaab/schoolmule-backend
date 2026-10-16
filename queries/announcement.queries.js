@@ -9,6 +9,7 @@
 // enum = text operator, so the enum side is always cast with ::text.
 
 const { inCurrentTerm } = require('./termScope');
+const { GRADE_RANK } = require('../utils/gradeRank');
 
 // Custom scope: the hand-picked rows in announcement_students. The audience
 // preview has no announcement row yet, so it passes its own predicate
@@ -92,11 +93,37 @@ const ACK_COUNT = `
   (SELECT COUNT(*) FROM announcement_acks k
    WHERE k.announcement_id = a.announcement_id AND ${GUARDIAN_IN_AUDIENCE('k.user_id')})::int`;
 
+// Students in the audience who have a live login (not archived, not
+// invite-pending): the "seen by N of M students" denominator.
+const STUDENT_AUDIENCE_COUNT = `(SELECT COUNT(DISTINCT sal.user_id) FROM students s
+   JOIN student_account_links sal ON sal.student_id = s.student_id
+   JOIN users su ON su.user_id = sal.user_id AND su.is_archived = FALSE AND su.password <> '!'
+  WHERE ${IN_AUDIENCE('s')})::int`;
+// Student logins that opened it. DISTINCT: one login links one student row per
+// year, and a post with no year reaches every year's row.
+const STUDENT_SEEN_COUNT = `(SELECT COUNT(DISTINCT r.user_id) FROM announcement_reads r
+   JOIN users su ON su.user_id = r.user_id AND su.is_archived = FALSE
+   JOIN student_account_links sal ON sal.user_id = r.user_id
+   JOIN students s ON s.student_id = sal.student_id
+  WHERE r.announcement_id = a.announcement_id AND ${IN_AUDIENCE('s')})::int`;
+
+// A student's own login that would receive the email for student alias `s`,
+// and the school's per-grade switch (classrooms on, student email on, the
+// student's grade at or above student_email_from_grade). `school` is the SQL
+// expression for the announcement's school. Used by the enqueue, the preview
+// and the send-time re-check, so the three can never disagree.
+const STUDENT_EMAIL_JOINS = (s, school) => `
+  JOIN student_account_links sal ON sal.student_id = ${s}.student_id
+  JOIN users su ON su.user_id = sal.user_id AND su.is_archived = FALSE AND su.password <> '!'
+                AND TRIM(COALESCE(su.email, '')) <> ''
+  JOIN school_classroom_settings scs ON scs.school = ${school} AND scs.enabled AND scs.student_email_from_grade IS NOT NULL`;
+const STUDENT_EMAIL_GRADE_OK = (s) => `${GRADE_RANK(`${s}.grade::text`)} >= ${GRADE_RANK('scs.student_email_from_grade')}`;
+
 const IS_PINNED = `(a.pinned_until IS NOT NULL AND a.pinned_until >= (NOW() AT TIME ZONE 'America/Toronto')::date)`;
 
 const BASE_COLUMNS = `
   a.announcement_id, a.school, a.school_year_id, a.scope, a.class_id, a.grade, a.title, a.body,
-  a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at, a.ack_requested,
+  a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at, a.ack_requested, a.send_email,
   TO_CHAR(a.pinned_until, 'YYYY-MM-DD') AS pinned_until,  -- DATE as the YYYY-MM-DD the API promises, not a JS Date
   cl.subject AS class_subject, cl.grade AS class_grade,
   TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
@@ -137,6 +164,8 @@ const announcementQueries = {
       ${AUDIENCE_COUNT} AS audience_count,
       ${SEEN_COUNT} AS seen_count,
       ${ACK_COUNT} AS ack_count,
+      ${STUDENT_AUDIENCE_COUNT} AS student_audience_count,
+      ${STUDENT_SEEN_COUNT} AS student_seen_count,
       k.acked_at,
       (SELECT COALESCE(json_agg(json_build_object('studentId', s.student_id, 'name', s.name) ORDER BY s.name), '[]')
          FROM students s JOIN parent_students ps ON ps.student_id = s.student_id AND ps.parent_id = $1
@@ -169,10 +198,17 @@ const announcementQueries = {
       AND ${VISIBLE('$1', '$3')}
   `,
 
-  // $1 school, $2 school_year_id, $3 scope, $4 class_id, $5 grade, $6 title, $7 body, $8 author_id, $9 author_role, $10 pinned_until, $11 ack_requested
+  // Student counts for the staff detail payload (the list carries them inline). $1 announcement_id
+  selectStudentCounts: `
+    SELECT ${STUDENT_AUDIENCE_COUNT} AS student_audience_count, ${STUDENT_SEEN_COUNT} AS student_seen_count
+    FROM announcements a WHERE a.announcement_id = $1
+  `,
+
+  // $1 school, $2 school_year_id, $3 scope, $4 class_id, $5 grade, $6 title, $7 body, $8 author_id, $9 author_role,
+  // $10 pinned_until, $11 ack_requested, $12 send_email
   insertAnnouncement: `
-    INSERT INTO announcements (school, school_year_id, scope, class_id, grade, title, body, author_id, author_role, pinned_until, ack_requested)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    INSERT INTO announcements (school, school_year_id, scope, class_id, grade, title, body, author_id, author_role, pinned_until, ack_requested, send_email)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     RETURNING announcement_id, published_at
   `,
   // $1 id, $2 title, $3 body, $4 pinned_until, $5 ack_requested. "edited" means the words changed;
@@ -270,7 +306,9 @@ const announcementQueries = {
   `,
 
   // ── Outbox ──────────────────────────────────────────────────
-  // One job per distinct lower-cased email in the audience, never the author.
+  // One job per distinct lower-cased email in the audience, never the author:
+  // every guardian, plus each student's own login when the school emails that
+  // student's grade. Callers skip this entirely for a post with send_email off.
   // $1 announcement_id, $2 delay (interval text)
   enqueueAnnouncementJobs: `
     INSERT INTO announcement_email_jobs (announcement_id, recipient_id, recipient_email, kind, school, send_after)
@@ -288,6 +326,17 @@ const announcementQueries = {
         AND NOT g.user_archived
         AND (a.author_id IS NULL OR g.parent_id IS DISTINCT FROM a.author_id)
         AND (author.email IS NULL OR g.email <> LOWER(TRIM(author.email)))
+      UNION ALL
+      -- A student's own login (pri 5: a parent account at the same address
+      -- wins; a student beats invite and sign-up rows).
+      SELECT a.school, su.user_id AS parent_id, LOWER(TRIM(su.email)) AS email, 'student' AS kind, 5 AS pri
+      FROM announcements a
+      JOIN students s ON ${IN_AUDIENCE('s')}
+      ${STUDENT_EMAIL_JOINS('s', 'a.school')}
+      LEFT JOIN users author ON author.user_id = a.author_id
+      WHERE a.announcement_id = $1
+        AND ${STUDENT_EMAIL_GRADE_OK('s')}
+        AND (author.email IS NULL OR LOWER(TRIM(su.email)) <> LOWER(TRIM(author.email)))
     ) x
     ORDER BY email, pri
     ON CONFLICT (announcement_id, LOWER(recipient_email)) DO UPDATE
@@ -299,7 +348,8 @@ const announcementQueries = {
     UPDATE announcement_email_jobs SET status = 'skipped', last_error = 'announcement removed'
     WHERE announcement_id = $1 AND status = 'pending'
   `,
-  // After a custom audience shrinks: pending jobs whose address no longer belongs to anyone in the audience.
+  // After a custom audience shrinks: pending jobs whose address no longer belongs to anyone in the audience
+  // (a guardian of a student in it, or a student in it).
   cancelJobsOutsideAudience: `
     UPDATE announcement_email_jobs j SET status = 'skipped', last_error = 'removed from audience'
     WHERE j.announcement_id = $1 AND j.status = 'pending'
@@ -308,6 +358,12 @@ const announcementQueries = {
         JOIN students s ON ${IN_AUDIENCE('s')}
         CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
         WHERE a.announcement_id = $1 AND ge.email = LOWER(j.recipient_email))
+      AND NOT EXISTS (
+        SELECT 1 FROM announcements a
+        JOIN students s ON ${IN_AUDIENCE('s')}
+        JOIN student_account_links sal ON sal.student_id = s.student_id
+        JOIN users su ON su.user_id = sal.user_id
+        WHERE a.announcement_id = $1 AND LOWER(TRIM(su.email)) = LOWER(j.recipient_email))
   `,
   retryFailedAnnouncementJobs: `
     UPDATE announcement_email_jobs SET status = 'pending', attempts = 0, last_error = NULL, send_after = NOW()
@@ -330,10 +386,18 @@ const announcementQueries = {
   // Everything the email needs, read at send time so an edit inside the window ships corrected. $1 job_id
   selectAnnouncementJobContext: `
     SELECT j.job_id, j.kind, j.recipient_id, j.recipient_email, j.school,
-      a.announcement_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id, a.author_role, a.ack_requested,
+      a.announcement_id, a.class_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id, a.author_role, a.ack_requested,
       cl.subject AS class_subject, cl.grade AS class_grade,
       TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
-      au.email AS author_email, COALESCE(au.is_archived, FALSE) AS author_archived,
+      au.email AS author_email, COALESCE(au.is_archived, FALSE) AS author_archived, au.avatar AS author_avatar,
+      -- Student jobs: is the recipient's student row still in the audience, does
+      -- the school still email that grade, and the student's first name.
+      EXISTS (SELECT 1 FROM student_account_links sal JOIN students s ON s.student_id = sal.student_id
+               WHERE sal.user_id = j.recipient_id AND ${IN_AUDIENCE('s')}) AS student_in_audience,
+      EXISTS (SELECT 1 FROM students s ${STUDENT_EMAIL_JOINS('s', 'a.school')}
+               WHERE su.user_id = j.recipient_id AND ${IN_AUDIENCE('s')} AND ${STUDENT_EMAIL_GRADE_OK('s')}) AS student_email_on,
+      (SELECT split_part(TRIM(s.name), ' ', 1) FROM student_account_links sal JOIN students s ON s.student_id = sal.student_id
+        WHERE sal.user_id = j.recipient_id AND ${IN_AUDIENCE('s')} LIMIT 1) AS student_first_name,
       COALESCE(u.first_name, split_part(pl.name, ' ', 1)) AS recipient_first_name,
       u.is_archived AS recipient_archived,
       (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
@@ -414,6 +478,10 @@ const announcementQueries = {
            (SELECT COUNT(*) FROM g WHERE has_account)::int AS guardians_with_account,
            (SELECT COUNT(*) FROM g WHERE NOT has_account AND invite_pending)::int AS guardians_invite_pending,
            (SELECT COUNT(*) FROM g WHERE NOT has_account AND NOT invite_pending)::int AS guardians_email_only,
+           -- Students whose own login would get the email (the enqueue's student branch).
+           (SELECT COUNT(DISTINCT su.user_id) FROM a CROSS JOIN st JOIN students s ON s.student_id = st.student_id
+              ${STUDENT_EMAIL_JOINS('s', 'a.school')}
+             WHERE ${STUDENT_EMAIL_GRADE_OK('s')})::int AS students_with_account,
            (SELECT COALESCE(json_agg(json_build_object('studentId', st.student_id, 'name', st.name) ORDER BY st.name), '[]')
               FROM st WHERE NOT EXISTS (SELECT 1 FROM students s CROSS JOIN LATERAL (${GUARDIAN_EMAILS('s')}) ge
                                         WHERE s.student_id = st.student_id)) AS students_without_email
@@ -455,6 +523,35 @@ const announcementQueries = {
     SELECT LOWER(email) AS email, TRIM(CONCAT(first_name, ' ', last_name)) AS name
     FROM users WHERE school = $1 AND LOWER(email) = ANY($2::text[])
   `,
+  // ── Student feed (T12 reuses it for the parent lens with the parent as reader) ──
+  // $1 student_id, $2 school, $3 school_year_id, $4 class_id|null, $5 reader user_id, $6 limit
+  listStudentAnnouncements: `
+    SELECT ${BASE_COLUMNS}, au.avatar AS author_avatar, au.photo_path AS author_photo_path,
+           (r.user_id IS NOT NULL) AS read, k.acked_at
+    ${BASE_FROM}
+    LEFT JOIN announcement_reads r ON r.announcement_id = a.announcement_id AND r.user_id = $5
+    LEFT JOIN announcement_acks k ON k.announcement_id = a.announcement_id AND k.user_id = $5
+    WHERE a.school = $2 AND a.deleted_at IS NULL
+      AND (a.school_year_id IS NULL OR a.school_year_id = $3)
+      AND ($4::uuid IS NULL OR a.class_id = $4)
+      AND EXISTS (SELECT 1 FROM students s WHERE s.student_id = $1 AND ${IN_AUDIENCE('s')})
+    ORDER BY ${IS_PINNED} DESC, a.published_at DESC
+    LIMIT $6
+  `,
+  // Is this student in the audience of this announcement (same rule as the feed)?
+  // The caller answers 404 when not, 410 when removed. $1 announcement_id, $2 student_id, $3 school_year_id
+  selectStudentAnnouncementAccess: `
+    SELECT a.announcement_id, a.school, a.deleted_at,
+      ((a.school_year_id IS NULL OR a.school_year_id = $3)
+       AND EXISTS (SELECT 1 FROM students s WHERE s.student_id = $2 AND ${IN_AUDIENCE('s')})) AS in_audience
+    FROM announcements a WHERE a.announcement_id = $1
+  `,
+  // Attachment metadata for a page of announcements (no paths: files open through a signed URL). $1 announcement_id[]
+  selectAttachmentsForAnnouncements: `
+    SELECT attachment_id, announcement_id, file_name, mime_type, size_bytes
+    FROM announcement_attachments WHERE announcement_id = ANY($1::uuid[]) ORDER BY created_at, attachment_id
+  `,
+
   // "Ask about this": is this parent + child in the audience of this (live) announcement? $1 announcement_id, $2 parent_id, $3 student_id
   selectParentAnnouncementContext: `
     SELECT a.announcement_id, a.author_id, a.scope, a.class_id, a.school, a.deleted_at,
@@ -467,3 +564,5 @@ const announcementQueries = {
 module.exports = announcementQueries;
 module.exports.IN_AUDIENCE = IN_AUDIENCE;
 module.exports.GUARDIAN_EMAILS = GUARDIAN_EMAILS;
+module.exports.STUDENT_AUDIENCE_COUNT = STUDENT_AUDIENCE_COUNT;
+module.exports.STUDENT_SEEN_COUNT = STUDENT_SEEN_COUNT;

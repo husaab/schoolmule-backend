@@ -14,6 +14,8 @@ const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const identityQueries = require('../queries/classIdentity.queries');
 const classroomQueries = require('../queries/classroom.queries');
+const announcementQueries = require('../queries/announcement.queries');
+const { toListItem } = require('./announcement.controller');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
 const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
 const { toClassCard, toHeaderClass, toComingUpRow, toTeacher, toPeopleStudent, peopleCounts } = require('../services/classroom/classCards');
@@ -115,6 +117,42 @@ const getPeople = async (req, res) => {
   } catch (error) {
     logger.error({ err: error, classId }, 'Failed to load the class people');
     return failed(res, 500, 'Error loading the class roster');
+  }
+};
+
+const STREAM_LIMIT = 50;
+
+// GET /api/classroom/classes/:classId/stream
+// The class Stream for staff: this class's posts (pinned first, then newest)
+// with guardian and student seen counts, what is coming up in the class, and
+// who a new post would email. Posts are not limited to the selected year (the
+// class id already scopes them), so a past-year class still shows its own.
+// notices are classwork notices (T14).
+const getStream = async (req, res) => {
+  const { classId, school } = req.class;
+  const { userId, role } = req.user;
+  const yearId = req.schoolYear?.schoolYearId ?? null;
+  try {
+    const [postRes, comingRes, previewRes] = await Promise.all([
+      db.query(announcementQueries.listAnnouncements, [
+        userId, school, role, null, classId, 'class', null, null, false, false, null, null, STREAM_LIMIT,
+      ]),
+      yearId ? db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, classId]) : Promise.resolve({ rows: [] }),
+      db.query(announcementQueries.selectAudiencePreview, [school, 'class', classId, null, yearId, null]),
+    ]);
+    const p = previewRes.rows[0] || {};
+    return ok(res, {
+      announcements: postRes.rows.map((r) => toListItem(r, req.user)),
+      notices: [],
+      upcoming: comingRes.rows.map(toComingUpRow),
+      audience: {
+        students: p.students_with_account ?? 0,
+        guardians: (p.guardians_with_account ?? 0) + (p.guardians_invite_pending ?? 0) + (p.guardians_email_only ?? 0),
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error, classId }, 'Failed to load the class stream');
+    return failed(res, 500, 'Error loading the class stream');
   }
 };
 
@@ -354,7 +392,7 @@ const setStudentAvatar = async (req, res) => {
 };
 
 module.exports = {
-  listClasses, getClass, getPeople, getClassroomSettings,
+  listClasses, getClass, getPeople, getStream, getClassroomSettings,
   resetStudentPassword, resendStudentInvite, printClassQrCards,
   updateIdentity, uploadBanner, deleteBanner, resetIdentity, updateOptions,
   archiveClass, unarchiveClass, setStudentAvatar,

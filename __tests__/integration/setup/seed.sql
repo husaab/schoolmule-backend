@@ -1721,3 +1721,10 @@ ALTER TABLE classes  ADD COLUMN IF NOT EXISTS archived_by        UUID REFERENCES
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS avatar     JSONB;
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS photo_path TEXT;
 ALTER TABLE students ADD COLUMN IF NOT EXISTS avatar     JSONB;
+
+-- student_portal_03_announcement_students.sql: the 'student' email kind and
+-- the per-post "email" switch.
+ALTER TABLE announcement_email_jobs DROP CONSTRAINT IF EXISTS announcement_email_jobs_kind_check;
+ALTER TABLE announcement_email_jobs ADD CONSTRAINT announcement_email_jobs_kind_check
+  CHECK (kind IN ('account', 'invite', 'signup', 'student'));
+ALTER TABLE announcements ADD COLUMN IF NOT EXISTS send_email BOOLEAN NOT NULL DEFAULT TRUE;

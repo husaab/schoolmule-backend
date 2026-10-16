@@ -15,4 +15,16 @@ const scopeLabel = ({ scope, grade, class_subject: subject, class_grade: classGr
 const parentLink = (announcementId) =>
   `${process.env.FRONTEND_URL || ''}/parent/messages?tab=announcements&announcement=${announcementId}`;
 
-module.exports = { scopeLabel, parentLink };
+/**
+ * Where a student lands from an email: the class Stream with the post opened
+ * for a class post, otherwise the student home. `ctx` has announcement_id,
+ * scope and class_id.
+ */
+const studentLink = ({ announcement_id: id, scope, class_id: classId }) => {
+  const base = process.env.FRONTEND_URL || '';
+  return scope === 'class' && classId
+    ? `${base}/student/classes/${classId}?announcement=${id}`
+    : `${base}/student?announcement=${id}`;
+};
+
+module.exports = { scopeLabel, parentLink, studentLink };

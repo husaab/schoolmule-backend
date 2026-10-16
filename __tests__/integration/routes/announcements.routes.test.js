@@ -92,7 +92,7 @@ describe('Integration: Announcements', () => {
     // dad@example.com appears on Zayd's record too: still one job, matched to the existing account.
 
     const preview = await authenticatedRequest('get', `/api/announcements/preview?scope=class&classId=${classId}`, asTeacher);
-    expect(preview.body.data).toEqual({ students: 3, guardiansWithAccount: 2, guardiansInvitePending: 1, guardiansEmailOnly: 2, studentsWithoutEmail: [] });
+    expect(preview.body.data).toEqual({ students: 3, guardiansWithAccount: 2, guardiansInvitePending: 1, guardiansEmailOnly: 2, studentsWithoutEmail: [], studentsWithAccount: 0 });
 
     const mom = await authenticatedRequest('get', '/api/announcements', asMom);
     expect(mom.body.data).toHaveLength(1);
@@ -209,7 +209,7 @@ describe('Integration: Announcements', () => {
       expect(staff.body.data.audienceCount).toBe(2);
 
       const preview = await authenticatedRequest('post', '/api/announcements/preview', asTeacher).send({ scope: 'custom', studentIds: [aminaId, zaydId] });
-      expect(preview.body.data).toEqual({ students: 2, guardiansWithAccount: 2, guardiansInvitePending: 0, guardiansEmailOnly: 1, studentsWithoutEmail: [] });
+      expect(preview.body.data).toEqual({ students: 2, guardiansWithAccount: 2, guardiansInvitePending: 0, guardiansEmailOnly: 1, studentsWithoutEmail: [], studentsWithAccount: 0 });
     });
 
     it('the picker roster follows the same rule as posting: teachers only see students they teach', async () => {

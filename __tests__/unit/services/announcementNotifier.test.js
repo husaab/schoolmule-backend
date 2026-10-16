@@ -157,6 +157,69 @@ describe('announcement notifier', () => {
     expect(r.ran('SET status = $2::text')[0].params.slice(1)).toEqual(['skipped', 'recipient archived']);
   });
 
+  describe("student kind", () => {
+    const studentJob = job({ kind: 'student', recipient_id: 'u1', recipient_email: 'amal.haddad@example.com' });
+    const studentCtx = (over = {}) => ctx({
+      kind: 'student', recipient_id: 'u1', recipient_email: 'amal.haddad@example.com', recipient_first_name: 'Amal',
+      student_first_name: 'Amal', child_names: null, student_in_audience: true, student_email_on: true,
+      class_id: 'c1', author_avatar: { style: 'kufi', skin: 3, bg: 1 }, ...over,
+    });
+    const school = { 'FROM schools': [{ name: 'Al Haadi Academy', school_code: 'ALHAADIACADEMY', email_reply_to: ['office@example.org'] }] };
+
+    it("skips with 'removed from audience' when student_in_audience is false", async () => {
+      const r = makeRouter({ [CLAIM]: once(studentJob), 'AS child_names': [studentCtx({ student_in_audience: false })] });
+      await notifier.drainAnnouncements();
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(r.ran('SET status = $2::text')[0].params.slice(1)).toEqual(['skipped', 'removed from audience']);
+    });
+
+    it('a student job is not judged by child_names: an empty list still sends', async () => {
+      makeRouter({ [CLAIM]: once(studentJob), 'AS child_names': [studentCtx({ child_names: [] })] });
+      await notifier.drainAnnouncements();
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips with 'student email off' when the school turned student email off after the post", async () => {
+      const r = makeRouter({ [CLAIM]: once(studentJob), 'AS child_names': [studentCtx({ student_email_on: false })] });
+      await notifier.drainAnnouncements();
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(r.ran('SET status = $2::text')[0].params.slice(1)).toEqual(['skipped', 'student email off']);
+    });
+
+    it('class post: student copy, /student class link, author avatar, no Got it, and no author Reply-To', async () => {
+      const r = makeRouter({ [CLAIM]: once(studentJob), 'AS child_names': [studentCtx({ ack_requested: true })], ...school });
+      await notifier.drainAnnouncements();
+      const email = mockSend.mock.calls[0][0];
+      expect(email.to).toEqual(['amal.haddad@example.com']);
+      expect(email.subject).toBe('Gr 6 Math: Forms due Friday');
+      expect(email.replyTo).toEqual(['office@example.org']); // the teacher (akhan@example.com) is left off
+      expect(email.html).toContain('Hi Amal,');
+      expect(email.html).toContain('<strong>Ahmed Khan</strong> posted in <strong>Gr 6 Math</strong>.');
+      expect(email.html).toContain('https://app.example.com/student/classes/c1?announcement=' + ANN);
+      expect(email.html).toContain('Open in SchoolMule');
+      expect(email.html).toContain('Questions? Ask your teacher in SchoolMule. Your parents get this announcement too.');
+      expect(email.html).toContain('https://schoolmule.ca/email/avatars/kufi-3-1.png');
+      expect(email.html).toContain('Please return &lt;the form&gt;.<br>Thanks');
+      expect(email.html).not.toContain('Got it');
+      expect(email.html).not.toContain('ack=1');
+      expect(email.html).not.toContain('Reply privately');
+      expect(email.html).not.toContain('Amina Test');
+      expect(r.ran('INSERT INTO password_reset_tokens')).toHaveLength(0);
+      expect(r.ran('SET status = $2::text')[0].params.slice(1, 2)).toEqual(['sent']);
+    });
+
+    it('grade, school and custom posts link to the student home; no avatar means the neutral PNG', async () => {
+      for (const scope of ['grade', 'school', 'custom']) {
+        mockSend.mockClear();
+        makeRouter({ [CLAIM]: once(studentJob), 'AS child_names': [studentCtx({ scope, grade: '6', class_id: null, author_avatar: null })] });
+        await notifier.drainAnnouncements();
+        const { html } = mockSend.mock.calls[0][0];
+        expect(html).toContain(`https://app.example.com/student?announcement=${ANN}`);
+        expect(html).toContain('https://schoolmule.ca/email/avatars/neutral.png');
+      }
+    });
+  });
+
   it('renders the row as it is at send time (an edit inside the window ships corrected)', async () => {
     makeRouter({ [CLAIM]: once(job()), 'AS child_names': [ctx({ title: 'Forms due Monday' })] });
     await notifier.drainAnnouncements();

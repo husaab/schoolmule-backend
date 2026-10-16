@@ -36,6 +36,7 @@ const accessRowToAnnouncement = (r) => ({
   deletedAt: r.deleted_at,
   attachmentCount: r.attachment_count ?? 0,
   ackRequested: Boolean(r.ack_requested),
+  sendEmail: r.send_email !== false,
   ackedAt: r.acked_at ?? null,
   studentCount: r.student_count ?? 0,
   studentNamesPreview: r.student_names_preview ?? [],

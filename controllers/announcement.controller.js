@@ -46,6 +46,9 @@ const todayToronto = () => new Date().toLocaleDateString('en-CA', { timeZone: 'A
 const yearOf = (req) => req.schoolYear?.schoolYearId ?? null;
 const isStaff = (user) => user.role === 'TEACHER' || user.role === 'ADMIN';
 const parseBool = (v) => v === true || v === 'true' || v === '1' || v === 1;
+// The "email this post" switch defaults to on: only an explicit no turns it off,
+// so a typo never silently stops the families' emails.
+const parseSendEmail = (v) => !['false', '0', 'off', 'no'].includes(String(v ?? '').trim().toLowerCase());
 
 /**
  * studentIds for a custom audience: repeated multipart fields, one JSON array
@@ -107,7 +110,8 @@ function validateFields(body, { partial = false } = {}) {
   return out;
 }
 
-const toItem = (r, user) => {
+/** One announcement as the list (and detail, create, edit) returns it; staff items carry the counts. */
+const toListItem = (r, user) => {
   const base = {
     announcementId: r.announcement_id,
     scope: r.scope,
@@ -140,16 +144,22 @@ const toItem = (r, user) => {
     ackCount: r.ack_count ?? 0,
     studentCount: r.student_count ?? 0,
     studentNamesPreview: r.student_names_preview ?? [],
+    // Student logins in the audience and how many opened it (students join the Stream).
+    studentAudienceCount: r.student_audience_count ?? 0,
+    studentSeenCount: r.student_seen_count ?? 0,
+    // false when the author posted without emailing anyone.
+    sendEmail: r.send_email !== false,
   };
 };
 
-// req.announcement (camelCase, from the middleware) back into a row for toItem.
+// req.announcement (camelCase, from the middleware) back into a row for toListItem.
 const fromAccess = (ann) => ({
   announcement_id: ann.announcementId, scope: ann.scope, class_id: ann.classId, class_subject: ann.classSubject,
   class_grade: ann.classGrade, grade: ann.grade, title: ann.title, body: ann.body, author_id: ann.authorId,
   author_name: ann.authorName, author_role: ann.authorRole, published_at: ann.publishedAt, pinned_until: ann.pinnedUntil,
   is_pinned: ann.isPinned, edited_at: ann.editedAt, attachment_count: ann.attachmentCount,
   ack_requested: ann.ackRequested, acked_at: ann.ackedAt, student_count: ann.studentCount, student_names_preview: ann.studentNamesPreview,
+  send_email: ann.sendEmail,
 });
 
 /** Scope ownership without a row yet. Returns { error: [status, message] } or class meta. */
@@ -211,7 +221,7 @@ const list = async (req, res) => {
       const { rows: f } = await db.query(q.selectFailedEmailAnnouncements, [rows.map((r) => r.announcement_id)]);
       failedSet = new Set(f.map((r) => r.announcement_id));
     }
-    const items = rows.map((r) => ({ ...toItem(r, req.user), ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.announcement_id) } : {}) }));
+    const items = rows.map((r) => ({ ...toListItem(r, req.user), ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.announcement_id) } : {}) }));
     return res.status(200).json({ status: 'success', data: items });
   } catch (error) {
     logger.error('Error listing announcements:', error);
@@ -304,6 +314,8 @@ const preview = async (req, res) => {
         guardiansInvitePending: r?.guardians_invite_pending ?? 0,
         guardiansEmailOnly: r?.guardians_email_only ?? 0,
         studentsWithoutEmail: r?.students_without_email ?? [],
+        // Students whose own login would get the email (school switch and grade permitting).
+        studentsWithAccount: r?.students_with_account ?? 0,
       },
     });
   } catch (error) {
@@ -371,7 +383,8 @@ const previewEmail = async (req, res) => {
   }
 };
 
-// POST /api/announcements  (multipart: scope, classId?, grade?, studentIds[]?, ackRequested?, title, body, pinnedUntil?, files[])
+// POST /api/announcements  (multipart: scope, classId?, grade?, studentIds[]?, ackRequested?, sendEmail?, title, body, pinnedUntil?, files[])
+// sendEmail (default true): false posts without emailing anyone, guardians or students.
 const create = async (req, res) => {
   const user = req.user;
   const files = req.files || [];
@@ -379,6 +392,7 @@ const create = async (req, res) => {
   if (a.error) return failed(res, 400, a.error);
   const { scope, classId, grade, studentIds } = a;
   const ackRequested = parseBool(req.body.ackRequested);
+  const sendEmail = parseSendEmail(req.body.sendEmail);
   const v = validateFields(req.body);
   if (v.error) return failed(res, 400, v.error);
 
@@ -393,7 +407,7 @@ const create = async (req, res) => {
     try {
       await client.query('BEGIN');
       ({ rows: [row] } = await client.query(q.insertAnnouncement, [
-        user.school, yearId, scope, classId, grade, v.title, v.body, user.userId, user.role, v.pinnedUntil, ackRequested,
+        user.school, yearId, scope, classId, grade, v.title, v.body, user.userId, user.role, v.pinnedUntil, ackRequested, sendEmail,
       ]));
       // The enqueue runs after COMMIT and reads the audience, so the picked rows must land in this transaction.
       if (scope === 'custom') await client.query(q.insertAnnouncementStudents, [row.announcement_id, studentIds]);
@@ -408,19 +422,21 @@ const create = async (req, res) => {
     }
 
     // The post is committed; a queue hiccup must never fail the request.
-    try {
-      await db.query(q.enqueueAnnouncementJobs, [row.announcement_id, EMAIL_DELAY]);
-    } catch (error) {
-      logger.error('Failed to queue announcement emails:', error);
+    if (sendEmail) {
+      try {
+        await db.query(q.enqueueAnnouncementJobs, [row.announcement_id, EMAIL_DELAY]);
+      } catch (error) {
+        logger.error('Failed to queue announcement emails:', error);
+      }
     }
 
-    const item = toItem({
+    const item = toListItem({
       announcement_id: row.announcement_id, scope, class_id: classId,
       class_subject: check.classSubject ?? null, class_grade: check.classGrade ?? null, grade,
       title: v.title, body: v.body, author_id: user.userId, author_name: user.username, author_role: user.role,
       published_at: row.published_at, pinned_until: v.pinnedUntil, is_pinned: Boolean(v.pinnedUntil), edited_at: null,
       attachment_count: files.length, read: true, seen_count: 0, audience_count: 0, ack_requested: ackRequested,
-      student_count: studentIds ? studentIds.length : 0,
+      student_count: studentIds ? studentIds.length : 0, send_email: sendEmail,
     }, user);
     return res.status(201).json({ status: 'success', data: { ...item, attachments: await signedAttachments(row.announcement_id) } });
   } catch (error) {
@@ -438,13 +454,14 @@ const get = async (req, res) => {
       signedAttachments(ann.announcementId),
       db.query('SELECT read_at FROM announcement_reads WHERE announcement_id = $1 AND user_id = $2', [ann.announcementId, user.userId]),
     ]);
-    const item = toItem({ ...fromAccess(ann), read: readRes.rows.length > 0 }, user);
+    const item = toListItem({ ...fromAccess(ann), read: readRes.rows.length > 0 }, user);
     if (!isStaff(user)) return res.status(200).json({ status: 'success', data: { ...item, attachments } });
 
-    const [{ rows: receipts }, { rows: [stats] }, { rows: picked }] = await Promise.all([
+    const [{ rows: receipts }, { rows: [stats] }, { rows: picked }, { rows: [studentCounts] }] = await Promise.all([
       db.query(q.selectReceipts, [ann.announcementId]),
       db.query(q.selectEmailStats, [ann.announcementId]),
       ann.scope === 'custom' ? db.query(q.selectAnnouncementStudents, [ann.announcementId]) : Promise.resolve({ rows: null }),
+      db.query(q.selectStudentCounts, [ann.announcementId]),
     ]);
     const shape = (r) => ({ userId: r.user_id, name: r.name, relation: r.relation, studentNames: r.student_names || [], readAt: r.read_at, ackedAt: r.acked_at ?? null, state: r.state });
     const seen = receipts.filter((r) => r.state === 'seen').map(shape);
@@ -458,6 +475,8 @@ const get = async (req, res) => {
         ackCount: receipts.filter((r) => r.acked_at).length,
         // Guardian accounts that can read: linked, not pending, not email-only.
         audienceCount: receipts.filter((r) => r.user_id && r.state !== 'invited' && r.state !== 'no-account').length,
+        studentAudienceCount: studentCounts?.student_audience_count ?? 0,
+        studentSeenCount: studentCounts?.student_seen_count ?? 0,
         receipts: { seen, notYet },
         ...(picked ? { students: picked.map((p) => ({ studentId: p.student_id, name: p.name, grade: p.grade ?? null })) } : {}),
         emails: { sent: stats?.sent ?? 0, pending: stats?.pending ?? 0, failed: stats?.failed ?? 0, signup: stats?.signup ?? 0, invite: stats?.invite ?? 0 },
@@ -535,13 +554,16 @@ const update = async (req, res) => {
       } catch (error) {
         logger.error('Failed to cancel announcement emails after an audience change:', error);
       }
-      try {
-        await db.query(q.enqueueAnnouncementJobs, [ann.announcementId, EMAIL_DELAY]);
-      } catch (error) {
-        logger.error('Failed to queue announcement emails after an audience change:', error);
+      // A post made without email stays without email when its selection changes.
+      if (ann.sendEmail !== false) {
+        try {
+          await db.query(q.enqueueAnnouncementJobs, [ann.announcementId, EMAIL_DELAY]);
+        } catch (error) {
+          logger.error('Failed to queue announcement emails after an audience change:', error);
+        }
       }
     }
-    const item = toItem({
+    const item = toListItem({
       ...fromAccess(ann), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true, ack_requested: ackRequested,
       student_count: studentIds ? studentIds.length : ann.studentCount,
     }, req.user);
@@ -636,4 +658,7 @@ const attachmentUrl = async (req, res) => {
   }
 };
 
-module.exports = { list, unreadCount, targets, students, preview, previewEmail, create, get, update, remove, markRead, acknowledge, unacknowledge, retryEmails, attachmentUrl, validateFields, toItem };
+module.exports = {
+  list, unreadCount, targets, students, preview, previewEmail, create, get, update, remove, markRead, acknowledge, unacknowledge,
+  retryEmails, attachmentUrl, validateFields, toListItem,
+};

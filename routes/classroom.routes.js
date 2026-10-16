@@ -25,12 +25,13 @@ router.param("studentId", (req, res, next, id) => {
   next();
 });
 
-// What staff read: the classes home, the class header, the People roster and
-// the school's classroom settings (read-only, for staff UI copy).
+// What staff read: the classes home, the class header, the People roster, the
+// class Stream and the school's classroom settings (read-only, for staff UI copy).
 router.get("/settings", controller.getClassroomSettings);
 router.get("/classes", controller.listClasses);
 router.get("/classes/:classId", requireClassOwnership, controller.getClass);
 router.get("/classes/:classId/people", requireClassOwnership, controller.getPeople);
+router.get("/classes/:classId/stream", requireClassOwnership, controller.getStream);
 
 // A student's login (People tab): a new password link, or the invite again.
 router.post("/classes/:classId/students/:studentId/reset-password", requireClassOwnership, controller.resetStudentPassword);
