@@ -18,7 +18,7 @@ const { rescaleForInsert, rescaleForRemoval } = require('./weights');
 const { BUCKET, SIGNED_URL_TTL, youtubeIdOf } = require('../../utils/classworkUpload');
 const { signedUrlMap } = require('../../utils/attachmentUpload');
 const engine = require('../analyticsEngine');
-const { cellsToDrafts } = require('./publish');
+const { cellsToDrafts, reconcileAudience } = require('./publish');
 
 const ITEM_KINDS = ['assessment', 'assignment', 'quiz', 'material'];
 const SUBMISSION_MODES = ['file', 'text', 'done', 'none'];
@@ -569,9 +569,16 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
 
   await replaceStudents(client, itemId, value);
   // An assignment or quiz newly filling an unpublished column (or a plain
-  // assessment becoming one) takes the column's cells as drafts (D3).
-  if (assessmentId && TURN_IN_KINDS.has(value.kind) && (newlyLinked || !TURN_IN_KINDS.has(cur.kind))) {
-    await cellsToDrafts(client, { itemId, assessmentId });
+  // assessment becoming one) takes its students' cells as drafts (D3); a
+  // changed audience moves grades between drafts and plain cells (round 3).
+  if (assessmentId && TURN_IN_KINDS.has(value.kind)) {
+    const audienceChanged = value.audience !== cur.audience
+      || !sameList(value.studentIds, cur.audience === 'some' ? cur.studentIds.map(lower) : []);
+    if (newlyLinked || !TURN_IN_KINDS.has(cur.kind)) await cellsToDrafts(client, { itemId, assessmentId });
+    if (audienceChanged) {
+      await reconcileAudience(client, { itemId, assessmentId });
+      gradebookChanged = true;
+    }
   }
   return { gradebookChanged };
 }

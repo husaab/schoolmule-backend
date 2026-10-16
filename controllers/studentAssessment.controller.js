@@ -18,21 +18,33 @@ const toColumnMaps = (rows) => ({
   liveCol: new Map(rows.filter((r) => r.is_published).map((r) => [r.assessment_id, r.item_id])),
 });
 
+const PLAIN = Object.freeze({ draftCol: new Map(), liveCol: new Map(), inAudience: () => false });
+
 /**
- * Runs `fn(runner, { draftCol, liveCol })`. With no turn-in column among
- * `assessmentIds` (every plain gradebook save) it runs on the pool exactly as
- * before. Otherwise it runs in a transaction with those columns locked and
- * their publish state read under the lock, so a draft can't land on a column
- * a Publish has just published (the grading view's lock order).
+ * Runs `fn(runner, { draftCol, liveCol, inAudience })`. With no turn-in
+ * column among `assessmentIds` (every plain gradebook save) it runs on the
+ * pool exactly as before. Otherwise it runs in a transaction with those
+ * columns locked and their publish state read under the lock, so a draft
+ * can't land on a column a Publish has just published (the grading view's
+ * lock order). `inAudience(assessmentId, studentId)`: the student is one the
+ * column's item is for; anyone else is graded like a plain assessment (T16
+ * fix round 3).
  */
-async function withTurnInColumns(classId, assessmentIds, fn) {
+async function withTurnInColumns(classId, assessmentIds, studentIds, fn) {
   const { rows } = await db.query(gradingQueries.selectTurnInColumns, [classId, assessmentIds]);
-  if (rows.length === 0) return fn(db, toColumnMaps([]));
+  if (rows.length === 0) return fn(db, PLAIN);
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     const { rows: locked } = await client.query(gradingQueries.lockTurnInColumns, [classId, assessmentIds]);
-    const result = await fn(client, toColumnMaps(locked));
+    const { rows: pairs } = await client.query(gradingQueries.selectAudiencePairs, [
+      locked.map((r) => r.item_id),
+      [...new Set(studentIds.map((id) => String(id).toLowerCase()))],
+    ]);
+    const itemOf = new Map(locked.map((r) => [r.assessment_id, r.item_id]));
+    const members = new Set(pairs.map((p) => `${p.item_id}:${p.student_id}`));
+    const inAudience = (assessmentId, studentId) => members.has(`${itemOf.get(assessmentId)}:${String(studentId).toLowerCase()}`);
+    const result = await fn(client, { ...toColumnMaps(locked), inAudience });
     await client.query('COMMIT');
     return result;
   } catch (error) {
@@ -163,15 +175,20 @@ const upsertScoresByClass = async (req, res) => {
     // D3/D17: a turn-in column keeps scores as drafts on the submission until its
     // assessment is published; after that the grid writes live, as Save did.
     const userId = req.user?.userId ?? null;
-    const { liveCol, liveEntries, drafts } = await withTurnInColumns(classId, assessmentIds, async (runner, { draftCol, liveCol: live }) => {
+    const studentIds = scores.map((e) => e.studentId);
+    const { syncFor, liveEntries, drafts } = await withTurnInColumns(classId, assessmentIds, studentIds, async (runner, { draftCol, liveCol, inAudience }) => {
+      // A draft: an unpublished turn-in column, for one of its item's students.
+      const isDraft = (e) => draftCol.has(e.assessmentId) && inAudience(e.assessmentId, e.studentId);
       const out = [];
-      for (const e of scores.filter((x) => draftCol.has(x.assessmentId))) {
+      for (const e of scores.filter(isDraft)) {
         const status = e.status || 'graded';
         const { rows } = await runner.query(gradingQueries.upsertDraftScore,
           [draftCol.get(e.assessmentId), e.studentId, status === 'missing' ? null : e.score ?? null, status, userId]);
         out.push(toDraft(rows[0], e.assessmentId));
       }
-      return { liveCol: live, liveEntries: scores.filter((x) => !draftCol.has(x.assessmentId)), drafts: out };
+      // A live cell on a published turn-in column, for one of its item's students, keeps the submission in step.
+      const sync = (r) => (liveCol.has(r.assessment_id) && inAudience(r.assessment_id, r.student_id) ? liveCol.get(r.assessment_id) : null);
+      return { syncFor: sync, liveEntries: scores.filter((e) => !isDraft(e)), drafts: out };
     });
     if (liveEntries.length === 0) {
       return res.status(200).json({ status: 'success', data: [], drafts });
@@ -208,9 +225,8 @@ const upsertScoresByClass = async (req, res) => {
     // A published turn-in column: the submission mirrors the live cell (and
     // counts as published), so the grading view and the grid agree.
     for (const r of upsertedRows) {
-      if (liveCol.has(r.assessment_id)) {
-        await db.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
-      }
+      const itemId = syncFor(r);
+      if (itemId) await db.query(gradingQueries.syncLiveSubmission, [itemId, r.student_id, r.score, r.status, userId]);
     }
     // upsertedRows is an array of { student_id, assessment_id, score }
     return res.status(200).json({
@@ -251,16 +267,17 @@ async function applyCellStatusSplit({ classId, studentId, assessmentId, status, 
 
   // D3/D17: an unpublished turn-in column takes the flag as a draft.
   const allIds = targets.map((t) => t.assessment_id);
-  return withTurnInColumns(classId, allIds, async (runner, { draftCol, liveCol }) => {
+  return withTurnInColumns(classId, allIds, [studentId], async (runner, { draftCol, liveCol, inAudience }) => {
     const drafts = [];
-    for (const id of allIds.filter((a) => draftCol.has(a))) {
+    const draftIds = allIds.filter((a) => draftCol.has(a) && inAudience(a, studentId));
+    for (const id of draftIds) {
       const itemId = draftCol.get(id);
       const { rows: [current] } = await runner.query(gradingQueries.selectDraft, [itemId, studentId]);
       const score = status === 'missing' ? null : current?.draft_score ?? null;
       const { rows } = await runner.query(gradingQueries.upsertDraftScore, [itemId, studentId, score, status, userId]);
       drafts.push(toDraft(rows[0], id));
     }
-    const ids = allIds.filter((a) => !draftCol.has(a));
+    const ids = allIds.filter((a) => !draftIds.includes(a));
     if (ids.length === 0) return { rows: [], drafts, found: true };
 
     const { rows } = await runner.query(
@@ -275,7 +292,7 @@ async function applyCellStatusSplit({ classId, studentId, assessmentId, status, 
       [studentId, ids, status]
     );
     for (const r of rows) {
-      if (liveCol.has(r.assessment_id)) {
+      if (liveCol.has(r.assessment_id) && inAudience(r.assessment_id, r.student_id)) {
         await runner.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
       }
     }

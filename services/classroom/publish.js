@@ -14,6 +14,17 @@ const { invalidateWeeklySummaries } = require('../aiWeeklySummary.service');
 const q = require('../../queries/grading.queries');
 const publishQueries = require('../../queries/assessmentPublish.queries');
 
+const OUTSIDE_AUDIENCE_MESSAGE = "This column also has grades for students this item isn't for. Publish the column in Grades first; then publish here.";
+
+/** A 409 the controllers answer with its message and code. */
+function conflict(message, code) {
+  const err = new Error(message);
+  err.status = 409;
+  err.expose = true;
+  err.code = code;
+  return err;
+}
+
 /**
  * D3: copy drafts into the gradebook for these students and flip the
  * assessment to published on its first publish. Runs inside the caller's
@@ -43,6 +54,13 @@ async function publishSubmissions(client, { item, studentIds, userId, school }) 
 
   const { rows: subs } = await client.query(q.lockPublishable, [item.item_id, ids, linked]);
   if (subs.length === 0) return { publishedStudentIds: [], assessmentPublished: false, batchId: null };
+  // Students outside the item's audience are graded like a plain assessment:
+  // publishing the column for some of the item's students would show their
+  // grades too, so the column must be published in Grades first (round 3).
+  if (linked && !isPublished) {
+    const { rows: [outside] } = await client.query(q.countOutsideGrades, [item.item_id]);
+    if ((outside?.n ?? 0) > 0) throw conflict(OUTSIDE_AUDIENCE_MESSAGE, 'OUTSIDE_AUDIENCE_GRADES');
+  }
 
   if (linked) {
     for (const s of subs) {
@@ -84,6 +102,19 @@ async function cellsToDrafts(client, { itemId, assessmentId }) {
 }
 
 /**
+ * After an item's audience changes (fix round 3): a student who left it is
+ * graded like a plain assessment (their draft becomes their gradebook cell),
+ * and a student who joined an unpublished column has their cell taken as a
+ * draft. Inside the caller's transaction.
+ */
+async function reconcileAudience(client, { itemId, assessmentId }) {
+  if (!assessmentId) return;
+  await client.query(q.draftsOutsideToCells, [itemId]);
+  await client.query(q.clearDraftsOutside, [itemId]);
+  await cellsToDrafts(client, { itemId, assessmentId });
+}
+
+/**
  * After COMMIT. Never throws. The grades changed, so the cached grade
  * matrices and this week's AI summaries of these students are stale.
  * T21 adds the students' 'graded' emails here.
@@ -97,4 +128,4 @@ async function afterPublish({ school, studentIds, itemId }) {
   }
 }
 
-module.exports = { publishSubmissions, cellsToDrafts, afterPublish };
+module.exports = { publishSubmissions, cellsToDrafts, reconcileAudience, afterPublish, OUTSIDE_AUDIENCE_MESSAGE };

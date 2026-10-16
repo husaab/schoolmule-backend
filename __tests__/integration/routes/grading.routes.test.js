@@ -798,6 +798,102 @@ describe('Integration: grading and per-student Publish', () => {
       expect((await get('/api/student/grades', asBilal)).data.classes.find((c) => c.classId === sciId).classAvg).toBeNull();
     });
 
+    // Fix round 3 (controller ruling on N1): a student outside an item's
+    // audience is graded like a plain assessment. The score lives in the
+    // gradebook, and the column's own Publish releases it as on main. Drafts
+    // and per-student Publish are for the item's students only.
+    describe('students outside an item audience (fix round 3)', () => {
+      const someItem = async (columnName, audience) => {
+        const colId = await assessment(sciId, columnName, { weight: 20, max: 10 });
+        return { colId, audience };
+      };
+      const grid = (scores) => post(`/api/studentAssessments/classes/${sciId}/scores`, { scores });
+      const trayPublish = (ids) => expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+        .send({ assessmentIds: ids }), 201);
+
+      it('RR-P6: a make-up item for some students over a graded, unpublished column keeps the others\' grades, and the column\'s Publish releases them', async () => {
+        const { colId } = await someItem('Column Z');
+        await grid([{ studentId: amalId, assessmentId: colId, score: 5 }, { studentId: daliaId, assessmentId: colId, score: 7 }]);
+        const makeUp = await createItem({
+          kind: 'assignment', title: 'Column Z', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        // Amal (in the audience) is a draft now; Dalia (outside) keeps her gradebook cell.
+        expect(await gradebook(colId)).toEqual([{ student_id: daliaId, score: 7, status: 'graded' }]);
+        expect(await submission(amalId, makeUp.itemId)).toMatchObject({ draft_score: 5, published_at: null });
+        expect(await submission(daliaId, makeUp.itemId)).toBeUndefined();
+
+        // The gradebook's own Publish of the column releases both, as on main.
+        const res = await trayPublish([colId]);
+        expect(res.data.classworkPublished).toEqual([{ assessmentId: colId, itemId: makeUp.itemId, studentCount: 1 }]);
+        expect(await gradebook(colId)).toEqual(
+          [{ student_id: amalId, score: 5, status: 'graded' }, { student_id: daliaId, score: 7, status: 'graded' }]
+            .sort((x, y) => x.student_id.localeCompare(y.student_id)),
+        );
+        expect(await studentGrade(asDalia, colId)).toMatchObject({ score: 7 });
+        expect(await studentGrade(asAmal, colId)).toMatchObject({ score: 5 });
+      });
+
+      it("a column's first per-student Publish is refused while it holds grades for students outside the item's audience", async () => {
+        const { colId } = await someItem('Lab sheet B');
+        await grid([{ studentId: daliaId, assessmentId: colId, score: 7 }]);
+        const makeUp = await createItem({
+          kind: 'assignment', title: 'Lab sheet B', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${makeUp.itemId}`;
+        await patchOn(url, amalId, { draftScore: 9 });
+        for (const [path, body] of [['publish', { studentIds: [amalId] }], ['mark-missing', { studentIds: [bilalId] }], ['excuse', { studentIds: [bilalId], excused: true }]]) {
+          const refused = await post(`${url}/${path}`, body, asTeacher, 409);
+          expect(refused.code).toBe('OUTSIDE_AUDIENCE_GRADES');
+        }
+        expect(await isPublished(colId)).toBe(false);
+        expect(await gradebook(colId)).toEqual([{ student_id: daliaId, score: 7, status: 'graded' }]);
+        expect(await studentGrade(asDalia, colId)).toBeNull();
+
+        // After the column's Publish in Grades, publishing one student works.
+        await trayPublish([colId]);
+        await patchOn(url, bilalId, { draftScore: 4 }); // live now
+        expect(await cell(bilalId, colId)).toEqual({ student_id: bilalId, score: 4, status: 'graded' });
+        expect((await post(`${url}/publish`, { studentIds: [amalId] })).data).toMatchObject({ skipped: [{ studentId: amalId, reason: 'unchanged' }] });
+      });
+
+      it("grid edits for a student outside the audience write the gradebook (plain), inside the audience they are drafts", async () => {
+        const { colId } = await someItem('Quiz C');
+        const quiz = await createItem({
+          kind: 'assignment', title: 'Quiz C', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const res = await grid([{ studentId: amalId, assessmentId: colId, score: 8 }, { studentId: daliaId, assessmentId: colId, score: 6 }]);
+        expect(res.data).toEqual([{ student_id: daliaId, assessment_id: colId, score: '6.00', status: 'graded' }]);
+        expect(res.drafts).toEqual([{ student_id: amalId, assessment_id: colId, draft_score: '8.00', draft_status: 'graded' }]);
+        const status = await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+          .send({ studentId: bilalId, assessmentId: colId, status: 'missing' }), 200);
+        expect(status.data).toEqual([{ student_id: bilalId, assessment_id: colId, score: null, status: 'missing' }]);
+        expect(status.drafts).toEqual([]);
+        expect(await submission(daliaId, quiz.itemId)).toBeUndefined();
+      });
+
+      it('changing the audience moves grades between the item (drafts) and the gradebook (plain)', async () => {
+        const { colId } = await someItem('Lab D');
+        await grid([{ studentId: daliaId, assessmentId: colId, score: 7 }]);
+        const lab = await createItem({
+          kind: 'assignment', title: 'Lab D', submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, bilalId, { draftScore: 6 });
+
+        // Bilal leaves the audience, Dalia joins it.
+        await editItem(url, { audience: 'some', studentIds: [amalId, daliaId] }, 200);
+        expect(await gradebook(colId)).toEqual([{ student_id: bilalId, score: 6, status: 'graded' }]);
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: null, draft_status: null });
+        expect(await submission(daliaId, lab.itemId)).toMatchObject({ draft_score: 7, published_at: null });
+        const list = (await get(`${url}/submissions`)).data;
+        expect(list.students.map((r) => [r.name, r.label])).toEqual([['Amal Haddad', 'Not turned in yet'], ['Dalia Nassar', 'Graded · draft']]);
+      });
+    });
+
     it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {
       await patch(amalId, { draftScore: 8 });
       await publish([amalId]);
