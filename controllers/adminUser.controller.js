@@ -15,11 +15,21 @@ const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { toUser } = require("../utils/userMapper");
 const { getResend, sendOrThrow } = require("../utils/emailUtils");
 const { platformSender } = require("../services/email/senderIdentity");
+const { assertStudentCanSignIn } = require("../services/classroom/studentLogin");
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
 // Roles an admin may preview. Previewing another admin shows the same UI the
-// admin already has, so it is not offered.
-const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT"];
+// admin already has, so it is not offered. A STUDENT preview keeps role
+// STUDENT, so the student fence and the read-only rule both apply to it.
+const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT", "STUDENT"];
+// Why a student can't be previewed: the student sign-in gate's verdicts, in
+// the admin's words. The preview would otherwise end at its first /auth/me.
+const STUDENT_PREVIEW_REFUSALS = {
+  NO_STUDENT_LINK: "This student account isn't linked to this school year.",
+  CLASSROOM_DISABLED: "Student sign-in is turned off for your school, so there is nothing to preview yet. Turn it on in Classroom settings first.",
+  CONSENT_REQUIRED: "This student has no parental consent on file, so they can't sign in yet.",
+  GRADE_NOT_ENABLED: "This student's grade doesn't use student sign-in yet.",
+};
 // The portals a preview can open in. A dual-role teacher (also a parent) may
 // be previewed in either; the view is one the target actually holds.
 const PREVIEW_VIEWS = ["TEACHER", "PARENT"];
@@ -406,7 +416,7 @@ const impersonateUser = async (req, res) => {
     const user = rows[0];
 
     if (!IMPERSONATABLE_ROLES.includes(user.role)) {
-      return res.status(400).json({ status: "failed", message: "Only teachers and parents can be previewed" });
+      return res.status(400).json({ status: "failed", message: "Only teachers, parents and students can be previewed" });
     }
     if (user.is_archived) {
       return res.status(409).json({ status: "failed", message: "Archived users can't be previewed. Restore them first." });
@@ -416,6 +426,16 @@ const impersonateUser = async (req, res) => {
         status: "failed",
         message: "This account can't sign in yet, so there is nothing to preview. Give it school access first.",
       });
+    }
+    // A student needs a link to the active year (and the rest of the sign-in
+    // gate) for the student portal to have anything to show.
+    if (user.role === "STUDENT") {
+      try {
+        await assertStudentCanSignIn(user);
+      } catch (v) {
+        if (!v || !STUDENT_PREVIEW_REFUSALS[v.code]) throw v;
+        return res.status(409).json({ status: "failed", code: v.code, message: STUDENT_PREVIEW_REFUSALS[v.code] });
+      }
     }
 
     const [{ rows: adminRows }, activeTerm, yearContext] = await Promise.all([

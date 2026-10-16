@@ -9,6 +9,7 @@
 // through the 7-day link; student_account_links ties it to one student row
 // per school year.
 
+const QRCode = require('qrcode');
 const db = require('../../config/database');
 const logger = require('../../logger');
 const q = require('../../queries/studentAccount.queries');
@@ -17,10 +18,17 @@ const schoolQueries = require('../../queries/school.queries');
 const { gradeRank } = require('../../utils/gradeRank');
 const { getSchoolName } = require('../../utils/schoolUtils');
 const { getResend, sendOrThrow } = require('../../utils/emailUtils');
+const { createPDFBuffer } = require('../../utils/pdfGenerator');
 const { schoolSender } = require('../email/senderIdentity');
 const { getStudentInviteEmailHTML, getStudentPasswordResetEmailHTML } = require('../../templates/emailTemplate');
+const { renderStudentCardsHTML } = require('../../templates/studentCardsTemplate');
+const { getSettings } = require('./classroomSettings');
+const { issueQrSecret, qrToken } = require('./studentLogin');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The most students one request may act on (invite, cards, void).
+const MAX_STUDENT_BATCH = 200;
 const ACCOUNT_STATUSES = ['not_invited', 'invited', 'active', 'archived', 'not_eligible'];
 const LINK_CONSTRAINTS = new Set(['uq_student_account_links_student', 'student_account_links_pkey']);
 
@@ -144,6 +152,158 @@ async function sendStudentPasswordReset({ userId, email, firstName, school, scho
   });
 }
 
+/**
+ * A request body's `studentIds`: 1 to MAX_STUDENT_BATCH UUIDs, lowercased and
+ * de-duplicated in order.
+ * @returns {{ ids: string[] } | { error: string }}
+ */
+function parseStudentIds(studentIds) {
+  if (!Array.isArray(studentIds) || studentIds.length < 1 || studentIds.length > MAX_STUDENT_BATCH) {
+    return { error: `Choose between 1 and ${MAX_STUDENT_BATCH} students` };
+  }
+  if (!studentIds.every((id) => typeof id === 'string' && UUID_RE.test(id))) return { error: 'Invalid student id' };
+  return { ids: [...new Set(studentIds.map((id) => id.toLowerCase()))] };
+}
+
+const refused = (status, message) => ({ sent: false, status, message });
+
+/**
+ * "Resend invite" for a student row with a login (admin and the student's
+ * teachers). Only the newest link works. Never throws for a refusal: returns
+ * { sent: true } or { sent: false, status, message }.
+ */
+async function resendInviteFor(row, { school, invitedBy }) {
+  if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
+  if (!row.invite_pending) return refused(400, 'This student has already set a password. Send a password link instead.');
+
+  await db.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+  try {
+    await sendStudentInvite({
+      userId: row.user_id,
+      email: row.account_email,
+      firstName: splitName(row.name).firstName,
+      school,
+      schoolInfo: await loadSchoolInfo(school),
+      invitedBy,
+    });
+  } catch (err) {
+    logger.error({ err, userId: row.user_id }, 'Failed to resend a student invite');
+    return refused(502, "The invite email couldn't be sent. Try again.");
+  }
+  return { sent: true };
+}
+
+/**
+ * "Reset password" for a student row with a login: a fresh 7-day password
+ * link, older links die. Same result shape as resendInviteFor.
+ */
+async function resetPasswordFor(row, { school, requestedBy }) {
+  if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
+  if (row.invite_pending) return refused(400, "This student hasn't set a password yet. Resend the invite instead.");
+
+  try {
+    await sendStudentPasswordReset({
+      userId: row.user_id,
+      email: row.account_email,
+      firstName: splitName(row.name).firstName,
+      school,
+      schoolInfo: await loadSchoolInfo(school),
+      requestedBy: requestedBy || 'Your school',
+    });
+  } catch (err) {
+    logger.error({ err, userId: row.user_id }, 'Failed to send a student password link');
+    return refused(502, "The password email couldn't be sent. Try again.");
+  }
+  return { sent: true };
+}
+
+const CARD_PDF_OPTIONS = {
+  format: 'Letter',
+  margin: { top: '0.5in', bottom: '0.5in', left: '0.5in', right: '0.5in' },
+};
+// A fresh object per call: qrcode writes its defaults into the options it gets.
+const qrImageOptions = () => ({ errorCorrectionLevel: 'M', margin: 1, width: 300 });
+
+const signInUrl = (userId, secret) =>
+  `${process.env.FRONTEND_URL || 'https://schoolmule.ca'}/qr?t=${encodeURIComponent(qrToken(userId, secret))}`;
+
+// Cards come out in the order they are handed out: grade, homeroom, name.
+const byClassroom = (a, b) =>
+  (gradeRank(a.grade) ?? 99) - (gradeRank(b.grade) ?? 99)
+  || String(a.homeroomTeacherName || '').localeCompare(String(b.homeroomTeacherName || ''))
+  || a.name.localeCompare(b.name);
+
+/**
+ * Print QR sign-in cards. Every eligible student (a login that is invited or
+ * active, a QR grade, a current row) gets a NEW secret: only its hash is
+ * stored, so printing always voids the student's previous card. The hashes
+ * are written only after the PDF rendered, so a failed print leaves the
+ * cards already in students' hands working.
+ *
+ * @param {{ school: string, studentIds: string[], requestedBy?: string }} p
+ * @returns {Promise<{ pdf: Buffer|null, issued: number, skippedIds: string[] }>}
+ *   pdf is null when no card could be issued.
+ */
+async function issueQrCards({ school, studentIds, requestedBy }) {
+  const [settings, { rows }] = await Promise.all([
+    getSettings(school),
+    db.query(q.selectStudentAccountRowsForCards, [school, studentIds]),
+  ]);
+  const byId = new Map(rows.map((r) => [r.student_id, r]));
+
+  const issued = [];
+  const skippedIds = [];
+  const cardHolders = new Set();
+  for (const studentId of studentIds) {
+    const row = byId.get(studentId);
+    // One card per login: a second row of the same student (another year)
+    // would only void the card printed for the first.
+    if (!row || !toStudentAccountRow(row, settings).qrEligible || cardHolders.has(row.user_id)) {
+      skippedIds.push(studentId);
+      continue;
+    }
+    cardHolders.add(row.user_id);
+    const { secret, hash } = issueQrSecret();
+    issued.push({
+      userId: row.user_id,
+      hash,
+      card: {
+        name: row.name,
+        grade: row.grade,
+        homeroomTeacherName: row.homeroom_teacher_name ?? null,
+        email: row.account_email,
+        qrDataUrl: await QRCode.toDataURL(signInUrl(row.user_id, secret), qrImageOptions()),
+      },
+    });
+  }
+  if (issued.length === 0) return { pdf: null, issued: 0, skippedIds };
+
+  const schoolInfo = await loadSchoolInfo(school);
+  const cards = issued.map((i) => i.card).sort(byClassroom);
+  const pdf = await createPDFBuffer(renderStudentCardsHTML({ schoolName: schoolNameOf(schoolInfo, school), cards }), CARD_PDF_OPTIONS);
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    for (const { userId, hash } of issued) await client.query(q.setQrSecret, [userId, hash]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  logger.info({ school, requestedBy, issued: issued.length, skipped: skippedIds.length }, 'Student QR cards issued');
+  return { pdf, issued: issued.length, skippedIds };
+}
+
+/** Void the live QR cards of these students (of the school). Resolves to how many were voided. */
+async function voidQr({ school, studentIds }) {
+  const { rowCount } = await db.query(q.voidQrForStudents, [school, studentIds]);
+  return rowCount;
+}
+
 const skipped = (studentId, reason, message) => ({ studentId, outcome: 'skipped', reason, message });
 
 /**
@@ -234,6 +394,7 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
 
 module.exports = {
   EMAIL_RE,
+  MAX_STUDENT_BATCH,
   ACCOUNT_STATUSES,
   normalizeEmail,
   splitName,
@@ -245,4 +406,9 @@ module.exports = {
   sendStudentInvite,
   sendStudentPasswordReset,
   inviteStudent,
+  parseStudentIds,
+  resendInviteFor,
+  resetPasswordFor,
+  issueQrCards,
+  voidQr,
 };

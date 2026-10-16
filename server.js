@@ -47,6 +47,8 @@ const messagingRoutes = require("./routes/messaging.routes")
 const announcementRoutes = require("./routes/announcement.routes")
 const studentAccountRoutes = require("./routes/studentAccount.routes")
 const classroomSettingsRoutes = require("./routes/classroomSettings.routes")
+const classroomRoutes = require("./routes/classroom.routes")
+const studentPortalRoutes = require("./routes/studentPortal.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
@@ -78,8 +80,9 @@ const corsOptions = {
   origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
-  // Lets the browser read download filenames (CSV/PDF exports) across origins.
-  exposedHeaders: ['Content-Disposition', 'X-Request-Id'],
+  // Lets the browser read download filenames (CSV/PDF exports) across origins,
+  // and which students a QR-card print skipped.
+  exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Skipped-Students'],
 };
 
 // core modules
@@ -165,6 +168,8 @@ app.use("/api/messaging", messagingRoutes);
 app.use("/api/announcements", announcementRoutes);
 app.use("/api/admin/student-accounts", studentAccountRoutes);
 app.use("/api/admin/classroom-settings", classroomSettingsRoutes);
+app.use("/api/classroom", classroomRoutes);
+app.use("/api/student", studentPortalRoutes);
 app.use("/api/finance", financeRoutes);
 
 // Global error handler — must be after all routes

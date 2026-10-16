@@ -29,6 +29,8 @@ const FEATURES = [
   ['/api/sk', 'JK/SK grading'],
   ['/api/admin/student-accounts', 'Student accounts'],
   ['/api/admin/classroom-settings', 'Student accounts'],
+  ['/api/classroom', 'Classroom'],
+  ['/api/student', 'Student portal'],
   ['/api/students', 'Students'],
   ['/api/classes', 'Classes'],
   ['/api/teachers', 'Teachers'],

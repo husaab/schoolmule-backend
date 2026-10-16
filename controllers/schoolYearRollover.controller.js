@@ -110,9 +110,12 @@ const executeRollover = async (req, res, next) => {
           s.name, s.homeroom_teacher_id, newGrade, s.oen, req.user.school,
           s.mother_name, s.mother_email, s.mother_number,
           s.father_name, s.father_email, s.father_number, s.emergency_contact,
-          targetYearId, s.student_id,
+          targetYearId, s.student_id, s.student_email,
         ]);
         await client.query(rolloverQueries.copyParentLinks, [inserted.rows[0].student_id, s.student_id]);
+        await client.query(rolloverQueries.copyStudentAccountLink, [
+          inserted.rows[0].student_id, s.student_id, targetYearId, req.user.userId,
+        ]);
         summary.studentsRolled += 1;
       }
     }

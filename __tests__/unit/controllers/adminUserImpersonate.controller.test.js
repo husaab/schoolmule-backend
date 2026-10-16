@@ -155,7 +155,62 @@ describe('POST /api/admin/users/:id/impersonate', () => {
     mockQueryResponse([teacherRow({ role: 'ADMIN' })]);
     const res = await post(TEST_TEACHER_USER_ID);
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/teachers and parents/i);
+    expect(res.body.message).toMatch(/teachers, parents and students/i);
+  });
+
+  describe('a student', () => {
+    const studentRow = (overrides = {}) =>
+      teacherRow({ role: 'STUDENT', first_name: 'Amal', last_name: 'Haddad', ...overrides });
+    // services/classroom/studentLogin SIGN_IN_CONTEXT: classrooms on, linked
+    // to the active year, consent on file, Grade 2.
+    const signInContext = (overrides = {}) => ({
+      enabled: true, login_from_grade: '1', qr_until_grade: '3', consent_at: new Date(),
+      qr_secret_hash: null, qr_voided_at: null, student_id: '660e8400-e29b-41d4-a716-446655440020', grade: '2',
+      ...overrides,
+    });
+
+    it('previews a student linked to the active year, keeping role STUDENT', async () => {
+      mockQueryResponse([studentRow()]); // target in school
+      mockQueryResponse([signInContext()]); // sign-in gate
+      mockQueryResponse([adminRow]); // admin row
+      mockQueryResponse([{ name: 'Term 1' }]); // active term
+      const res = await post(TEST_TEACHER_USER_ID);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ role: 'STUDENT', baseRole: 'STUDENT', roles: ['STUDENT'] });
+      const decoded = jwt.verify(res.body.data.token, JWT_SECRET);
+      expect(decoded).toMatchObject({ role: 'STUDENT', baseRole: 'STUDENT' });
+      expect(decoded.impersonator.userId).toBe(TEST_ADMIN_USER_ID);
+      expect(decoded.exp - decoded.iat).toBe(2 * 60 * 60);
+    });
+
+    it("refuses a student with no link to this school year (409)", async () => {
+      mockQueryResponse([studentRow()]);
+      mockQueryResponse([signInContext({ student_id: null, grade: null })]);
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        code: 'NO_STUDENT_LINK', message: "This student account isn't linked to this school year.",
+      });
+    });
+
+    it('refuses a student who could not sign in (classrooms off) with a reason for the admin', async () => {
+      mockQueryResponse([studentRow()]);
+      mockQueryResponse([signInContext({ enabled: false })]);
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('CLASSROOM_DISABLED');
+      expect(res.body.message).toMatch(/turned off for your school/);
+    });
+
+    it('refuses the parent view for a student', async () => {
+      mockQueryResponse([studentRow()]);
+      mockQueryResponse([signInContext()]);
+      mockQueryResponse([adminRow]);
+      mockQueryResponse([{ name: 'Term 1' }]);
+      const res = await post(TEST_TEACHER_USER_ID).send({ view: 'PARENT' });
+      expect(res.status).toBe(400);
+    });
   });
 
   it('refuses archived users', async () => {

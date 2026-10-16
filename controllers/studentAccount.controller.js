@@ -17,14 +17,16 @@ const {
   EMAIL_RE,
   ACCOUNT_STATUSES,
   normalizeEmail,
-  splitName,
   conflictMessage,
   deriveStatus,
   toStudentAccountRow,
   loadSchoolInfo,
-  sendStudentInvite,
-  sendStudentPasswordReset,
   inviteStudent,
+  parseStudentIds,
+  resendInviteFor,
+  resetPasswordFor,
+  issueQrCards,
+  voidQr,
 } = require('../services/classroom/studentAccounts');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -212,11 +214,7 @@ async function requireAccount(req, res) {
   return row;
 }
 
-const accountUser = (row) => ({
-  userId: row.user_id,
-  email: row.account_email,
-  firstName: splitName(row.name).firstName,
-});
+const sentOrRefused = (res, result) => (result.sent ? ok(res, { sent: true }) : failed(res, result.status, result.message));
 
 // POST /api/admin/student-accounts/:studentId/resend-invite
 const resendInvite = async (req, res) => {
@@ -224,18 +222,7 @@ const resendInvite = async (req, res) => {
   try {
     const row = await requireAccount(req, res);
     if (!row) return undefined;
-    if (row.is_archived) return failed(res, 409, 'This account is archived. Restore it first.');
-    if (!row.invite_pending) return failed(res, 400, 'This student has already set a password. Send a password link instead.');
-
-    // Only the newest link should work.
-    await db.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
-    try {
-      await sendStudentInvite({ ...accountUser(row), school, schoolInfo: await loadSchoolInfo(school), invitedBy: username });
-    } catch (error) {
-      logger.error({ err: error, userId: row.user_id }, 'Failed to resend a student invite');
-      return failed(res, 502, "The invite email couldn't be sent. Try again.");
-    }
-    return ok(res, { sent: true });
+    return sentOrRefused(res, await resendInviteFor(row, { school, invitedBy: username }));
   } catch (error) {
     logger.error({ err: error }, 'Failed to resend a student invite');
     return failed(res, 500, 'Error resending the invite');
@@ -248,23 +235,55 @@ const resetPassword = async (req, res) => {
   try {
     const row = await requireAccount(req, res);
     if (!row) return undefined;
-    if (row.is_archived) return failed(res, 409, 'This account is archived. Restore it first.');
-    if (row.invite_pending) {
-      return failed(res, 400, "This student hasn't set a password yet. Resend the invite instead.");
-    }
-
-    try {
-      await sendStudentPasswordReset({
-        ...accountUser(row), school, schoolInfo: await loadSchoolInfo(school), requestedBy: username || 'Your school',
-      });
-    } catch (error) {
-      logger.error({ err: error, userId: row.user_id }, 'Failed to send a student password link');
-      return failed(res, 502, "The password email couldn't be sent. Try again.");
-    }
-    return ok(res, { sent: true });
+    return sentOrRefused(res, await resetPasswordFor(row, { school, requestedBy: username }));
   } catch (error) {
     logger.error({ err: error }, 'Failed to send a student password link');
     return failed(res, 500, 'Error sending the password link');
+  }
+};
+
+// POST /api/admin/student-accounts/qr/void  { studentIds }
+// The listed students' live QR cards stop working (a reprint issues new ones).
+const voidQrCards = async (req, res) => {
+  const parsed = parseStudentIds(req.body?.studentIds);
+  if (parsed.error) return failed(res, 400, parsed.error);
+  try {
+    return ok(res, { voided: await voidQr({ school: req.user.school, studentIds: parsed.ids }) });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to void student QR cards');
+    return failed(res, 500, 'Error voiding the QR cards');
+  }
+};
+
+/**
+ * Send a cards PDF from issueQrCards. Ineligible students are listed in
+ * X-Skipped-Students; nothing printable is a 404. Shared with the teacher's
+ * class route (controllers/classroom.controller.js).
+ */
+async function sendQrCards(res, { school, studentIds, requestedBy }) {
+  const { pdf, skippedIds } = await issueQrCards({ school, studentIds, requestedBy });
+  if (!pdf) {
+    return failed(res, 404, 'None of these students can get a QR card. Cards are for invited or active accounts in the QR grades.', {
+      skippedStudentIds: skippedIds,
+    });
+  }
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="student-sign-in-cards.pdf"');
+  res.setHeader('Content-Length', pdf.length);
+  if (skippedIds.length > 0) res.setHeader('X-Skipped-Students', skippedIds.join(','));
+  return res.status(200).send(Buffer.from(pdf));
+}
+
+// POST /api/admin/student-accounts/cards.pdf  { studentIds }
+// Printing always reissues: each printed card voids that student's older one.
+const printQrCards = async (req, res) => {
+  const parsed = parseStudentIds(req.body?.studentIds);
+  if (parsed.error) return failed(res, 400, parsed.error);
+  try {
+    return await sendQrCards(res, { school: req.user.school, studentIds: parsed.ids, requestedBy: req.user.userId });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to print student QR cards');
+    return failed(res, 500, 'Error printing the QR cards');
   }
 };
 
@@ -421,6 +440,9 @@ module.exports = {
   inviteStudents,
   resendInvite,
   resetPassword,
+  voidQrCards,
+  printQrCards,
+  sendQrCards,
   archiveAccount,
   unarchiveAccount,
   listUnlinked,

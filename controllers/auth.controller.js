@@ -18,8 +18,12 @@ const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { GoogleSignInError } = googleSignInService;
+const { assertStudentCanSignIn, parseQrToken, secretMatches } = require('../services/classroom/studentLogin');
+const studentAccountQueries = require('../queries/studentAccount.queries');
 
 const SESSION_TTL = '7d';
+// Students often share school computers (spec §6): their sessions are short.
+const STUDENT_SESSION_TTL = '12h';
 
 // The session JWT. `role` is the view the user is acting in and is what every
 // guard reads; `baseRole` is the database role and `roles` every view the
@@ -41,7 +45,7 @@ const signSessionToken = ({ user, role, roles, activeTerm }) =>
       activeTerm: activeTerm ? activeTerm.name : false,
     },
     process.env.JWT_SECRET,
-    { expiresIn: SESSION_TTL }
+    { expiresIn: user.role === 'STUDENT' ? STUDENT_SESSION_TTL : SESSION_TTL }
   );
 
 // The identity half of a session response, shared by login, /me and /view so
@@ -74,15 +78,28 @@ const recordLogin = (req, { email, user, outcome }) => {
   });
 };
 
-// Everything after "this person proved who they are", shared by the password
-// and Google sign-ins so both apply the same rules: the archive gate, the
-// admin flag repair, the login_events row and the session payload. Throws a
-// { status, message } verdict for an archived account.
-const openSession = async (req, user, { email, message }) => {
+// Everything after "this person proved who they are", shared by the password,
+// Google and QR-card sign-ins so all apply the same rules: the archive gate,
+// the student gate, the admin flag repair, the login_events row and the
+// session payload. Throws a { status, message, code? } verdict for an
+// archived account or a student who may not sign in now. `via` is 'qr' for a
+// QR card (only the youngest grades may use one).
+const openSession = async (req, user, { email, message, via = 'password' }) => {
   // Archived accounts keep their history but can't sign in.
   if (user.is_archived) {
     recordLogin(req, { email, user, outcome: 'archived' });
     throw { status: 403, message: "This account has been archived. Contact your school admin." };
+  }
+
+  // Students also need classrooms on, a link to this year's row, consent and
+  // an enabled grade (services/classroom/studentLogin.js).
+  if (user.role === 'STUDENT') {
+    try {
+      await assertStudentCanSignIn(user, { via });
+    } catch (v) {
+      recordLogin(req, { email, user, outcome: 'student_blocked' });
+      throw v;
+    }
   }
 
   // Admins skip both checks. Persist it, not just the token: otherwise
@@ -314,10 +331,49 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
       if (status >= 500) logger.error({ err: error }, "Login failed");
       return {
         status,
+        // The verdict's machine-readable reason (e.g. CLASSROOM_DISABLED).
+        ...(status < 500 && error.code && { code: error.code }),
         message: error.message || "Internal Server Error"
       };
     }
   };
+
+const QR_INVALID = {
+  status: 401,
+  code: 'QR_INVALID',
+  message: "This card doesn't work any more. Ask your teacher for a new one.",
+};
+
+// POST /api/auth/student-qr { token }
+//
+// A student's printed QR card opens /qr?t=<userId>.<secret>; the page posts
+// the token here. Only the SHA-256 of the card's secret is stored, and a
+// reprint or a void replaces it, so an old card answers 401 QR_INVALID. A
+// valid card then goes through the same openSession gate as a password,
+// with the QR grade limit on top. Same response as /api/auth/login.
+const studentQrLogin = async (req) => {
+  const parsed = parseQrToken(req.body?.token);
+  let user = null;
+
+  try {
+    if (parsed) {
+      const { rows } = await db.query(studentAccountQueries.selectQrLoginUser, [parsed.userId]);
+      user = rows[0] || null;
+    }
+    if (!user || String(user.role) !== 'STUDENT' || user.qr_voided_at || !secretMatches(parsed.secret, user.qr_secret_hash)) {
+      recordLogin(req, { email: user ? user.email : '', user, outcome: 'qr_invalid' });
+      return { ...QR_INVALID };
+    }
+    return await openSession(req, user, { email: user.email, message: 'Signed in', via: 'qr' });
+  } catch (error) {
+    const status = Number.isInteger(error.status) ? error.status : 500;
+    if (status >= 500) {
+      logger.error({ err: error }, "QR sign-in failed");
+      return { status, message: "Sign-in failed. Please try again." };
+    }
+    return { status, ...(error.code && { code: error.code }), message: error.message };
+  }
+};
 
 const GOOGLE_INTENTS = ['login', 'signup'];
 
@@ -465,7 +521,7 @@ const googleSignIn = async (req) => {
       logger.error({ err: error }, "Google sign-in failed");
       return { status, message: "Google sign-in failed. Please try again." };
     }
-    return { status, message: error.message };
+    return { status, ...(error.code && { code: error.code }), message: error.message };
   }
 };
 
@@ -806,6 +862,18 @@ const validateSession = async (req, res) => {
       });
     }
 
+    // The sign-in gate again: a school that turns classrooms off, an
+    // unlinked or withdrawn student... ends the open session (401 + code, so
+    // the client signs out and can say why).
+    if (user.role === 'STUDENT') {
+      try {
+        await assertStudentCanSignIn(user);
+      } catch (v) {
+        if (!v || !v.code) throw v;
+        return res.status(401).json({ success: false, code: v.code, message: v.message });
+      }
+    }
+
     // Same rule as login: an admin is always verified. Repair a row that
     // predates the login fix so this check and the token can't disagree.
     if (user.role === 'ADMIN' && (!user.is_verified || !user.is_verified_school)) {
@@ -926,6 +994,7 @@ module.exports = {
     registerUser,
     login,
     googleSignIn,
+    studentQrLogin,
     switchView,
     sendVerificationEmail,
     verifyEmail,

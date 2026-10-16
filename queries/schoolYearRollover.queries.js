@@ -2,7 +2,8 @@ const rolloverQueries = {
   selectSourceStudents: `
     SELECT student_id, name, grade::text AS grade, oen, homeroom_teacher_id,
            mother_name, mother_email, mother_number,
-           father_name, father_email, father_number, emergency_contact
+           father_name, father_email, father_number, emergency_contact,
+           student_email
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
     ORDER BY name
@@ -19,8 +20,8 @@ const rolloverQueries = {
       name, homeroom_teacher_id, grade, oen, school,
       mother_name, mother_email, mother_number,
       father_name, father_email, father_number, emergency_contact,
-      school_year_id, previous_student_id
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      school_year_id, previous_student_id, student_email
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING student_id
   `,
 
@@ -29,6 +30,15 @@ const rolloverQueries = {
     SELECT $1, ps.parent_id, ps.parent_name, ps.parent_email, ps.parent_number, ps.relation, ps.school
     FROM parent_students ps
     WHERE ps.student_id = $2
+  `,
+
+  // The student's login follows them into the new year's row, beside the
+  // parent links. $1 = new student_id, $2 = old student_id,
+  // $3 = target school_year_id, $4 = linked_by
+  copyStudentAccountLink: `
+    INSERT INTO student_account_links (user_id, student_id, school_year_id, linked_by)
+    SELECT sal.user_id, $1, $3, $4 FROM student_account_links sal WHERE sal.student_id = $2
+    ON CONFLICT DO NOTHING
   `,
 
   selectSourceClasses: `

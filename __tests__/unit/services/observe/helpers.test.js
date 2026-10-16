@@ -45,6 +45,12 @@ describe('featureMap', () => {
   it('does not match partial segments', () => {
     expect(featureFor('/api/userspace')).toBe('Other');
   });
+  it('keeps the student portal apart from the staff Students API', () => {
+    expect(featureFor('/api/student/me')).toBe('Student portal');
+    expect(featureFor('/api/students/:id')).toBe('Students');
+    expect(featureFor('/api/classroom/classes/:classId/qr-cards.pdf')).toBe('Classroom');
+    expect(featureFor('/api/classes/:id')).toBe('Classes');
+  });
   it('builds a CASE expression that ends in Other', () => {
     const sql = featureCaseSql();
     expect(sql.startsWith('CASE')).toBe(true);

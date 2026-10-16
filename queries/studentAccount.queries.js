@@ -121,6 +121,49 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.school_year_id = $3
     RETURNING user_id
   `,
 
+  //  Rows for printing QR cards: any year's rows the caller picked (a student
+  //  row id names its year), never a withdrawn one. $1 = school, $2 = student_id[]
+  selectStudentAccountRowsForCards: `${ROW_SELECT}
+WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT TRUE`,
+
+  //  Printing a card always reissues it: only the hash is stored, so the
+  //  new secret voids any older card. $1 = user_id, $2 = sha-256 hex
+  setQrSecret: `
+    UPDATE student_accounts
+    SET qr_secret_hash = $2, qr_issued_at = NOW(), qr_voided_at = NULL, updated_at = NOW()
+    WHERE user_id = $1
+  `,
+
+  //  Void the live QR cards of these students' logins. $1 = school, $2 = student_id[]
+  voidQrForStudents: `
+    UPDATE student_accounts sa
+    SET qr_voided_at = NOW(), updated_at = NOW()
+    FROM student_account_links sal
+    JOIN students s ON s.student_id = sal.student_id
+    WHERE sa.user_id = sal.user_id
+      AND s.school = $1 AND s.student_id = ANY($2::uuid[])
+      AND sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL
+    RETURNING sa.user_id
+  `,
+
+  //  A QR card's login: the user row plus its card hash. $1 = user_id
+  selectQrLoginUser: `
+    SELECT u.*, sa.qr_secret_hash, sa.qr_voided_at
+    FROM users u
+    JOIN student_accounts sa ON sa.user_id = u.user_id
+    WHERE u.user_id = $1
+  `,
+
+  //  Which of these students are on the class roster. $1 = class_id, $2 = student_id[]
+  selectEnrolledStudentIds: `
+    SELECT student_id FROM class_students WHERE class_id = $1 AND student_id = ANY($2::uuid[])
+  `,
+
+  //  The sign-in address of a student login. $1 = user_id
+  selectStudentUserEmail: `
+    SELECT email FROM users WHERE user_id = $1
+  `,
+
   //  An issued, not yet voided QR card stops working. $1 = user_id
   voidQr: `
     UPDATE student_accounts

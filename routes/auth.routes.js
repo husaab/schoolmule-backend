@@ -1,5 +1,5 @@
 const express = require("express");
-const { registerUser, login, googleSignIn, sendVerificationEmail, verifyEmail, approveUserForSchool,
+const { registerUser, login, googleSignIn, studentQrLogin, sendVerificationEmail, verifyEmail, approveUserForSchool,
 getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserForSchool, logout, requestPasswordReset,
 validateResetToken, resetPassword, validateSession, switchView} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
@@ -14,6 +14,9 @@ router.post( "/login", loginLimiter, responseParser(login));
 // Sign in or sign up with Google (code from the Google popup). Same limiter as
 // a password sign-in: every attempt still needs a real Google account.
 router.post( "/google", loginLimiter, responseParser(googleSignIn));
+// A student's printed QR card (the /qr page posts its token). Same limiter
+// and same response as a password sign-in.
+router.post('/student-qr', loginLimiter, responseParser(studentQrLogin));
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 

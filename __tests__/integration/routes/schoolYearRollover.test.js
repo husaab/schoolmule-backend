@@ -130,6 +130,49 @@ describe('school year rollover', () => {
     expect(rows).toEqual([{ name: 'Moving Kid', grade: 'SK' }]); // Grad Kid graduated, not inserted with grade ''
   });
 
+  it("rollover copies the student's email and login link to the new year's row", async () => {
+    const studentUser = '550e8400-e29b-41d4-a716-446655440020';
+    // The admin running the rollover is recorded as linked_by (FK to users).
+    await pool.query(
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+       VALUES ('550e8400-e29b-41d4-a716-446655440000', 'office.admin@example.com', 'Office Admin', 'hashed', 'Office', 'Admin', 'ALHAADIACADEMY', 'ADMIN', true, true)`,
+    );
+    await pool.query(
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+       VALUES ($1, 'moving.kid@example.com', 'Moving Kid', 'hashed', 'Moving', 'Kid', 'ALHAADIACADEMY', 'STUDENT', true, true)`,
+      [studentUser],
+    );
+    await pool.query(`UPDATE students SET student_email = 'moving.kid@example.com' WHERE student_id = $1`, [movingKid]);
+    await pool.query(
+      `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`,
+      [studentUser, movingKid, year25],
+    );
+
+    const body = {
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },
+      classes: { mode: 'skip' }, terms: [], copyPlanner: false, copyCalendar: false,
+    };
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send(body);
+    expect(res.status).toBe(200);
+
+    const { rows: [rolled] } = await pool.query(
+      `SELECT student_id, student_email FROM students WHERE school_year_id = $1 AND previous_student_id = $2`,
+      [year26, movingKid]);
+    expect(rolled.student_email).toBe('moving.kid@example.com');
+
+    const { rows: links } = await pool.query(
+      `SELECT user_id, student_id, school_year_id::text, linked_by FROM student_account_links ORDER BY school_year_id = $1`,
+      [year26]);
+    expect(links).toEqual([
+      { user_id: studentUser, student_id: movingKid, school_year_id: year25, linked_by: null },
+      { user_id: studentUser, student_id: rolled.student_id, school_year_id: year26, linked_by: '550e8400-e29b-41d4-a716-446655440000' },
+    ]);
+
+    // Re-running the rollover neither duplicates the row nor the link.
+    expect((await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send(body)).status).toBe(200);
+    expect((await pool.query(`SELECT 1 FROM student_account_links`)).rows).toHaveLength(2);
+  });
+
   // Added during review: copyPlanner/copyCalendar execute paths had zero coverage
   // (both existing execute tests pass copyPlanner:false, copyCalendar:false), yet
   // they hit the per-year planner unique constraints and the fixed-block
