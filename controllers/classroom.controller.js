@@ -77,12 +77,15 @@ const getClass = async (req, res) => {
     const row = cardRes.rows[0];
     if (!row) return failed(res, 404, 'Class not found');
     const isAdmin = isAdminUser(req);
+    // Advisory, for hiding controls: a past school year is read-only for teachers. The server enforces
+    // that only for requests made in a past year (resolveSchoolYear), not for a past-year class by id.
+    // requireClassOwnership has already let only an admin or this class's lead or co-teacher through.
+    // Deleting follows editing: every teacher of a current-year class may delete it, as on /classes.
+    const canEdit = isAdmin || row.year_is_active !== false;
     return ok(res, {
       class: toHeaderClass(row),
       teachers,
-      // Advisory, for hiding controls: a past school year is read-only for teachers. The server enforces
-      // that only for requests made in a past year (resolveSchoolYear), not for a past-year class by id.
-      permissions: { canEdit: isAdmin || row.year_is_active !== false, canDelete: isAdmin, isAdmin },
+      permissions: { canEdit, canDelete: canEdit, isAdmin },
       settings: {
         parentsReadPrivateComments: settings.parentsReadPrivateComments,
         studentPhotos: settings.studentPhotos,
