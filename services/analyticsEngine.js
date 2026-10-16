@@ -21,7 +21,7 @@ const db = require('../config/database');
 const q = require('../queries/analytics.queries');
 const stats = require('../utils/statsUtils');
 const gradeEngine = require('./gradeEngine');
-const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup } = gradeEngine;
+const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, cellState } = gradeEngine;
 
 const ENGINE_NAME = 'graded_only';
 const VALID_ENGINES = [ENGINE_NAME];
@@ -151,6 +151,7 @@ function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = 
         is_published: r.is_published,
         parent_comment: r.parent_comment,
         published_at: r.published_at,
+        is_turn_in: Boolean(r.is_turn_in),
       });
     }
 
@@ -261,15 +262,50 @@ function classAverageStats(cls) {
 }
 
 /**
- * Students and parents see a class average only when the class shows it
- * (classes.show_class_average) and at least this many students have a
- * published, counted score in that scope (the assessment, or the class), so
- * an average can never give away a classmate's mark (controller ruling,
- * Task 16 fix round 1).
+ * The privacy floor for class averages: at least this many students with a
+ * counted score in that scope (the assessment, or the class), so an average
+ * can never give a classmate's mark away. Controller rulings, Task 16 fix
+ * rounds 1 and 2:
+ *   - the Classroom surfaces (student portal, parent lens: `classroom`) show
+ *     an average only when the class shows it (classes.show_class_average)
+ *     and the floor is met;
+ *   - the parent portal keeps today's averages, and applies the floor only
+ *     while an assessment is partly published (partlyPublished).
  */
 const MIN_STUDENTS_FOR_AVERAGE = 5;
 
-function getStudentClassBreakdown(matrix, studentId) {
+/**
+ * The assessments of a class that are published for some students only: a
+ * column an assignment or quiz fills (published one student at a time, spec
+ * D3) where some student of the class has no released grade yet (a blank
+ * cell), and every category holding one. Run on a published-only matrix, so
+ * only published columns are present.
+ */
+function partlyPublished(cls) {
+  const partial = new Set();
+  for (const a of cls.assessments) {
+    if (!a.is_turn_in || a.is_parent) continue;
+    for (const stu of cls.students.values()) {
+      const row = stu.rows.find((r) => r.assessment_id === a.assessment_id);
+      const state = row ? cellState(row) : 'blank';
+      if (state === 'blank') { partial.add(a.assessment_id); break; }
+    }
+  }
+  for (const a of cls.assessments) {
+    if (a.is_parent && cls.assessments.some((c) => c.parent_assessment_id === a.assessment_id && partial.has(c.assessment_id))) {
+      partial.add(a.assessment_id);
+    }
+  }
+  return partial;
+}
+
+/**
+ * One student's grades, class by class. `classroom` (the student portal and
+ * the parent lens) applies the Classroom average rule; without it (the
+ * parent portal, its feed and the weekly summary) averages are today's,
+ * floored only while an assessment is partly published.
+ */
+function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {}) {
   const cross = matrix.students.get(studentId);
   if (!cross) return null;
 
@@ -281,19 +317,21 @@ function getStudentClassBreakdown(matrix, studentId) {
     const stu = cls.students.get(studentId);
     const scoreLookup = buildScoreLookup(stu.rows);
     const byId = new Map(cls.assessments.map((a) => [a.assessment_id, a]));
-    // Averages only where the class shows them and enough students count
-    // (MIN_STUDENTS_FOR_AVERAGE); otherwise null.
-    const showAverages = Boolean(cls.showClassAverage);
+    // Which averages show (MIN_STUDENTS_FOR_AVERAGE): see the rule above.
+    const partial = classroom ? null : partlyPublished(cls);
+    const floored = (id) => (classroom ? true : partial.has(id));
+    const shows = !classroom || Boolean(cls.showClassAverage);
     const classAvgByAssessment = new Map();
-    if (showAverages) {
+    if (shows) {
       for (const [id, { avg, n }] of classAverageStats(cls)) {
-        if (n >= MIN_STUDENTS_FOR_AVERAGE) classAvgByAssessment.set(id, avg);
+        if (!floored(id) || n >= MIN_STUDENTS_FOR_AVERAGE) classAvgByAssessment.set(id, avg);
       }
     }
 
     // Mean of the class's non-null finalPcts (null-skip aware).
     const peerPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
-    const showClassAvg = showAverages && peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE;
+    const classFloored = classroom || partial.size > 0;
+    const showClassAvg = shows && peerPcts.length > 0 && (!classFloored || peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE);
 
     classes.push({
       classId: cls.classId,
@@ -491,6 +529,7 @@ module.exports = {
   getStudentClassBreakdown,
   classAveragesByAssessment,
   classAverageStats,
+  partlyPublished,
   MIN_STUDENTS_FOR_AVERAGE,
   classAssessmentAverages,
   invalidateCache,

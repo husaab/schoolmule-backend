@@ -135,7 +135,8 @@ async function buildChildGrades({ studentId, school, req }) {
     engine.buildAnalyticsMatrix(school, termId, engine.normalizeEngine(), PUBLISHED_ONLY),
     db.query(q.selectGradeClasses, [studentId, school, termId === engine.ALL_TERMS ? null : termId]),
   ]);
-  const breakdown = engine.getStudentClassBreakdown(matrix, studentId);
+  // The Classroom average rule: shown by the class and at least 5 counted scores.
+  const breakdown = engine.getStudentClassBreakdown(matrix, studentId, { classroom: true });
   const byClass = new Map((breakdown?.classes ?? []).map((c) => [c.classId, c]));
   const classes = classRows.map((row) => toChildClassGrades(row, byClass.get(row.class_id)));
   // missingCount follows the one work-status rule (studentWork.js): work past

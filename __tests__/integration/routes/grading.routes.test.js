@@ -746,6 +746,58 @@ describe('Integration: grading and per-student Publish', () => {
       expect(sent()).toHaveLength(2);
     });
 
+    // Fix round 2 (controller ruling): the parent portal keeps today's
+    // averages; the floor of 5 applies there only while an assessment is
+    // partly published. The Classroom surfaces keep the full rule.
+    it("the parent portal's averages for a fully published plain assessment are main's numbers, class option off", async () => {
+      const testId = await assessment(sciId, 'Unit test', { weight: 60, max: 50 });
+      await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+        scores: [{ studentId: amalId, assessmentId: testId, score: 40 }, { studentId: bilalId, assessmentId: testId, score: 30 }],
+      });
+      await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+        .send({ assessmentIds: [testId] }), 201);
+
+      // Main's calculation, the engine's own per-assessment average and class mean.
+      engine.invalidateCache();
+      const matrix = await engine.buildAnalyticsMatrix('ALHAADIACADEMY', termId, engine.normalizeEngine(), { publishedOnly: true });
+      const cls = matrix.classes.get(sciId);
+      const mainAvg = engine.classAveragesByAssessment(cls).get(testId);
+      const finals = [...cls.students.values()].map((x) => x.finalPct).filter((p) => p != null);
+      const mainClassAvg = Math.round((finals.reduce((t, p) => t + p, 0) / finals.length) * 10) / 10;
+      expect(mainAvg).toBe(70); // (80 + 60) / 2, two students
+
+      for (const [who, id] of [[asParentA, amalId], [asParentB, bilalId]]) {
+        const grades = await parentGrades(who, id);
+        expect(parentScore(grades, testId).classAvgPct).toBe(mainAvg);
+        expect(grades.classes.find((c) => c.classId === sciId).classAvg).toBe(mainClassAvg);
+      }
+      // The Classroom surfaces keep their rule: off, and fewer than 5.
+      engine.invalidateCache();
+      expect((await get('/api/student/grades', asAmal)).data.classes.find((c) => c.classId === sciId).classAvg).toBeNull();
+    });
+
+    it('a partly published assessment with fewer than 5 released scores hides the average in the parent portal, until it is fully published', async () => {
+      await patch(amalId, { draftScore: 8 });
+      await patch(bilalId, { draftScore: 6 });
+      await patch(daliaId, { draftScore: 7 });
+      await publish([amalId]);
+      for (const [who, id] of [[asParentA, amalId], [asParentB, bilalId]]) {
+        const grades = await parentGrades(who, id);
+        expect(parentScore(grades)).toMatchObject({ classAvgPct: null });
+        expect(grades.classes.find((c) => c.classId === sciId).classAvg).toBeNull();
+      }
+      expect(parentScore(await parentGrades(asParentA, amalId), homeworkId).classAvgPct).toBeNull(); // the category too
+
+      // Everyone released: back to today's numbers, even with 3 students.
+      await publish('graded');
+      const grades = await parentGrades(asParentB, bilalId);
+      expect(parentScore(grades)).toMatchObject({ score: 6, classAvgPct: 70 }); // (80 + 60 + 70) / 3
+      expect(grades.classes.find((c) => c.classId === sciId).classAvg).toBe(70);
+      // The student portal still needs the class option and 5 students.
+      engine.invalidateCache();
+      expect((await get('/api/student/grades', asBilal)).data.classes.find((c) => c.classId === sciId).classAvg).toBeNull();
+    });
+
     it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {
       await patch(amalId, { draftScore: 8 });
       await publish([amalId]);

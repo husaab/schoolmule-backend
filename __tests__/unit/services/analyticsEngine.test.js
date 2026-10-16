@@ -348,35 +348,30 @@ describe('getStudentClassBreakdown', () => {
     expect(category.rollupPct).toBeNull();
   });
 
-  // A class shown its average (classes.show_class_average) with these scores
-  // on a1, one student each: s1, s2, …
-  const shownRows = (scores, extra = {}) => scores.map((score, k) => matrixRow({
-    student_id: `s${k + 1}`, student_name: `Student ${k + 1}`, score, show_class_average: true, ...extra,
-  }));
-
+  // The parent portal (no `classroom` option) keeps today's averages: these
+  // two tests are main's, unchanged.
   it('reports the class average per assessment, skipping excluded and ungraded peers', () => {
     const rows = [
-      ...shownRows([80, 60, 70, 90, 50]),
-      matrixRow({ student_id: 's6', student_name: 'Cal', score: 10, is_excluded: true, show_class_average: true }),
-      matrixRow({ student_id: 's7', student_name: 'Dee', score: null, show_class_average: true }),
+      matrixRow({ score: 80 }),
+      matrixRow({ student_id: 's2', student_name: 'Bob', score: 60 }),
+      matrixRow({ student_id: 's3', student_name: 'Cal', score: 10, is_excluded: true }),
+      matrixRow({ student_id: 's4', student_name: 'Dee', score: null }),
     ];
     const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip');
     const breakdown = engine.getStudentClassBreakdown(matrix, 's1');
     const quiz = breakdown.classes[0].assessmentScores.find((a) => a.assessmentId === 'a1');
     expect(quiz.classAvgPct).toBe(70);
-    expect(breakdown.classes[0].classAvg).toBe(70);
 
-    const ungraded = engine.getStudentClassBreakdown(matrix, 's7');
+    const ungraded = engine.getStudentClassBreakdown(matrix, 's4');
     expect(ungraded.classes[0].assessmentScores[0].classAvgPct).toBe(70);
   });
 
   it('averages category rollups across peers and leaves it null when nobody is graded', () => {
     const cat = (student_id, kidScore) => [
-      matrixRow({ student_id, assessment_id: 'cat', is_parent: true, weight_points: 100, max_score: null, score: null, show_class_average: true }),
-      matrixRow({ student_id, assessment_id: 'kid1', parent_assessment_id: 'cat', weight_points: 10, score: kidScore, show_class_average: true }),
+      matrixRow({ student_id, assessment_id: 'cat', is_parent: true, weight_points: 100, max_score: null, score: null }),
+      matrixRow({ student_id, assessment_id: 'kid1', parent_assessment_id: 'cat', weight_points: 10, score: kidScore }),
     ];
-    const peers = [['s1', 90], ['s2', 50], ['s3', 70], ['s4', 70], ['s5', 70]].flatMap(([id, score]) => cat(id, score));
-    const matrix = engine.buildMatrixFromRows(peers, 't1', 'null_skip');
+    const matrix = engine.buildMatrixFromRows([...cat('s1', 90), ...cat('s2', 50)], 't1', 'null_skip');
     const category = engine
       .getStudentClassBreakdown(matrix, 's1')
       .classes[0].assessmentScores.find((a) => a.assessmentId === 'cat');
@@ -387,42 +382,84 @@ describe('getStudentClassBreakdown', () => {
     expect(none.every((a) => a.classAvgPct === null)).toBe(true);
   });
 
-  // Controller ruling (Task 16 fix round 1): students and parents see a class
+  // Rows on a1 for s1, s2, … with these scores (null = no released grade).
+  const peerRows = (scores, extra = {}) => scores.map((score, k) => matrixRow({
+    student_id: `s${k + 1}`, student_name: `Student ${k + 1}`, score, ...extra,
+  }));
+  const portal = (rows, studentId = 's1', options) =>
+    engine.getStudentClassBreakdown(engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true }), studentId, options).classes[0];
+
+  describe('the parent portal: today\'s averages, floored only while partly published (fix round 2)', () => {
+    it('a fully published assessment averages exactly as on main, whatever the class option', () => {
+      const cls = portal(peerRows([80, 60]));
+      expect(cls.assessmentScores[0].classAvgPct).toBe(70);
+      expect(cls.classAvg).toBe(70);
+      // An assignment's column every student has a grade on is fully published: today's numbers too.
+      const full = portal(peerRows([80, 60, 70], { is_turn_in: true }));
+      expect(full.assessmentScores[0].classAvgPct).toBe(70);
+      expect(full.classAvg).toBe(70);
+    });
+
+    it.each([
+      [1, null],
+      [4, null],
+      [5, 70],
+    ])('partly published (%i released, others still to come): the average is %p', (count, expected) => {
+      const scores = [...[80, 60, 70, 90, 50].slice(0, count), null];
+      const cls = portal(peerRows(scores, { is_turn_in: true }), `s${scores.length}`);
+      expect(cls.assessmentScores[0].classAvgPct).toBe(expected);
+      expect(cls.classAvg).toBe(expected);
+    });
+
+    it('a category holding a partly published column is floored too', () => {
+      const cat = (student_id, kidScore) => [
+        matrixRow({ student_id, assessment_id: 'cat', is_parent: true, weight_points: 100, max_score: null, score: null }),
+        matrixRow({ student_id, assessment_id: 'kid1', parent_assessment_id: 'cat', weight_points: 10, score: kidScore, is_turn_in: true }),
+      ];
+      const cls = portal([...cat('s1', 90), ...cat('s2', null)], 's2');
+      expect(cls.assessmentScores.find((a) => a.assessmentId === 'cat').classAvgPct).toBeNull();
+      expect(cls.assessmentScores.find((a) => a.assessmentId === 'kid1').classAvgPct).toBeNull();
+    });
+  });
+
+  // Controller ruling (fix round 1): the Classroom surfaces show a class
   // average only when the class shows it and at least 5 students have a
-  // published, counted score in that scope; a mark can't be worked out.
-  it.each([
-    [1, null],
-    [4, null],
-    [5, 70],
-  ])('with %i published, counted scores the class average is %p', (count, expected) => {
-    const scores = [80, 60, 70, 90, 50].slice(0, count);
-    const rows = [...shownRows(scores), matrixRow({ student_id: 's9', student_name: 'Eve', score: null, show_class_average: true })];
-    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true });
-    const cls = engine.getStudentClassBreakdown(matrix, 's9').classes[0];
-    expect(cls.assessmentScores[0].classAvgPct).toBe(expected);
-    expect(cls.classAvg).toBe(expected);
-    expect(engine.MIN_STUDENTS_FOR_AVERAGE).toBe(5);
-  });
+  // published, counted score in that scope.
+  describe('the Classroom surfaces (`classroom`)', () => {
+    const classroom = { classroom: true };
 
-  it('a class that does not show its average gives none, however many students count', () => {
-    const matrix = engine.buildMatrixFromRows(shownRows([80, 60, 70, 90, 50, 40], { show_class_average: false }), 't1', 'null_skip');
-    const cls = engine.getStudentClassBreakdown(matrix, 's1').classes[0];
-    expect(cls.assessmentScores[0].classAvgPct).toBeNull();
-    expect(cls.classAvg).toBeNull();
-    // Staff averages are not gated: the same matrix still averages the column.
-    expect(engine.classAveragesByAssessment(matrix.classes.get('c1')).get('a1')).toBe(65);
-  });
+    it.each([
+      [1, null],
+      [4, null],
+      [5, 70],
+    ])('with %i published, counted scores the class average is %p', (count, expected) => {
+      const scores = [...[80, 60, 70, 90, 50].slice(0, count), null];
+      const cls = portal(peerRows(scores, { show_class_average: true }), `s${scores.length}`, classroom);
+      expect(cls.assessmentScores[0].classAvgPct).toBe(expected);
+      expect(cls.classAvg).toBe(expected);
+      expect(engine.MIN_STUDENTS_FOR_AVERAGE).toBe(5);
+    });
 
-  it('an unpublished score never counts toward the five', () => {
-    const rows = [
-      ...shownRows([80, 60, 70, 90]),
-      matrixRow({ student_id: 's5', student_name: 'Late', score: 50, show_class_average: true, assessment_id: 'a2', is_published: false }),
-      ...shownRows([null, null, null, null], { assessment_id: 'a2', is_published: false }),
-    ];
-    const matrix = engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true });
-    const cls = engine.getStudentClassBreakdown(matrix, 's1').classes[0];
-    expect(cls.assessmentScores.find((a) => a.assessmentId === 'a1').classAvgPct).toBeNull();
-    expect(cls.classAvg).toBeNull();
+    it('a class that does not show its average gives none, however many students count', () => {
+      const rows = peerRows([80, 60, 70, 90, 50, 40]);
+      const cls = portal(rows, 's1', classroom);
+      expect(cls.assessmentScores[0].classAvgPct).toBeNull();
+      expect(cls.classAvg).toBeNull();
+      // The parent portal and staff averages are not gated by the option.
+      expect(portal(rows).assessmentScores[0].classAvgPct).toBe(65);
+      expect(engine.classAveragesByAssessment(engine.buildMatrixFromRows(rows, 't1', 'null_skip').classes.get('c1')).get('a1')).toBe(65);
+    });
+
+    it('an unpublished score never counts toward the five', () => {
+      const rows = [
+        ...peerRows([80, 60, 70, 90], { show_class_average: true }),
+        matrixRow({ student_id: 's5', student_name: 'Late', score: 50, show_class_average: true, assessment_id: 'a2', is_published: false }),
+        ...peerRows([null, null, null, null], { assessment_id: 'a2', is_published: false, show_class_average: true }),
+      ];
+      const cls = portal(rows, 's1', classroom);
+      expect(cls.assessmentScores.find((a) => a.assessmentId === 'a1').classAvgPct).toBeNull();
+      expect(cls.classAvg).toBeNull();
+    });
   });
 
   it('lists a flagged-missing child (never the category) in missingWork, and exposes cell status', () => {

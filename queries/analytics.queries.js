@@ -39,6 +39,7 @@ const analyticsQueries = {
       a.is_published,
       a.parent_comment,
       a.published_at,
+      (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
       (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
@@ -53,6 +54,12 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- An assignment or quiz fills the column (at most one item per column):
+    -- its grades can be published one student at a time (spec D3).
+    LEFT JOIN classwork_items AS ti
+      ON ti.assessment_id = a.assessment_id
+     AND ti.kind IN ('assignment', 'quiz')
+     AND ti.deleted_at IS NULL
     WHERE c.school  = $1
       AND c.term_id = $2
       AND c.grade NOT IN ('JK', 'SK')
@@ -89,6 +96,7 @@ const analyticsQueries = {
       a.is_published,
       a.parent_comment,
       a.published_at,
+      (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
       (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
@@ -103,6 +111,12 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- An assignment or quiz fills the column (at most one item per column):
+    -- its grades can be published one student at a time (spec D3).
+    LEFT JOIN classwork_items AS ti
+      ON ti.assessment_id = a.assessment_id
+     AND ti.kind IN ('assignment', 'quiz')
+     AND ti.deleted_at IS NULL
     WHERE c.school  = $1
       AND c.grade NOT IN ('JK', 'SK')
     ORDER BY c.class_id, cs.student_id, a.sort_order NULLS LAST, a.date NULLS LAST
@@ -138,6 +152,7 @@ const analyticsQueries = {
       a.is_published,
       a.parent_comment,
       a.published_at,
+      (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
       (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
@@ -152,6 +167,12 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- An assignment or quiz fills the column (at most one item per column):
+    -- its grades can be published one student at a time (spec D3).
+    LEFT JOIN classwork_items AS ti
+      ON ti.assessment_id = a.assessment_id
+     AND ti.kind IN ('assignment', 'quiz')
+     AND ti.deleted_at IS NULL
     WHERE c.class_id = $1
       AND c.grade NOT IN ('JK', 'SK')
     ORDER BY c.class_id, cs.student_id, a.sort_order NULLS LAST, a.date NULLS LAST

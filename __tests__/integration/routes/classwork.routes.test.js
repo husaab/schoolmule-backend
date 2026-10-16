@@ -348,17 +348,14 @@ describe('Integration: classwork', () => {
       expect(avgOf(noMax)).toBe(7); // no max on file counts as 100, as in the engine
       expect(avgOf(hwIds[0])).toBeNull(); // not published
 
-      // Parity with the engine's per-assessment average over the parent
-      // portal's published-only matrix (one calculation). Parents themselves
-      // see it only when the class shows it and 5 students count (T16 fix 1).
+      // Parity with the parent portal's number for the same columns.
       engine.invalidateCache('ALHAADIACADEMY');
       const matrix = await engine.buildAnalyticsMatrix('ALHAADIACADEMY', termId, engine.normalizeEngine(), { publishedOnly: true });
-      const engineAvgs = engine.classAveragesByAssessment(matrix.classes.get(sciId));
-      expect([avgOf(unit1Id), avgOf(noMax)]).toEqual([engineAvgs.get(unit1Id), engineAvgs.get(noMax)]);
-      const single = (await call('get', `${BASE}/items/${list.find((i) => i.gradebook?.assessmentId === unit1Id).itemId}`)).body.data;
-      expect(single.classAvgPct).toBe(engineAvgs.get(unit1Id));
       const breakdown = engine.getStudentClassBreakdown(matrix, amalId).classes.find((c) => c.classId === sciId);
-      expect(breakdown.assessmentScores.find((r) => r.assessmentId === unit1Id).classAvgPct).toBeNull();
+      const portalAvg = (id) => breakdown.assessmentScores.find((r) => r.assessmentId === id).classAvgPct;
+      expect([avgOf(unit1Id), avgOf(noMax)]).toEqual([portalAvg(unit1Id), portalAvg(noMax)]);
+      const single = (await call('get', `${BASE}/items/${list.find((i) => i.gradebook?.assessmentId === unit1Id).itemId}`)).body.data;
+      expect(single.classAvgPct).toBe(portalAvg(unit1Id));
 
       // A published assignment's column is not a plain assessment: no average.
       const a = await createItem(sciId, homeworkAssignment());
