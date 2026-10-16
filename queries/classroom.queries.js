@@ -10,6 +10,7 @@
 // class, `s` the student and `cs` the roster row.
 
 const { studentAvatarSql } = require('../utils/avatar');
+const { GRADE_RANK } = require('../utils/gradeRank');
 
 const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
 
@@ -48,7 +49,7 @@ const COMING_UP = `
     AND ($5::uuid IS NULL OR c.class_id = $5::uuid)
     AND COALESCE(a.is_parent, FALSE) = FALSE
     AND a.date BETWEEN ${TORONTO_TODAY} AND ${TORONTO_TODAY} + 14
-  ORDER BY a.date, LENGTH(c.grade::text), c.grade::text, c.subject, a.sort_order NULLS LAST, a.name
+  ORDER BY a.date, ${GRADE_RANK('c.grade::text')}, c.subject, a.sort_order NULLS LAST, a.name
   LIMIT 8`;
 
 // One ClassCard row. `extraColumns` is the header's additions (options, year).
@@ -82,7 +83,7 @@ const classroomQueries = {
     `c.school = $2 AND c.school_year_id = $4 AND ($5::boolean OR c.archived_at IS NULL)
   AND ${CALLER_SCOPE}`,
     `
-ORDER BY LENGTH(c.grade::text), c.grade::text, c.subject`,
+ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
   ),
 
   //  The class header: the same card plus the class options and the year it
@@ -125,8 +126,7 @@ ORDER BY LENGTH(c.grade::text), c.grade::text, c.subject`,
     SELECT s.student_id, s.name, s.grade::text AS grade, ${studentAvatarSql('s')},
            u.user_id, u.is_archived, (u.password = '!') AS invite_pending, u.last_seen_at,
            COALESCE((SELECT json_agg(json_build_object(
-                       'name', COALESCE(NULLIF(TRIM(CONCAT(pu.first_name, ' ', pu.last_name)), ''),
-                                        NULLIF(TRIM(ps.parent_name), ''), NULLIF(TRIM(ps.parent_email), '')),
+                       'name', COALESCE(NULLIF(TRIM(CONCAT(pu.first_name, ' ', pu.last_name)), ''), NULLIF(TRIM(ps.parent_name), '')),
                        'relation', NULLIF(TRIM(ps.relation), ''),
                        'hasAccount', pu.user_id IS NOT NULL,
                        'emailKey', LOWER(TRIM(COALESCE(pu.email, ps.parent_email, ''))))

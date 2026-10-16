@@ -9,6 +9,7 @@ const { deriveStatus, isQrEligible } = require('./studentAccounts');
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 
+const UNNAMED_PARENT = 'Parent';
 const KINDERGARTEN_RE = /kindergarten|^[js]k\b/i;
 
 /** "Grade 5 Science"; a JK or SK class reads "JK Science" (and just its own name when that already says so). */
@@ -71,18 +72,20 @@ const toTeacher = (row, photoUrl) => ({
 
 /**
  * One entry per parent address (case-insensitive). Rows arrive account-holders
- * first, so the copy with a login is the one kept. A row with no address
- * dedupes on its name; one with neither is dropped.
+ * first, so the copy with a login is the one kept. A parent with no name on
+ * file shows as "Parent" (the address itself never leaves the server); a row
+ * with no address dedupes on its name; one with neither is dropped.
  */
 function dedupeParents(parents) {
   const seen = new Set();
   const out = [];
   for (const p of parents || []) {
-    if (!p.name) continue;
-    const key = p.emailKey || `name:${p.name.toLowerCase()}`;
+    if (!p.name && !p.emailKey) continue;
+    const name = p.name || UNNAMED_PARENT;
+    const key = p.emailKey || `name:${name.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ name: p.name, relation: p.relation ?? null, hasAccount: Boolean(p.hasAccount) });
+    out.push({ name, relation: p.relation ?? null, hasAccount: Boolean(p.hasAccount) });
   }
   return out;
 }

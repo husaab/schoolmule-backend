@@ -78,7 +78,8 @@ const getClass = async (req, res) => {
     return ok(res, {
       class: toHeaderClass(row),
       teachers,
-      // A past school year is read-only for teachers (the write middleware refuses them).
+      // Advisory, for hiding controls: a past school year is read-only for teachers. The server enforces
+      // that only for requests made in a past year (resolveSchoolYear), not for a past-year class by id.
       permissions: { canEdit: isAdmin || row.year_is_active !== false, canDelete: isAdmin, isAdmin },
       settings: {
         parentsReadPrivateComments: settings.parentsReadPrivateComments,

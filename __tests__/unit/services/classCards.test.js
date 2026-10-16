@@ -36,6 +36,19 @@ describe('dedupeParents', () => {
     expect(out).toEqual([{ name: 'Nour Haddad', relation: 'Aunt', hasAccount: false }]);
   });
 
+  it('shows a parent with an address but no name as "Parent", one entry per address, and never returns the address', () => {
+    const out = dedupeParents([
+      { name: null, relation: null, hasAccount: false, emailKey: 'a@example.com' },
+      { name: null, relation: 'Father', hasAccount: false, emailKey: 'b@example.com' },
+      { name: null, relation: null, hasAccount: false, emailKey: 'A@example.com'.toLowerCase() },
+    ]);
+    expect(out).toEqual([
+      { name: 'Parent', relation: null, hasAccount: false },
+      { name: 'Parent', relation: 'Father', hasAccount: false },
+    ]);
+    expect(JSON.stringify(out)).not.toContain('example.com');
+  });
+
   it('tolerates a missing list', () => {
     expect(dedupeParents(null)).toEqual([]);
   });

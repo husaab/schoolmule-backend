@@ -16,11 +16,17 @@ const OTHER_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440003';
 const MONA_ID = '550e8400-e29b-41d4-a716-446655440004';
 const AMAL_USER_ID = '550e8400-e29b-41d4-a716-446655440010';
 const SAMI_USER_ID = '550e8400-e29b-41d4-a716-446655440011';
+const FOREIGN_ADMIN_ID = '550e8400-e29b-41d4-a716-446655440020';
+const FOREIGN_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440021';
 
 const asAdmin = { userId: ADMIN_ID, username: 'Office Admin', email: 'office@example.com', role: 'ADMIN' };
 const asTeacher = { userId: TEACHER_ID, username: 'Ziad Teacher', email: 'teacher@example.com', role: 'TEACHER' };
 const asCoTeacher = { userId: CO_TEACHER_ID, username: 'Omar Coteacher', email: 'omar.coteacher@example.com', role: 'TEACHER' };
 const asOtherTeacher = { userId: OTHER_TEACHER_ID, username: 'Dina Teacher', email: 'dina.teacher@example.com', role: 'TEACHER' };
+const asParent = { userId: MONA_ID, username: 'Mona Haddad', email: 'mona.haddad@example.com', role: 'PARENT' };
+const asForeignAdmin = {
+  userId: FOREIGN_ADMIN_ID, username: 'Yard Admin', email: 'yard.admin@example.com', role: 'ADMIN', school: 'PLAYGROUND',
+};
 const asStudent = {
   userId: AMAL_USER_ID, username: 'Amal Haddad', email: 'amal.haddad@example.com', role: 'STUDENT', roles: ['STUDENT'],
 };
@@ -195,6 +201,36 @@ describe('Integration: classroom teacher read API', () => {
     it('a class with no roster has a student count of zero', async () => {
       const data = await cards();
       expect(data.classes.find((c) => c.classId === sciId).studentCount).toBe(0);
+    });
+
+    it('cards list JK and SK first, then Grades 1 to 8, with the subject as the tiebreak', async () => {
+      await makeClass('Math', '8', TEACHER_ID);
+      await makeClass('Science', '1', TEACHER_ID);
+      await makeClass('Math', '1', TEACHER_ID);
+      await makeClass('Art', '1', TEACHER_ID);
+      await makeClass('Play and Learn', 'SK', TEACHER_ID);
+      await makeClass('Play and Learn', 'JK', TEACHER_ID);
+
+      const data = await cards();
+      expect(data.classes.map((c) => `${c.grade} ${c.subject}`)).toEqual([
+        'JK Play and Learn', 'SK Play and Learn', '1 Art', '1 Math', '1 Science', '4 Math', '5 Science', '8 Math',
+      ]);
+    });
+
+    it('comingUp puts JK and SK before Grades 1 to 8 when assessments fall on the same day', async () => {
+      const grade8 = await makeClass('Math', '8', TEACHER_ID);
+      const grade1 = await makeClass('Science', '1', TEACHER_ID);
+      const sk = await makeClass('Play and Learn', 'SK', TEACHER_ID);
+      const jk = await makeClass('Play and Learn', 'JK', TEACHER_ID);
+      await assessment(grade8, 'Eighth', 1);
+      await assessment(grade1, 'First', 1);
+      await assessment(sk, 'Senior', 1);
+      await assessment(jk, 'Junior', 1);
+
+      const data = await cards();
+      expect(data.comingUp.map((r) => r.classLabel)).toEqual([
+        'JK Play and Learn', 'SK Play and Learn', 'Grade 1 Science', 'Grade 8 Math',
+      ]);
     });
 
     it('comingUp lists assessments in the next 14 days across the teacher\'s classes', async () => {
@@ -398,6 +434,14 @@ describe('Integration: classroom teacher read API', () => {
       expect(byId[ramiId].parents).toEqual([]);
     });
 
+    it('a parent with no name on file shows as "Parent" and the address never leaves the server', async () => {
+      await parentLink(ramiId, { email: 'only.address@example.com' });
+      const res = await get(`${BASE}/classes/${sciId}/people`);
+      const rami = res.body.data.students.find((s) => s.studentId === ramiId);
+      expect(rami.parents).toEqual([{ name: 'Parent', relation: null, hasAccount: false }]);
+      expect(JSON.stringify(res.body)).not.toContain('only.address@example.com');
+    });
+
     it('teachers are listed lead first, with the roster header counts', async () => {
       const data = await people(sciId);
       expect(data.teachers.map((t) => [t.name, t.role])).toEqual([['Ziad Teacher', 'lead'], ['Omar Coteacher', 'co']]);
@@ -454,6 +498,65 @@ describe('Integration: classroom teacher read API', () => {
       const res = await get(`${BASE}/settings`, asStudent);
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+    });
+  });
+
+  describe('authorization', () => {
+    let foreignClassId;
+
+    beforeEach(async () => {
+      await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
+      const foreignYearId = (await pool.query(
+        `SELECT school_year_id FROM school_years WHERE school = 'PLAYGROUND' AND is_active LIMIT 1`,
+      )).rows[0].school_year_id;
+      await pool.query(
+        `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ($1, 'yard.admin@example.com', 'Yard Admin', 'hashed', 'Yard', 'Admin', 'PLAYGROUND', 'ADMIN', true, true),
+                ($2, 'yard.teacher@example.com', 'Yara Teacher', 'hashed', 'Yara', 'Teacher', 'PLAYGROUND', 'TEACHER', true, true)`,
+        [FOREIGN_ADMIN_ID, FOREIGN_TEACHER_ID],
+      );
+      foreignClassId = (await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_name, school_year_id)
+         VALUES ('PLAYGROUND', '5', 'Science', 'Yara Teacher', $1, 'Term 1', $2) RETURNING class_id`,
+        [FOREIGN_TEACHER_ID, foreignYearId],
+      )).rows[0].class_id;
+    });
+
+    it("another school's classes never reach this school's admin, in the list, header or People", async () => {
+      const list = await cards('', asAdmin);
+      expect(list.classes.map((c) => c.classId)).not.toContain(foreignClassId);
+
+      const header = await get(`${BASE}/classes/${foreignClassId}`, asAdmin);
+      expect(header.status).toBe(403);
+      const roster = await get(`${BASE}/classes/${foreignClassId}/people`, asAdmin);
+      expect(roster.status).toBe(403);
+    });
+
+    it("this school's classes never reach another school's admin", async () => {
+      const list = await cards('', asForeignAdmin);
+      expect(list.classes.map((c) => c.classId)).toEqual([foreignClassId]);
+
+      const header = await get(`${BASE}/classes/${sciId}`, asForeignAdmin);
+      expect(header.status).toBe(403);
+      const roster = await get(`${BASE}/classes/${sciId}/people`, asForeignAdmin);
+      expect(roster.status).toBe(403);
+    });
+
+    it('a teacher of another school is refused a class by its id', async () => {
+      const asForeignTeacher = { ...asTeacher, userId: FOREIGN_TEACHER_ID, school: 'PLAYGROUND' };
+      const res = await get(`${BASE}/classes/${sciId}`, asForeignTeacher);
+      expect(res.status).toBe(403);
+    });
+
+    it.each([
+      ['the list', () => `${BASE}/classes`],
+      ['the header', (ids) => `${BASE}/classes/${ids.sciId}`],
+      ['People', (ids) => `${BASE}/classes/${ids.sciId}/people`],
+      ['the settings', () => `${BASE}/settings`],
+    ])('a parent token is refused %s', async (_label, url) => {
+      const res = await get(url({ sciId }), asParent);
+      expect(res.status).toBe(403);
+      expect(res.body.status).toBe('failed');
     });
   });
 });
