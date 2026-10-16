@@ -5,7 +5,9 @@
 // by the parent's read-only lens (studentId = a child the parent owns, reader
 // = the parent). The reader only decides read and "Got it" state; what a
 // child's classes, Stream and teachers are never depends on who is looking.
-// Archived classes never appear.
+// Archived classes never appear. Classwork status (a card's next item and
+// missing count, Stream notices) comes from studentWork.js, the same rule
+// as the To-do.
 
 const db = require('../../config/database');
 const q = require('../../queries/childClassroom.queries');
@@ -13,6 +15,7 @@ const { selectCurrentTerm } = require('../../queries/termScope');
 const { identityOf } = require('./classView');
 const { listStudentStream } = require('./studentStream');
 const { signedPhotoUrl } = require('../profile/photos');
+const { listWork, classSummaries, noticesOf } = require('./studentWork');
 
 const firstNameOf = (name) => String(name || '').trim().split(/\s+/)[0] || '';
 
@@ -43,8 +46,11 @@ async function currentTerm(school, schoolYearId) {
 
 const toTeacherLite = (t) => ({ userId: t.userId, name: t.name, avatar: t.avatar ?? null, role: t.role });
 
-/** selectChildClasses row → StudentClassCard. */
-function toStudentClassCard(row) {
+/**
+ * selectChildClasses row → StudentClassCard. `work` is the class's
+ * classSummaries entry: its next item for this student and missing count.
+ */
+function toStudentClassCard(row, work = null) {
   const teachers = (row.teachers || []).map(toTeacherLite);
   return {
     classId: row.class_id,
@@ -54,10 +60,29 @@ function toStudentClassCard(row) {
     identity: identityOf(row),
     teacher: teachers.find((t) => t.role === 'lead') || null,
     teachers,
-    next: null, // T15: the class's next item for this student
-    missingCount: 0, // T15
+    next: work?.next ?? null,
+    missingCount: work?.missingCount ?? 0,
     hasNewPost: Boolean(row.has_new_post),
   };
+}
+
+/**
+ * The child's current-term classes of the year (never archived ones), by
+ * subject, and the child's work in them (studentWork items), so home and the
+ * parent summary count from the same rows the cards show.
+ * @param {{ studentId: string, school: string, schoolYearId: string|null, readerId: string }} p
+ * @returns {Promise<{ classes: object[], work: object[] }>} StudentClassCard[] and work items
+ */
+async function loadChildClassroom({ studentId, school, schoolYearId, readerId }) {
+  const term = await currentTerm(school, schoolYearId);
+  const [{ rows }, work] = await Promise.all([
+    db.query(q.selectChildClasses, [
+      studentId, school, schoolYearId ?? null, term?.term_id ?? null, term?.name ?? null, readerId,
+    ]),
+    listWork({ studentId, school, schoolYearId, term }),
+  ]);
+  const summaries = classSummaries(work);
+  return { classes: rows.map((row) => toStudentClassCard(row, summaries.get(row.class_id))), work };
 }
 
 /**
@@ -65,12 +90,8 @@ function toStudentClassCard(row) {
  * @param {{ studentId: string, school: string, schoolYearId: string|null, readerId: string }} p
  * @returns {Promise<object[]>} StudentClassCard[]
  */
-async function listChildClasses({ studentId, school, schoolYearId, readerId }) {
-  const term = await currentTerm(school, schoolYearId);
-  const { rows } = await db.query(q.selectChildClasses, [
-    studentId, school, schoolYearId ?? null, term?.term_id ?? null, term?.name ?? null, readerId,
-  ]);
-  return rows.map(toStudentClassCard);
+async function listChildClasses(p) {
+  return (await loadChildClassroom(p)).classes;
 }
 
 /** The class's teachers (lead first) with signed photo URLs; empty unless the child is on the roster. */
@@ -109,12 +130,17 @@ async function getChildClass({ studentId, classId, school, schoolYearId }) {
 
 /**
  * The class Stream: the class's posts in the child's audience, with the
- * reader's own read and "Got it" state. Callers check getChildClass first.
+ * reader's own read and "Got it" state, and the classwork the child can see
+ * (posted assignments, quizzes and materials, newest first) as notices.
+ * Callers check getChildClass first.
  * @returns {Promise<{ announcements: object[], notices: object[] }>}
  */
 async function getChildStream({ studentId, classId, school, schoolYearId, readerId, limit }) {
-  const announcements = await listStudentStream({ studentId, school, schoolYearId, classId, readerId, limit });
-  return { announcements, notices: [] }; // notices: T15
+  const [announcements, work] = await Promise.all([
+    listStudentStream({ studentId, school, schoolYearId, classId, readerId, limit }),
+    listWork({ studentId, school, classId }),
+  ]);
+  return { announcements, notices: noticesOf(work) };
 }
 
 /** People for a child: the teachers only, never classmates. Callers check getChildClass first. */
@@ -144,6 +170,7 @@ async function listAckNeeded({ parentId, school, schoolYearId }) {
 
 module.exports = {
   loadChild,
+  loadChildClassroom,
   listChildClasses,
   getChildClass,
   getChildStream,

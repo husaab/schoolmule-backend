@@ -290,7 +290,8 @@ describe('Integration: classwork', () => {
         status: 'posted', effectiveStatus: 'posted', submissionMode: 'file', audience: 'all', topicId: null,
         dueAt: new Date(dueAt).toISOString(), date: torontoDay(dueAt), attachmentCount: 0, attachments: [], studentIds: [],
         emailStudents: true, remindStudents: true, showEarly: false, classAvgPct: null,
-        counts: { turnedIn: 0, missing: 0, notYet: 0, toReview: 0, drafts: 0, published: 0 },
+        // Both students can see it and nothing is turned in yet (the T15 counts).
+        counts: { turnedIn: 0, missing: 0, notYet: 2, toReview: 0, drafts: 0, published: 0 },
       });
       expect(item.postedAt).not.toBeNull();
       expect(item.gradebook).toMatchObject({

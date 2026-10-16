@@ -6,12 +6,16 @@
 // so a parent reads only their own children. The lens reuses the student
 // portal's read model (services/classroom/childClassroom.js, childGrades.js)
 // with the parent as the reader: it shows a child's classes exactly as the
-// child sees them, with the parent's own read and "Got it" state.
+// child sees them, with the parent's own read and "Got it" state. Classwork
+// comes from the student's own service (studentWork.js) read-only: no
+// submission row is ever created and every can* flag is false.
 
 const logger = require('../logger');
 const {
-  loadChild, listChildClasses, getChildClass, getChildStream, listParentChildren, listAckNeeded,
+  loadChild, loadChildClassroom, listChildClasses, getChildClass, getChildStream, listParentChildren, listAckNeeded,
 } = require('../services/classroom/childClassroom');
+const work = require('../services/classroom/studentWork');
+const { newestDueFirst } = require('../services/classroom/todoGroups');
 const { buildChildGrades, isTermParamValid, allItems, recentItems } = require('../services/classroom/childGrades');
 const { listStudentStream } = require('../services/classroom/studentStream');
 
@@ -30,9 +34,21 @@ const NOT_ENROLLED = { status: 'failed', code: 'NOT_ENROLLED', message: "This st
 
 const byNewest = (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt);
 
+/** A service error (httpError) answers as itself; anything else is logged as a 500. */
+function fail(res, error, userMessage, context) {
+  if (error && error.expose && error.status) {
+    return res.status(error.status).json({ status: 'failed', message: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+  logger.error({ err: error, ...context }, userMessage);
+  return failed(res, 500, userMessage);
+}
+
 // GET /api/parent-portal/classroom/summary
-// "Needs you" plus one card per child of the selected year. Grades use the
-// default term of the year (the summary takes no ?termId=).
+// "Needs you" (posts asking for a "Got it", then each child's missing work due
+// in the last 14 days) plus one card per child of the selected year. Grades
+// use the default term of the year (the summary takes no ?termId=); due this
+// week (assigned, due within 7 days) and missing come from the child's
+// current-term work, the same rows the child's To-do shows.
 const getClassroomSummary = async (req, res) => {
   const { userId, school } = req.user;
   const schoolYearId = req.schoolYear?.schoolYearId ?? null;
@@ -43,14 +59,17 @@ const getClassroomSummary = async (req, res) => {
       listAckNeeded({ parentId: userId, school, schoolYearId }),
     ]);
 
+    const now = new Date();
+    const missingRows = [];
     const summaries = await Promise.all(children.map(async (c) => {
       const studentId = c.student_id;
       const childYearId = c.school_year_id ?? schoolYearId;
-      const [classes, grades, posts] = await Promise.all([
-        listChildClasses({ studentId, school, schoolYearId: childYearId, readerId: userId }),
+      const [{ classes, work: items }, grades, posts] = await Promise.all([
+        loadChildClassroom({ studentId, school, schoolYearId: childYearId, readerId: userId }),
         buildChildGrades({ studentId, school, req: gradesReq }),
         listStudentStream({ studentId, school, schoolYearId: childYearId, classId: null, readerId: userId, limit: RECENT_POSTS_WINDOW }),
       ]);
+      missingRows.push(...work.needsYouMissing(items, studentId, now));
       return {
         studentId,
         name: c.name,
@@ -58,8 +77,8 @@ const getClassroomSummary = async (req, res) => {
         avatar: c.avatar ?? null,
         signsIn: Boolean(c.signs_in),
         classCount: classes.length,
-        dueThisWeek: 0, // T15
-        missingCount: 0, // T15
+        dueThisWeek: work.dueWithin(items, now).length,
+        missingCount: items.filter((w) => w.status === 'missing').length,
         newGradeCount: recentItems(grades, { sinceDays: NEW_GRADE_DAYS, limit: Infinity }).length,
         latestGrade: allItems(grades)[0] ?? null,
         homeroomTeacherName: c.homeroom_teacher_name ?? null,
@@ -67,7 +86,7 @@ const getClassroomSummary = async (req, res) => {
       };
     }));
 
-    return ok(res, { needsYou, children: summaries });
+    return ok(res, { needsYou: [...needsYou, ...missingRows.sort(newestDueFirst)], children: summaries });
   } catch (error) {
     logger.error({ err: error, userId }, 'Failed to load the parent classroom summary');
     return failed(res, 500, 'Error loading the Classes page');
@@ -121,7 +140,52 @@ const requireLensClass = async (req, res, next) => {
 };
 
 // GET /api/parent-portal/students/:studentId/classroom/classes/:classId
-const getLensClass = (req, res) => ok(res, { class: req.childClass, upcoming: [] }); // upcoming: T15
+// The class header and what's coming up for the child (at most 3).
+const getLensClass = async (req, res) => {
+  try {
+    const upcoming = await work.getUpcoming({ studentId: req.child.studentId, school: req.user.school, classId: req.params.classId });
+    return ok(res, { class: req.childClass, upcoming });
+  } catch (error) {
+    return fail(res, error, 'Error loading the class', { classId: req.params.classId });
+  }
+};
+
+// GET /api/parent-portal/students/:studentId/classroom/classes/:classId/classwork
+// The child's Classwork exactly as the child sees it (same service, no writes).
+const getLensClasswork = async (req, res) => {
+  try {
+    return ok(res, await work.getClasswork({ studentId: req.child.studentId, school: req.user.school, classId: req.params.classId }));
+  } catch (error) {
+    return fail(res, error, 'Error loading the classwork', { classId: req.params.classId });
+  }
+};
+
+// GET /api/parent-portal/students/:studentId/classroom/items/:itemId
+// One item with the child's work, read-only: no submission row is created
+// and canEdit / canTurnIn / canUnsubmit are false.
+const getLensItem = async (req, res) => {
+  try {
+    const item = await work.getStudentItem({
+      studentId: req.child.studentId, school: req.user.school, itemId: req.params.itemId, canAct: false, open: false,
+    });
+    if (!item) return failed(res, 404, 'Item not found');
+    return ok(res, item);
+  } catch (error) {
+    return fail(res, error, 'Error loading the item', { itemId: req.params.itemId });
+  }
+};
+
+// GET /api/parent-portal/students/:studentId/classroom/files/:fileId/url
+// A one-hour signed URL for a file of the child's own work.
+const getLensFileUrl = async (req, res) => {
+  try {
+    const url = await work.fileUrl({ studentId: req.child.studentId, school: req.user.school, fileId: req.params.fileId });
+    if (!url) return failed(res, 404, 'File not found');
+    return ok(res, { url });
+  } catch (error) {
+    return fail(res, error, 'Could not open the file', { fileId: req.params.fileId });
+  }
+};
 
 // GET /api/parent-portal/students/:studentId/classroom/classes/:classId/stream?limit=30
 // The parent is the reader, so read and ackedAt are the parent's own.
@@ -153,6 +217,9 @@ module.exports = {
   listLensClasses,
   requireLensClass,
   getLensClass,
+  getLensClasswork,
+  getLensItem,
+  getLensFileUrl,
   getLensStream,
   getLensGrades,
 };

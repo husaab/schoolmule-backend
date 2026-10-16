@@ -6,6 +6,7 @@
 // with no column. Aliases: `i` item, `a` its assessment, `p` the category.
 
 const { GRADE_RANK } = require('../utils/gradeRank');
+const { GRADE_VISIBLE, WORK_STATE_SQL, WORK_JOINS } = require('./workState');
 
 // An ISO-8601 UTC string from a timestamptz, for values built inside JSON.
 const ISO = (expr) => `to_char((${expr}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
@@ -38,8 +39,34 @@ const AUDIENCE_SIZE = (i = 'i') => `(SELECT COUNT(*) FROM class_students cs JOIN
      AND (${i}.audience = 'all' OR EXISTS (SELECT 1 FROM classwork_item_students x
                                            WHERE x.item_id = ${i}.item_id AND x.student_id = cs.student_id)))::int`;
 
-// Turn-in counts per item. Nothing is turned in online until T15.
-const ITEM_COUNTS = `json_build_object('turnedIn', 0, 'missing', 0, 'notYet', 0, 'toReview', 0, 'drafts', 0, 'published', 0)`;
+// How many of the students an item reaches (roster, not archived, audience)
+// have turned it in, by the submission's turned_in_at (graded work included).
+const TURNED_IN_COUNT = (i = 'i') => `(SELECT COUNT(*) FROM classwork_submissions sub
+   JOIN class_students cs ON cs.class_id = ${i}.class_id AND cs.student_id = sub.student_id
+   JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+   WHERE sub.item_id = ${i}.item_id AND sub.turned_in_at IS NOT NULL
+     AND (${i}.audience = 'all' OR EXISTS (SELECT 1 FROM classwork_item_students x
+                                           WHERE x.item_id = ${i}.item_id AND x.student_id = sub.student_id)))::int`;
+
+// Turn-in counts per item (aliases `i`, `a`) over the students who can see
+// it (roster, not archived, ITEM_VISIBLE), by the one status rule
+// (WORK_STATE_SQL): turnedIn = turned in (late too), missing = derived +
+// confirmed, notYet = assigned; toReview = turned in with no draft and no
+// visible grade; drafts = a draft score/status not yet published; published =
+// published to the student. A draft or future item reaches no one yet: zeros.
+const ITEM_COUNTS = `(SELECT json_build_object(
+    'turnedIn', COUNT(*) FILTER (WHERE w.state = 'turned_in'),
+    'missing', COUNT(*) FILTER (WHERE w.state = 'missing'),
+    'notYet', COUNT(*) FILTER (WHERE w.state = 'assigned'),
+    'toReview', COUNT(*) FILTER (WHERE w.turned_in_at IS NOT NULL AND w.draft_score IS NULL AND w.draft_status IS NULL AND NOT w.visible),
+    'drafts', COUNT(*) FILTER (WHERE (w.draft_score IS NOT NULL OR w.draft_status IS NOT NULL) AND w.published_at IS NULL),
+    'published', COUNT(*) FILTER (WHERE w.published_at IS NOT NULL))
+  FROM (SELECT ${WORK_STATE_SQL} AS state, ${GRADE_VISIBLE} AS visible,
+               sub.turned_in_at, sub.draft_score, sub.draft_status, sub.published_at
+          FROM class_students ro
+          JOIN students st ON st.student_id = ro.student_id AND st.is_archived IS NOT TRUE
+          ${WORK_JOINS('ro.student_id')}
+         WHERE ro.class_id = i.class_id AND ${ITEM_VISIBLE('i', 'a', 'ro')}) w)`;
 
 // A cell that holds a grade: a score, or a confirmed missing/excused status.
 const HAS_GRADE = (sa = 'sa') => `(${sa}.score IS NOT NULL OR ${sa}.status IN ('missing', 'excused'))`;
@@ -69,6 +96,7 @@ const classworkQueries = {
   ITEM_DAY,
   ITEM_VISIBLE,
   AUDIENCE_SIZE,
+  TURNED_IN_COUNT,
   ITEM_COUNTS,
   ITEM_SELECT,
 

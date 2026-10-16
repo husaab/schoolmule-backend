@@ -94,6 +94,12 @@ describe('toComingUpRow', () => {
     expect(toComingUpRow({ ...base, kind: 'quiz', submission_mode: 'none' })).toMatchObject({ inClass: false, stillToTurnIn: 3 });
   });
 
+  it('still to turn in leaves out the students who turned it in', () => {
+    const base = { item_id: 'i1', class_id: 'c1', grade: '5', subject: 'Science', title: 'T', date: '2026-10-23', kind: 'assignment', submission_mode: 'file' };
+    expect(toComingUpRow({ ...base, audience_size: 22, turned_in_count: 5 }).stillToTurnIn).toBe(17);
+    expect(toComingUpRow({ ...base, audience_size: '3', turned_in_count: '3' }).stillToTurnIn).toBe(0);
+  });
+
   it('is an in-class assessment with nothing to turn in', () => {
     expect(toComingUpRow({ assessment_id: 'a1', class_id: 'c1', grade: '5', subject: 'Science', title: 'Unit test', date: '2026-10-23' })).toEqual({
       itemId: null, assessmentId: 'a1', classId: 'c1', classLabel: 'Grade 5 Science', title: 'Unit test',
@@ -116,5 +122,6 @@ describe('toDraftRow and toNotice', () => {
     expect(toNotice({ item_id: 'i1', kind: 'material', title: 'Reading', posted_at: new Date('2026-10-09T12:00:00Z'), due_at: null, total: '22' })).toEqual({
       itemId: 'i1', kind: 'material', title: 'Reading', postedAt: '2026-10-09T12:00:00.000Z', dueAt: null, turnedInCount: 0, total: 22,
     });
+    expect(toNotice({ item_id: 'i2', kind: 'assignment', title: 'Lab', posted_at: null, due_at: null, total: 22, turned_in_count: '4' }).turnedInCount).toBe(4);
   });
 });

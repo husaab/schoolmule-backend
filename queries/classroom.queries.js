@@ -5,13 +5,14 @@
 // fragments, so each of them changes exactly one constant:
 //   CARD_NEXT, COMING_UP     classwork items (T14); DRAFTS_AND_SCHEDULED, STREAM_NOTICES (T14)
 //   CARD_TO_REVIEW, TO_REVIEW  T16 counts submissions waiting for a grade
-//   PEOPLE_MISSING           T15 counts a student's missing work in the class
+//   PEOPLE_MISSING           a student's missing work in the class (T15)
 // Fragments that sit inside a SELECT use the aliases of that query: `c` is the
 // class, `s` the student and `cs` the roster row.
 
 const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
-const { ISO, EFFECTIVE_POSTED, ITEM_DAY, AUDIENCE_SIZE } = require('./classwork.queries');
+const { ISO, EFFECTIVE_POSTED, ITEM_DAY, AUDIENCE_SIZE, TURNED_IN_COUNT, ITEM_VISIBLE } = require('./classwork.queries');
+const { WORK_STATE_SQL, WORK_JOINS } = require('./workState');
 
 const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
 
@@ -32,8 +33,14 @@ const CARD_NEXT = `(SELECT json_build_object('itemId', i.item_id, 'assessmentId'
 const CARD_TO_REVIEW = '0';
 const TO_REVIEW = null; // T16: a query returning the "to review" list; T7 answers [].
 
-// A student's missing work in the class. Nothing is tracked yet (T15).
-const PEOPLE_MISSING = '0';
+// A student's missing work in the class (`cs` the roster row, `s` the
+// student): the items they can see whose status is missing, derived (past
+// due, nothing turned in) or confirmed (a published missing), by the same
+// rule the student's own To-do uses.
+const PEOPLE_MISSING = `(SELECT COUNT(*) FROM classwork_items i
+    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+    ${WORK_JOINS('s.student_id')}
+   WHERE i.class_id = cs.class_id AND ${ITEM_VISIBLE('i', 'a', 's')} AND ${WORK_STATE_SQL} = 'missing')::int`;
 
 // The classes a caller works with: an admin sees every class of the school,
 // a teacher the ones they lead or co-teach. $1 user_id, $3 role.
@@ -42,13 +49,13 @@ const CALLER_SCOPE = `($3::text = 'ADMIN' OR c.teacher_id = $1
 
 // Live classwork (not materials) falling today through two weeks out,
 // earliest first, at most 8, in the caller's active classes. audience_size is
-// how many students the item reaches (still to turn in, until T15 counts
-// turn-ins). $1 user_id, $2 school, $3 role, $4 school_year_id, $5 class_id
+// how many students the item reaches, turned_in_count how many of them have
+// turned it in. $1 user_id, $2 school, $3 role, $4 school_year_id, $5 class_id
 // (NULL = every class of the caller).
 const COMING_UP = `
   SELECT i.item_id, i.assessment_id, i.kind, i.submission_mode, c.class_id, c.grade::text AS grade, c.subject,
          COALESCE(a.name, i.title) AS title, TO_CHAR(${ITEM_DAY()}, 'YYYY-MM-DD') AS date, i.due_at,
-         ${AUDIENCE_SIZE()} AS audience_size
+         ${AUDIENCE_SIZE()} AS audience_size, ${TURNED_IN_COUNT()} AS turned_in_count
   FROM classwork_items i
   JOIN classes c ON c.class_id = i.class_id
   LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
@@ -82,10 +89,11 @@ const DRAFTS_AND_SCHEDULED = `
 
 // The teacher Stream's classwork notices: live assignments, quizzes and
 // materials of the class, newest first, at most 20. total = the students the
-// item reaches; turnedInCount is 0 until T15. $1 class_id
+// item reaches; turned_in_count = how many of them turned it in. $1 class_id
 const STREAM_NOTICES = `
   SELECT i.item_id, i.kind, COALESCE(a.name, i.title) AS title,
-         COALESCE(i.posted_at, i.publish_at) AS posted_at, i.due_at, ${AUDIENCE_SIZE()} AS total
+         COALESCE(i.posted_at, i.publish_at) AS posted_at, i.due_at, ${AUDIENCE_SIZE()} AS total,
+         ${TURNED_IN_COUNT()} AS turned_in_count
   FROM classwork_items i
   LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
   WHERE i.class_id = $1 AND i.deleted_at IS NULL AND i.kind IN ('assignment', 'quiz', 'material')

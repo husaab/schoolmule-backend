@@ -28,6 +28,14 @@ router.param('classId', (req, res, next, id) => {
   }
   next();
 });
+router.param('itemId', (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: 'failed', message: 'Item not found' });
+  next();
+});
+router.param('fileId', (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: 'failed', message: 'File not found' });
+  next();
+});
 
 router.get('/summary', getSummary);
 router.get('/calendar', getCalendar);
@@ -46,6 +54,9 @@ router.get('/classroom/summary', classroom.getClassroomSummary);
 router.get('/students/:studentId/classroom/classes', ...lensChild, classroom.listLensClasses);
 router.get('/students/:studentId/classroom/classes/:classId', ...lensChild, classroom.requireLensClass, classroom.getLensClass);
 router.get('/students/:studentId/classroom/classes/:classId/stream', ...lensChild, classroom.requireLensClass, classroom.getLensStream);
+router.get('/students/:studentId/classroom/classes/:classId/classwork', ...lensChild, classroom.requireLensClass, classroom.getLensClasswork);
+router.get('/students/:studentId/classroom/items/:itemId', ...lensChild, classroom.getLensItem);
+router.get('/students/:studentId/classroom/files/:fileId/url', ...lensChild, classroom.getLensFileUrl);
 router.get('/students/:studentId/classroom/grades', ...lensChild, classroom.getLensGrades);
 
 module.exports = router;

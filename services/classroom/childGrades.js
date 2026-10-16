@@ -15,6 +15,7 @@ const classworkQueries = require('../../queries/classwork.queries');
 const termQueries = require('../../queries/term.queries');
 const { resolveTerm } = require('./resolveTerm');
 const { identityOf } = require('./classView');
+const { missingCountsByClass } = require('./studentWork');
 
 // The parent portal's PARENT_VIEW: unpublished assessments are pruned before
 // the engine runs, so they neither show nor count.
@@ -71,7 +72,7 @@ function toChildClassGrades(row, cls) {
     finalPct: cls ? cls.finalPct ?? null : null,
     classAvg: row.show_class_average && cls ? cls.classAvg ?? null : null,
     gradedCount: items.filter((i) => i.status === 'graded').length,
-    missingCount: items.filter((i) => i.status === 'missing').length,
+    missingCount: 0, // set in buildChildGrades from the work-status rule (derived + confirmed)
     latestPublishedAt: items.reduce((latest, i) => (i.publishedAt && (!latest || i.publishedAt > latest) ? i.publishedAt : latest), null),
     items,
   };
@@ -126,7 +127,14 @@ async function buildChildGrades({ studentId, school, req }) {
   const breakdown = engine.getStudentClassBreakdown(matrix, studentId);
   const byClass = new Map((breakdown?.classes ?? []).map((c) => [c.classId, c]));
   const classes = classRows.map((row) => toChildClassGrades(row, byClass.get(row.class_id)));
-  return { ...base, classes: await withClasswork(classes, studentId) };
+  // missingCount follows the one work-status rule (studentWork.js): work past
+  // due with nothing turned in, plus a published missing, so Grades agrees
+  // with the To-do and the class card.
+  const [withItems, missing] = await Promise.all([
+    withClasswork(classes, studentId),
+    missingCountsByClass({ studentId, school, classIds: classes.map((c) => c.classId) }),
+  ]);
+  return { ...base, classes: withItems.map((c) => ({ ...c, missingCount: missing.get(c.classId) ?? 0 })) };
 }
 
 /** Every GradeItem of a ChildGrades, newest first. */

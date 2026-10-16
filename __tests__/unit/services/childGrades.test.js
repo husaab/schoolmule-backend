@@ -12,6 +12,7 @@ const db = require('../../__mocks__/config/database');
 const engine = require('../../../services/analyticsEngine');
 const q = require('../../../queries/childClassroom.queries');
 const classworkQueries = require('../../../queries/classwork.queries');
+const submissionQueries = require('../../../queries/classworkSubmission.queries');
 const termQueries = require('../../../queries/term.queries');
 const { buildChildGrades, newGradesFor } = require('../../../services/classroom/childGrades');
 
@@ -59,6 +60,8 @@ let classRows;
 let matrixRows;
 let itemRows;
 let itemQueryArgs;
+let missingRows;
+let missingQueryArgs;
 
 const req = (query = {}) => ({ query, user: { school: SCHOOL }, schoolYear: { schoolYearId: YEAR_ID } });
 
@@ -68,11 +71,14 @@ beforeEach(() => {
   matrixRows = [row(AMAL, quiz1, 8), row(AMAL, quiz2, 3), row(BILAL, quiz1, 6), row(BILAL, quiz2, 10)];
   itemRows = [];
   itemQueryArgs = null;
+  missingRows = [];
+  missingQueryArgs = null;
 
   db.query.mockImplementation(async (sql, params) => {
     if (sql === q.selectChildProfile) return { rows: [profile] };
     if (sql === q.selectGradeClasses) return { rows: classRows };
     if (sql === classworkQueries.selectItemsForAssessments) { itemQueryArgs = params; return { rows: itemRows }; }
+    if (sql === submissionQueries.selectMissingByClass) { missingQueryArgs = params; return { rows: missingRows }; }
     if (sql === termQueries.selectTermsBySchool) {
       return { rows: [{ term_id: TERM_ID, name: 'Term 1', is_active: true, start_date: '2026-09-01', end_date: '2026-12-20', school: SCHOOL }] };
     }
@@ -147,6 +153,7 @@ describe('buildChildGrades', () => {
     const project = assessment(PROJECT, 'Project', { published_at: daysAgo(5) });
     const blank = assessment(SHEET1, 'Worksheet 1', { published_at: daysAgo(6) });
     matrixRows = [row(AMAL, quiz1, 8), row(AMAL, essay, 7, 'missing'), row(AMAL, project, 9, 'excused'), row(AMAL, blank, null)];
+    missingRows = [{ class_id: MATH, n: 1 }]; // the essay, by the work-status rule
 
     const [math] = (await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() })).classes;
 
@@ -154,6 +161,15 @@ describe('buildChildGrades', () => {
       ['Quiz 1', 'graded', 8], ['Essay', 'missing', null], ['Project', 'excused', null],
     ]);
     expect(math).toMatchObject({ gradedCount: 1, missingCount: 1 });
+  });
+
+  it('missingCount is the work-status count for the student (derived + confirmed), not just published missing cells', async () => {
+    missingRows = [{ class_id: MATH, n: 3 }];
+
+    const grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
+
+    expect(grades.classes[0]).toMatchObject({ classId: MATH, missingCount: 3, gradedCount: 1 });
+    expect(missingQueryArgs).toEqual([AMAL, SCHOOL, [MATH]]);
   });
 
   it("lists the student's classes with nothing graded yet, and drops a class the class list does not have (archived)", async () => {

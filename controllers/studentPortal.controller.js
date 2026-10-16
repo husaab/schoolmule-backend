@@ -17,12 +17,22 @@ const { photoUrlFor } = require('../services/profile/photos');
 const { loadSchoolInfo } = require('../services/classroom/studentAccounts');
 const { getSchoolName } = require('../utils/schoolUtils');
 const {
-  loadChild, listChildClasses, getChildClass, getChildStream,
+  loadChild, loadChildClassroom, listChildClasses, getChildClass, getChildStream,
 } = require('../services/classroom/childClassroom');
 const { buildChildGrades, newGradesFor, isTermParamValid } = require('../services/classroom/childGrades');
+const work = require('../services/classroom/studentWork');
 
-const ok = (res, data) => res.status(200).json({ status: 'success', data });
+const ok = (res, data, status = 200) => res.status(status).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
+
+/** A service error (httpError, maybe with a code) answers as itself; anything else is logged as a 500. */
+function fail(res, error, userMessage, context) {
+  if (error && error.expose && error.status) {
+    return res.status(error.status).json({ status: 'failed', message: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+  logger.error({ err: error, ...context }, userMessage);
+  return failed(res, 500, userMessage);
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEED_LIMIT = 30;
@@ -138,23 +148,25 @@ const self = (req) => ({
 });
 
 // GET /api/student/home
-// Who is signed in, new grades (published in the last 14 days, default term
-// of the year; home takes no ?termId=) and the class cards. dueSoon and
-// missing are classwork (T15).
+// Who is signed in, what's due soon (assigned work due within 7 days, at most
+// 5) and missing (at most 3, newest due first), new grades (published in the
+// last 14 days, default term of the year; home takes no ?termId=) and the
+// class cards. Due soon, missing and the cards count from the same work rows.
 const getHome = async (req, res) => {
   const me = self(req);
   const gradesReq = { query: {}, user: req.user, schoolYear: req.schoolYear };
   try {
-    const [child, newGrades, classes] = await Promise.all([
+    const now = new Date();
+    const [child, newGrades, { classes, work: items }] = await Promise.all([
       loadChild(me.studentId, me.school),
       newGradesFor({ studentId: me.studentId, school: me.school, req: gradesReq }),
-      listChildClasses(me),
+      loadChildClassroom(me),
     ]);
     const { studentId, name, firstName, grade } = req.student;
     return ok(res, {
       student: { studentId, name, firstName, grade, avatar: child?.avatar ?? null },
-      dueSoon: [],
-      missing: [],
+      dueSoon: work.dueSoonOf(items, now),
+      missing: work.homeMissingOf(items),
       newGrades,
       classes,
     });
@@ -189,8 +201,26 @@ const requireEnrolledClass = async (req, res, next) => {
 };
 
 // GET /api/student/classes/:classId
-// The class header. upcoming is classwork (T15).
-const getClass = (req, res) => ok(res, { class: req.childClass, upcoming: [] });
+// The class header and what's coming up in it (at most 3).
+const getClass = async (req, res) => {
+  try {
+    const upcoming = await work.getUpcoming({ studentId: req.student.studentId, school: req.user.school, classId: req.params.classId });
+    return ok(res, { class: req.childClass, upcoming });
+  } catch (error) {
+    return fail(res, error, 'Error loading the class', { classId: req.params.classId });
+  }
+};
+
+// GET /api/student/classes/:classId/classwork
+// The class's topics (those holding something the student can see), items
+// with the student's status, and what's coming up.
+const getClasswork = async (req, res) => {
+  try {
+    return ok(res, await work.getClasswork({ studentId: req.student.studentId, school: req.user.school, classId: req.params.classId }));
+  } catch (error) {
+    return fail(res, error, 'Error loading the classwork', { classId: req.params.classId });
+  }
+};
 
 // GET /api/student/classes/:classId/stream?limit=30
 const getClassStream = async (req, res) => {
@@ -219,7 +249,126 @@ const getGrades = async (req, res) => {
   }
 };
 
+// ── Classwork: the To-do, an item, and the student's own work ─────────────
+
+const TODO_TABS = ['assigned', 'missing', 'done'];
+const ITEM_NOT_FOUND = 'Item not found';
+
+// The caller's own row: every work query keys on it, never on a client id.
+const mine = (req, extra = {}) => ({ studentId: req.student.studentId, school: req.user.school, ...extra });
+
+// GET /api/student/todo?tab=assigned|missing|done&classId=
+// Counts per tab and the tab's groups (current-term classes; classId narrows both).
+const getTodo = async (req, res) => {
+  const tab = req.query.tab ? String(req.query.tab) : 'assigned';
+  if (!TODO_TABS.includes(tab)) return failed(res, 400, 'tab must be assigned, missing or done');
+  const classId = req.query.classId ? String(req.query.classId).toLowerCase() : null;
+  if (classId && !UUID_RE.test(classId)) return failed(res, 400, 'Invalid class id');
+  try {
+    return ok(res, await work.getTodo(mine(req, { schoolYearId: req.student.schoolYearId, tab, classId })));
+  } catch (error) {
+    return fail(res, error, 'Error loading your to-do list', { userId: req.user.userId });
+  }
+};
+
+// GET /api/student/items/:itemId
+// The item page. Opening a turn-in item creates the student's submission on
+// first open (opened_at); an admin's read-only preview writes nothing.
+const getItem = async (req, res) => {
+  try {
+    const item = await work.getStudentItem(mine(req, {
+      itemId: req.params.itemId, canAct: true, open: !req.user.impersonator,
+    }));
+    if (!item) return failed(res, 404, ITEM_NOT_FOUND);
+    return ok(res, item);
+  } catch (error) {
+    return fail(res, error, 'Error loading the item', { itemId: req.params.itemId });
+  }
+};
+
+/** The item as it stands after a change (the reply to turn in and unsubmit). */
+const itemReply = async (req, res) => {
+  const item = await work.getStudentItem(mine(req, { itemId: req.params.itemId, canAct: true, open: false }));
+  if (!item) return failed(res, 404, ITEM_NOT_FOUND);
+  return ok(res, item);
+};
+
+// PUT /api/student/items/:itemId/text  { textAnswer }  (autosave, ≤ 20 000 characters)
+const saveText = async (req, res) => {
+  if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'textAnswer')) return failed(res, 400, 'Send textAnswer');
+  const parsed = work.parseTextAnswer(req.body.textAnswer);
+  if (parsed.error) return failed(res, 400, parsed.error);
+  try {
+    return ok(res, await work.saveText(mine(req, { itemId: req.params.itemId, text: parsed.value })));
+  } catch (error) {
+    return fail(res, error, 'Error saving your answer', { itemId: req.params.itemId });
+  }
+};
+
+// Guard for POST …/files, before the upload is read: the item is the
+// student's, takes files, and is still open to changes.
+const requireUploadableItem = async (req, res, next) => {
+  try {
+    await work.checkUploadable(mine(req, { itemId: req.params.itemId }));
+    return next();
+  } catch (error) {
+    return fail(res, error, 'Error checking the item', { itemId: req.params.itemId });
+  }
+};
+
+// POST /api/student/items/:itemId/files  multipart "files" (≤ 5 × 10 MB)
+// Replies with every file of the student's work on the item.
+const uploadFiles = async (req, res) => {
+  try {
+    const files = await work.addFiles(mine(req, { itemId: req.params.itemId, userId: req.user.userId, files: req.files }));
+    return ok(res, { files }, 201);
+  } catch (error) {
+    return fail(res, error, 'Error uploading your files', { itemId: req.params.itemId });
+  }
+};
+
+// DELETE /api/student/files/:fileId  (own file, not turned in)
+const deleteFile = async (req, res) => {
+  try {
+    return ok(res, await work.deleteFile(mine(req, { fileId: req.params.fileId })));
+  } catch (error) {
+    return fail(res, error, 'Error removing the file', { fileId: req.params.fileId });
+  }
+};
+
+// GET /api/student/files/:fileId/url  (signed for an hour)
+const fileUrl = async (req, res) => {
+  try {
+    const url = await work.fileUrl(mine(req, { fileId: req.params.fileId }));
+    if (!url) return failed(res, 404, 'File not found');
+    return ok(res, { url });
+  } catch (error) {
+    return fail(res, error, 'Could not open the file', { fileId: req.params.fileId });
+  }
+};
+
+// POST /api/student/items/:itemId/turn-in
+const turnIn = async (req, res) => {
+  try {
+    await work.turnIn(mine(req, { itemId: req.params.itemId }));
+    return await itemReply(req, res);
+  } catch (error) {
+    return fail(res, error, 'Error turning in your work', { itemId: req.params.itemId });
+  }
+};
+
+// POST /api/student/items/:itemId/unsubmit
+const unsubmit = async (req, res) => {
+  try {
+    await work.unsubmit(mine(req, { itemId: req.params.itemId }));
+    return await itemReply(req, res);
+  } catch (error) {
+    return fail(res, error, 'Error unsubmitting your work', { itemId: req.params.itemId });
+  }
+};
+
 module.exports = {
   getMe, listAnnouncements, requireStudentAnnouncement, markAnnouncementRead, announcementAttachmentUrl,
-  getHome, listClasses, requireEnrolledClass, getClass, getClassStream, getClassPeople, getGrades,
+  getHome, listClasses, requireEnrolledClass, getClass, getClasswork, getClassStream, getClassPeople, getGrades,
+  getTodo, getItem, saveText, requireUploadableItem, uploadFiles, deleteFile, fileUrl, turnIn, unsubmit,
 };

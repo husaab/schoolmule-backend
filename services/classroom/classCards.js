@@ -50,7 +50,7 @@ const toHeaderClass = (row) => ({ ...toClassCard(row), options: optionsOf(row) }
  */
 const isInClass = (kind, submissionMode) => kind === 'assessment' || (kind === 'assignment' && submissionMode === 'none');
 
-/** COMING_UP row → ComingUpRow. Still to turn in = the students the item reaches (T15 subtracts turn-ins). */
+/** COMING_UP row → ComingUpRow. Still to turn in = the students the item reaches, less those who turned it in. */
 function toComingUpRow(row) {
   const kind = row.kind ?? 'assessment';
   const inClass = isInClass(kind, row.submission_mode);
@@ -64,7 +64,7 @@ function toComingUpRow(row) {
     date: row.date,
     dueAt: iso(row.due_at),
     inClass,
-    stillToTurnIn: inClass ? null : Number(row.audience_size) || 0,
+    stillToTurnIn: inClass ? null : Math.max(0, (Number(row.audience_size) || 0) - (Number(row.turned_in_count) || 0)),
   };
 }
 
@@ -86,7 +86,7 @@ const toNotice = (row) => ({
   title: row.title,
   postedAt: iso(row.posted_at),
   dueAt: iso(row.due_at),
-  turnedInCount: 0,
+  turnedInCount: Number(row.turned_in_count) || 0,
   total: Number(row.total) || 0,
 });
 

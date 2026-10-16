@@ -1,5 +1,8 @@
-// classworkUpload: link helpers (YouTube ids, http/https only) and the file path.
-const { youtubeIdOf, parseLinkUrl, parseLinkTitle, classworkFilePath } = require('../../../utils/classworkUpload');
+// classworkUpload: link helpers (YouTube ids, http/https only), the file
+// paths, and the type check on a student's turned-in files.
+const {
+  youtubeIdOf, parseLinkUrl, parseLinkTitle, classworkFilePath, submissionFileFilter, submissionFilePath, SUBMISSION_TYPE_ERROR,
+} = require('../../../utils/classworkUpload');
 
 describe('youtubeIdOf', () => {
   it.each([
@@ -48,5 +51,31 @@ describe('classworkFilePath', () => {
   it('puts the file under the school and item, with a fresh name and the lower-cased extension', () => {
     expect(classworkFilePath('ALHAADIACADEMY', 'item-1', 'Checklist.PDF'))
       .toMatch(/^ALHAADIACADEMY\/classwork\/item-1\/[0-9a-f-]{36}\.pdf$/);
+  });
+});
+
+describe('submission files', () => {
+  const check = (originalname, mimetype) => new Promise((resolve) => {
+    submissionFileFilter({}, { originalname, mimetype }, (err, ok) => resolve(err ? err : ok));
+  });
+
+  it.each([
+    ['photo.JPG', 'image/jpeg'], ['shot.heic', 'image/heic'], ['shot.HEIC', 'image/heif'], ['scan.png', 'image/png'],
+    ['work.pdf', 'application/pdf'], ['essay.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['slides.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'], ['old.ppt', 'application/vnd.ms-powerpoint'],
+  ])('accepts %s (%s)', async (name, type) => expect(await check(name, type)).toBe(true));
+
+  it.each([
+    ['clip.mp4', 'video/mp4'], ['run.exe', 'application/octet-stream'], ['notes.txt', 'text/plain'],
+    ['photo.png', 'application/pdf'], ['photo', 'image/jpeg'],
+  ])('refuses %s (%s)', async (name, type) => {
+    const err = await check(name, type);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toMatchObject({ code: 'UNSUPPORTED_FILE', message: SUBMISSION_TYPE_ERROR });
+  });
+
+  it('stores under <SCHOOL>/<item>/<student>/ with a fresh name and the lower-cased extension', () => {
+    expect(submissionFilePath('ALHAADIACADEMY', 'item-1', 'student-1', 'My Work.PDF'))
+      .toMatch(/^ALHAADIACADEMY\/item-1\/student-1\/[0-9a-f-]{36}\.pdf$/);
   });
 });
