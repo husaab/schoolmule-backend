@@ -5,7 +5,9 @@
 // twin is WORK_STATE_SQL (queries/workState.js, re-exported by
 // queries/classworkSubmission.queries.js), and an integration test holds the
 // two to the same answer for every branch. "Missing" past the due date is
-// derived here at read time (D7): nothing is written.
+// derived here at read time (D7): nothing is written. It is derived only for
+// a student who can sign in (SIGNS_IN, queries/studentSignsIn.js): a child
+// with no way to turn work in online is never Missing by a due date alone.
 
 const GRADE_STATES = ['missing', 'excused'];
 
@@ -33,9 +35,11 @@ const out = (status, isLate = false) => ({ status, isLate: Boolean(isLate), miss
  * @param {{kind, submissionMode?, assessmentId, dueAt}} item
  * @param {{turnedInAt, isLate}|null} sub
  * @param {{isPublished: boolean, row: {score, status}|null}} grade   // student_assessments row of this student, if any
+ * @param {Date} now
+ * @param {{signsIn?: boolean}} student  // signsIn false: the child can't sign in, so no derived Missing
  * @returns {{ status: WorkStatus, isLate: boolean, missingDerived: boolean }}
  */
-function workStatus(item, sub, grade, now = new Date()) {
+function workStatus(item, sub, grade, now = new Date(), { signsIn = true } = {}) {
   const visible = isGradeVisible(grade);
   if (visible && grade.row.status === 'excused') return out('excused');
   if (visible && grade.row.status === 'missing') return out('missing');
@@ -43,7 +47,7 @@ function workStatus(item, sub, grade, now = new Date()) {
   if (item.kind === 'material') return out('material');
   if (!isTurnInItem(item)) return out('no_turn_in');
   if (sub?.turnedInAt) return out('turned_in', sub.isLate);
-  if (item.dueAt && new Date(item.dueAt) < now) return { status: 'missing', isLate: false, missingDerived: true };
+  if (signsIn && item.dueAt && new Date(item.dueAt) < now) return { status: 'missing', isLate: false, missingDerived: true };
   return out('assigned');
 }
 

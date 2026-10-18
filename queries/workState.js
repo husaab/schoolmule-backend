@@ -2,11 +2,15 @@
 //
 // The SQL twin of services/classroom/workStatus.js (spec 0.8), as fragments
 // over the aliases `i` (classwork_items), `a` (its assessment, LEFT JOINed),
-// `sub` (this student's classwork_submissions row, LEFT JOINed) and `sa` (this
-// student's student_assessments row, LEFT JOINed). Kept apart from the query
-// files so classwork.queries.js (ITEM_COUNTS) and
-// classworkSubmission.queries.js can both use them without a require cycle;
-// classworkSubmission.queries.js re-exports them.
+// `sub` (this student's classwork_submissions row, LEFT JOINed), `sa` (this
+// student's student_assessments row, LEFT JOINed) and `wst` (the student's
+// students row). WORK_JOINS(student) adds `sub`, `sa` and `wst`; every query
+// that uses WORK_STATE_SQL joins through it. Kept apart from the query files
+// so classwork.queries.js (ITEM_COUNTS) and classworkSubmission.queries.js
+// can both use them without a require cycle; classworkSubmission.queries.js
+// re-exports them.
+
+const { SIGNS_IN } = require('./studentSignsIn');
 
 // A grade the student and parent may see: published, and a score or a
 // missing/excused status in the cell.
@@ -18,7 +22,11 @@ const GRADE_VISIBLE = `(COALESCE(a.is_published, FALSE) AND sa.student_id IS NOT
 const TURN_IN_ITEM = `(i.kind = 'quiz' OR (i.kind = 'assignment' AND i.submission_mode <> 'none'))`;
 
 // The WorkStatus, in workStatus()'s order. The derived "missing" compares
-// with NOW(), which is constant inside a transaction.
+// with NOW(), which is constant inside a transaction, and only applies to a
+// student who can sign in (SIGNS_IN): a child with no way to turn work in
+// online is never "missing" by a due date alone (work done in class stays
+// Assigned until the teacher grades it, marks it missing or excuses it).
+// A teacher-confirmed, published Missing (the branches above) still shows.
 const WORK_STATE_SQL = `(CASE
   WHEN ${GRADE_VISIBLE} AND sa.status = 'excused' THEN 'excused'
   WHEN ${GRADE_VISIBLE} AND sa.status = 'missing' THEN 'missing'
@@ -26,7 +34,7 @@ const WORK_STATE_SQL = `(CASE
   WHEN i.kind = 'material' THEN 'material'
   WHEN NOT ${TURN_IN_ITEM} THEN 'no_turn_in'
   WHEN sub.turned_in_at IS NOT NULL THEN 'turned_in'
-  WHEN i.due_at IS NOT NULL AND i.due_at < NOW() THEN 'missing'
+  WHEN i.due_at IS NOT NULL AND i.due_at < NOW() AND ${SIGNS_IN('wst')} THEN 'missing'
   ELSE 'assigned' END)`;
 
 // The late flag: only graded and turned-in work carries it.
@@ -47,10 +55,12 @@ const NEEDS_PUBLISH = `(CASE WHEN i.assessment_id IS NOT NULL
     THEN ${HAS_DRAFT} AND (sub.published_at IS NULL OR NOT COALESCE(a.is_published, FALSE))
     ELSE sub.feedback IS NOT NULL AND sub.published_at IS NULL END)`;
 
-// The joins that give one student's `sub` and `sa` for item `i`. `student`
-// is a SQL expression for the student id (an alias column or a parameter).
+// The joins that give one student's `sub`, `sa` and `wst` (their students
+// row, for SIGNS_IN) for item `i`. `student` is a SQL expression for the
+// student id (an alias column or a parameter).
 const WORK_JOINS = (student) => `
 LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = ${student}
-LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = ${student}`;
+LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = ${student}
+LEFT JOIN students wst ON wst.student_id = ${student}`;
 
 module.exports = { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH };

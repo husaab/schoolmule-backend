@@ -55,8 +55,8 @@ const TO_REVIEW = `
 
 // A student's missing work in the class (`cs` the roster row, `s` the
 // student): the items they can see whose status is missing, derived (past
-// due, nothing turned in) or confirmed (a published missing), by the same
-// rule the student's own To-do uses.
+// due, nothing turned in, and the student can sign in) or confirmed (a
+// published missing), by the same rule the student's own To-do uses.
 const PEOPLE_MISSING = `(SELECT COUNT(*) FROM classwork_items i
     LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
     ${WORK_JOINS('s.student_id')}

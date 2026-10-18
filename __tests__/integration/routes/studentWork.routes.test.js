@@ -13,7 +13,7 @@ const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
 const { workStatus } = require('../../../services/classroom/workStatus');
-const { WORK_STATE_SQL, WORK_LATE_SQL } = require('../../../queries/classworkSubmission.queries');
+const { WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS } = require('../../../queries/classworkSubmission.queries');
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const OTHER_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440003';
@@ -129,6 +129,8 @@ describe('Integration: student work', () => {
     bilalId = await makeStudent('Bilal Karim', [sciId, arabicId]);
     for (const [u, s] of [[AMAL_USER_ID, amalId], [BILAL_USER_ID, bilalId]]) {
       await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [u, s, yearId]);
+      // Consent on file and a password: both can sign in (SIGNS_IN), so derived Missing applies.
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())`, [u]);
     }
     await pool.query(
       `INSERT INTO parent_students (parent_id, student_id, parent_name, parent_email, school) VALUES
@@ -545,17 +547,15 @@ describe('Integration: student work', () => {
     cases.assigned = await mk('Assigned', { dueAt: inDays(1) });
     cases.noDue = await mk('No due');
 
-    const { rows } = await pool.query(`
+    const readStates = async () => (await pool.query(`
       SELECT i.item_id, i.kind, i.submission_mode, i.assessment_id, i.due_at,
              COALESCE(a.is_published, FALSE) AS is_published, sa.score, sa.status AS sa_status, sa.student_id AS sa_student,
              sub.turned_in_at, sub.is_late AS sub_late, NOW() AS now,
              ${WORK_STATE_SQL} AS state, ${WORK_LATE_SQL} AS late
       FROM classwork_items i
       LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
-      LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = $1
-      LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = $1
-      WHERE i.class_id = $2`, [amalId, sciId]);
-    const byId = new Map(rows.map((r) => [r.item_id, r]));
+      ${WORK_JOINS('$1::uuid')}
+      WHERE i.class_id = $2`, [amalId, sciId])).rows;
 
     const expected = {
       excused: ['excused', false], confirmedMissing: ['missing', false], graded: ['graded', true],
@@ -563,17 +563,27 @@ describe('Integration: student work', () => {
       plain: ['no_turn_in', false], paperAssignment: ['no_turn_in', false], turnedIn: ['turned_in', true],
       derivedMissing: ['missing', false], quizMissing: ['missing', false], assigned: ['assigned', false], noDue: ['assigned', false],
     };
-    for (const [name, [status, isLate]] of Object.entries(expected)) {
-      const r = byId.get(cases[name]);
-      const js = workStatus(
-        { kind: r.kind, submissionMode: r.submission_mode, assessmentId: r.assessment_id, dueAt: r.due_at },
-        r.turned_in_at || r.sub_late !== null ? { turnedInAt: r.turned_in_at, isLate: r.sub_late } : null,
-        { isPublished: r.is_published, row: r.sa_student ? { score: r.score === null ? null : Number(r.score), status: r.sa_status } : null },
-        r.now,
-      );
-      expect([name, r.state, r.late]).toEqual([name, status, isLate]);
-      expect([name, js.status, js.isLate]).toEqual([name, r.state, r.late]);
-    }
+    const agree = (rows, want, signsIn) => {
+      const byId = new Map(rows.map((r) => [r.item_id, r]));
+      for (const [name, [status, isLate]] of Object.entries(want)) {
+        const r = byId.get(cases[name]);
+        const js = workStatus(
+          { kind: r.kind, submissionMode: r.submission_mode, assessmentId: r.assessment_id, dueAt: r.due_at },
+          r.turned_in_at || r.sub_late !== null ? { turnedInAt: r.turned_in_at, isLate: r.sub_late } : null,
+          { isPublished: r.is_published, row: r.sa_student ? { score: r.score === null ? null : Number(r.score), status: r.sa_status } : null },
+          r.now,
+          { signsIn },
+        );
+        expect([name, signsIn, r.state, r.late]).toEqual([name, signsIn, status, isLate]);
+        expect([name, signsIn, js.status, js.isLate]).toEqual([name, signsIn, r.state, r.late]);
+      }
+    };
+    agree(await readStates(), expected, true);
+
+    // Amal can't sign in once consent is withdrawn: the derived Missing goes
+    // (Assigned), the teacher-confirmed published Missing stays.
+    await pool.query(`UPDATE student_accounts SET consent_at = NULL WHERE user_id = $1`, [AMAL_USER_ID]);
+    agree(await readStates(), { ...expected, derivedMissing: ['assigned', false], quizMissing: ['assigned', false] }, false);
   });
 
   it('teacher classwork counts and People missing counts follow the same rule', async () => {
@@ -617,5 +627,65 @@ describe('Integration: student work', () => {
     const after = (await expectStatus(call('get', `/api/classroom/classes/${sciId}/stream`, asTeacher), 200)).data;
     expect(after.upcoming.find((r) => r.itemId === future.itemId)).toMatchObject({ stillToTurnIn: 1 });
     expect(after.notices.find((n) => n.itemId === future.itemId)).toMatchObject({ turnedInCount: 1, total: 2 });
+  });
+
+  it("derived Missing is never computed for a child who can't sign in; a confirmed published Missing still shows", async () => {
+    // Bilal can't sign in (no consent on file); Amal can.
+    await pool.query(`UPDATE student_accounts SET consent_at = NULL WHERE user_id = $1`, [BILAL_USER_ID]);
+
+    const overdue = await graded({ title: 'Overdue sheet', submissionMode: 'file', dueAt: inDays(2) });
+    await setDue(overdue.itemId, new Date(Date.now() - HOUR_MS).toISOString()); // past due, nothing turned in
+    const quizId = await assessment(sciId, 'Pop quiz', { parentId: homeworkId, max: 10, date: torontoDay(inDays(-3)) });
+    await score(bilalId, quizId, null, 'missing');
+    await score(amalId, quizId, null, 'missing');
+    await publish(quizId);
+    const quizItemId = await itemOf(quizId);
+
+    // Parent summary: signsIn, the missing count and "Needs you".
+    const bilalSummary = (await get('/api/parent-portal/classroom/summary', asOtherParent)).data;
+    const bilalCard = bilalSummary.children.find((c) => c.studentId === bilalId);
+    expect(bilalCard).toMatchObject({ signsIn: false, missingCount: 1 });
+    expect(bilalSummary.needsYou.filter((r) => r.kind === 'missing').map((r) => r.itemId)).toEqual([quizItemId]);
+    const amalSummary = (await get('/api/parent-portal/classroom/summary', asParent)).data;
+    expect(amalSummary.children.find((c) => c.studentId === amalId)).toMatchObject({ signsIn: true, missingCount: 2 });
+    expect(amalSummary.needsYou.filter((r) => r.kind === 'missing').map((r) => r.itemId).sort())
+      .toEqual([overdue.itemId, quizItemId].sort());
+
+    // The lens: classwork statuses, class cards and grades counts.
+    const lensWork = (await get(`/api/parent-portal/students/${bilalId}/classroom/classes/${sciId}/classwork`, asOtherParent)).data;
+    const lensBy = Object.fromEntries(lensWork.items.map((i) => [i.itemId, i.status]));
+    expect(lensBy[overdue.itemId]).toBe('assigned');
+    expect(lensBy[quizItemId]).toBe('missing');
+    const lensClasses = (await get(`/api/parent-portal/students/${bilalId}/classroom/classes`, asOtherParent)).data;
+    expect(lensClasses.classes.find((c) => c.classId === sciId).missingCount).toBe(1);
+    const lensGrades = (await get(`/api/parent-portal/students/${bilalId}/classroom/grades`, asOtherParent)).data;
+    expect(lensGrades.classes.find((c) => c.classId === sciId).missingCount).toBe(1);
+    const lensItem = (await get(`/api/parent-portal/students/${bilalId}/classroom/items/${overdue.itemId}`, asOtherParent)).data;
+    expect(lensItem.submission.status).toBe('assigned');
+
+    // The child's own reads agree (and Amal's are unchanged).
+    expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asBilal)).data.counts.missing).toBe(1);
+    expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asAmal)).data.counts.missing).toBe(2);
+    expect((await get('/api/student/home', asBilal)).data.missing.map((i) => i.itemId)).toEqual([quizItemId]);
+
+    // The teacher's counts, People, grading rows and the grid overlay use the same rule.
+    const single = (await expectStatus(call('get', `/api/classroom/items/${overdue.itemId}`, asTeacher), 200)).data;
+    expect(single.counts).toMatchObject({ missing: 1, notYet: 1 });
+    const people = (await expectStatus(call('get', `/api/classroom/classes/${sciId}/people`, asTeacher), 200)).data;
+    const missingOf = (id) => people.students.find((x) => x.studentId === id).missingCount;
+    expect([missingOf(amalId), missingOf(bilalId)]).toEqual([2, 1]);
+    const grading = (await expectStatus(call('get', `/api/classroom/items/${overdue.itemId}/submissions`, asTeacher), 200)).data;
+    const rowOf = (id) => grading.students.find((x) => x.studentId === id);
+    expect(rowOf(amalId)).toMatchObject({ status: 'missing', label: 'Missing' });
+    expect(rowOf(bilalId)).toMatchObject({ status: 'assigned', label: 'Not turned in yet' });
+    const overlay = (await expectStatus(call('get', `/api/classroom/classes/${sciId}/grid-overlay`, asTeacher), 200)).data;
+    const overdueColumn = overlay.items.find((x) => x.itemId === overdue.itemId).assessmentId;
+    expect(overlay.cells.filter((c) => c.assessmentId === overdueColumn).map((c) => [c.studentId, c.state]))
+      .toEqual([[amalId, 'missing_derived']]);
+
+    // Consent on file again: Bilal signs in, and the derived Missing is back.
+    await pool.query(`UPDATE student_accounts SET consent_at = NOW() WHERE user_id = $1`, [BILAL_USER_ID]);
+    const again = (await get('/api/parent-portal/classroom/summary', asOtherParent)).data;
+    expect(again.children.find((c) => c.studentId === bilalId)).toMatchObject({ signsIn: true, missingCount: 2 });
   });
 });

@@ -11,7 +11,7 @@
 // submission, `sa` the gradebook cell.
 
 const { studentAvatarSql } = require('../utils/avatar');
-const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, HAS_DRAFT, AWAITING_GRADE } = require('./workState');
+const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE } = require('./workState');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
 // The item's students: the class roster (not archived), narrowed to the
@@ -39,8 +39,7 @@ FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 JOIN class_students cs ON cs.class_id = i.class_id
 JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
-LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
-LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+${WORK_JOINS('s.student_id')}
 WHERE i.item_id = $1 AND ($2::uuid IS NULL OR s.student_id = $2::uuid) AND ${IN_ITEM_AUDIENCE}
 ORDER BY s.name, s.student_id`;
 
@@ -393,8 +392,7 @@ const gradingQueries = {
     JOIN assessments a ON a.assessment_id = i.assessment_id
     JOIN class_students cs ON cs.class_id = i.class_id
     JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
-    LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
-    LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+    ${WORK_JOINS('s.student_id')}
     WHERE i.class_id = $1 AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL AND ${IN_ITEM_AUDIENCE}
     ) c
     WHERE c.state IS NOT NULL

@@ -12,6 +12,7 @@ const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { inCurrentTerm } = require('./termScope');
 const { IN_AUDIENCE } = require('./announcement.queries');
+const { SIGNS_IN } = require('./studentSignsIn');
 
 // A class's teachers, lead first then co-teachers by last name, as PersonLite
 // JSON. Archived accounts are left out (they are no one to talk to). `c` is
@@ -38,23 +39,8 @@ const HAS_NEW_POST = (c, reader) => `EXISTS (
        AND a.published_at >= NOW() - INTERVAL '7 days'
        AND NOT EXISTS (SELECT 1 FROM announcement_reads r WHERE r.announcement_id = a.announcement_id AND r.user_id = ${reader}))`;
 
-// The child can sign in by some route the sign-in gate allows
-// (services/classroom/studentLogin.js#assertStudentCanSignIn): a linked login
-// that is not archived, with consent on file, classrooms on and the child's
-// grade at or above the school's login grade, AND a way in: a password that is
-// set (not the invite-pending '!'), or a live QR card (issued, not voided) in a
-// grade the school gives cards to. A card works for an invite-pending login,
-// so a Grade 1-3 child who only ever scans a card still signs in.
-const SIGNS_IN = (s) => `EXISTS (
-    SELECT 1 FROM student_account_links sal
-      JOIN users su ON su.user_id = sal.user_id AND su.is_archived IS NOT TRUE
-      JOIN student_accounts sa ON sa.user_id = su.user_id AND sa.consent_at IS NOT NULL
-      JOIN school_classroom_settings scs ON scs.school = ${s}.school AND scs.enabled
-     WHERE sal.student_id = ${s}.student_id
-       AND ${GRADE_RANK(`${s}.grade::text`)} >= ${GRADE_RANK('scs.login_from_grade')}
-       AND (su.password <> '!'
-            OR (sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL
-                AND ${GRADE_RANK(`${s}.grade::text`)} <= ${GRADE_RANK('scs.qr_until_grade')})))`;
+// SIGNS_IN: the child can sign in by some route the sign-in gate allows
+// (queries/studentSignsIn.js, shared with the derived Missing in workState.js).
 
 const childClassroomQueries = {
   // One student row as the portal shows it. $1 student_id

@@ -61,6 +61,8 @@ describe('Integration: grading and per-student Publish', () => {
     await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, id]);
     if (loginId) {
       await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [loginId, id, yearId]);
+      // Consent on file: the student signs in, so a due date can make work Missing.
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())`, [loginId]);
     }
     return id;
   };

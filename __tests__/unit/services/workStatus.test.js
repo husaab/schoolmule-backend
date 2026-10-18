@@ -72,6 +72,20 @@ describe('workStatus', () => {
     expect(workStatus({ kind: 'quiz', submissionMode: 'none', assessmentId: null, dueAt: PAST }, null, NO_GRADE, NOW).status).toBe('missing');
   });
 
+  it('7. a child who can\'t sign in is never missing by a due date alone; a confirmed missing still shows', () => {
+    const cannot = { signsIn: false };
+    expect(workStatus(assignment({ dueAt: PAST }), null, NO_GRADE, NOW, cannot))
+      .toEqual({ status: 'assigned', isLate: false, missingDerived: false });
+    expect(workStatus({ kind: 'quiz', submissionMode: 'none', assessmentId: null, dueAt: PAST }, null, NO_GRADE, NOW, cannot).status)
+      .toBe('assigned');
+    expect(workStatus(assignment({ dueAt: PAST }), null, published({ score: null, status: 'missing' }), NOW, cannot))
+      .toEqual({ status: 'missing', isLate: false, missingDerived: false });
+    expect(workStatus(assignment({ dueAt: PAST }), null, unpublished({ score: null, status: 'missing' }), NOW, cannot).status)
+      .toBe('assigned');
+    // signsIn true (and the default) keeps the derived missing.
+    expect(workStatus(assignment({ dueAt: PAST }), null, NO_GRADE, NOW, { signsIn: true }).missingDerived).toBe(true);
+  });
+
   it('8. otherwise assigned (future due date, or none)', () => {
     expect(workStatus(assignment(), null, NO_GRADE, NOW)).toEqual({ status: 'assigned', isLate: false, missingDerived: false });
     expect(workStatus(assignment({ dueAt: null }), null, NO_GRADE, NOW).status).toBe('assigned');

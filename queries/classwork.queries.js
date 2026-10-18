@@ -50,8 +50,8 @@ const TURNED_IN_COUNT = (i = 'i') => `(SELECT COUNT(*) FROM classwork_submission
 
 // Turn-in counts per item (aliases `i`, `a`) over the students who can see
 // it (roster, not archived, ITEM_VISIBLE), by the one status rule
-// (WORK_STATE_SQL): turnedIn = turned in (late too), missing = derived +
-// confirmed, notYet = assigned; toReview = turned in and waiting for the
+// (WORK_STATE_SQL): turnedIn = turned in (late too), missing = derived (a
+// student who can sign in) + confirmed, notYet = assigned; toReview = turned in and waiting for the
 // teacher, and drafts = what "Publish to N" counts (the grading view's own
 // rules, workState.js); published = published to the student. A draft or
 // future item reaches no one yet: zeros.
