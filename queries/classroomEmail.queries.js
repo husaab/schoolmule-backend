@@ -335,12 +335,17 @@ const classroomEmailQueries = {
   //  Every grade that reached the login since $2 (spec D6), minus what an
   //  earlier graded email already carried. Two sources, one row each:
   //  - work published to the student on Classwork (a submission published,
-  //    feedback included), keyed by submission and publish instant;
+  //    feedback included), keyed by submission and publish instant; only on
+  //    an item the student can see (ITEM_VISIBLE);
   //  - a whole gradebook column published in Grades (a plain assessment, or
   //    a student a turn-in item isn't for), keyed by column and its publish
   //    instant; never a live edit of an already-published column (D17).
+  //    Every student on the class roster whose grade it released, as their
+  //    Grades page shows it: a student the item isn't for (graded like a
+  //    plain assessment) or an item not posted still gets the email, with
+  //    item_visible false so the link goes to their Grades page.
   //  A Missing is not "graded" (the student sees it in the portal). Only what
-  //  the student may see: GRADE_VISIBLE, feedback published, ITEM_VISIBLE.
+  //  the student may see: GRADE_VISIBLE and feedback published.
   //  $1 user_id, $2 since, $3 now, $4 recipient email, $5 this job's id
   selectGradedWork: `
     SELECT g.* FROM (
@@ -349,7 +354,8 @@ const classroomEmailQueries = {
              CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
              sub.feedback,
-             ${TEACHER_NAME('gb', 'tu')} AS teacher_name
+             ${TEACHER_NAME('gb', 'tu')} AS teacher_name,
+             TRUE AS item_visible
       FROM students s
       ${STUDENT_EMAIL_FROM('s')}
       JOIN classwork_submissions sub ON sub.student_id = s.student_id AND sub.published_at > $2::timestamptz
@@ -368,7 +374,8 @@ const classroomEmailQueries = {
       SELECT 'col:' || a.assessment_id::text, ${PUBLISHED_KEY('a.published_at')}, a.published_at,
              i.item_id, i.kind, COALESCE(a.name, i.title), c.subject, a.max_score,
              sa.score, sa.status, NULL::text,
-             ${TEACHER_NAME('pb', 'tu')}
+             ${TEACHER_NAME('pb', 'tu')},
+             ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
       FROM students s
       ${STUDENT_EMAIL_FROM('s')}
       JOIN student_assessments sa ON sa.student_id = s.student_id
@@ -381,7 +388,8 @@ const classroomEmailQueries = {
       WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
         AND ${GRADE_VISIBLE} AND sa.status <> 'missing'
         AND sub.published_at IS NULL
-        AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
+        AND i.deleted_at IS NULL
+        AND EXISTS (SELECT 1 FROM class_students ro WHERE ro.class_id = c.class_id AND ro.student_id = s.student_id)
     ) g
     WHERE NOT EXISTS (
       SELECT 1 FROM classroom_email_jobs j

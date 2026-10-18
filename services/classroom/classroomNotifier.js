@@ -233,7 +233,8 @@ async function buildGraded(job, recipient, now) {
         feedback: r.feedback,
         teacherName: r.teacher_name,
       })),
-      link: rows.length === 1 ? studentItemLink(rows[0].item_id) : `${base()}/student/grades`,
+      // One grade on work the student can open links to it; else the Grades page.
+      link: rows.length === 1 && rows[0].item_visible ? studentItemLink(rows[0].item_id) : `${base()}/student/grades`,
       ...school,
     }),
   };

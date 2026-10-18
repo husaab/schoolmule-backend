@@ -623,6 +623,37 @@ describe('Integration: classroom emails', () => {
     expect((await processJob(next)).row).toMatchObject({ status: 'skipped', last_error: 'nothing published' });
   });
 
+  it('a Grades publish emails a student the item is not for their grade too, linked to their Grades page', async () => {
+    // Only Amal takes the assignment; Bilal is graded in the same column like a plain assessment.
+    const item = await assignment({
+      title: 'Leaf rubbing', audience: 'some', studentIds: [amalId], gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    });
+    const column = item.gradebook.assessmentId;
+    await patchReq(`/api/classroom/items/${item.itemId}/submissions/${amalId}`, { draftScore: 9 });
+    await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, 7)`, [bilalId, column]);
+
+    await post(`/api/assessment-publications/classes/${sciId}/publish`, { assessmentIds: [column] }, asTeacher, 201);
+    const rows = await jobs('graded');
+    expect(rows.map((r) => r.recipient_email)).toEqual(['amal.haddad@example.com', 'bilal.karim@example.com']);
+
+    getResend().emails.send.mockClear();
+    const bilalJob = rows.find((r) => r.recipient_email === 'bilal.karim@example.com');
+    expect((await processJob(bilalJob)).outcome).toBe('sent');
+    const [email] = sent();
+    expect(email.to).toEqual(['bilal.karim@example.com']);
+    expect(email.subject).toBe('Graded: Leaf rubbing');
+    expect(text(email.html)).toContain('Leaf rubbing · Science 7/10');
+    expect(email.html).not.toContain('9/10'); // Amal's grade is never in Bilal's email
+    // The item isn't Bilal's to open: the link is his Grades page.
+    expect(email.html).toContain('http://localhost:3000/student/grades');
+    expect(email.html).not.toContain(`/student/items/${item.itemId}`);
+
+    getResend().emails.send.mockClear();
+    expect((await processJob(rows.find((r) => r.recipient_email === 'amal.haddad@example.com'))).outcome).toBe('sent');
+    expect(sent()[0].html).toContain(`http://localhost:3000/student/items/${item.itemId}`);
+    expect(sent()[0].html).not.toContain('7/10');
+  });
+
   it('processing renders and sends through the school sender with no teacher Reply-To', async () => {
     await pool.query(`UPDATE schools SET email_reply_to = '{office@example.org}' WHERE school_code = 'ALHAADIACADEMY'`);
     await pool.query(`UPDATE users SET avatar = '{"style":"kufi","skin":1,"bg":3}' WHERE user_id = $1`, [TEACHER_ID]);
