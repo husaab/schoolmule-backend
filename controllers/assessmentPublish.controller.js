@@ -44,6 +44,7 @@ const {
 const { invalidateWeeklySummaries } = require('../services/aiWeeklySummary.service');
 const gradingQueries = require('../queries/grading.queries');
 const { publishSubmissions, afterPublish } = require('../services/classroom/publish');
+const { enqueueGraded } = require('../services/classroom/classroomNotifier');
 
 // Resend allows ~2 requests/second. Matches sendBulkReportEmails.
 const EMAIL_RATE_LIMIT_MS = 600;
@@ -496,6 +497,10 @@ const publishAssessments = async (req, res) => {
     for (const [itemId, studentIds] of classworkStudents) {
       await afterPublish({ school, studentIds, itemId });
     }
+    // Students get their "graded" email for every column published here
+    // (spec D6), bundled with the Classwork ones above into one per student
+    // per 15 minutes. Parents' digest below is unchanged. Never throws.
+    await enqueueGraded({ school, assessmentIds: cascade.finalIds });
   } catch (error) {
     logger.error('Publish committed, but preparing notifications failed:', error);
     return res.status(201).json({

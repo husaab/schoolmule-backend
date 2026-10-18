@@ -454,19 +454,30 @@ async function promoteScheduled() {
 }
 
 /**
- * The classroom part of a tick (T21): post scheduled classwork, queue its
- * "new work" emails, run the daily sweeps (due reminders, missing alerts,
- * summaries) and send what is due. Never throws: a failure is logged and the
- * tick carries on with the other queues.
+ * The classroom part of a tick (T21), before the other queues: post scheduled
+ * classwork, queue its "new work" emails and run the daily sweeps (due
+ * reminders, missing alerts, summaries). Never throws.
  */
 async function classroomTick(now = new Date()) {
   try {
     const promoted = await promoteScheduled();
     if (promoted.length) await classroom.enqueueNewWork(promoted.map((r) => r.item_id), { now });
     await classroom.runSchedule(now);
-    await classroom.drainClassroomJobs();
   } catch (error) {
     logger.error({ err: error }, 'Classroom emails tick failed');
+  }
+}
+
+/**
+ * Sends due classroom emails, last in the tick so a 4 pm surge of summaries
+ * never holds back message digests or announcements. Never throws.
+ */
+async function drainClassroom() {
+  try {
+    return await classroom.drainClassroomJobs();
+  } catch (error) {
+    logger.error({ err: error }, 'Sending classroom emails failed');
+    return 0;
   }
 }
 
@@ -487,6 +498,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
       if (!disabledReason) await remindIfDue();
       await drainAll();
       await drainAnnouncements();
+      await drainClassroom();
     } catch (error) {
       // Never let a worker error take the process down.
       logger.error({ err: error }, 'Message notifier tick failed');
@@ -508,5 +520,5 @@ function stopWorker() {
 
 module.exports = {
   startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS,
-  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick,
+  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick, drainClassroom,
 };

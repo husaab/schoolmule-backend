@@ -22,10 +22,13 @@ const TZ = 'America/Toronto';
 // A student row `s` whose own login `su` may get class email: T10's gate
 // (classrooms on, student email on for the grade, a login that is not
 // archived, not invite-pending, with an address) plus a usable login: consent
-// on file and the grade at or above the school's sign-in grade, so nobody is
-// sent an "Open in SchoolMule" they can't open. Aliases sal, su, scs, sacc.
+// on file, the grade at or above the school's sign-in grade, and the login's
+// link for the active year (the row the student signs in as), so nobody is
+// sent an "Open in SchoolMule" they can't open and a past year's row never
+// speaks for the login. Aliases sal, su, scs, sacc, say.
 const STUDENT_EMAIL_FROM = (s) => `${STUDENT_EMAIL_JOINS(s, `${s}.school`)}
-  JOIN student_accounts sacc ON sacc.user_id = su.user_id AND sacc.consent_at IS NOT NULL`;
+  JOIN student_accounts sacc ON sacc.user_id = su.user_id AND sacc.consent_at IS NOT NULL
+  JOIN school_years say ON say.school_year_id = sal.school_year_id AND say.is_active`;
 const STUDENT_EMAIL_OK = (s) => `(${s}.is_archived IS NOT TRUE AND ${STUDENT_EMAIL_GRADE_OK(s)}
   AND ${GRADE_RANK(`${s}.grade::text`)} >= ${GRADE_RANK('scs.login_from_grade')})`;
 
@@ -43,19 +46,23 @@ const DAY_START = (date) => `((${date})::timestamp AT TIME ZONE '${TZ}')`;
 // Feedback the student and parent may read (spec 0.8).
 const FEEDBACK_VISIBLE = `(sub.published_at IS NOT NULL AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE)))`;
 
-// Work that became missing after `since`: derived (due after `since`, not
-// turned in, a child who can sign in) or a Missing the teacher published
-// after `since`. The state is judged at `now`.
-const NEWLY_MISSING = (now, since) => `(${WORK_STATE_AT(now)} = 'missing' AND CASE WHEN ${GRADE_VISIBLE}
-    THEN COALESCE(sub.published_at, a.published_at) > ${since}
-    ELSE i.due_at > ${since} END)`;
+// Work that became missing in (since, until]: derived (due then, not turned
+// in, a child who can sign in) or a Missing the teacher published then. The
+// state is judged at `now`.
+const NEWLY_MISSING = (now, since, until) => `(${WORK_STATE_AT(now)} = 'missing' AND CASE WHEN ${GRADE_VISIBLE}
+    THEN COALESCE(sub.published_at, a.published_at) > ${since} AND COALESCE(sub.published_at, a.published_at) <= ${until}
+    ELSE i.due_at > ${since} AND i.due_at <= ${until} END)`;
+
+// A guardian who reads the day's news in the daily summary instead (ruling:
+// no separate missing alert next to it). `np` is their notification_prefs row.
+const GETS_DAILY_SUMMARY = (np) => `(COALESCE(${np}.weekly_summary, TRUE) AND COALESCE(${np}.summary_frequency, 'weekly') = 'daily')`;
 
 const TEACHER_NAME = (u1, u2) => `COALESCE(NULLIF(TRIM(CONCAT(${u1}.first_name, ' ', ${u1}.last_name)), ''),
   NULLIF(TRIM(CONCAT(${u2}.first_name, ' ', ${u2}.last_name)), ''), c.teacher_name)`;
 
-// The ISO instant to the microsecond, the identity of one publish of one
-// submission (a re-publish after a regrade is a new one).
-const PUBLISHED_KEY = `to_char(sub.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+// A publish instant to the microsecond, part of the identity of one publish
+// (a re-publish after a regrade, or a column published again, is a new one).
+const PUBLISHED_KEY = (expr) => `to_char(${expr} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 const JOB_COLUMNS = '(kind, digest_key, recipient_id, recipient_email, school, payload, send_after)';
 const ON_CONFLICT = 'ON CONFLICT (LOWER(recipient_email), kind, digest_key) DO NOTHING';
@@ -114,6 +121,26 @@ const classroomEmailQueries = {
     ${ON_CONFLICT}
     RETURNING job_id`,
 
+  //  Grades published on whole gradebook columns (Publish in Grades): the
+  //  students with a grade there that is now visible to them, one job per
+  //  student per 15-minute bucket (shared with enqueueGraded, so one publish
+  //  of several columns, or of a turn-in column, is one email).
+  //  $1 assessment ids, $2 school, $3 digest key, $4 bucket end, $5 bucket start
+  enqueueGradedColumns: `
+    INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
+    SELECT DISTINCT ON (LOWER(TRIM(su.email)))
+           'graded', $3::text, su.user_id, LOWER(TRIM(su.email)), s.school,
+           jsonb_build_object('studentId', s.student_id, 'since', $5::text), $4::timestamptz
+    FROM assessments a
+    JOIN student_assessments sa ON sa.assessment_id = a.assessment_id
+    JOIN students s ON s.student_id = sa.student_id AND s.school = $2
+    ${STUDENT_EMAIL_FROM('s')}
+    WHERE a.assessment_id = ANY($1::uuid[]) AND ${GRADE_VISIBLE} AND sa.status <> 'missing'
+      AND ${STUDENT_EMAIL_OK('s')}
+    ORDER BY LOWER(TRIM(su.email)), s.student_id
+    ${ON_CONFLICT}
+    RETURNING job_id`,
+
   //  Grades published: one job per eligible student per 15-minute bucket.
   //  $1 student ids, $2 school, $3 digest key, $4 bucket end, $5 bucket start
   enqueueGraded: `
@@ -128,46 +155,57 @@ const classroomEmailQueries = {
     ${ON_CONFLICT}
     RETURNING job_id`,
 
-  //  Missing work: one job per guardian address whose active-year children
-  //  (in a school with classrooms on) have work that went missing since $2,
-  //  unless the guardian turned the alerts off. $1 now, $2 since, $3 digest key
+  //  Missing work: one job per guardian address × child × item that went
+  //  missing in the sweep's fixed window ($2, $3], so the unique key makes an
+  //  item's alert happen once for that address, whatever re-runs the sweep
+  //  (a restart, a second instance, a later day whose window overlaps, or the
+  //  item going from derived to teacher-confirmed Missing). The send
+  //  coalesces an address's pending alerts into one email per family.
+  //  Active-year children in a school with classrooms on; not for guardians
+  //  who turned alerts off or who get the daily summary (it lists them).
+  //  $1 now, $2 since, $3 until
   enqueueMissingAlerts: `
     WITH kids AS (
-      SELECT DISTINCT s.student_id, s.school, s.grade, ps.parent_id
+      SELECT DISTINCT s.student_id, s.school, ps.parent_id
       FROM parent_students ps
       JOIN students s ON s.student_id = ps.student_id AND s.is_archived IS NOT TRUE
       JOIN school_classroom_settings scs ON scs.school = s.school AND scs.enabled
       WHERE ps.parent_id IS NOT NULL AND ${ACTIVE_YEAR('s')}
     ),
     fresh AS (
-      SELECT DISTINCT k.parent_id, k.school
+      SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id
       FROM kids k
       JOIN class_students ro ON ro.student_id = k.student_id
       JOIN classes c ON c.class_id = ro.class_id AND c.archived_at IS NULL
       JOIN classwork_items i ON i.class_id = c.class_id
       LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
       ${WORK_JOINS('k.student_id')}
-      WHERE ((i.due_at > $2::timestamptz AND i.due_at <= $1::timestamptz)
-             OR sub.published_at > $2::timestamptz OR a.published_at > $2::timestamptz)
+      WHERE ((i.due_at > $2::timestamptz AND i.due_at <= $3::timestamptz)
+             OR (sub.published_at > $2::timestamptz AND sub.published_at <= $3::timestamptz)
+             OR (a.published_at > $2::timestamptz AND a.published_at <= $3::timestamptz))
         AND ${ITEM_VISIBLE('i', 'a', 'k', '$1::timestamptz')}
-        AND ${NEWLY_MISSING('$1::timestamptz', '$2::timestamptz')}
+        AND ${NEWLY_MISSING('$1::timestamptz', '$2::timestamptz', '$3::timestamptz')}
     )
     INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
-    SELECT DISTINCT ON (LOWER(TRIM(gu.email)))
-           'missing_alert', $3::text, gu.user_id, LOWER(TRIM(gu.email)), f.school,
-           jsonb_build_object('since', $2::timestamptz, 'until', $1::timestamptz), $1::timestamptz
+    SELECT DISTINCT ON (LOWER(TRIM(gu.email)), f.student_id, f.item_id)
+           'missing_alert', 'missing:' || f.student_id::text || ':' || f.item_id::text,
+           gu.user_id, LOWER(TRIM(gu.email)), f.school,
+           jsonb_build_object('studentId', f.student_id, 'itemId', f.item_id, 'since', $2::timestamptz, 'until', $3::timestamptz),
+           $1::timestamptz
     FROM fresh f
     JOIN users gu ON gu.user_id = f.parent_id AND ${GUARDIAN_OK('gu')}
     LEFT JOIN notification_prefs np ON np.user_id = gu.user_id
-    WHERE COALESCE(np.missing_alerts, TRUE)
-    ORDER BY LOWER(TRIM(gu.email)), gu.user_id
+    WHERE COALESCE(np.missing_alerts, TRUE) AND NOT ${GETS_DAILY_SUMMARY('np')}
+    ORDER BY LOWER(TRIM(gu.email)), f.student_id, f.item_id, gu.user_id
     ${ON_CONFLICT}
     RETURNING job_id`,
 
   //  The summaries due today: daily ones, and weekly ones whose day (the
   //  parent's, else the school's) is today. Whether there is anything to say
-  //  is decided at send time. $1 now, $2 Toronto weekday, $3 weekly key,
-  //  $4 daily key, $5 weekly since, $6 daily since
+  //  is decided at send time. The windows are fixed 4 pm Toronto instants
+  //  (classroomDigest.sweepWindows), so a re-run reads the same ones.
+  //  $1 now, $2 Toronto weekday, $3 weekly key, $4 daily key, $5 weekly since,
+  //  $6 daily since, $7 until
   enqueueSummaries: `
     INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
     SELECT DISTINCT ON (LOWER(TRIM(gu.email)))
@@ -175,7 +213,7 @@ const classroomEmailQueries = {
            gu.user_id, LOWER(TRIM(gu.email)), s.school,
            jsonb_build_object('frequency', CASE WHEN f.daily THEN 'daily' ELSE 'weekly' END,
                               'since', CASE WHEN f.daily THEN $6::timestamptz ELSE $5::timestamptz END,
-                              'until', $1::timestamptz),
+                              'until', $7::timestamptz),
            $1::timestamptz
     FROM parent_students ps
     JOIN students s ON s.student_id = ps.student_id AND s.is_archived IS NOT TRUE
@@ -205,6 +243,19 @@ const classroomEmailQueries = {
     )
     RETURNING job_id, kind, digest_key, recipient_id, recipient_email, school, payload, attempts, created_at`,
 
+  //  The other pending missing alerts for this address, taken with the one
+  //  being sent so the family gets one email (pushed 5 minutes out, like a
+  //  claim, so another instance leaves them alone). $1 address, $2 the claimed job
+  claimSiblingAlerts: `
+    UPDATE classroom_email_jobs
+    SET attempts = attempts + 1, send_after = NOW() + interval '5 minutes'
+    WHERE job_id IN (
+      SELECT job_id FROM classroom_email_jobs
+      WHERE kind = 'missing_alert' AND status = 'pending' AND LOWER(recipient_email) = LOWER($1) AND job_id <> $2
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING job_id, payload`,
+
   //  $1 job_id, $2 status, $3 error, $4 payload to merge (jsonb or NULL)
   finishJob: `
     UPDATE classroom_email_jobs
@@ -212,6 +263,13 @@ const classroomEmailQueries = {
         sent_at = CASE WHEN $2::text = 'sent' THEN NOW() ELSE sent_at END,
         payload = CASE WHEN $4::jsonb IS NULL THEN payload ELSE payload || $4::jsonb END
     WHERE job_id = $1`,
+
+  //  Several jobs sent (or skipped) as one email. $1 job ids, $2 status, $3 error
+  finishJobs: `
+    UPDATE classroom_email_jobs
+    SET status = $2::text, last_error = $3,
+        sent_at = CASE WHEN $2::text = 'sent' THEN NOW() ELSE sent_at END
+    WHERE job_id = ANY($1::uuid[])`,
 
   //  $1 job_id, $2 error, $3 max attempts
   retryOrFailJob: `
@@ -269,36 +327,62 @@ const classroomEmailQueries = {
       AND ${WORK_STATE_AT('$3::timestamptz')} = 'assigned'
     ORDER BY i.due_at, title, i.item_id`,
 
-  //  The login's work published since $2 that the student may see, with a
-  //  grade or feedback to show (a Missing is not "graded": the student sees
-  //  it in the portal), minus what an earlier graded email already carried.
+  //  Every grade that reached the login since $2 (spec D6), minus what an
+  //  earlier graded email already carried. Two sources, one row each:
+  //  - work published to the student on Classwork (a submission published,
+  //    feedback included), keyed by submission and publish instant;
+  //  - a whole gradebook column published in Grades (a plain assessment, or
+  //    a student a turn-in item isn't for), keyed by column and its publish
+  //    instant; never a live edit of an already-published column (D17).
+  //  A Missing is not "graded" (the student sees it in the portal). Only what
+  //  the student may see: GRADE_VISIBLE, feedback published, ITEM_VISIBLE.
   //  $1 user_id, $2 since, $3 now, $4 recipient email, $5 this job's id
   selectGradedWork: `
-    SELECT sub.submission_id::text AS submission_id, ${PUBLISHED_KEY} AS published_key, sub.published_at,
-           i.item_id, i.kind, COALESCE(a.name, i.title) AS title, c.subject, a.max_score,
-           CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
-           CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
-           sub.feedback,
-           ${TEACHER_NAME('gb', 'tu')} AS teacher_name
-    FROM students s
-    ${STUDENT_EMAIL_FROM('s')}
-    JOIN classwork_submissions sub ON sub.student_id = s.student_id AND sub.published_at > $2::timestamptz
-    JOIN classwork_items i ON i.item_id = sub.item_id
-    JOIN classes c ON c.class_id = i.class_id AND c.archived_at IS NULL
-    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
-    LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
-    LEFT JOIN users gb ON gb.user_id = sub.graded_by AND gb.is_archived IS NOT TRUE
-    LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
-    WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
-      AND ${FEEDBACK_VISIBLE}
-      AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
-      AND (${GRADE_VISIBLE} OR sub.feedback IS NOT NULL)
-      AND NOT (${GRADE_VISIBLE} AND sa.status = 'missing')
-      AND NOT EXISTS (
-        SELECT 1 FROM classroom_email_jobs j
-        WHERE LOWER(j.recipient_email) = LOWER($4) AND j.kind = 'graded' AND j.status = 'sent' AND j.job_id <> $5
-          AND j.payload->'emailed' @> jsonb_build_array(jsonb_build_object('id', sub.submission_id::text, 'at', ${PUBLISHED_KEY})))
-    ORDER BY sub.published_at, title, i.item_id`,
+    SELECT g.* FROM (
+      SELECT sub.submission_id::text AS key_id, ${PUBLISHED_KEY('sub.published_at')} AS published_key, sub.published_at,
+             i.item_id, i.kind, COALESCE(a.name, i.title) AS title, c.subject, a.max_score,
+             CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
+             CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
+             sub.feedback,
+             ${TEACHER_NAME('gb', 'tu')} AS teacher_name
+      FROM students s
+      ${STUDENT_EMAIL_FROM('s')}
+      JOIN classwork_submissions sub ON sub.student_id = s.student_id AND sub.published_at > $2::timestamptz
+      JOIN classwork_items i ON i.item_id = sub.item_id
+      JOIN classes c ON c.class_id = i.class_id AND c.archived_at IS NULL
+      LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+      LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+      LEFT JOIN users gb ON gb.user_id = sub.graded_by AND gb.is_archived IS NOT TRUE
+      LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
+      WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
+        AND ${FEEDBACK_VISIBLE}
+        AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
+        AND (${GRADE_VISIBLE} OR sub.feedback IS NOT NULL)
+        AND NOT (${GRADE_VISIBLE} AND sa.status = 'missing')
+      UNION ALL
+      SELECT 'col:' || a.assessment_id::text, ${PUBLISHED_KEY('a.published_at')}, a.published_at,
+             i.item_id, i.kind, COALESCE(a.name, i.title), c.subject, a.max_score,
+             sa.score, sa.status, NULL::text,
+             ${TEACHER_NAME('pb', 'tu')}
+      FROM students s
+      ${STUDENT_EMAIL_FROM('s')}
+      JOIN student_assessments sa ON sa.student_id = s.student_id
+      JOIN assessments a ON a.assessment_id = sa.assessment_id AND a.published_at > $2::timestamptz
+      JOIN classwork_items i ON i.assessment_id = a.assessment_id
+      JOIN classes c ON c.class_id = a.class_id AND c.archived_at IS NULL
+      LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
+      LEFT JOIN users pb ON pb.user_id = a.published_by AND pb.is_archived IS NOT TRUE
+      LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
+      WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
+        AND ${GRADE_VISIBLE} AND sa.status <> 'missing'
+        AND sub.published_at IS NULL
+        AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
+    ) g
+    WHERE NOT EXISTS (
+      SELECT 1 FROM classroom_email_jobs j
+      WHERE LOWER(j.recipient_email) = LOWER($4) AND j.kind = 'graded' AND j.status = 'sent' AND j.job_id <> $5
+        AND j.payload->'emailed' @> jsonb_build_array(jsonb_build_object('id', g.key_id, 'at', g.published_key)))
+    ORDER BY g.published_at, g.title, g.item_id`,
 
   //  A guardian's children of the active year, in schools with classrooms on,
   //  oldest grade first (the P3 board). $1 parent user_id
@@ -340,6 +424,21 @@ const classroomEmailQueries = {
            OR a.published_at > $3::timestamptz)
       AND ${ITEM_VISIBLE('i', 'a', 'ro', '$2::timestamptz')}
     ORDER BY ro.student_id, i.due_at NULLS LAST, title, i.item_id`,
+
+  //  The alerted items (student × item pairs) of a guardian's children as
+  //  they stand now: state judged at $3, only what the child may see.
+  //  $1 student ids, $2 item ids (pairwise), $3 now
+  selectAlertItems: `
+    SELECT ro.student_id, i.item_id, i.kind, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
+           i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
+           ${WORK_STATE_AT('$3::timestamptz')} AS state
+    FROM unnest($1::uuid[], $2::uuid[]) AS p(student_id, item_id)
+    JOIN classwork_items i ON i.item_id = p.item_id
+    JOIN class_students ro ON ro.class_id = i.class_id AND ro.student_id = p.student_id
+    JOIN classes c ON c.class_id = i.class_id AND c.archived_at IS NULL
+    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+    ${WORK_JOINS('ro.student_id')}
+    WHERE ${ITEM_VISIBLE('i', 'a', 'ro', '$3::timestamptz')}`,
 
   //  Posts in the children's audience published in ($2, $3], with whether
   //  this parent has pressed "Got it". $1 student ids, $2 since, $3 now, $4 parent user_id

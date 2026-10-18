@@ -20,6 +20,26 @@ describe('torontoParts', () => {
   });
 });
 
+describe('torontoInstant and sweepWindows', () => {
+  it('finds the instant of a Toronto wall-clock hour, across DST', () => {
+    expect(d.torontoInstant('2026-10-16', 16).toISOString()).toBe('2026-10-16T20:00:00.000Z'); // EDT
+    expect(d.torontoInstant('2026-11-06', 16).toISOString()).toBe('2026-11-06T21:00:00.000Z'); // EST
+    expect(d.torontoInstant('2026-11-01', 16).toISOString()).toBe('2026-11-01T21:00:00.000Z'); // the day DST ends
+    expect(d.torontoInstant('2026-03-08', 16).toISOString()).toBe('2026-03-08T20:00:00.000Z'); // the day DST starts
+  });
+
+  it('anchors the sweeps to 4 pm, so a later run the same day reads the same windows', () => {
+    const at430 = d.sweepWindows(at('2030-10-18T20:30:00Z'));
+    const at1800 = d.sweepWindows(at('2030-10-18T22:00:00Z'));
+    expect(at1800).toEqual(at430);
+    expect(at430.until.toISOString()).toBe('2030-10-18T20:00:00.000Z');
+    expect(at430.day.toISOString()).toBe('2030-10-17T20:00:00.000Z');
+    expect(at430.week.toISOString()).toBe('2030-10-11T20:00:00.000Z');
+    // Across the fall DST change the week still runs 4 pm to 4 pm.
+    expect(d.sweepWindows(at('2026-11-06T21:30:00Z')).week.toISOString()).toBe('2026-10-30T20:00:00.000Z');
+  });
+});
+
 describe('scheduleGates', () => {
   it('opens due reminders at 17:00 and missing alerts and summaries at 16:00, Toronto time', () => {
     expect(d.scheduleGates(at('2026-10-16T19:59:00Z'))).toEqual({
@@ -146,6 +166,8 @@ describe('labels', () => {
     expect(d.scoreLabel({ score: null, maxScore: 10, status: 'graded' })).toBeNull();
     expect(d.excerpt('  one\n\ntwo  ', 50)).toBe('one two');
     expect(d.excerpt('x'.repeat(30), 10)).toBe(`${'x'.repeat(9)}…`);
+    expect(d.excerptLines('Label six parts.  \r\n\r\n\r\n\nUse colour.\n')).toBe('Label six parts.\n\nUse colour.');
+    expect(d.excerptLines('y'.repeat(700), 600)).toHaveLength(600);
   });
 });
 
@@ -159,15 +181,14 @@ describe('sections', () => {
     max_score: 10, grade_published_at: null, feedback: null, feedback_published_at: null, teacher_name: 'Ziad Teacher', ...o,
   });
 
-  it('missingAlertItems: derived Missing due in the window, and Missing published in the window', () => {
+  it('stillMissing: what is still missing now, newest due first', () => {
     const rows = [
-      row({ item_id: 'derived-new', state: 'missing', due_at: ago(3) }),
-      row({ item_id: 'derived-old', state: 'missing', due_at: ago(30) }),
-      row({ item_id: 'confirmed-new', state: 'missing', grade_visible: true, status: 'missing', grade_published_at: ago(2), due_at: ago(40) }),
-      row({ item_id: 'confirmed-old', state: 'missing', grade_visible: true, status: 'missing', grade_published_at: ago(26) }),
-      row({ item_id: 'turned-in', state: 'turned_in', due_at: ago(3) }),
+      row({ item_id: 'older', state: 'missing', due_at: ago(30) }),
+      row({ item_id: 'newer', state: 'missing', due_at: ago(3) }),
+      row({ item_id: 'turned-in-since', state: 'turned_in', due_at: ago(3) }),
+      row({ item_id: 'graded-since', state: 'graded', grade_visible: true, score: '0' }),
     ];
-    expect(d.missingAlertItems(rows, { since: ago(24) }).map((r) => r.item_id)).toEqual(['derived-new', 'confirmed-new']);
+    expect(d.stillMissing(rows).map((r) => r.item_id)).toEqual(['newer', 'older']);
   });
 
   it('summarySections: Missing (last 14 days), new grades and feedback in the window, due next week', () => {
@@ -186,7 +207,7 @@ describe('sections', () => {
       row({ item_id: 'due-tonight', due_at: at('2026-10-17T03:00:00Z') }),
       row({ item_id: 'due-turned-in', state: 'turned_in', due_at: at('2026-10-19T15:00:00Z') }),
     ];
-    const weekly = d.summarySections(rows, { since: ago(24 * 7), now, frequency: 'weekly' });
+    const weekly = d.summarySections(rows, { since: ago(24 * 7), until: now, now, frequency: 'weekly' });
     expect(weekly.missing.map((r) => r.item_id)).toEqual(['missing-recent', 'missing-dated']);
     expect(weekly.grades.map((r) => r.item_id).sort()).toEqual(['excused-new', 'feedback-only', 'graded-new']);
     // Still to come and not turned in: from now (tonight included) to a week from today.
@@ -197,5 +218,9 @@ describe('sections', () => {
       { since: ago(24), now, frequency: 'daily' });
     expect(daily.grades.map((r) => r.item_id).sort()).toEqual(['excused-new', 'feedback-only', 'graded-new']);
     expect(daily.due.map((r) => r.item_id)).toEqual(['due-tonight', 'due-saturday']);
+
+    // A grade published after the window's end belongs to the next summary.
+    const ended = d.summarySections(rows, { since: ago(24), until: ago(6), now, frequency: 'daily' });
+    expect(ended.grades).toEqual([]);
   });
 });

@@ -605,15 +605,10 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
  * After COMMIT: queues the students' "new work" emails for items that were
  * just posted. Items with "Email students" off, and students who can't see
  * the item or don't get class email, get nothing; an item that was posted
- * before never emails twice (one job per student and item). Never throws.
+ * before never emails twice (one job per student and item). Never throws
+ * (enqueueNewWork logs its own failures).
  */
-async function notifyPosted(itemIds) {
-  try {
-    await enqueueNewWork(itemIds);
-  } catch (error) {
-    logger.warn({ err: error, itemIds }, 'Queueing new work emails failed');
-  }
-}
+const notifyPosted = (itemIds) => enqueueNewWork(itemIds);
 
 /**
  * Deletes an item, in the caller's transaction. An item with no column is

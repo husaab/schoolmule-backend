@@ -43,6 +43,39 @@ function addDays(date, n) {
   return new Date(Date.UTC(y, m - 1, d) + n * DAY_MS).toISOString().slice(0, 10);
 }
 
+/**
+ * The instant a Toronto wall-clock hour falls on, for a 'YYYY-MM-DD' (DST-safe:
+ * the offset is read back from the Toronto clock, not assumed).
+ */
+function torontoInstant(date, hour) {
+  const [y, m, d] = date.split('-').map(Number);
+  let t = Date.UTC(y, m - 1, d, hour) + 5 * 60 * 60 * 1000; // EST guess
+  for (let i = 0; i < 3; i += 1) {
+    const p = torontoParts(t);
+    const diffDays = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${p.date}T00:00:00Z`)) / DAY_MS);
+    const diff = diffDays * 24 + (hour - p.hour);
+    if (diff === 0) break;
+    t += diff * 60 * 60 * 1000;
+  }
+  return new Date(t);
+}
+
+/**
+ * The fixed windows the daily sweeps read, anchored to 4 pm Toronto so a
+ * re-run later the same day (a restart, another instance) reads exactly the
+ * same window: the missing alert and the daily summary cover (yesterday
+ * 4 pm, today 4 pm], the weekly summary (a week ago 4 pm, today 4 pm].
+ */
+function sweepWindows(now) {
+  const { date } = torontoParts(now);
+  const until = torontoInstant(date, SUMMARY_HOUR);
+  return {
+    until,
+    day: torontoInstant(addDays(date, -1), SUMMARY_HOUR),
+    week: torontoInstant(addDays(date, -7), SUMMARY_HOUR),
+  };
+}
+
 /** The weekday (0 = Sunday) of a 'YYYY-MM-DD'. */
 const dowOf = (date) => new Date(`${date}T12:00:00Z`).getUTCDay();
 
@@ -180,6 +213,12 @@ function excerpt(value, max = 140) {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
+/** The start of a longer text with its line breaks (at most one blank line), at most `max` characters. */
+function excerptLines(value, max = 600) {
+  const text = String(value || '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
 // ── Sections ───────────────────────────────────────────────────────────────
 // Rows are a child's visible work (classroomEmail.queries.js selectChildWork):
 // state is the one WorkStatus rule, the grade and feedback columns are set
@@ -189,38 +228,29 @@ const isTurnIn = (r) => r.kind === 'quiz' || r.kind === 'assignment';
 const itemDay = (r) => (r.due_at ? torontoParts(r.due_at).date : r.date || null);
 const newestDueFirst = (a, b) => (time(b.due_at) ?? time(b.date)) - (time(a.due_at) ?? time(a.date)) || String(a.title).localeCompare(String(b.title));
 const soonestDueFirst = (a, b) => time(a.due_at) - time(b.due_at) || String(a.title).localeCompare(String(b.title));
-const after = (value, since) => value != null && time(value) > time(since);
+const within = (value, since, until) => value != null && time(value) > time(since) && (until == null || time(value) <= time(until));
 
-/**
- * Work that went missing since `since`: derived (due since then and not
- * turned in) or confirmed by the teacher (a Missing published since then).
- */
-function missingAlertItems(rows, { since }) {
-  return rows
-    .filter((r) => r.state === 'missing' && (r.grade_visible
-      ? r.status === 'missing' && after(r.grade_published_at, since)
-      : after(r.due_at, since)))
-    .sort(newestDueFirst);
-}
+/** Still missing now, newest due first (the missing alert's rows, re-read at send time). */
+const stillMissing = (rows) => rows.filter((r) => r.state === 'missing').sort(newestDueFirst);
 
 /**
  * The summary's sections for one child's rows.
  * - missing: still missing, due or dated in the last 14 days;
  * - grades: a grade (or, on work with no gradebook column, feedback) that
- *   reached the child since `since`; kindergarten classes are graded on
+ *   reached the child in (since, until]; kindergarten classes are graded on
  *   skills elsewhere, so their columns are left out as in the parent portal;
  * - due: not turned in and still to come, by the end of tomorrow (daily) or
  *   within a week (weekly).
  */
-function summarySections(rows, { since, now, frequency = 'weekly' }) {
+function summarySections(rows, { since, until = null, now, frequency = 'weekly' }) {
   const today = torontoParts(now).date;
   const missingFrom = addDays(today, -MISSING_DAYS);
   const dueTo = addDays(today, frequency === 'daily' ? 1 : DUE_NEXT_DAYS);
   const missing = rows.filter((r) => r.state === 'missing' && (itemDay(r) ?? '') >= missingFrom).sort(newestDueFirst);
   const grades = rows
     .filter((r) => (r.grade_visible
-      ? r.status !== 'missing' && after(r.grade_published_at, since) && r.class_grade !== 'JK' && r.class_grade !== 'SK'
-      : !r.assessment_id && Boolean(r.feedback) && after(r.feedback_published_at, since)))
+      ? r.status !== 'missing' && within(r.grade_published_at, since, until) && r.class_grade !== 'JK' && r.class_grade !== 'SK'
+      : !r.assessment_id && Boolean(r.feedback) && within(r.feedback_published_at, since, until)))
     .sort((a, b) => time(a.grade_published_at ?? a.feedback_published_at) - time(b.grade_published_at ?? b.feedback_published_at));
   const due = rows
     .filter((r) => r.state === 'assigned' && isTurnIn(r) && r.due_at && time(r.due_at) > time(now) && itemDay(r) <= dueTo)
@@ -240,6 +270,8 @@ module.exports = {
   DEFAULT_SUMMARY_DOW,
   MISSING_DAYS,
   torontoParts,
+  torontoInstant,
+  sweepWindows,
   addDays,
   isoWeekKey,
   gradedBucket,
@@ -257,7 +289,8 @@ module.exports = {
   dowPlural,
   scoreLabel,
   excerpt,
-  missingAlertItems,
+  excerptLines,
+  stillMissing,
   summarySections,
   whenLabel,
 };

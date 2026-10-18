@@ -297,7 +297,6 @@ const updateNotificationPrefs = async (req, res) => {
 module.exports = {
   getNotificationPrefs,
   updateNotificationPrefs,
-  validatePrefs,
   getClassroomSummary,
   requireLensChild,
   listLensClasses,

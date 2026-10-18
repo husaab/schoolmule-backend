@@ -315,7 +315,7 @@ describe('promoteScheduled (worker tick)', () => {
   });
 });
 
-describe('classroomTick (worker tick, T21)', () => {
+describe('classroomTick and drainClassroom (worker tick, T21)', () => {
   const classroom = require('../../../services/classroom/classroomNotifier');
   let spies = [];
   beforeEach(() => {
@@ -326,7 +326,7 @@ describe('classroomTick (worker tick, T21)', () => {
   });
   afterEach(() => { spies.forEach((s) => s.mockRestore()); spies = []; });
 
-  it('posts scheduled work, queues its new-work emails, runs the sweeps, then sends', async () => {
+  it('posts scheduled work, queues its new-work emails, then runs the sweeps', async () => {
     const order = [];
     makeRouter({ "SET status = 'posted'": [{ item_id: 'i1', class_id: 'c1' }, { item_id: 'i2', class_id: 'c1' }] });
     spies = [
@@ -336,17 +336,19 @@ describe('classroomTick (worker tick, T21)', () => {
     ];
     const now = new Date('2026-10-16T20:30:00Z');
     await notifier.classroomTick(now);
-    expect(order).toEqual([['enqueueNewWork', ['i1', 'i2'], now], ['runSchedule', now], ['drainClassroomJobs']]);
+    // Sending is the tick's last step (drainClassroom), after the message queues.
+    expect(order).toEqual([['enqueueNewWork', ['i1', 'i2'], now], ['runSchedule', now]]);
   });
 
-  it('queues nothing when nothing was posted, and never throws', async () => {
+  it('queues nothing when nothing was posted; neither step ever throws', async () => {
     makeRouter({});
     spies = [
       jest.spyOn(classroom, 'enqueueNewWork').mockResolvedValue(0),
-      jest.spyOn(classroom, 'runSchedule').mockResolvedValue({}),
+      jest.spyOn(classroom, 'runSchedule').mockRejectedValue(new Error('connection reset')),
       jest.spyOn(classroom, 'drainClassroomJobs').mockRejectedValue(new Error('connection reset')),
     ];
     await expect(notifier.classroomTick(new Date())).resolves.toBeUndefined();
     expect(classroom.enqueueNewWork).not.toHaveBeenCalled();
+    await expect(notifier.drainClassroom()).resolves.toBe(0);
   });
 });

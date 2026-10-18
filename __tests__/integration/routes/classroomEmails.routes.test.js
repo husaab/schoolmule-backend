@@ -292,13 +292,14 @@ describe('Integration: classroom emails', () => {
 
   it('missing alert: one email per family covering two siblings; none when prefs.missing_alerts is false', async () => {
     // Amal: derived Missing, due three hours ago and not turned in.
-    await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
+    const cells = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
     // Sami: a teacher-confirmed Missing published two hours ago.
     const spelling = (await pool.query(
       `INSERT INTO assessments (class_id, name, max_score, date, is_published, published_at)
        VALUES ($1, 'Spelling list 4', 10, DATE '2030-10-17', TRUE, $2) RETURNING assessment_id`, [engId, hoursFrom(FRIDAY, -2)],
     )).rows[0].assessment_id;
     await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, NULL, 'missing')`, [samiId, spelling]);
+    const spellingItem = (await pool.query(`SELECT item_id FROM classwork_items WHERE assessment_id = $1`, [spelling])).rows[0].item_id;
     // Bilal turned it in, so Rania's family has nothing new.
     await pool.query(
       `INSERT INTO classwork_submissions (item_id, student_id, turned_in_at)
@@ -309,10 +310,16 @@ describe('Integration: classroom emails', () => {
     expect(await jobs('missing_alert')).toEqual([]);
     await classroom.runSchedule(FRIDAY);
     const rows = await jobs('missing_alert');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ recipient_email: 'mona.haddad@example.com', digest_key: 'missing:2030-10-18', recipient_id: MONA_ID });
+    // One job per child × item (the item's alert happens once for this address), all Mona's.
+    expect(rows.map((r) => r.digest_key).sort()).toEqual([`missing:${amalId}:${cells.itemId}`, `missing:${samiId}:${spellingItem}`].sort());
+    expect(rows.every((r) => r.recipient_email === 'mona.haddad@example.com' && r.recipient_id === MONA_ID)).toBe(true);
+    // The window is fixed: yesterday 4 pm to today 4 pm, Toronto time.
+    expect(new Date(rows[0].payload.since).toISOString()).toBe('2030-10-17T20:00:00.000Z');
+    expect(new Date(rows[0].payload.until).toISOString()).toBe('2030-10-18T20:00:00.000Z');
 
+    // Sending one sends the family's single email and finishes both.
     expect((await processJob(rows[0], FRIDAY)).outcome).toBe('sent');
+    expect(sent()).toHaveLength(1);
     const [email] = sent();
     expect(email.to).toEqual(['mona.haddad@example.com']);
     expect(email.subject).toBe('Missing work: Amal (1), Sami (1)');
@@ -322,8 +329,9 @@ describe('Integration: classroom emails', () => {
     expect(body).toContain('Sami · Grade 3');
     expect(body).toContain('Spelling list 4 · English');
     expect(email.html).toContain('http://localhost:3000/parent/classes');
+    expect((await jobs('missing_alert')).map((r) => r.status)).toEqual(['sent', 'sent']);
 
-    // Alerts off: no job at all, and a pending one is skipped at send time.
+    // Alerts off: no job at all, and pending ones are skipped at send time, the family's together.
     await pool.query(`DELETE FROM classroom_email_jobs`);
     await pool.query(`INSERT INTO notification_prefs (user_id, missing_alerts) VALUES ($1, FALSE)`, [MONA_ID]);
     classroom.resetScheduleState();
@@ -332,20 +340,92 @@ describe('Integration: classroom emails', () => {
     await pool.query(`UPDATE notification_prefs SET missing_alerts = TRUE WHERE user_id = $1`, [MONA_ID]);
     classroom.resetScheduleState();
     await classroom.runSchedule(FRIDAY);
-    const [again] = await jobs('missing_alert');
+    const pending = await jobs('missing_alert');
+    expect(pending).toHaveLength(2);
     await pool.query(`UPDATE notification_prefs SET missing_alerts = FALSE WHERE user_id = $1`, [MONA_ID]);
-    expect((await processJob(again, FRIDAY)).row).toMatchObject({ status: 'skipped', last_error: 'prefs off' });
+    expect((await processJob(pending[0], FRIDAY)).row).toMatchObject({ status: 'skipped', last_error: 'prefs off' });
+    expect((await jobs('missing_alert')).map((r) => [r.status, r.last_error])).toEqual([['skipped', 'prefs off'], ['skipped', 'prefs off']]);
 
     // A family whose only news is a derived Missing (judged at the scheduler's clock) is alerted too.
     await pool.query(`DELETE FROM classwork_submissions WHERE student_id = $1`, [bilalId]);
     classroom.resetScheduleState();
     await classroom.runSchedule(FRIDAY);
     expect((await jobs('missing_alert')).map((r) => r.recipient_email)).toContain('rania.karim@example.com');
-    // A day later it is no longer news.
-    await pool.query(`DELETE FROM classroom_email_jobs`);
+  });
+
+  it('missing alerts never repeat an item: a restart re-reads the same 4 pm window and an item is alerted once per address', async () => {
+    const monaAlerts = () => jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
+    // Due Friday 13:30 and graded in the gradebook (so it can be confirmed Missing later).
+    const first = await assignment({
+      title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString(), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    });
+    await classroom.runSchedule(FRIDAY); // 16:30
+    let rows = await monaAlerts();
+    expect(rows.map((r) => r.digest_key)).toEqual([`missing:${amalId}:${first.itemId}`]);
+    expect((await processJob(rows[0], FRIDAY)).outcome).toBe('sent');
+
+    // Work that goes missing at 17:00, after today's window closed at 16:00; the worker restarts at 18:00.
+    const late = await assignment({ title: 'Seed journal', dueAt: hoursFrom(FRIDAY, 0.5).toISOString() });
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 1.5));
+    expect(await monaAlerts()).toHaveLength(1);
+
+    // Saturday morning the teacher confirms the first item Missing (published): the same item, no second alert.
+    const confirmedAt = hoursFrom(FRIDAY, 17.5);
+    await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, NULL, 'missing')`,
+      [amalId, first.gradebook.assessmentId]);
+    await pool.query(
+      `INSERT INTO classwork_submissions (item_id, student_id, draft_status, published_at) VALUES ($1, $2, 'missing', $3)`,
+      [first.itemId, amalId, confirmedAt],
+    );
+    await pool.query(`UPDATE assessments SET is_published = TRUE, published_at = $2 WHERE assessment_id = $1`, [first.gradebook.assessmentId, confirmedAt]);
+
+    // Saturday 16:30: the 17:00 item is news, exactly once; the first item is not alerted again.
     classroom.resetScheduleState();
     await classroom.runSchedule(hoursFrom(FRIDAY, 24));
-    expect(await jobs('missing_alert')).toEqual([]);
+    rows = await monaAlerts();
+    expect(rows.map((r) => [r.digest_key, r.status]).sort()).toEqual([
+      [`missing:${amalId}:${first.itemId}`, 'sent'],
+      [`missing:${amalId}:${late.itemId}`, 'pending'],
+    ].sort());
+    getResend().emails.send.mockClear();
+    expect((await processJob(rows.find((r) => r.status === 'pending'), hoursFrom(FRIDAY, 24))).outcome).toBe('sent');
+    const [email] = sent();
+    expect(email.subject).toBe('Missing work: Amal (1)');
+    expect(email.html).toContain('Seed journal');
+    expect(email.html).not.toContain('Plant cell diagram');
+
+    // A second run that day, or a second instance, adds nothing.
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 26));
+    expect(await monaAlerts()).toHaveLength(2);
+  });
+
+  it("a daily-summary parent gets the day's Missing in the daily summary, not a separate alert", async () => {
+    await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
+    await pool.query(`INSERT INTO notification_prefs (user_id, summary_frequency) VALUES ($1, 'daily')`, [MONA_ID]);
+    // Rania reads no summary at all but keeps the alerts.
+    await pool.query(`INSERT INTO notification_prefs (user_id, summary_frequency, weekly_summary) VALUES ($1, 'daily', FALSE)`, [RANIA_ID]);
+
+    await classroom.runSchedule(FRIDAY);
+    expect((await jobs('missing_alert')).map((r) => r.recipient_email)).toEqual(['rania.karim@example.com']);
+    const summaries = await jobs('weekly_summary');
+    expect(summaries.map((r) => [r.recipient_email, r.digest_key])).toEqual([['mona.haddad@example.com', 'daily:2030-10-18']]);
+
+    expect((await processJob(summaries[0], FRIDAY)).outcome).toBe('sent');
+    const [email] = sent();
+    expect(email.to).toEqual(['mona.haddad@example.com']);
+    expect(email.subject).toBe('Your day: Amal has 1 missing');
+    expect(text(email.html)).toContain('Plant cell diagram · Science · was due Fri, Oct 18');
+
+    // An alert queued before Mona switched to the daily summary is skipped when it would go out.
+    await pool.query(`DELETE FROM classroom_email_jobs`);
+    await pool.query(`UPDATE notification_prefs SET summary_frequency = 'weekly' WHERE user_id = $1`, [MONA_ID]);
+    classroom.resetScheduleState();
+    await classroom.runSchedule(FRIDAY);
+    const [alert] = await jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
+    await pool.query(`UPDATE notification_prefs SET summary_frequency = 'daily' WHERE user_id = $1`, [MONA_ID]);
+    expect((await processJob(alert, FRIDAY)).row).toMatchObject({ status: 'skipped', last_error: 'in daily summary' });
   });
 
   it("weekly summary on the school's day; skipped when every section is empty; a daily-frequency parent gets one each day", async () => {
@@ -421,41 +501,83 @@ describe('Integration: classroom emails', () => {
     const graded = (title) => assignment({ title, gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
     const first = await graded('Plant cell diagram');
     const second = await graded('Seed journal');
-    for (const it of [first, second]) await turnIn(it.itemId, asAmal);
+    const third = await graded('Leaf rubbing');
+    for (const it of [first, second, third]) await turnIn(it.itemId, asAmal);
+    await turnIn(first.itemId, asBilal);
     await patchReq(`/api/classroom/items/${first.itemId}/submissions/${amalId}`, { draftScore: 8, feedback: 'Great labels.' });
     await patchReq(`/api/classroom/items/${second.itemId}/submissions/${amalId}`, { draftScore: 9 });
+    await patchReq(`/api/classroom/items/${third.itemId}/submissions/${amalId}`, { draftScore: 7, feedback: 'Draft note.' }); // stays a draft
+    await patchReq(`/api/classroom/items/${first.itemId}/submissions/${bilalId}`, { draftScore: 6, feedback: 'Check the nucleus.' });
 
-    const before = gradedBucket(new Date());
+    // Keep both publishes inside one bucket: wait out a boundary that is less than 5 s away.
+    const BUCKET_MS = 15 * 60 * 1000;
+    const toBoundary = BUCKET_MS - (Date.now() % BUCKET_MS);
+    if (toBoundary < 5000) await new Promise((resolve) => setTimeout(resolve, toBoundary + 100));
+    const bucket = gradedBucket(new Date());
     await post(`/api/classroom/items/${first.itemId}/publish`, { studentIds: [amalId] });
     await post(`/api/classroom/items/${second.itemId}/publish`, { studentIds: [amalId] });
-    const after = gradedBucket(new Date());
+    expect(gradedBucket(new Date()).key).toBe(bucket.key);
 
     let rows = await jobs('graded');
-    expect(rows.every((r) => r.recipient_email === 'amal.haddad@example.com')).toBe(true);
-    if (before.key === after.key) {
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ digest_key: before.key, recipient_id: AMAL_USER_ID });
-      expect(new Date(rows[0].send_after).toISOString()).toBe(before.end.toISOString());
-    }
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ digest_key: bucket.key, recipient_id: AMAL_USER_ID, recipient_email: 'amal.haddad@example.com' });
+    expect(new Date(rows[0].send_after).toISOString()).toBe(bucket.end.toISOString());
     // Enqueueing again inside the bucket changes nothing.
-    const last = rows[rows.length - 1];
-    const lastBucketStart = new Date(last.digest_key.slice('graded:'.length));
-    await classroom.enqueueGraded({ school: 'ALHAADIACADEMY', studentIds: [amalId], now: new Date(lastBucketStart.getTime() + 60 * 1000) });
+    await classroom.enqueueGraded({ school: 'ALHAADIACADEMY', studentIds: [amalId], now: new Date(bucket.start.getTime() + 60 * 1000) });
     rows = await jobs('graded');
-    expect(rows[rows.length - 1].job_id).toBe(last.job_id);
-    expect(rows).toHaveLength(before.key === after.key ? 1 : rows.length);
+    expect(rows).toHaveLength(1);
 
-    expect((await processJob(last)).outcome).toBe('sent');
+    // A classmate's grade published meanwhile is their own email, never Amal's.
+    await post(`/api/classroom/items/${first.itemId}/publish`, { studentIds: [bilalId] });
+
+    expect((await processJob(rows[0])).outcome).toBe('sent');
     const email = sent().find((m) => m.to[0] === 'amal.haddad@example.com');
     expect(email.subject).toBe('Graded: Plant cell diagram and 1 more');
     const body = text(email.html);
     expect(body).toContain('Plant cell diagram · Science 8/10');
     expect(body).toContain('"Great labels." Ziad Teacher');
     expect(body).toContain('Seed journal · Science 9/10');
+    // D3: an unpublished draft and a classmate's grade never reach the email.
+    for (const absent of ['Leaf rubbing', 'Draft note.', '7/10', 'Check the nucleus.', '6/10']) expect(body).not.toContain(absent);
 
     // The next bucket's job finds nothing new: what was emailed is not emailed again.
-    await classroom.enqueueGraded({ school: 'ALHAADIACADEMY', studentIds: [amalId], now: new Date(lastBucketStart.getTime() + 16 * 60 * 1000) });
-    const next = (await jobs('graded')).find((r) => r.status === 'pending');
+    await classroom.enqueueGraded({ school: 'ALHAADIACADEMY', studentIds: [amalId], now: new Date(bucket.start.getTime() + 16 * 60 * 1000) });
+    const next = (await jobs('graded', `AND recipient_email = 'amal.haddad@example.com'`)).find((r) => r.status === 'pending');
+    expect((await processJob(next)).row).toMatchObject({ status: 'skipped', last_error: 'nothing published' });
+  });
+
+  it('publishing a plain column in Grades emails each student their grade once; parents keep their digest', async () => {
+    const unit = (await pool.query(
+      `INSERT INTO assessments (class_id, name, max_score, weight_points, date) VALUES ($1, 'Unit 2 test', 20, 30, DATE '2026-10-01') RETURNING assessment_id`,
+      [sciId],
+    )).rows[0].assessment_id;
+    const unitItem = (await pool.query(`SELECT item_id FROM classwork_items WHERE assessment_id = $1`, [unit])).rows[0].item_id;
+    for (const [studentId, score] of [[amalId, 17], [bilalId, 15], [daliaId, 12]]) {
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, $3)`, [studentId, unit, score]);
+    }
+
+    await post(`/api/assessment-publications/classes/${sciId}/publish`, { assessmentIds: [unit] }, asTeacher, 201);
+    // Dalia's login is invite-pending: no student email for her.
+    const rows = await jobs('graded');
+    expect(rows.map((r) => r.recipient_email)).toEqual(['amal.haddad@example.com', 'bilal.karim@example.com']);
+    // The parents' publish digest went out exactly as before.
+    expect(sent().some((m) => m.to.includes('mona.haddad@example.com'))).toBe(true);
+
+    getResend().emails.send.mockClear();
+    expect((await processJob(rows[0])).outcome).toBe('sent');
+    const [email] = sent();
+    expect(email.to).toEqual(['amal.haddad@example.com']);
+    expect(email.subject).toBe('Graded: Unit 2 test');
+    const body = text(email.html);
+    expect(body).toContain('Unit 2 test · Science 17/20');
+    expect(body).not.toContain('15/20');
+    expect(email.html).toContain(`http://localhost:3000/student/items/${unitItem}`);
+
+    // A score typed later on the published column goes live without an email (D17), and the
+    // next graded email does not list the column again.
+    await pool.query(`UPDATE student_assessments SET score = 18 WHERE student_id = $1 AND assessment_id = $2`, [amalId, unit]);
+    await classroom.enqueueGraded({ school: 'ALHAADIACADEMY', studentIds: [amalId], now: new Date(Date.now() + 16 * 60 * 1000) });
+    const next = (await jobs('graded', `AND recipient_email = 'amal.haddad@example.com'`)).find((r) => r.status === 'pending');
     expect((await processJob(next)).row).toMatchObject({ status: 'skipped', last_error: 'nothing published' });
   });
 

@@ -4,8 +4,11 @@
 // (classroom_email_jobs) drained by the message notifier's tick:
 //   new_work       a student, 2 minutes after an item is posted
 //   due_reminder   a student, from 5 pm, for work due tomorrow not turned in
-//   graded         a student, grades published in a 15-minute bucket
-//   missing_alert  a guardian address, from 4 pm, work that went missing today
+//   graded         a student, every grade published in a 15-minute bucket
+//                  (Classwork and whole columns published in Grades)
+//   missing_alert  a guardian address, from 4 pm: one job per child × item
+//                  that went missing in (yesterday 4 pm, today 4 pm], sent as
+//                  one email per family; not for daily-summary readers
 //   weekly_summary a guardian address, from 4 pm on their day (or daily)
 // Students are emailed like T10's announcement emails: classrooms on, student
 // email on for their grade, a usable login (consent, set password, address,
@@ -16,7 +19,9 @@
 //
 // Idempotency: each enqueue is INSERT ... ON CONFLICT DO NOTHING on (address,
 // kind, digest key), so a tick, a restart or a second instance re-running it
-// adds nothing; `lastRun` only saves re-running the sweeps' SQL within a day.
+// adds nothing; the sweeps read windows anchored to 4 pm Toronto, so a re-run
+// the same day reads the same window; `lastRun` only saves re-running their
+// SQL within a day.
 
 const db = require('../../config/database');
 const logger = require('../../logger');
@@ -34,9 +39,9 @@ const RATE_LIMIT_MS = 600;
 const DRAIN_LIMIT = 40;
 const NEW_WORK_DELAY_MS = 2 * 60 * 1000;
 const BUCKET_MS = 15 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
 const POST_NOTE_MAX = 90;
+// The new-work email carries the start of the instructions; the rest is in SchoolMule.
+const INSTRUCTIONS_MAX = 600;
 // Postgres: relation does not exist (student_portal_23 not applied).
 const UNDEFINED_TABLE = '42P01';
 
@@ -91,15 +96,23 @@ async function enqueueNewWork(itemIds, { now = new Date() } = {}) {
 }
 
 /**
- * Grades just published to these students (after COMMIT): one graded job per
- * eligible student per 15-minute bucket, sent when the bucket ends, so a
- * teacher publishing several items in a row sends one email. Never throws.
+ * Grades just published (after COMMIT): one graded job per eligible student
+ * per 15-minute bucket, sent when the bucket ends, so a teacher publishing
+ * several items or columns in a row sends one email (spec D6: every newly
+ * published grade). `studentIds`: work published to these students in
+ * Classwork; `assessmentIds`: whole columns published in Grades (the students
+ * with a grade there that is now visible). Never throws.
  */
-async function enqueueGraded({ school, studentIds, now = new Date() }) {
-  const ids = [...new Set((studentIds || []).filter(Boolean))];
-  if (!ids.length || !school) return 0;
+async function enqueueGraded({ school, studentIds = [], assessmentIds = [], now = new Date() }) {
+  if (!school) return 0;
+  const students = [...new Set((studentIds || []).filter(Boolean))];
+  const columns = [...new Set((assessmentIds || []).filter(Boolean))];
   const bucket = digest.gradedBucket(now);
-  return enqueue('graded', q.enqueueGraded, [ids, school, bucket.key, iso(bucket.end), iso(bucket.start)], { school });
+  const tail = [school, bucket.key, iso(bucket.end), iso(bucket.start)];
+  let queued = 0;
+  if (students.length) queued += await enqueue('graded', q.enqueueGraded, [students, ...tail], { school });
+  if (columns.length) queued += await enqueue('graded', q.enqueueGradedColumns, [columns, ...tail], { school });
+  return queued;
 }
 
 async function enqueueDueReminders(now, parts) {
@@ -107,15 +120,16 @@ async function enqueueDueReminders(now, parts) {
   return rows.length;
 }
 
-async function enqueueMissingAlerts(now, parts) {
-  const { rows } = await db.query(q.enqueueMissingAlerts, [iso(now), iso(new Date(now).getTime() - DAY_MS), `missing:${parts.date}`]);
+async function enqueueMissingAlerts(now) {
+  const w = digest.sweepWindows(now);
+  const { rows } = await db.query(q.enqueueMissingAlerts, [iso(now), iso(w.day), iso(w.until)]);
   return rows.length;
 }
 
 async function enqueueSummaries(now, parts) {
-  const t = new Date(now).getTime();
+  const w = digest.sweepWindows(now);
   const { rows } = await db.query(q.enqueueSummaries, [
-    iso(now), parts.dow, `weekly:${digest.isoWeekKey(now)}`, `daily:${parts.date}`, iso(t - WEEK_MS), iso(t - DAY_MS),
+    iso(now), parts.dow, `weekly:${digest.isoWeekKey(now)}`, `daily:${parts.date}`, iso(w.week), iso(w.day), iso(w.until),
   ]);
   return rows.length;
 }
@@ -177,7 +191,7 @@ async function buildNewWork(job, recipient, now) {
       dueLabel: c.due_at ? `${digest.dayLabel(c.due_at)} at ${digest.timeLabel(c.due_at)}` : null,
       dateLabel: !c.due_at && c.date ? digest.dayLabel(c.date) : null,
       points: c.max_score !== null && c.max_score !== undefined ? digest.scoreLabel({ score: c.max_score }) : null,
-      instructions: c.instructions ? c.instructions.trim() : null,
+      instructions: c.instructions ? digest.excerptLines(c.instructions, INSTRUCTIONS_MAX) : null,
       link: studentItemLink(c.item_id),
       ...school,
     }),
@@ -209,7 +223,7 @@ async function buildGraded(job, recipient, now) {
   const { rows } = await db.query(q.selectGradedWork, [recipient.user_id, iso(since), iso(now), job.recipient_email, job.job_id]);
   if (!rows.length) return { skip: 'nothing published' };
   return {
-    payloadPatch: { emailed: rows.map((r) => ({ id: r.submission_id, at: r.published_key })) },
+    payloadPatch: { emailed: rows.map((r) => ({ id: r.key_id, at: r.published_key })) },
     render: (school) => templates.gradedEmail({
       recipientFirstName: recipient.first_name,
       grades: rows.map((r) => ({
@@ -263,16 +277,34 @@ async function childrenWork(parentId, now, since) {
   return { children, work: groupBy(rows, 'student_id') };
 }
 
+/**
+ * One email per family: this job and the address's other pending alerts
+ * (one job per child × item, see enqueueMissingAlerts) go out together and
+ * are finished together. What is no longer missing (turned in, graded,
+ * excused since) is left out.
+ */
 async function buildMissingAlert(job, recipient, now) {
+  const { rows: siblings } = await db.query(q.claimSiblingAlerts, [job.recipient_email, job.job_id]);
+  const group = siblings.map((r) => r.job_id);
   const prefs = await loadPrefs(recipient.user_id, job.school);
-  if (!prefs.missingAlerts) return { skip: 'prefs off' };
-  const since = job.payload?.since ? new Date(job.payload.since) : new Date(new Date(now).getTime() - DAY_MS);
-  const { children, work } = await childrenWork(recipient.user_id, now, since);
+  if (!prefs.missingAlerts) return { skip: 'prefs off', group };
+  // The daily summary lists the day's Missing work: no second email beside it.
+  if (prefs.weeklySummary && prefs.summaryFrequency === 'daily') return { skip: 'in daily summary', group };
+
+  const pairs = [job, ...siblings].map((j) => j.payload || {}).filter((p) => p.studentId && p.itemId);
+  const { rows: children } = await db.query(q.selectGuardianChildren, [recipient.user_id]);
+  const mine = new Set(children.map((c) => c.student_id));
+  const wanted = pairs.filter((p) => mine.has(p.studentId));
+  const { rows } = wanted.length
+    ? await db.query(q.selectAlertItems, [wanted.map((p) => p.studentId), wanted.map((p) => p.itemId), iso(now)])
+    : { rows: [] };
+  const work = groupBy(rows, 'student_id');
   const blocks = children
-    .map((c) => ({ ...childHeader(c), items: digest.missingAlertItems(work.get(c.student_id) || [], { since }).map(missingLine) }))
+    .map((c) => ({ ...childHeader(c), items: digest.stillMissing(work.get(c.student_id) || []).map(missingLine) }))
     .filter((c) => c.items.length);
-  if (!blocks.length) return { skip: 'nothing new' };
+  if (!blocks.length) return { skip: 'nothing new', group };
   return {
+    group,
     render: (school) => templates.missingAlertEmail({
       recipientFirstName: recipient.first_name,
       children: blocks,
@@ -287,11 +319,13 @@ async function buildSummary(job, recipient, now) {
   const prefs = await loadPrefs(recipient.user_id, job.school);
   if (!prefs.weeklySummary) return { skip: 'prefs off' };
   const frequency = job.payload?.frequency === 'daily' ? 'daily' : 'weekly';
-  const t = new Date(now).getTime();
-  const since = job.payload?.since ? new Date(job.payload.since) : new Date(t - (frequency === 'daily' ? DAY_MS : WEEK_MS));
+  // The window the sweep fixed (4 pm to 4 pm, Toronto); content after its end is the next summary's.
+  const windows = digest.sweepWindows(now);
+  const since = job.payload?.since ? new Date(job.payload.since) : (frequency === 'daily' ? windows.day : windows.week);
+  const until = job.payload?.until ? new Date(job.payload.until) : windows.until;
   const { children, work } = await childrenWork(recipient.user_id, now, since);
   if (!children.length) return { skip: 'nothing to report' };
-  const { rows: postRows } = await db.query(q.selectChildPosts, [children.map((c) => c.student_id), iso(since), iso(now), recipient.user_id]);
+  const { rows: postRows } = await db.query(q.selectChildPosts, [children.map((c) => c.student_id), iso(since), iso(until), recipient.user_id]);
   // A post for the whole school or grade reaches several children: list it once, under the first.
   const seen = new Set();
   const posts = new Map();
@@ -300,7 +334,7 @@ async function buildSummary(job, recipient, now) {
     for (const p of posts.get(c.student_id)) seen.add(p.announcement_id);
   }
   const blocks = children.map((c) => {
-    const sections = digest.summarySections(work.get(c.student_id) || [], { since, now, frequency });
+    const sections = digest.summarySections(work.get(c.student_id) || [], { since, until, now, frequency });
     return {
       ...childHeader(c),
       missing: sections.missing.map(missingLine),
@@ -362,8 +396,11 @@ async function schoolOf(school) {
  * @returns {Promise<'sent'|'skipped'>} throws when the send fails (the caller retries)
  */
 async function processClassroomJob(job, { now = new Date() } = {}) {
-  const skip = async (reason) => {
+  // `group`: other jobs this email answers for (a family's missing alerts),
+  // finished with this one.
+  const skip = async (reason, group = []) => {
     await db.query(q.finishJob, [job.job_id, 'skipped', reason, null]);
+    if (group.length) await db.query(q.finishJobs, [group, 'skipped', reason]);
     return 'skipped';
   };
   const build = BUILDERS[job.kind];
@@ -374,7 +411,8 @@ async function processClassroomJob(job, { now = new Date() } = {}) {
   if (recipient.invite_pending) return skip('invite pending');
 
   const built = await build(job, recipient, now);
-  if (built.skip) return skip(built.skip);
+  const group = built.group || [];
+  if (built.skip) return skip(built.skip, group);
 
   const school = await schoolOf(job.school);
   const { subject, html } = built.render(school);
@@ -386,6 +424,7 @@ async function processClassroomJob(job, { now = new Date() } = {}) {
   });
   // Resend accepted it: record that first so nothing can send it again.
   await db.query(q.finishJob, [job.job_id, 'sent', null, built.payloadPatch ? JSON.stringify(built.payloadPatch) : null]);
+  if (group.length) await db.query(q.finishJobs, [group, 'sent', null]);
   return 'sent';
 }
 
