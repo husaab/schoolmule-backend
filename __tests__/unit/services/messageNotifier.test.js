@@ -314,3 +314,39 @@ describe('promoteScheduled (worker tick)', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+describe('classroomTick (worker tick, T21)', () => {
+  const classroom = require('../../../services/classroom/classroomNotifier');
+  let spies = [];
+  beforeEach(() => {
+    db._reset();
+    // An earlier test stood the scheduler down (missing table); a worker start clears that.
+    notifier.startWorker(60 * 60 * 1000);
+    notifier.stopWorker();
+  });
+  afterEach(() => { spies.forEach((s) => s.mockRestore()); spies = []; });
+
+  it('posts scheduled work, queues its new-work emails, runs the sweeps, then sends', async () => {
+    const order = [];
+    makeRouter({ "SET status = 'posted'": [{ item_id: 'i1', class_id: 'c1' }, { item_id: 'i2', class_id: 'c1' }] });
+    spies = [
+      jest.spyOn(classroom, 'enqueueNewWork').mockImplementation(async (ids, opts) => { order.push(['enqueueNewWork', ids, opts.now]); return 2; }),
+      jest.spyOn(classroom, 'runSchedule').mockImplementation(async (now) => { order.push(['runSchedule', now]); }),
+      jest.spyOn(classroom, 'drainClassroomJobs').mockImplementation(async () => { order.push(['drainClassroomJobs']); return 0; }),
+    ];
+    const now = new Date('2026-10-16T20:30:00Z');
+    await notifier.classroomTick(now);
+    expect(order).toEqual([['enqueueNewWork', ['i1', 'i2'], now], ['runSchedule', now], ['drainClassroomJobs']]);
+  });
+
+  it('queues nothing when nothing was posted, and never throws', async () => {
+    makeRouter({});
+    spies = [
+      jest.spyOn(classroom, 'enqueueNewWork').mockResolvedValue(0),
+      jest.spyOn(classroom, 'runSchedule').mockResolvedValue({}),
+      jest.spyOn(classroom, 'drainClassroomJobs').mockRejectedValue(new Error('connection reset')),
+    ];
+    await expect(notifier.classroomTick(new Date())).resolves.toBeUndefined();
+    expect(classroom.enqueueNewWork).not.toHaveBeenCalled();
+  });
+});

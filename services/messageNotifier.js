@@ -24,6 +24,7 @@ const { avatarPngUrl } = require('../utils/avatar');
 const adminUserQueries = require('../queries/adminUser.queries');
 const { emailAttachments } = require('../utils/attachmentUpload');
 const scheduler = require('./classroom/scheduler');
+const classroom = require('./classroom/classroomNotifier');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -452,11 +453,29 @@ async function promoteScheduled() {
   }
 }
 
+/**
+ * The classroom part of a tick (T21): post scheduled classwork, queue its
+ * "new work" emails, run the daily sweeps (due reminders, missing alerts,
+ * summaries) and send what is due. Never throws: a failure is logged and the
+ * tick carries on with the other queues.
+ */
+async function classroomTick(now = new Date()) {
+  try {
+    const promoted = await promoteScheduled();
+    if (promoted.length) await classroom.enqueueNewWork(promoted.map((r) => r.item_id), { now });
+    await classroom.runSchedule(now);
+    await classroom.drainClassroomJobs();
+  } catch (error) {
+    logger.error({ err: error }, 'Classroom emails tick failed');
+  }
+}
+
 function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   if (timer) return;
   disabledReason = null;
   announcementsDisabled = null;
   classworkDisabled = null;
+  classroom.resetScheduleState();
   // A restart part-way through the day must not re-run the reminder sweep.
   lastReminderDate = torontoDate();
   timer = setInterval(async () => {
@@ -464,7 +483,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
     if (draining) return;
     draining = true;
     try {
-      await promoteScheduled();
+      await classroomTick();
       if (!disabledReason) await remindIfDue();
       await drainAll();
       await drainAnnouncements();
@@ -489,5 +508,5 @@ function stopWorker() {
 
 module.exports = {
   startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS,
-  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled,
+  drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick,
 };

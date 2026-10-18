@@ -18,6 +18,9 @@ const work = require('../services/classroom/studentWork');
 const { newestDueFirst } = require('../services/classroom/todoGroups');
 const { buildChildGrades, isTermParamValid, allItems, recentItems } = require('../services/classroom/childGrades');
 const { listStudentStream } = require('../services/classroom/studentStream');
+const db = require('../config/database');
+const emailQueries = require('../queries/classroomEmail.queries');
+const { loadPrefs } = require('../services/classroom/classroomNotifier');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
@@ -211,7 +214,90 @@ const getLensGrades = async (req, res) => {
   }
 };
 
+// ── Email preferences (T21) ─────────────────────────────────────────────
+
+const FREQUENCIES = ['weekly', 'daily'];
+const PREF_KEYS = ['weeklySummary', 'summaryFrequency', 'summaryDow', 'missingAlerts'];
+const hasKey = (body, key) => Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined;
+
+/**
+ * A change to the parent's email choices: any of the four keys (the others
+ * keep their saved value). summaryDow null means "the school's day".
+ * @returns {{ value: object } | { error: string }}
+ */
+function validatePrefs(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Send your email preferences' };
+  if (!PREF_KEYS.some((k) => hasKey(body, k))) return { error: 'Send at least one preference to change' };
+  const value = {};
+  for (const key of ['weeklySummary', 'missingAlerts']) {
+    if (!hasKey(body, key)) continue;
+    if (typeof body[key] !== 'boolean') return { error: `${key} must be true or false` };
+    value[key] = body[key];
+  }
+  if (hasKey(body, 'summaryFrequency')) {
+    if (!FREQUENCIES.includes(body.summaryFrequency)) return { error: 'summaryFrequency must be weekly or daily' };
+    value.summaryFrequency = body.summaryFrequency;
+  }
+  if (hasKey(body, 'summaryDow')) {
+    const dow = body.summaryDow;
+    if (dow !== null && !(Number.isInteger(dow) && dow >= 0 && dow <= 6)) {
+      return { error: 'summaryDow must be a day from 0 (Sunday) to 6 (Saturday), or null for the school day' };
+    }
+    value.summaryDow = dow;
+  }
+  return { value };
+}
+
+// The API shape: summaryDow is the effective day (the parent's, else the school's).
+const toPrefs = (p) => ({
+  weeklySummary: p.weeklySummary,
+  summaryFrequency: p.summaryFrequency,
+  summaryDow: p.summaryDow ?? p.schoolDow,
+  missingAlerts: p.missingAlerts,
+  schoolDefaultDow: p.schoolDow,
+});
+
+// GET /api/parent-portal/notification-prefs
+const getNotificationPrefs = async (req, res) => {
+  try {
+    return ok(res, toPrefs(await loadPrefs(req.user.userId, req.user.school)));
+  } catch (error) {
+    logger.error({ err: error, userId: req.user.userId }, 'Failed to load email preferences');
+    return failed(res, 500, 'Error loading your email preferences');
+  }
+};
+
+// PUT /api/parent-portal/notification-prefs  { weeklySummary?, summaryFrequency?, summaryDow?, missingAlerts? }
+// Picking the school's own day stores NULL, so the summary follows the
+// school if it ever changes its day.
+const updateNotificationPrefs = async (req, res) => {
+  const checked = validatePrefs(req.body);
+  if (checked.error) return failed(res, 400, checked.error);
+  const { userId, school } = req.user;
+  try {
+    const current = await loadPrefs(userId, school);
+    const next = { ...current, ...checked.value };
+    if (hasKey(checked.value, 'summaryDow') && next.summaryDow === current.schoolDow) next.summaryDow = null;
+    const { rows: [saved] } = await db.query(emailQueries.upsertPrefs, [
+      userId, next.weeklySummary, next.summaryFrequency, next.summaryDow, next.missingAlerts,
+    ]);
+    return ok(res, toPrefs({
+      weeklySummary: saved.weekly_summary,
+      summaryFrequency: saved.summary_frequency,
+      summaryDow: saved.summary_dow,
+      missingAlerts: saved.missing_alerts,
+      schoolDow: current.schoolDow,
+    }));
+  } catch (error) {
+    logger.error({ err: error, userId }, 'Failed to save email preferences');
+    return failed(res, 500, 'Error saving your email preferences');
+  }
+};
+
 module.exports = {
+  getNotificationPrefs,
+  updateNotificationPrefs,
+  validatePrefs,
   getClassroomSummary,
   requireLensChild,
   listLensClasses,

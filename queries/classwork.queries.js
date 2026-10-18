@@ -23,12 +23,14 @@ const ITEM_DAY = (i = 'i', a = 'a') => `COALESCE((${i}.due_at AT TIME ZONE 'Amer
 /**
  * The single "item visible to student" rule (spec 0.8). `s` is an alias with a
  * student_id column (or an expression table alias the caller provides).
+ * `now` is the SQL instant it is judged at: NOW() everywhere but the
+ * classroom emails' scheduler (T21), which passes its own clock.
  */
-const ITEM_VISIBLE = (i, a, s) => `
+const ITEM_VISIBLE = (i, a, s, now = 'NOW()') => `
   ${i}.deleted_at IS NULL
-  AND (${i}.status = 'posted' OR (${i}.status = 'scheduled' AND ${i}.publish_at <= NOW()))
+  AND (${i}.status = 'posted' OR (${i}.status = 'scheduled' AND ${i}.publish_at <= ${now}))
   AND (${i}.kind <> 'assessment' OR ${i}.show_early OR ${a}.date IS NULL
-       OR ${a}.date <= (NOW() AT TIME ZONE 'America/Toronto')::date OR ${a}.is_published)
+       OR ${a}.date <= (${now} AT TIME ZONE 'America/Toronto')::date OR ${a}.is_published)
   AND (${i}.audience = 'all' OR EXISTS (SELECT 1 FROM classwork_item_students x WHERE x.item_id = ${i}.item_id AND x.student_id = ${s}.student_id))
   AND EXISTS (SELECT 1 FROM class_students cs WHERE cs.class_id = ${i}.class_id AND cs.student_id = ${s}.student_id)`;
 

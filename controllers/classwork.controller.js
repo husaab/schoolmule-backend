@@ -77,6 +77,7 @@ const createItem = async (req, res) => {
       return items.createItem(client, { classId, userId: req.user.userId, value: checked.value });
     });
     gradebookTouched(school, result.gradebookChanged);
+    if (result.posted) await items.notifyPosted([result.itemId]);
     return ok(res, await items.loadItem(result.itemId), 201);
   } catch (error) {
     return fail(res, error, 'Error creating the item', { classId });
@@ -118,6 +119,7 @@ const updateItem = async (req, res) => {
       return items.updateItem(client, { classId, userId: req.user.userId, row, cur, value: checked.value });
     });
     gradebookTouched(school, result.gradebookChanged);
+    if (result.posted) await items.notifyPosted([itemId]);
     return ok(res, await items.loadItem(itemId));
   } catch (error) {
     return fail(res, error, 'Error saving the item', { itemId });

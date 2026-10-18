@@ -59,4 +59,8 @@ router.get('/students/:studentId/classroom/items/:itemId', ...lensChild, classro
 router.get('/students/:studentId/classroom/files/:fileId/url', ...lensChild, classroom.getLensFileUrl);
 router.get('/students/:studentId/classroom/grades', ...lensChild, classroom.getLensGrades);
 
+// Email preferences: the weekly (or daily) summary and missing-work alerts.
+router.get('/notification-prefs', classroom.getNotificationPrefs);
+router.put('/notification-prefs', classroom.updateNotificationPrefs);
+
 module.exports = router;

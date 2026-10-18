@@ -1885,3 +1885,32 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS includes_student BOOLEAN NOT 
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS classwork_item_id UUID REFERENCES classwork_items(item_id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conversations_classwork_anchor
   ON conversations (student_id, classwork_item_id) WHERE classwork_item_id IS NOT NULL;
+
+-- student_portal_23_classroom_emails.sql: parents' email choices and the
+-- classroom email outbox (RLS is migration-only).
+CREATE TABLE IF NOT EXISTS notification_prefs (
+  user_id            UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+  weekly_summary     BOOLEAN NOT NULL DEFAULT TRUE,
+  summary_frequency  TEXT NOT NULL DEFAULT 'weekly' CHECK (summary_frequency IN ('weekly', 'daily')),
+  summary_dow        SMALLINT CHECK (summary_dow BETWEEN 0 AND 6),
+  missing_alerts     BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS classroom_email_jobs (
+  job_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind             TEXT NOT NULL CHECK (kind IN ('new_work', 'due_reminder', 'graded', 'missing_alert', 'weekly_summary')),
+  digest_key       TEXT NOT NULL,
+  recipient_id     UUID REFERENCES users(user_id) ON DELETE CASCADE,
+  recipient_email  TEXT NOT NULL,
+  school           school NOT NULL,
+  payload          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  send_after       TIMESTAMPTZ NOT NULL,
+  status           VARCHAR(16) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'skipped', 'failed')),
+  attempts         INT NOT NULL DEFAULT 0,
+  last_error       TEXT,
+  sent_at          TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_email_jobs_digest ON classroom_email_jobs (LOWER(recipient_email), kind, digest_key);
+CREATE INDEX IF NOT EXISTS idx_classroom_email_jobs_due ON classroom_email_jobs (send_after) WHERE status = 'pending';

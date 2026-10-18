@@ -13,6 +13,7 @@ const analyticsEngine = require('../analyticsEngine');
 const { invalidateWeeklySummaries } = require('../aiWeeklySummary.service');
 const q = require('../../queries/grading.queries');
 const publishQueries = require('../../queries/assessmentPublish.queries');
+const { enqueueGraded } = require('./classroomNotifier');
 
 const OUTSIDE_AUDIENCE_MESSAGE = "This column also has grades for students this item isn't for. Publish the column in Grades first; then publish here.";
 
@@ -144,8 +145,9 @@ async function reconcileAudience(client, { itemId, assessmentId, wasFor = null }
 
 /**
  * After COMMIT. Never throws. The grades changed, so the cached grade
- * matrices and this week's AI summaries of these students are stale.
- * T21 adds the students' 'graded' emails here.
+ * matrices and this week's AI summaries of these students are stale; the
+ * students get their "graded" email, bundled per 15 minutes (T21). Parents
+ * keep today's publish digest, sent by the callers.
  */
 async function afterPublish({ school, studentIds, itemId }) {
   try {
@@ -154,6 +156,7 @@ async function afterPublish({ school, studentIds, itemId }) {
   } catch (error) {
     logger.warn({ err: error, itemId }, 'afterPublish bookkeeping failed');
   }
+  await enqueueGraded({ school, studentIds });
 }
 
 module.exports = { publishSubmissions, cellsToDrafts, reconcileAudience, afterPublish, OUTSIDE_AUDIENCE_MESSAGE };

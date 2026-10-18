@@ -27,15 +27,19 @@ const TURN_IN_ITEM = `(i.kind = 'quiz' OR (i.kind = 'assignment' AND i.submissio
 // online is never "missing" by a due date alone (work done in class stays
 // Assigned until the teacher grades it, marks it missing or excuses it).
 // A teacher-confirmed, published Missing (the branches above) still shows.
-const WORK_STATE_SQL = `(CASE
+// WORK_STATE_AT(now) is the same rule as of `now` (a SQL timestamptz
+// expression), for the classroom emails' scheduler (T21); WORK_STATE_SQL is
+// it at NOW().
+const WORK_STATE_AT = (now) => `(CASE
   WHEN ${GRADE_VISIBLE} AND sa.status = 'excused' THEN 'excused'
   WHEN ${GRADE_VISIBLE} AND sa.status = 'missing' THEN 'missing'
   WHEN ${GRADE_VISIBLE} THEN 'graded'
   WHEN i.kind = 'material' THEN 'material'
   WHEN NOT ${TURN_IN_ITEM} THEN 'no_turn_in'
   WHEN sub.turned_in_at IS NOT NULL THEN 'turned_in'
-  WHEN i.due_at IS NOT NULL AND i.due_at < NOW() AND ${SIGNS_IN('wst')} THEN 'missing'
+  WHEN i.due_at IS NOT NULL AND i.due_at < ${now} AND ${SIGNS_IN('wst')} THEN 'missing'
   ELSE 'assigned' END)`;
+const WORK_STATE_SQL = WORK_STATE_AT('NOW()');
 
 // The late flag: only graded and turned-in work carries it.
 const WORK_LATE_SQL = `(CASE WHEN ${WORK_STATE_SQL} IN ('graded', 'turned_in') THEN COALESCE(sub.is_late, FALSE) ELSE FALSE END)`;
@@ -63,4 +67,6 @@ LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_i
 LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = ${student}
 LEFT JOIN students wst ON wst.student_id = ${student}`;
 
-module.exports = { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH };
+module.exports = {
+  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_AT, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH,
+};

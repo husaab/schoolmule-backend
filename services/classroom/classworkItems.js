@@ -19,6 +19,7 @@ const { BUCKET, SIGNED_URL_TTL, youtubeIdOf } = require('../../utils/classworkUp
 const { signedUrlMap } = require('../../utils/attachmentUpload');
 const engine = require('../analyticsEngine');
 const { cellsToDrafts, reconcileAudience } = require('./publish');
+const { enqueueNewWork } = require('./classroomNotifier');
 
 const ITEM_KINDS = ['assessment', 'assignment', 'quiz', 'material'];
 const SUBMISSION_MODES = ['file', 'text', 'done', 'none'];
@@ -444,7 +445,9 @@ const itemParams = (v) => [
 
 /**
  * Creates an item from a validated value, in the caller's transaction.
- * @returns {Promise<{ itemId: string, gradebookChanged: boolean }>}
+ * `posted`: it went straight to posted (the caller emails students after
+ * COMMIT, notifyPosted).
+ * @returns {Promise<{ itemId: string, gradebookChanged: boolean, posted: boolean }>}
  */
 async function createItem(client, { classId, userId, value }) {
   let assessmentId = null;
@@ -468,7 +471,7 @@ async function createItem(client, { classId, userId, value }) {
   if (value.audience === 'some') await replaceStudents(client, item.item_id, value);
   // An assignment or quiz filling an unpublished column takes its cells as drafts (D3).
   if (assessmentId && TURN_IN_KINDS.has(value.kind)) await cellsToDrafts(client, { itemId: item.item_id, assessmentId });
-  return { itemId: item.item_id, gradebookChanged: Boolean(assessmentId) };
+  return { itemId: item.item_id, gradebookChanged: Boolean(assessmentId), posted: value.status === 'posted' };
 }
 
 const sameList = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
@@ -495,8 +498,10 @@ function contentChanged(value, cur) {
 
 /**
  * Applies a validated edit, in the caller's transaction. `row` is the item's
- * ITEM_SELECT row (before), `cur` its toCurrent form.
- * @returns {Promise<{ gradebookChanged: boolean }>}
+ * ITEM_SELECT row (before), `cur` its toCurrent form. `posted`: the edit
+ * posted it (from a draft or a schedule), so students are emailed after
+ * COMMIT (notifyPosted).
+ * @returns {Promise<{ gradebookChanged: boolean, posted: boolean }>}
  */
 async function updateItem(client, { classId, userId, row, cur, value }) {
   const itemId = row.item_id;
@@ -593,7 +598,21 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
       gradebookChanged = true;
     }
   }
-  return { gradebookChanged };
+  return { gradebookChanged, posted: value.status === 'posted' && row.status !== 'posted' };
+}
+
+/**
+ * After COMMIT: queues the students' "new work" emails for items that were
+ * just posted. Items with "Email students" off, and students who can't see
+ * the item or don't get class email, get nothing; an item that was posted
+ * before never emails twice (one job per student and item). Never throws.
+ */
+async function notifyPosted(itemIds) {
+  try {
+    await enqueueNewWork(itemIds);
+  } catch (error) {
+    logger.warn({ err: error, itemIds }, 'Queueing new work emails failed');
+  }
 }
 
 /**
@@ -751,5 +770,5 @@ module.exports = {
   httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput,
   toAttachment, toItemSummary, toItem, toCurrent, toCategoryOption, toColumnOption, toTopic,
   loadContext, loadItem, loadAttachments, withClassAverages,
-  createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, signedFileUrl,
+  createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, signedFileUrl, notifyPosted,
 };
