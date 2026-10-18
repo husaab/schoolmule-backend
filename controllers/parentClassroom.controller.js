@@ -119,9 +119,11 @@ const lensOf = (req) => ({
 });
 
 // GET /api/parent-portal/students/:studentId/classroom/classes
+// signsIn: the child can sign in (SIGNS_IN, as on the summary card), for the
+// lens's "doesn't sign in" note.
 const listLensClasses = async (req, res) => {
   try {
-    return ok(res, { classes: await listChildClasses(lensOf(req)) });
+    return ok(res, { classes: await listChildClasses(lensOf(req)), signsIn: req.child.signsIn });
   } catch (error) {
     logger.error({ err: error, studentId: req.params.studentId }, 'Failed to list the lens classes');
     return failed(res, 500, 'Error loading the classes');

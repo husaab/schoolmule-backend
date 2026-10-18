@@ -187,8 +187,12 @@ describe("Integration: the parent's Classes page and lens", () => {
     await pool.query(
       `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [SARA_USER_ID, saraId, yearId],
     );
-    const signsIn = async () => (await get('/api/parent-portal/classroom/summary')).data.children
-      .find((c) => c.studentId === saraId).signsIn;
+    // The lens's classes payload carries the same flag (the P2 "doesn't sign in" note).
+    const signsIn = async () => {
+      const card = (await get('/api/parent-portal/classroom/summary')).data.children.find((c) => c.studentId === saraId).signsIn;
+      expect((await get(lens(saraId, '/classes'))).data.signsIn).toBe(card);
+      return card;
+    };
     const account = (sql) => pool.query(`UPDATE student_accounts SET ${sql} WHERE user_id = $1`, [SARA_USER_ID]);
     const settings = (sql) => pool.query(`UPDATE school_classroom_settings SET ${sql} WHERE school = 'ALHAADIACADEMY'`);
 
@@ -247,7 +251,10 @@ describe("Integration: the parent's Classes page and lens", () => {
   });
 
   it("the lens lists the child's current classes and opens one with the lead teacher to message", async () => {
-    const classes = (await get(lens(amalId, '/classes'))).data.classes;
+    const lensClasses = (await get(lens(amalId, '/classes'))).data;
+    expect(lensClasses.signsIn).toBe(true);
+    expect((await get(lens(saraId, '/classes'))).data.signsIn).toBe(false); // Sara has no login
+    const { classes } = lensClasses;
     expect(classes.map((c) => c.subject)).toEqual(['Math', 'Science']); // archived French hidden
     const student = (await get('/api/student/classes', asAmal)).data.classes;
     expect(classes).toEqual(student);

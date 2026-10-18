@@ -43,11 +43,13 @@ const HAS_NEW_POST = (c, reader) => `EXISTS (
 // (queries/studentSignsIn.js, shared with the derived Missing in workState.js).
 
 const childClassroomQueries = {
-  // One student row as the portal shows it. $1 student_id
+  // One student row as the portal shows it, and whether the child signs in
+  // (the lens's "doesn't sign in" note). $1 student_id
   selectChildProfile: `
     SELECT s.student_id, s.name, s.grade::text AS grade, s.school, s.school_year_id, s.is_archived,
            ${studentAvatarSql('s')},
-           NULLIF(TRIM(CONCAT(ht.first_name, ' ', ht.last_name)), '') AS homeroom_teacher_name
+           NULLIF(TRIM(CONCAT(ht.first_name, ' ', ht.last_name)), '') AS homeroom_teacher_name,
+           ${SIGNS_IN('s')} AS signs_in
     FROM students s
     LEFT JOIN users ht ON ht.user_id = s.homeroom_teacher_id
     WHERE s.student_id = $1

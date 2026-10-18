@@ -21,7 +21,7 @@ const firstNameOf = (name) => String(name || '').trim().split(/\s+/)[0] || '';
 
 /**
  * A child's student row, or null when it is unknown, archived or in another school.
- * @returns {Promise<null | { studentId, name, firstName, grade, schoolYearId, avatar, homeroomTeacherName }>}
+ * @returns {Promise<null | { studentId, name, firstName, grade, schoolYearId, avatar, homeroomTeacherName, signsIn }>}
  */
 async function loadChild(studentId, school) {
   const { rows } = await db.query(q.selectChildProfile, [studentId]);
@@ -35,6 +35,7 @@ async function loadChild(studentId, school) {
     schoolYearId: r.school_year_id ?? null,
     avatar: r.avatar ?? null,
     homeroomTeacherName: r.homeroom_teacher_name ?? null,
+    signsIn: Boolean(r.signs_in),
   };
 }
 
