@@ -137,7 +137,9 @@ async function processJob(job) {
 
   const html = getConversationDigestEmailHTML({
     forStudent: isStudent,
-    parentsIncluded: !ctx.guardians_hidden,
+    // "Your parents are in every conversation" only when it's true: a linked
+    // guardian, and not an item thread the school keeps from guardians.
+    parentsIncluded: !ctx.guardians_hidden && Boolean(ctx.has_guardians),
     recipientFirstName: ctx.recipient_first_name,
     studentName: ctx.student_name,
     className: ctx.class_subject,

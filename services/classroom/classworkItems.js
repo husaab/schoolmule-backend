@@ -38,6 +38,8 @@ const GRADED_WORK_CODE = 'GRADED_WORK_EXISTS';
 const GRADED_WORK_MESSAGE = "Students' work on this item is already graded. Clear those grades in the grading view before changing how it counts in the gradebook.";
 const DRAFT_ABOVE_MAX_CODE = 'DRAFT_ABOVE_MAX';
 const TURN_IN_KINDS = new Set(['assignment', 'quiz']);
+const HAS_THREAD_CODE = 'ITEM_HAS_MESSAGES';
+const HAS_THREAD_MESSAGE = 'Students have messages about this work, so it stays an assignment or quiz.';
 
 const has = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
 const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
@@ -513,6 +515,12 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   // dropped, and are never left behind by the item becoming a plain
   // assessment. The teacher clears them first (T16).
   const leavesTurnIn = TURN_IN_KINDS.has(cur.kind) && !TURN_IN_KINDS.has(value.kind);
+  // Messages about this work (T17) are anchored to the item: it stays a kind
+  // that takes them (an assessment row can be hard-deleted with its column,
+  // which would drop the anchor and with it a school's "hide from parents").
+  if (leavesTurnIn && (await one(client, q.selectHasThread, [itemId]))?.has_thread) {
+    throw httpError(409, HAS_THREAD_MESSAGE, HAS_THREAD_CODE);
+  }
   const newMax = target.mode === 'category' ? target.maxScore : null;
   const maxChanges = Boolean(assessmentId) && newMax !== null && newMax !== cur.maxScore;
   if (assessmentId && (dropping || switching || leavesTurnIn || maxChanges)) {

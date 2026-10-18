@@ -308,8 +308,18 @@ describe('Integration: student messaging', () => {
     // The item thread: no guardians in it, and no guardian email.
     expect(itemThread.participants.map((p) => p.role).sort()).toEqual(['STUDENT', 'TEACHER', 'TEACHER']);
     expect(await pendingJobs(itemId)).toEqual(sorted([TEACHER_ID, CO_TEACHER_ID]));
+    const momBadge = async () => (await get('/api/messaging/conversations/unread-count', asMom)).data;
+    const badgeBefore = await momBadge();
     await staffPost(itemId, asTeacher, 'Yes, a graph is great.');
     expect(await pendingJobs(itemId)).toEqual(sorted([CO_TEACHER_ID, AMAL_USER_ID]));
+    // The parent's badge doesn't move, and a search doesn't find it.
+    expect(await momBadge()).toEqual(badgeBefore);
+    expect((await get('/api/messaging/conversations?status=all&q=Lab%20report', asMom)).data).toEqual([]);
+    // Staff list rows name no guardians on it (they aren't in it).
+    const staffRow = (await get('/api/messaging/conversations', asTeacher)).data.find((c) => c.conversationId === itemId);
+    expect(staffRow.guardianNames).toEqual([]);
+    expect((await get('/api/messaging/conversations', asTeacher)).data.find((c) => c.conversationId === general).guardianNames.sort())
+      .toEqual(['Mona Haddad', 'Sami Haddad']);
 
     // The parent: not listed, not openable, not in the badge or the chips, not in the lens.
     const momList = (await get('/api/messaging/conversations?status=all', asMom)).data.map((c) => c.conversationId);
@@ -436,5 +446,141 @@ describe('Integration: student messaging', () => {
     await staffPost(own, asTeacher, 'Still there?');
     expect((await send('post', `/api/student/conversations/${own}/read`, asAmal, undefined, 200)).data.lastReadAt).toBeTruthy();
     expect((await get('/api/student/conversations/unread-count', asAmal)).data.unreadMessages).toBe(0);
+  });
+
+  describe('fix round 1', () => {
+    const ADMIN_LEAD_ID = '550e8400-e29b-41d4-a716-446655440020';
+    const ADMIN_CO_ID = '550e8400-e29b-41d4-a716-446655440021';
+    const AUNT_ID = '550e8400-e29b-41d4-a716-446655440022';
+    const asAdminLead = { userId: ADMIN_LEAD_ID, username: 'Rami Principal', email: 'rami.principal@example.com', role: 'ADMIN' };
+
+    it('an admin who leads or co-teaches one of the student\'s current classes is a target and can be messaged; a non-teaching admin is refused', async () => {
+      await user(ADMIN_LEAD_ID, 'rami.principal@example.com', 'Rami', 'Principal', 'ADMIN');
+      await user(ADMIN_CO_ID, 'laila.vice@example.com', 'Laila', 'Vice', 'ADMIN');
+      const artId = await makeClass('Art', ADMIN_LEAD_ID);
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [artId, amalId]);
+      await pool.query(`INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2)`, [sciId, ADMIN_CO_ID]);
+      // An admin who leads only Amal's past-term class is not a current teacher.
+      await pool.query(`UPDATE classes SET teacher_id = $2 WHERE class_id = $1`, [pastId, ADMIN_ID]);
+
+      const targets = (await get('/api/student/conversations/targets', asAmal)).data.teachers;
+      expect(targets.map((t) => [t.name, t.classes.map((c) => c.subject)])).toEqual([
+        ['Huda Homeroom', []],
+        ['Laila Vice', ['Science']],
+        ['Omar Coteacher', ['Science']],
+        ['Rami Principal', ['Art']],
+        ['Ziad Teacher', ['Science']],
+      ]);
+      expect(targets.map((t) => t.userId)).not.toContain(ADMIN_ID);
+
+      // The teaching admins can be messaged, with the parents in the thread as always.
+      const lead = (await startThread({ teacherId: ADMIN_LEAD_ID, subject: 'Paint', body: 'Can I bring my own brushes?' })).data;
+      expect(lead.conversation).toMatchObject({ classId: artId, leadTeacherName: 'Rami Principal', includesStudent: true });
+      expect(sorted(lead.participants.map((p) => p.userId))).toEqual(sorted([MOM_ID, DAD_ID, AMAL_USER_ID, ADMIN_LEAD_ID]));
+      expect(await pendingJobs(lead.conversation.conversationId)).toEqual(sorted([MOM_ID, DAD_ID, ADMIN_LEAD_ID]));
+      const co = (await startThread({ teacherId: ADMIN_CO_ID, classId: sciId, subject: 'Lab', body: 'Is the lab open at lunch?' })).data;
+      expect(sorted(co.participants.map((p) => p.userId)))
+        .toEqual(sorted([MOM_ID, DAD_ID, AMAL_USER_ID, TEACHER_ID, CO_TEACHER_ID, ADMIN_CO_ID]));
+      await startThread({ teacherId: ADMIN_LEAD_ID, classId: sciId, subject: 'Hi', body: 'x' }, asAmal, 400); // not this class
+
+      // The teaching admin answers in their inbox; no "joined" line (they teach the class).
+      const answered = (await staffPost(lead.conversation.conversationId, asAdminLead, 'Yes, bring them.')).data;
+      expect(answered.messages.map((m) => m.kind)).toEqual(['message', 'message']);
+
+      // A non-teaching admin, and the admin of the past-term class, are refused.
+      const refused = 'You can message your own teachers only.';
+      expect((await startThread({ teacherId: ADMIN_ID, subject: 'Hi', body: 'Hello' }, asAmal, 403)).message).toBe(refused);
+      // Bilal has no class with either teaching admin except Laila's Science.
+      expect((await startThread({ teacherId: ADMIN_LEAD_ID, subject: 'Hi', body: 'Hello' }, asBilal, 403)).message).toBe(refused);
+      await startThread({ teacherId: ADMIN_CO_ID, subject: 'Hi', body: 'Hello' }, asBilal, 201);
+    });
+
+    it('guardians are derived at read time: one linked after the thread began is in it; one unlinked is out', async () => {
+      await user(AUNT_ID, 'nadia.haddad@example.com', 'Nadia', 'Haddad', 'PARENT');
+      const asAunt = { userId: AUNT_ID, username: 'Nadia Haddad', email: 'nadia.haddad@example.com', role: 'PARENT' };
+      const id = (await startThread({ teacherId: TEACHER_ID, subject: 'Field trip', body: 'Do I need a lunch?' })).data.conversation.conversationId;
+      await get(`/api/messaging/conversations/${id}`, asAunt, 403);
+
+      await pool.query(
+        `INSERT INTO parent_students (parent_id, student_id, parent_name, parent_email, relation, school)
+         VALUES ($1, $2, 'Nadia Haddad', 'nadia.haddad@example.com', 'Aunt', 'ALHAADIACADEMY')`, [AUNT_ID, amalId],
+      );
+      const opened = (await get(`/api/messaging/conversations/${id}`, asAunt)).data;
+      expect(opened.participants.map((p) => p.userId)).toContain(AUNT_ID);
+      expect((await get('/api/student/conversations/targets', asAmal)).data.guardians.map((g) => g.name)).toContain('Nadia Haddad');
+      await staffPost(id, asTeacher, 'Yes, bring a lunch.');
+      expect(await pendingJobs(id)).toContain(AUNT_ID);
+
+      await pool.query(`DELETE FROM parent_students WHERE parent_id = $1`, [AUNT_ID]);
+      await pool.query(`UPDATE message_email_jobs SET status = 'sent' WHERE conversation_id = $1`, [id]);
+      await get(`/api/messaging/conversations/${id}`, asAunt, 403);
+      await staffPost(id, asTeacher, 'And a hat.');
+      expect(await pendingJobs(id)).not.toContain(AUNT_ID);
+      expect(await pendingJobs(id)).toEqual(expect.arrayContaining([MOM_ID, DAD_ID, AMAL_USER_ID]));
+
+      // An archived guardian is not named in the student's compose note.
+      await pool.query(`UPDATE users SET is_archived = TRUE WHERE user_id = $1`, [DAD_ID]);
+      expect((await get('/api/student/conversations/targets', asAmal)).data.guardians).toEqual([{ name: 'Mona Haddad', relation: 'Mother' }]);
+    });
+
+    it('an item with messages stays an assignment or quiz (409), so the thread keeps its anchor', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET parents_read_private_comments = FALSE WHERE school = 'ALHAADIACADEMY'`);
+      const catId = (await pool.query(
+        `INSERT INTO assessments (class_id, name, is_parent, weight_points) VALUES ($1, 'Tests', TRUE, 40) RETURNING assessment_id`, [sciId],
+      )).rows[0].assessment_id;
+      const item = await createItem(sciId, { kind: 'assignment', title: 'Private one', submissionMode: 'text', dueAt: inDays(3) });
+      const conv = (await send('post', `/api/student/items/${item.itemId}/thread/messages`, asAmal, { body: 'A question' }, 201)).data.conversation.conversationId;
+
+      const toAssessment = await call('patch', `/api/classroom/items/${item.itemId}`, asTeacher)
+        .send({ kind: 'assessment', title: 'Private one', date: '2026-10-20', gradebook: { mode: 'category', categoryId: catId, maxScore: 10 } });
+      expect([toAssessment.status, toAssessment.body.code]).toEqual([409, 'ITEM_HAS_MESSAGES']);
+      const toMaterial = await call('patch', `/api/classroom/items/${item.itemId}`, asTeacher).send({ kind: 'material', title: 'Private one' });
+      expect([toMaterial.status, toMaterial.body.code]).toEqual([409, 'ITEM_HAS_MESSAGES']);
+      // Other edits, and assignment ↔ quiz, are fine.
+      await send('patch', `/api/classroom/items/${item.itemId}`, asTeacher, { title: 'Private one (v2)' }, 200);
+      // Deleting the item soft-deletes it: the anchor and the guardians' exclusion stay.
+      await send('delete', `/api/classroom/items/${item.itemId}`, asTeacher, undefined, 200);
+      const { rows: [row] } = await pool.query(`SELECT classwork_item_id FROM conversations WHERE conversation_id = $1`, [conv]);
+      expect(row.classwork_item_id).toBe(item.itemId);
+      await get(`/api/messaging/conversations/${conv}`, asMom, 403);
+
+      // An item with no messages may still change kind.
+      const plain = await createItem(sciId, { kind: 'assignment', title: 'No messages', submissionMode: 'text' });
+      await send('patch', `/api/classroom/items/${plain.itemId}`, asTeacher, { kind: 'material', title: 'No messages' }, 200);
+    });
+
+    it('a teacher cannot start a thread about work the students cannot see yet (409 ITEM_NOT_POSTED)', async () => {
+      const draft = await createItem(sciId, { kind: 'assignment', title: 'Not yet', submissionMode: 'done', status: 'draft' });
+      const res = await call('post', `/api/classroom/items/${draft.itemId}/students/${amalId}/thread`, asTeacher);
+      expect([res.status, res.body.code]).toEqual([409, 'ITEM_NOT_POSTED']);
+      expect((await get(`/api/classroom/items/${draft.itemId}/students/${amalId}/thread`, asTeacher)).data)
+        .toEqual({ conversationId: null, messageCount: 0 });
+      // Posted: the thread can start.
+      await send('patch', `/api/classroom/items/${draft.itemId}`, asTeacher, { status: 'posted' }, 200);
+      await send('post', `/api/classroom/items/${draft.itemId}/students/${amalId}/thread`, asTeacher, undefined, 201);
+    });
+
+    it("the student's badge counts this year's threads, like the list", async () => {
+      const id = (await startThread({ teacherId: TEACHER_ID, subject: 'This year', body: 'Hello' })).data.conversation.conversationId;
+      await staffPost(id, asTeacher, 'Hi');
+      // Last year's row of Amal, linked to the same login, with an unread thread.
+      const pastYear = (await pool.query(
+        `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+         SELECT 'ALHAADIACADEMY', school_id, '2019-2020', DATE '2019-09-01', DATE '2020-06-30', FALSE
+         FROM schools WHERE school_code = 'ALHAADIACADEMY' RETURNING school_year_id`,
+      )).rows[0].school_year_id;
+      const oldRow = (await pool.query(
+        `INSERT INTO students (name, grade, school, school_year_id) VALUES ('Amal Haddad', '4', 'ALHAADIACADEMY', $1) RETURNING student_id`, [pastYear],
+      )).rows[0].student_id;
+      await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [AMAL_USER_ID, oldRow, pastYear]);
+      const old = (await pool.query(
+        `INSERT INTO conversations (school, student_id, teacher_id, kind, title, includes_student) VALUES ('ALHAADIACADEMY', $1, $2, 'general', 'Last year', TRUE)
+         RETURNING conversation_id`, [oldRow, TEACHER_ID],
+      )).rows[0].conversation_id;
+      await pool.query(`INSERT INTO messages (conversation_id, sender_id, sender_role, body) VALUES ($1, $2, 'TEACHER', 'Old news')`, [old, TEACHER_ID]);
+
+      expect((await get('/api/student/conversations', asAmal)).data.items.map((c) => c.conversationId)).toEqual([id]);
+      expect((await get('/api/student/conversations/unread-count', asAmal)).data).toEqual({ unreadConversations: 1, unreadMessages: 1 });
+    });
   });
 });

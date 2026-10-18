@@ -16,6 +16,8 @@
 -- ============================================================
 
 BEGIN;
+-- Give up rather than queue behind a long transaction on conversations.
+SET LOCAL lock_timeout = '5s';
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS includes_student BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS classwork_item_id UUID REFERENCES classwork_items(item_id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conversations_classwork_anchor

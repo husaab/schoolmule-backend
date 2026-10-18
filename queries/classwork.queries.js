@@ -226,6 +226,9 @@ ORDER BY i.created_at, i.item_id`,
   countGrades: `
     SELECT COUNT(*)::int AS n FROM student_assessments sa WHERE sa.assessment_id = $1 AND ${HAS_GRADE()}`,
 
+  //  Does the item carry a "messages about this work" thread (T17)? $1 item_id
+  selectHasThread: `SELECT EXISTS (SELECT 1 FROM conversations WHERE classwork_item_id = $1) AS has_thread`,
+
   //  Students' work on this item already graded, as a draft or published
   //  (T16): how many, and the highest score. $1 item_id
   selectGradedWork: `

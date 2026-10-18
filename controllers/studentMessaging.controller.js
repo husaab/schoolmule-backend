@@ -84,7 +84,7 @@ const listConversations = async (req, res) => {
 // GET /api/student/conversations/unread-count → { unreadConversations, unreadMessages }
 const getUnreadCount = async (req, res) => {
   try {
-    const { rows: [r] } = await db.query(q.selectStudentUnreadSummary, [req.user.userId, req.user.school]);
+    const { rows: [r] } = await db.query(q.selectStudentUnreadSummary, [req.user.userId, req.user.school, yearOf(req)]);
     return ok(res, { unreadConversations: r?.unread_conversations ?? 0, unreadMessages: r?.unread_messages ?? 0 });
   } catch (error) {
     logger.error({ err: error, userId: req.user.userId }, 'Error loading the student unread count');

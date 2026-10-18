@@ -34,6 +34,8 @@ const FEEDBACK_MAX = 5000;
 const MAX_STUDENTS = 500;
 const GRADED_KINDS = new Set(['assignment', 'quiz']);
 
+const ITEM_NOT_POSTED_MESSAGE = 'Post this work before messaging students about it.';
+
 const MESSAGES = {
   NOT_GRADED_HERE: 'Only assignments and quizzes are graded here.',
   STUDENT_NOT_FOUND: 'Student not found',
@@ -277,9 +279,9 @@ const getStudentThread = async (req, res) => {
 // POST /api/classroom/items/:itemId/students/:studentId/thread → { conversationId }
 // Ensures the thread (one per student × item; includes the student, their
 // guardians are derived in). The teacher then posts through
-// POST /api/messaging/conversations/:id/messages. Starting one is held to the
-// current term like every new thread (admins exempt); an existing one is
-// always returned.
+// POST /api/messaging/conversations/:id/messages. Starting one needs the item
+// posted (409 ITEM_NOT_POSTED) and is held to the current term like every
+// new thread (admins exempt); an existing one is always returned.
 const ensureStudentThread = async (req, res) => {
   const { itemId } = req.item;
   const { school } = req.class;
@@ -291,6 +293,9 @@ const ensureStudentThread = async (req, res) => {
     const term = await resolveCurrentTerm(req);
     const { rows: [anchor] } = await db.query(messagingQueries.selectClassworkThreadAnchor, [itemId, ...termParams(term)]);
     if (!anchor) throw httpError(404, 'Item not found');
+    // A thread is titled with the item and shows in the family's Messages:
+    // never for work the students can't see yet (a draft or scheduled item).
+    if (!anchor.is_live) throw httpError(409, ITEM_NOT_POSTED_MESSAGE, 'ITEM_NOT_POSTED');
     if (term && req.user.role !== 'ADMIN' && !anchor.in_current_term) throw httpError(400, PAST_TERM_MESSAGE);
     const { rows: [c] } = await db.query(messagingQueries.insertClassworkThread, [
       school, studentId, anchor.class_id, anchor.lead_teacher_id ?? null, anchor.title || 'Classwork', req.user.userId, itemId,

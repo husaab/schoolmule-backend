@@ -147,7 +147,7 @@ describe('messageNotifier', () => {
       'FOR UPDATE SKIP LOCKED': [job()],
       'AS recipient_email': [ctx({
         recipient_role: 'STUDENT', recipient_email: 'amal.haddad@example.com', recipient_first_name: 'Amal',
-        includes_student: true, recipient_in_thread: true, student_email_on: true, guardians_hidden: false,
+        includes_student: true, recipient_in_thread: true, student_email_on: true, guardians_hidden: false, has_guardians: true,
       })],
       'AS attachment_count': [msg({ sender_name: 'Ziad Teacher', body: 'Nice start' })],
       'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, is_published: false }],
@@ -173,6 +173,20 @@ describe('messageNotifier', () => {
     await notifier.drainOnce();
     expect(mockSend.mock.calls[0][0].subject).toBe('2 new messages about Unit 3 Quiz');
     expect(mockSend.mock.calls[0][0].html).toContain('14/20');
+  });
+
+  it('the student email says parents are in the thread only when a guardian is, and the thread is not kept from them', async () => {
+    const studentCtx = { recipient_role: 'STUDENT', includes_student: true, recipient_in_thread: true, student_email_on: true };
+    for (const [over, says] of [
+      [{ has_guardians: true, guardians_hidden: false }, true],
+      [{ has_guardians: false, guardians_hidden: false }, false], // no linked guardian account
+      [{ has_guardians: true, guardians_hidden: true }, false], // an item thread kept from parents
+    ]) {
+      mockSend.mockClear();
+      makeRouter({ 'FOR UPDATE SKIP LOCKED': [job()], 'AS recipient_email': [ctx({ ...studentCtx, ...over })], 'AS attachment_count': [msg()] });
+      await notifier.drainOnce();
+      expect([over, mockSend.mock.calls[0][0].html.includes('Your parents are in every conversation')]).toEqual([over, says]);
+    }
   });
 
   it('skips a student no longer in the thread, a school that does not email students, and a guardian on a hidden item thread', async () => {
