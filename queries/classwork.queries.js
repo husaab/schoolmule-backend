@@ -72,6 +72,14 @@ const ITEM_COUNTS = `(SELECT json_build_object(
 // A cell that holds a grade: a score, or a confirmed missing/excused status.
 const HAS_GRADE = (sa = 'sa') => `(${sa}.score IS NOT NULL OR ${sa}.status IN ('missing', 'excused'))`;
 
+// Students' work on the item graded as a draft or published (a score or a
+// status on the submission; a live grade keeps its copy there), counted over
+// every submission: students who can't see the item (a draft or scheduled
+// item, off the audience, archived) included, since deleting the item drops
+// their grades too. The same rule as selectGradedWork.
+const GRADED_WORK_COUNT = (i = 'i') => `(SELECT COUNT(*) FROM classwork_submissions gw
+   WHERE gw.item_id = ${i}.item_id AND (gw.draft_score IS NOT NULL OR gw.draft_status IS NOT NULL))::int`;
+
 // Item (and ItemSummary) columns. classAvgPct is not computed here: it comes
 // from the grade engine (classworkItems.withClassAverages).
 const ITEM_SELECT = `
@@ -85,7 +93,8 @@ SELECT i.item_id, i.class_id, i.kind, COALESCE(a.name, i.title) AS title, i.topi
        COALESCE(a.is_published, FALSE) AS is_published,
        (SELECT COUNT(*) FROM student_assessments sa WHERE sa.assessment_id = a.assessment_id AND ${HAS_GRADE()})::int AS score_count,
        (SELECT COUNT(*) FROM classwork_attachments x WHERE x.item_id = i.item_id)::int AS attachment_count,
-       ${ITEM_COUNTS} AS counts
+       ${ITEM_COUNTS} AS counts,
+       ${GRADED_WORK_COUNT()} AS graded_work_count
 FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 LEFT JOIN assessments p ON p.assessment_id = a.parent_assessment_id`;
@@ -99,6 +108,7 @@ const classworkQueries = {
   AUDIENCE_SIZE,
   TURNED_IN_COUNT,
   ITEM_COUNTS,
+  GRADED_WORK_COUNT,
   ITEM_SELECT,
 
   // ── Reads ──────────────────────────────────────────────────────────────

@@ -1074,4 +1074,36 @@ describe('Integration: grading and per-student Publish', () => {
       expect(await cell(daliaId)).toEqual({ student_id: daliaId, score: 6, status: 'graded' });
     });
   });
+
+  it("gradedWorkCount counts every student's draft or published grade on the item, whether they can see it or not", async () => {
+    // A draft item no student sees yet: its counts are zeros, gradedWorkCount isn't.
+    const draft = await createItem({
+      kind: 'assignment', title: 'Draft worksheet', submissionMode: 'done', status: 'draft',
+      dueAt: inDays(3), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    });
+    expect(draft.gradedWorkCount).toBe(0);
+    await expectStatus(authenticatedRequest('patch', `/api/classroom/items/${draft.itemId}/submissions/${amalId}`, asTeacher)
+      .send({ draftScore: 7 }), 200);
+    const draftNow = (await get(`/api/classroom/items/${draft.itemId}`)).data;
+    expect(draftNow.counts.drafts).toBe(0);
+    expect(draftNow.gradedWorkCount).toBe(1);
+
+    // The posted item: Amal published, then Bilal graded live (the column is
+    // published now), Dalia turned in with no grade.
+    await patch(amalId, { draftScore: 9 });
+    await publish([amalId]);
+    await patch(bilalId, { draftScore: 6 });
+    let single = (await get(itemUrl)).data;
+    expect(single.counts).toMatchObject({ drafts: 0, published: 2 });
+    expect(single.gradedWorkCount).toBe(2);
+
+    // Bilal archived after grading: no longer in the counts, still in gradedWorkCount.
+    await pool.query(`UPDATE students SET is_archived = TRUE WHERE student_id = $1`, [bilalId]);
+    single = (await get(itemUrl)).data;
+    expect(single.counts.published).toBe(1);
+    expect(single.gradedWorkCount).toBe(2);
+    const list = (await get(`/api/classroom/classes/${sciId}/items`)).data;
+    const byId = Object.fromEntries(list.items.map((i) => [i.itemId, i.gradedWorkCount]));
+    expect([byId[item.itemId], byId[draft.itemId]]).toEqual([2, 1]);
+  });
 });

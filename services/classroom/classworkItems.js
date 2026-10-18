@@ -256,6 +256,9 @@ function toItemSummary(row) {
     } : null,
     attachmentCount: Number(row.attachment_count) || 0,
     counts: row.counts,
+    // Every student's draft or published grade on the item, seen by them or
+    // not (counts.* only cover students who can see it): what a delete drops.
+    gradedWorkCount: Number(row.graded_work_count) || 0,
     classAvgPct: null, // withClassAverages (the grade engine)
     createdAt: iso(row.created_at),
     editedAt: iso(row.edited_at),
