@@ -389,6 +389,7 @@ async function buildStudentItem(row, { canAct, studentId, forGuardian = !canAct 
     subject: w.subject,
     identity,
     kind: w.kind,
+    submissionMode: w.submissionMode,
     title: w.title,
     instructions: row.instructions ?? null,
     teacher: w.teacher ? { ...w.teacher, photoUrl: photoUrl ?? null } : null,

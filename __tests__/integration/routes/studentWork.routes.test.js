@@ -177,6 +177,17 @@ describe('Integration: student work', () => {
     expect(await submissions(other.itemId)).toHaveLength(0);
   });
 
+  it('the item payload says how the work is turned in (submissionMode), for the student and the parent lens', async () => {
+    const lens = `/api/parent-portal/students/${amalId}/classroom`;
+    for (const mode of ['file', 'text', 'done', 'none']) {
+      const item = await assignment({ title: `Mode ${mode}`, submissionMode: mode });
+      expect((await get(`/api/student/items/${item.itemId}`)).data.submissionMode).toBe(mode);
+      expect((await get(`${lens}/items/${item.itemId}`, asParent)).data.submissionMode).toBe(mode);
+    }
+    const material = await createItem(sciId, { kind: 'material', title: 'Cells reading' });
+    expect((await get(`/api/student/items/${material.itemId}`)).data.submissionMode).toBe('none');
+  });
+
   it('text answer autosaves and turn-in needs a non-blank answer', async () => {
     const item = await assignment({ submissionMode: 'text' });
     const url = `/api/student/items/${item.itemId}`;
