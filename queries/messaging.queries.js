@@ -5,9 +5,23 @@
 // (guardians), classes.teacher_id (lead) and class_teachers (co-teachers) —
 // so a guardian linked after a thread began sees it immediately. See
 // middleware/requireConversationAccess.js.
+//
+// Student portal (T17): a conversation may also include the student
+// (includes_student, new threads only: every older parent–teacher thread
+// stays between the adults) through the student's login
+// (student_account_links), and may be anchored to one piece of classwork
+// (classwork_item_id, "private comments" on that work). Guardians are always
+// derived into a student's thread; a school may hide item threads from them
+// (school_classroom_settings.parents_read_private_comments = FALSE).
 
 // Current-term gate for starting threads (see termScope.js).
 const { inCurrentTerm, selectCurrentTerm } = require('./termScope');
+const { GRADE_RANK } = require('../utils/gradeRank');
+
+// An item thread the school keeps from guardians. `c` is the conversations
+// alias. Never true for a thread with no classwork anchor, so every
+// parent–teacher thread keeps its guardians.
+const GUARDIANS_HIDDEN = "(c.classwork_item_id IS NOT NULL AND NOT COALESCE((SELECT scs.parents_read_private_comments FROM school_classroom_settings scs WHERE scs.school = c.school), TRUE))";
 
 // The "who can see this conversation" projection, shared by the guard and
 // the thread endpoint. $1 conversation_id
@@ -26,7 +40,12 @@ const CONVERSATION_ACCESS_SELECT = `
               WHERE ps.student_id = c.student_id AND ps.parent_id IS NOT NULL), '{}')::uuid[] AS guardian_ids,
     COALESCE((SELECT ARRAY_AGG(cp.user_id) FROM conversation_participants cp
               JOIN users u ON u.user_id = cp.user_id
-              WHERE cp.conversation_id = c.conversation_id AND u.role = 'ADMIN'), '{}')::uuid[] AS admin_participant_ids
+              WHERE cp.conversation_id = c.conversation_id AND u.role = 'ADMIN'), '{}')::uuid[] AS admin_participant_ids,
+    c.includes_student, c.classwork_item_id,
+    CASE WHEN c.includes_student THEN COALESCE((SELECT ARRAY_AGG(sal.user_id) FROM student_account_links sal
+           JOIN users su ON su.user_id = sal.user_id AND su.is_archived = FALSE
+          WHERE sal.student_id = c.student_id), '{}') ELSE '{}' END::uuid[] AS student_user_ids,
+    ${GUARDIANS_HIDDEN} AS guardians_hidden
   FROM conversations c
   JOIN students s  ON s.student_id = c.student_id
   LEFT JOIN classes cl ON cl.class_id = c.class_id
@@ -68,7 +87,7 @@ const LAST_MESSAGE_SQL = `
 const listBody = (scopeSql) => `
   SELECT
     c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.kind, c.teacher_id, c.title, c.status,
-    c.last_message_at, c.created_at,
+    c.last_message_at, c.created_at, c.includes_student, c.classwork_item_id,
     s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     lt.avatar AS lead_teacher_avatar,
@@ -97,8 +116,13 @@ const listBody = (scopeSql) => `
   LIMIT $8
 `;
 
-const PARENT_SCOPE = `EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1)`;
+// A guardian's threads: their children's, minus item threads the school keeps from guardians.
+const PARENT_SCOPE = `EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1) AND NOT ${GUARDIANS_HIDDEN}`;
 const TEACHER_SCOPE = `cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)`;
+// A student's threads: only those that include the student, through the
+// caller's own login (any year's link, so last year's threads stay theirs).
+// An older parent–teacher thread about them never matches.
+const STUDENT_SCOPE = "c.includes_student AND EXISTS (SELECT 1 FROM student_account_links sal WHERE sal.user_id = $1 AND sal.student_id = c.student_id)";
 
 const messagingQueries = {
   selectConversationAccess: `${CONVERSATION_ACCESS_SELECT} WHERE c.conversation_id = $1`,
@@ -176,6 +200,7 @@ const messagingQueries = {
   listForParent: listBody(PARENT_SCOPE),
   listForTeacher: listBody(TEACHER_SCOPE),
   listForAdmin: listBody('TRUE'),
+  listForStudent: listBody(STUDENT_SCOPE),
 
   // Badge. $1 user_id, $2 school, $3 role
   selectUnreadSummary: `
@@ -185,7 +210,8 @@ const messagingQueries = {
       LEFT JOIN classes cl ON cl.class_id = c.class_id
       LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
       WHERE c.school = $2 AND (
-        ($3 = 'PARENT' AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1))
+        ($3 = 'PARENT' AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = c.student_id AND ps.parent_id = $1)
+                       AND NOT ${GUARDIANS_HIDDEN})
         OR ($3 = 'TEACHER' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)))
         OR ($3 = 'ADMIN' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)
                               OR EXISTS (SELECT 1 FROM conversation_participants cp2 WHERE cp2.conversation_id = c.conversation_id AND cp2.user_id = $1)))
@@ -196,7 +222,33 @@ const messagingQueries = {
         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = mine.conversation_id AND m.kind = 'message'
            AND m.deleted_at IS NULL AND m.sender_id IS DISTINCT FROM $1
            AND m.created_at > COALESCE(mine.last_read_at, '-infinity'::timestamptz)) AS unread,
-        (mine.status = 'open' AND COALESCE((SELECT CASE WHEN $3 = 'PARENT' THEN lm.sender_role <> 'PARENT' ELSE lm.sender_role = 'PARENT' END
+        (mine.status = 'open' AND COALESCE((SELECT CASE WHEN $3 = 'PARENT' THEN lm.sender_role NOT IN ('PARENT', 'STUDENT') ELSE lm.sender_role IN ('PARENT', 'STUDENT') END
+           FROM messages lm WHERE lm.conversation_id = mine.conversation_id AND lm.kind = 'message' AND lm.deleted_at IS NULL
+           ORDER BY lm.created_at DESC LIMIT 1), FALSE)) AS needs_reply
+      FROM mine
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE unread > 0)::int AS unread_conversations,
+      COALESCE(SUM(unread), 0)::int AS unread_messages,
+      COUNT(*) FILTER (WHERE needs_reply)::int AS needs_reply
+    FROM per
+  `,
+
+  // The student's badge: the parent badge's shape over the student's own
+  // threads (STUDENT_SCOPE). $1 user_id, $2 school
+  selectStudentUnreadSummary: `
+    WITH mine AS (
+      SELECT c.conversation_id, c.status, cp.last_read_at
+      FROM conversations c
+      LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
+      WHERE c.school = $2 AND ${STUDENT_SCOPE}
+    ),
+    per AS (
+      SELECT
+        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = mine.conversation_id AND m.kind = 'message'
+           AND m.deleted_at IS NULL AND m.sender_id IS DISTINCT FROM $1
+           AND m.created_at > COALESCE(mine.last_read_at, '-infinity'::timestamptz)) AS unread,
+        (mine.status = 'open' AND COALESCE((SELECT lm.sender_role NOT IN ('PARENT', 'STUDENT')
            FROM messages lm WHERE lm.conversation_id = mine.conversation_id AND lm.kind = 'message' AND lm.deleted_at IS NULL
            ORDER BY lm.created_at DESC LIMIT 1), FALSE)) AS needs_reply
       FROM mine
@@ -212,7 +264,9 @@ const messagingQueries = {
   selectMessages: `
     SELECT m.message_id, m.sender_id, m.sender_role, m.kind, m.body, m.created_at, m.edited_at, m.deleted_at,
            TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
-           u.avatar AS sender_avatar,
+           COALESCE(u.avatar, CASE WHEN m.sender_role = 'STUDENT' THEN
+             (SELECT st.avatar FROM conversations sc JOIN students st ON st.student_id = sc.student_id
+               WHERE sc.conversation_id = m.conversation_id) END) AS sender_avatar,
            (SELECT ps.relation FROM parent_students ps
              JOIN conversations c ON c.conversation_id = m.conversation_id
              WHERE ps.parent_id = m.sender_id AND ps.student_id = c.student_id LIMIT 1) AS sender_relation
@@ -236,13 +290,24 @@ const messagingQueries = {
     WHERE ma.attachment_id = $1 AND m.conversation_id = $2 AND m.deleted_at IS NULL
   `,
 
-  // Display list: guardians with accounts, lead + co-teachers, admins who joined. $1 conversation_id
+  // Display list: guardians with accounts (unless the school keeps this item
+  // thread from them), the student when the thread includes them (their
+  // login, not archived; avatar by the student display rule), lead +
+  // co-teachers, admins who joined. $1 conversation_id
   selectParticipants: `
     SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.role, ps.relation, (u.password = '!') AS invite_pending, u.avatar
     FROM conversations c
     JOIN parent_students ps ON ps.student_id = c.student_id AND ps.parent_id IS NOT NULL
     JOIN users u ON u.user_id = ps.parent_id
-    WHERE c.conversation_id = $1
+    WHERE c.conversation_id = $1 AND NOT ${GUARDIANS_HIDDEN}
+    UNION
+    SELECT u.user_id, COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), st.name), u.role, 'student', FALSE,
+           COALESCE(u.avatar, st.avatar)
+    FROM conversations c
+    JOIN students st ON st.student_id = c.student_id
+    JOIN student_account_links sal ON sal.student_id = c.student_id
+    JOIN users u ON u.user_id = sal.user_id AND u.is_archived = FALSE
+    WHERE c.conversation_id = $1 AND c.includes_student
     UNION
     SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar
     FROM conversations c LEFT JOIN classes cl ON cl.class_id = c.class_id
@@ -351,7 +416,17 @@ const messagingQueries = {
       (u.password = '!') AS recipient_invite_pending,
       c.title, c.assessment_id, c.kind, c.student_id, c.last_message_at,
       s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
-      cp.last_read_at, cp.last_emailed_at, COALESCE(cp.muted, FALSE) AS muted
+      cp.last_read_at, cp.last_emailed_at, COALESCE(cp.muted, FALSE) AS muted,
+      -- Student threads (T17), re-checked at send time: a guardian on an item
+      -- thread the school now keeps from guardians, a student no longer in
+      -- the thread, or a school that doesn't email the student's grade, is
+      -- skipped.
+      c.includes_student, ${GUARDIANS_HIDDEN} AS guardians_hidden,
+      (c.includes_student AND EXISTS (SELECT 1 FROM student_account_links sal
+         WHERE sal.user_id = j.recipient_id AND sal.student_id = c.student_id)) AS recipient_in_thread,
+      EXISTS (SELECT 1 FROM school_classroom_settings scs
+         WHERE scs.school = s.school AND scs.enabled AND scs.student_email_from_grade IS NOT NULL
+           AND ${GRADE_RANK('s.grade::text')} >= ${GRADE_RANK('scs.student_email_from_grade')}) AS student_email_on
     FROM message_email_jobs j
     JOIN users u ON u.user_id = j.recipient_id
     JOIN conversations c ON c.conversation_id = j.conversation_id
@@ -453,13 +528,15 @@ const messagingQueries = {
     ORDER BY sort_order NULLS LAST, name
   `,
 
-  // Chips. $1 user_id, $2 class_id|null, $3 student_id|null, $4 school
+  // Chips. $1 user_id, $2 class_id|null, $3 student_id|null, $4 school,
+  // $5 caller role (a guardian never learns of an item thread kept from guardians)
   selectStubs: `
     SELECT c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.status,
            ${UNREAD_COUNT_EXPR} AS unread_count
     FROM conversations c
     LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
     WHERE c.school = $4 AND ($2::uuid IS NULL OR c.class_id = $2) AND ($3::uuid IS NULL OR c.student_id = $3)
+      AND ($5::text IS DISTINCT FROM 'PARENT' OR NOT ${GUARDIANS_HIDDEN})
   `,
 
   // ── Phase 2: general threads ────────────────────────────────
@@ -658,6 +735,89 @@ const messagingQueries = {
   selectFailedEmailConversations: `
     SELECT DISTINCT conversation_id FROM message_email_jobs WHERE status = 'failed' AND conversation_id = ANY($1::uuid[])
   `,
+
+  // ── Student portal (T17): students in conversations ─────────
+  // The teachers a student may write to: the lead and co-teachers of the
+  // student's live current-term classes of the year, plus the homeroom
+  // teacher (not term-bound). Archived accounts and admins are never offered.
+  // Each teacher once, with the classes they teach the student.
+  // $1 student_id, $2 school_year_id|null, $3 current term_id|null, $4 current term name|null
+  selectStudentTeacherTargets: `
+    SELECT t.user_id, t.name, t.avatar,
+           COALESCE(json_agg(json_build_object('classId', t.class_id, 'subject', t.subject) ORDER BY t.subject, t.class_id)
+                    FILTER (WHERE t.class_id IS NOT NULL), '[]') AS classes
+    FROM (
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.avatar, cl.class_id, cl.subject
+      FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+      JOIN users u ON u.user_id = cl.teacher_id
+      WHERE cs.student_id = $1 AND cl.archived_at IS NULL AND ($2::uuid IS NULL OR cl.school_year_id = $2)
+        AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE AND u.role = 'TEACHER'
+      UNION
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.avatar, cl.class_id, cl.subject
+      FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
+      JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
+      WHERE cs.student_id = $1 AND cl.archived_at IS NULL AND ($2::uuid IS NULL OR cl.school_year_id = $2)
+        AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE AND u.role = 'TEACHER'
+      UNION
+      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.avatar, NULL::uuid, NULL
+      FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
+      WHERE s.student_id = $1 AND u.is_archived = FALSE AND u.role = 'TEACHER'
+    ) t
+    GROUP BY t.user_id, t.name, t.avatar
+    ORDER BY t.name, t.user_id
+  `,
+  // The student's guardians who are in their conversations (linked accounts). $1 student_id
+  selectStudentGuardians: `
+    SELECT name, relation FROM (
+      SELECT DISTINCT ON (ps.parent_id)
+             COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name) AS name, ps.relation
+      FROM parent_students ps JOIN users u ON u.user_id = ps.parent_id
+      WHERE ps.student_id = $1 AND ps.parent_id IS NOT NULL
+      ORDER BY ps.parent_id, ps.relation NULLS LAST
+    ) g
+    WHERE name IS NOT NULL
+    ORDER BY name
+  `,
+  // A general thread a student starts with one of their teachers.
+  // $1 school, $2 student_id, $3 class_id|null, $4 teacher_id, $5 title, $6 created_by
+  insertStudentConversation: `
+    INSERT INTO conversations (school, student_id, class_id, teacher_id, assessment_id, kind, title, created_by, includes_student)
+    VALUES ($1, $2, $3, $4, NULL, 'general', $5, $6, TRUE)
+    RETURNING conversation_id
+  `,
+  // The student's thread about one piece of classwork, with its message count. $1 student_id, $2 item_id
+  findClassworkThread: `
+    SELECT c.conversation_id,
+           (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.conversation_id
+              AND m.kind = 'message' AND m.deleted_at IS NULL)::int AS message_count,
+           ${GUARDIANS_HIDDEN} AS guardians_hidden
+    FROM conversations c
+    WHERE c.student_id = $1 AND c.classwork_item_id = $2
+  `,
+  // Creates it once per student × item; a second create lands in the first.
+  // $1 school, $2 student_id, $3 class_id, $4 teacher_id|null, $5 title, $6 created_by, $7 item_id
+  insertClassworkThread: `
+    INSERT INTO conversations (school, student_id, class_id, teacher_id, assessment_id, kind, title, created_by,
+                               includes_student, classwork_item_id)
+    VALUES ($1, $2, $3, $4, NULL, 'general', $5, $6, TRUE, $7)
+    ON CONFLICT (student_id, classwork_item_id) WHERE classwork_item_id IS NOT NULL
+      DO UPDATE SET title = conversations.title
+    RETURNING conversation_id
+  `,
+  // What an item thread is created from: the item's class, its lead, its
+  // title, and whether the class is in the current term (the new-thread gate).
+  // $1 item_id, $2 current term_id|null, $3 current term name|null
+  selectClassworkThreadAnchor: `
+    SELECT i.item_id, i.kind, i.class_id, COALESCE(a.name, i.title) AS title,
+           cl.school, cl.teacher_id AS lead_teacher_id, ${inCurrentTerm('cl', '$2', '$3')} AS in_current_term
+    FROM classwork_items i
+    JOIN classes cl ON cl.class_id = i.class_id
+    LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+    WHERE i.item_id = $1 AND i.deleted_at IS NULL
+  `,
 };
+
+messagingQueries.GUARDIANS_HIDDEN = GUARDIANS_HIDDEN;
+messagingQueries.STUDENT_SCOPE = STUDENT_SCOPE;
 
 module.exports = messagingQueries;

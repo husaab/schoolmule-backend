@@ -142,6 +142,66 @@ describe('messageNotifier', () => {
     expect(mockSend.mock.calls[0][0].html).not.toContain('14/20');
   });
 
+  it('a STUDENT recipient gets the /student/messages link, their own subject, and never an unpublished score', async () => {
+    const r = makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx({
+        recipient_role: 'STUDENT', recipient_email: 'amal.haddad@example.com', recipient_first_name: 'Amal',
+        includes_student: true, recipient_in_thread: true, student_email_on: true, guardians_hidden: false,
+      })],
+      'AS attachment_count': [msg({ sender_name: 'Ziad Teacher', body: 'Nice start' })],
+      'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, is_published: false }],
+    });
+    expect(await notifier.drainOnce()).toBe(1);
+    const email = mockSend.mock.calls[0][0];
+    expect(email.to).toEqual(['amal.haddad@example.com']);
+    expect(email.subject).toBe('Ziad Teacher sent you a message about Unit 3 Quiz');
+    expect(email.html).toContain(`/student/messages?thread=${CONVO}`);
+    expect(email.html).not.toContain('/parent/messages');
+    expect(email.html).not.toContain('14/20');
+    expect(email.html).toContain('Your parents are in every conversation');
+    expect(r.ran('SET status = $2::text, last_error = $3')[0].params.slice(0, 2)).toEqual([JOB, 'sent']);
+
+    // Published: the score may show.
+    mockSend.mockClear();
+    makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx({ recipient_role: 'STUDENT', includes_student: true, recipient_in_thread: true, student_email_on: true })],
+      'AS attachment_count': [msg(), msg({ message_id: 'm2', body: 'Second' })],
+      'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, is_published: true }],
+    });
+    await notifier.drainOnce();
+    expect(mockSend.mock.calls[0][0].subject).toBe('2 new messages about Unit 3 Quiz');
+    expect(mockSend.mock.calls[0][0].html).toContain('14/20');
+  });
+
+  it('skips a student no longer in the thread, a school that does not email students, and a guardian on a hidden item thread', async () => {
+    const cases = [
+      [{ recipient_role: 'STUDENT', includes_student: true, recipient_in_thread: false, student_email_on: true }, 'not in thread'],
+      [{ recipient_role: 'STUDENT', includes_student: true, recipient_in_thread: true, student_email_on: false }, 'student email off'],
+      [{ recipient_role: 'PARENT', includes_student: true, guardians_hidden: true }, 'hidden from guardians'],
+    ];
+    for (const [over, reason] of cases) {
+      mockSend.mockClear();
+      const r = makeRouter({ 'FOR UPDATE SKIP LOCKED': [job()], 'AS recipient_email': [ctx(over)], 'AS attachment_count': [msg()] });
+      await notifier.drainOnce();
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(r.ran('SET status = $2::text, last_error = $3')[0].params.slice(1)).toEqual(['skipped', reason]);
+    }
+  });
+
+  it('a guardian on a student thread (not hidden) is emailed as today', async () => {
+    makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx({ includes_student: true, guardians_hidden: false })],
+      'AS attachment_count': [msg({ sender_name: 'Amal Haddad' })],
+    });
+    await notifier.drainOnce();
+    const email = mockSend.mock.calls[0][0];
+    expect(email.subject).toBe("Amal Haddad sent a message about Amina Test's Unit 3 Quiz");
+    expect(email.html).toContain(`/parent/messages?thread=${CONVO}`);
+  });
+
   it('a message posted during the send is still emailed: last_emailed_at is the last rendered message and a new job is queued', async () => {
     let calls = 0;
     const r = makeRouter({

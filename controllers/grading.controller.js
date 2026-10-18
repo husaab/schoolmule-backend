@@ -26,6 +26,8 @@ const { publishSubmissions, afterPublish } = require('../services/classroom/publ
 const { sendGradeDigest } = require('./assessmentPublish.controller');
 const { SUBMISSION_BUCKET, SIGNED_URL_TTL } = require('../utils/classworkUpload');
 const { STATUSES } = require('../services/gradeEngine');
+const messagingQueries = require('../queries/messaging.queries');
+const { resolveCurrentTerm, termParams, PAST_TERM_MESSAGE } = require('./messaging.controller');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEEDBACK_MAX = 5000;
@@ -98,7 +100,7 @@ function toGradingRow(r, { linked, assessmentPublished = false }) {
     publishedAt: iso(linked ? r.visible_published_at : r.sub_published_at),
     feedback,
     needsPublish: (hasDraft || (!linked && feedback !== null)) && unpublished,
-    hasThread: false, // T17
+    hasThread: Boolean(r.has_thread),
   };
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {
@@ -232,15 +234,70 @@ const getSubmission = async (req, res) => {
     const item = await loadGradingItem(itemId);
     const found = await loadRow(item, studentId);
     if (!found) return failed(res, 404, MESSAGES.STUDENT_NOT_FOUND);
+    const [files, thread] = await Promise.all([signedFiles(found.raw.submission_id), findThread(studentId, itemId)]);
     return ok(res, {
       row: found.row,
       textAnswer: found.raw.text_answer ?? null,
-      files: await signedFiles(found.raw.submission_id),
+      files,
       quiz: null, // T23
-      thread: null, // T17
+      thread: thread.conversationId ? thread : null,
     });
   } catch (error) {
     return fail(res, error, 'Error loading the submission', { itemId, studentId });
+  }
+};
+
+/** The student's thread about this item: { conversationId|null, messageCount }. */
+async function findThread(studentId, itemId) {
+  const { rows: [t] } = await db.query(messagingQueries.findClassworkThread, [studentId, itemId]);
+  return { conversationId: t?.conversation_id ?? null, messageCount: t ? Number(t.message_count) || 0 : 0 };
+}
+
+/** The item (an assignment or quiz) and the student, who must be one the item is for; else an httpError. */
+async function loadThreadTarget(itemId, studentId) {
+  const item = await loadGradingItem(itemId);
+  const { rows: [inAudience] } = await db.query(q.selectAudienceIds, [itemId, [studentId]]);
+  if (!inAudience) throw httpError(404, MESSAGES.STUDENT_NOT_FOUND);
+  return item;
+}
+
+// GET /api/classroom/items/:itemId/students/:studentId/thread → { conversationId|null, messageCount }
+// The student's "messages about this work" thread, if any (the grading view's panel).
+const getStudentThread = async (req, res) => {
+  const { itemId } = req.item;
+  const studentId = req.params.studentId.toLowerCase();
+  try {
+    await loadThreadTarget(itemId, studentId);
+    return ok(res, await findThread(studentId, itemId));
+  } catch (error) {
+    return fail(res, error, 'Error loading the messages', { itemId, studentId });
+  }
+};
+
+// POST /api/classroom/items/:itemId/students/:studentId/thread → { conversationId }
+// Ensures the thread (one per student × item; includes the student, their
+// guardians are derived in). The teacher then posts through
+// POST /api/messaging/conversations/:id/messages. Starting one is held to the
+// current term like every new thread (admins exempt); an existing one is
+// always returned.
+const ensureStudentThread = async (req, res) => {
+  const { itemId } = req.item;
+  const { school } = req.class;
+  const studentId = req.params.studentId.toLowerCase();
+  try {
+    await loadThreadTarget(itemId, studentId);
+    const existing = await findThread(studentId, itemId);
+    if (existing.conversationId) return ok(res, { conversationId: existing.conversationId });
+    const term = await resolveCurrentTerm(req);
+    const { rows: [anchor] } = await db.query(messagingQueries.selectClassworkThreadAnchor, [itemId, ...termParams(term)]);
+    if (!anchor) throw httpError(404, 'Item not found');
+    if (term && req.user.role !== 'ADMIN' && !anchor.in_current_term) throw httpError(400, PAST_TERM_MESSAGE);
+    const { rows: [c] } = await db.query(messagingQueries.insertClassworkThread, [
+      school, studentId, anchor.class_id, anchor.lead_teacher_id ?? null, anchor.title || 'Classwork', req.user.userId, itemId,
+    ]);
+    return ok(res, { conversationId: c.conversation_id }, 201);
+  } catch (error) {
+    return fail(res, error, 'Error starting the conversation', { itemId, studentId });
   }
 };
 
@@ -492,6 +549,7 @@ const getGridOverlay = async (req, res) => {
 
 module.exports = {
   listSubmissions, getSubmission, updateSubmission, publish, markMissing, excuse, getGridOverlay,
+  getStudentThread, ensureStudentThread,
   // exported for unit testing
   toGradingRow, gradingCounts, gradingLabel, nextGrade,
 };

@@ -56,9 +56,9 @@ const timeLabel = (d) =>
 
 function threadLink(role, conversationId) {
   const base = process.env.FRONTEND_URL || '';
-  return role === 'PARENT'
-    ? `${base}/parent/messages?thread=${conversationId}`
-    : `${base}/messages?thread=${conversationId}`;
+  if (role === 'PARENT') return `${base}/parent/messages?thread=${conversationId}`;
+  if (role === 'STUDENT') return `${base}/student/messages?thread=${conversationId}`;
+  return `${base}/messages?thread=${conversationId}`;
 }
 
 /** "14/20 (70%)" for the facts block, or null when the score must not be shown. */
@@ -67,7 +67,8 @@ async function contextLineFor(ctx) {
   const { rows } = await db.query(q.selectAssessmentContext, [ctx.assessment_id, ctx.student_id]);
   const a = rows[0];
   if (!a) return null;
-  if (ctx.recipient_role === 'PARENT' && !a.is_published) return null;
+  // The publish gate: a guardian or the student never sees an unpublished score.
+  if ((ctx.recipient_role === 'PARENT' || ctx.recipient_role === 'STUDENT') && !a.is_published) return null;
   if (a.status === 'missing') return 'Missing (0%)';
   if (a.status === 'excused') return 'Excused';
   if (a.score == null || !a.max_score) return null;
@@ -99,6 +100,16 @@ async function processJob(job) {
     await db.query(q.finishJob, [job.job_id, 'skipped', reason]);
     return 'skipped';
   }
+  // Student threads (T17), re-checked at send time.
+  const isStudent = ctx.recipient_role === 'STUDENT';
+  const threadSkip = isStudent && !ctx.recipient_in_thread ? 'not in thread'
+    : isStudent && !ctx.student_email_on ? 'student email off'
+      : ctx.recipient_role === 'PARENT' && ctx.guardians_hidden ? 'hidden from guardians'
+        : null;
+  if (threadSkip) {
+    await db.query(q.finishJob, [job.job_id, 'skipped', threadSkip]);
+    return 'skipped';
+  }
 
   const since = latest(ctx.last_emailed_at, ctx.last_read_at);
   const { rows: msgs } = await db.query(q.selectMessagesForEmail, [job.conversation_id, job.recipient_id, since]);
@@ -125,6 +136,8 @@ async function processJob(job) {
   const schoolName = getSchoolName(job.school);
 
   const html = getConversationDigestEmailHTML({
+    forStudent: isStudent,
+    parentsIncluded: !ctx.guardians_hidden,
     recipientFirstName: ctx.recipient_first_name,
     studentName: ctx.student_name,
     className: ctx.class_subject,
@@ -141,9 +154,16 @@ async function processJob(job) {
     schoolName,
     schoolInfo,
   });
-  const subject = msgs.length === 1
-    ? `${msgs[0].sender_name || 'SchoolMule'} sent a message about ${ctx.student_name}'s ${ctx.title}`
-    : `${msgs.length} new messages about ${ctx.student_name}'s ${ctx.title}`;
+  let subject;
+  if (isStudent) {
+    subject = msgs.length === 1
+      ? `${msgs[0].sender_name || 'SchoolMule'} sent you a message about ${ctx.title}`
+      : `${msgs.length} new messages about ${ctx.title}`;
+  } else {
+    subject = msgs.length === 1
+      ? `${msgs[0].sender_name || 'SchoolMule'} sent a message about ${ctx.student_name}'s ${ctx.title}`
+      : `${msgs.length} new messages about ${ctx.student_name}'s ${ctx.title}`;
+  }
 
   await sendOrThrow(getResend(), {
     ...schoolSender({ school: job.school, schoolInfo, role: 'messages' }),

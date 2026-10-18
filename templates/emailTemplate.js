@@ -240,7 +240,12 @@ function getConversationDigestEmailHTML({
   link,
   schoolName,
   schoolInfo,
+  forStudent = false,
+  parentsIncluded = true,
 }) {
+  if (forStudent) {
+    return studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded });
+  }
   const first = messages[0];
   const heading =
     messages.length === 1
@@ -276,6 +281,44 @@ function getConversationDigestEmailHTML({
       anyAttached(messages.map((m) => m.attachments))
         ? finePrint("The attached files are also kept in SchoolMule, where only the student's guardians and teachers can open them.")
         : '',
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+}
+
+/**
+ * The same digest addressed to the student in their own thread (T17): the
+ * conversation and class (a score only once published), and the reminder
+ * that their parents are in the conversation too (unless the school keeps
+ * this item thread from parents).
+ */
+function studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded }) {
+  const first = messages[0];
+  const heading = messages.length === 1 ? `New message from ${first.senderName}` : `${messages.length} new messages`;
+  const blocks = messages
+    .map((m) => {
+      const meta = `${m.senderName} · ${m.sentAtLabel}`;
+      const attach = attachmentLine(m.attachments, m.attachmentCount, 'open in SchoolMule to view');
+      return note(meta, `${multiline(m.body)}${attach}`);
+    })
+    .join('');
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading,
+    preheader: `${title} · ${className}`,
+    content: [
+      paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
+      paragraph(
+        `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in your conversation <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
+      ),
+      facts([
+        ['Conversation', escapeHtml(title) + (contextLine ? ` · ${escapeHtml(contextLine)}` : '')],
+        ['Class', escapeHtml(className)],
+      ]),
+      blocks,
+      button('Reply in SchoolMule', link),
+      parentsIncluded ? finePrint('Your parents are in every conversation with your teachers. They can read and reply.') : '',
       signOff(schoolName),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),

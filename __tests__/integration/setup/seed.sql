@@ -1878,3 +1878,10 @@ CREATE TABLE IF NOT EXISTS submission_files (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_submission_files_submission ON submission_files(submission_id);
+
+-- student_portal_22_messaging_students.sql: conversations that include the
+-- student (new threads only) and the item anchor ("private comments").
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS includes_student BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS classwork_item_id UUID REFERENCES classwork_items(item_id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversations_classwork_anchor
+  ON conversations (student_id, classwork_item_id) WHERE classwork_item_id IS NOT NULL;

@@ -734,8 +734,9 @@ describe('messaging controller', () => {
       const r = makeRouter();
       const res = await authenticatedRequest('get', `/api/messaging/conversations/stubs?studentId=${STUDENT}`, mockAdminUser());
       expect(res.status).toBe(200);
-      const [stubs] = r.ran('FROM conversations c') .filter((c) => c.sql.includes('AS unread_count') && c.params.length === 4);
+      const [stubs] = r.ran('FROM conversations c') .filter((c) => c.sql.includes('AS unread_count') && c.params.length === 5);
       expect(stubs.params[3]).toBe(SCHOOL);
+      expect(stubs.params[4]).toBe('ADMIN'); // the role: a guardian never learns of an item thread kept from guardians
       expect((await authenticatedRequest('get', '/api/messaging/conversations?classId=not-a-uuid', mockTeacherUser())).status).toBe(400);
       expect((await authenticatedRequest('get', '/api/messaging/conversations/stubs?classId=nope', mockTeacherUser())).status).toBe(400);
       const bad = await authenticatedRequest('post', '/api/messaging/conversations', mockParentUser())

@@ -92,6 +92,67 @@ describe('requireConversationAccess', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  describe('students in conversations (T17)', () => {
+    const STUDENT_USER = '66666666-6666-4666-8666-666666666666';
+    const asStudent = { userId: STUDENT_USER, role: 'STUDENT' };
+
+    it('a STUDENT is a member when the thread includes the student and lists their login', async () => {
+      db.query.mockResolvedValueOnce({ rows: [row({ includes_student: true, student_user_ids: [STUDENT_USER] })] });
+      const next = jest.fn();
+      const req = makeReq(asStudent);
+      await requireConversationAccess(req, makeRes(), next);
+      expect(next).toHaveBeenCalledWith();
+      expect(req.conversation).toMatchObject({ includesStudent: true, studentUserIds: [STUDENT_USER], classworkItemId: null });
+    });
+
+    it('a STUDENT is never a member of a thread that does not include the student (an older parent–teacher thread)', async () => {
+      // Even if a login id were listed, includes_student = false wins.
+      db.query.mockResolvedValueOnce({ rows: [row({ includes_student: false, student_user_ids: [STUDENT_USER] })] });
+      const res = makeRes();
+      const next = jest.fn();
+      await requireConversationAccess(makeReq(asStudent), res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("a STUDENT whose login is not listed (another student's thread) is refused", async () => {
+      db.query.mockResolvedValueOnce({ rows: [row({ includes_student: true, student_user_ids: ['someone-else'] })] });
+      const res = makeRes();
+      await requireConversationAccess(makeReq(asStudent), res, jest.fn());
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('a PARENT loses access to an item thread the school keeps from guardians (guardians_hidden)', async () => {
+      db.query.mockResolvedValueOnce({
+        rows: [row({ includes_student: true, classwork_item_id: 'item-1', student_user_ids: [STUDENT_USER], guardians_hidden: true })],
+      });
+      const res = makeRes();
+      const next = jest.fn();
+      await requireConversationAccess(makeReq({ userId: PARENT, role: 'PARENT' }), res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+
+      // The teacher and the student still pass; the guardians are dropped from membership (and emails).
+      db.query.mockResolvedValueOnce({
+        rows: [row({ includes_student: true, classwork_item_id: 'item-1', student_user_ids: [STUDENT_USER], guardians_hidden: true })],
+      });
+      const req = makeReq({ userId: TEACHER, role: 'TEACHER' });
+      const next2 = jest.fn();
+      await requireConversationAccess(req, makeRes(), next2);
+      expect(next2).toHaveBeenCalled();
+      expect(req.conversation).toMatchObject({ guardianIds: [], guardiansHidden: true, classworkItemId: 'item-1' });
+    });
+
+    it('a PARENT keeps access to an item thread while guardians may read it', async () => {
+      db.query.mockResolvedValueOnce({
+        rows: [row({ includes_student: true, classwork_item_id: 'item-1', student_user_ids: [STUDENT_USER], guardians_hidden: false })],
+      });
+      const next = jest.fn();
+      await requireConversationAccess(makeReq({ userId: PARENT, role: 'PARENT' }), makeRes(), next);
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
   it('403s on a malformed id (db throws)', async () => {
     db.query.mockRejectedValueOnce(new Error('invalid input syntax for type uuid'));
     const res = makeRes();

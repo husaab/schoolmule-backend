@@ -16,6 +16,7 @@ const supabase = require('../../config/supabaseClient');
 const logger = require('../../logger');
 const q = require('../../queries/classworkSubmission.queries');
 const classworkQueries = require('../../queries/classwork.queries');
+const messagingQueries = require('../../queries/messaging.queries');
 const { selectCurrentTerm } = require('../../queries/termScope');
 const { identityOf } = require('./classView');
 const { todoTab, groupTodo, torontoDay, newestDueFirst } = require('./todoGroups');
@@ -55,6 +56,11 @@ const MESSAGES = Object.freeze({
   ITEM_NOT_FOUND: 'Item not found',
   FILE_NOT_FOUND: 'File not found',
 });
+
+// Messages about one piece of work ("private comments", T17) are for the
+// work students turn in: assignments and quizzes.
+const THREAD_KINDS = Object.freeze(['assignment', 'quiz']);
+const takesThread = (kind) => THREAD_KINDS.includes(kind);
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 const num = (value) => (value === null || value === undefined ? null : Number(value));
@@ -333,14 +339,28 @@ function gradeBlock(row, w) {
 }
 
 /**
+ * The student's thread about this item, as StudentItem.thread
+ * ({ conversationId, messageCount }), or null: none yet, not a turn-in kind,
+ * or (`forGuardian`, the parent lens) a thread the school keeps from guardians.
+ */
+async function itemThreadOf(row, { studentId, forGuardian }) {
+  if (!takesThread(row.kind)) return null;
+  const { rows } = await db.query(messagingQueries.findClassworkThread, [studentId, row.item_id]);
+  const t = rows[0];
+  if (!t || (forGuardian && t.guardians_hidden)) return null;
+  return { conversationId: t.conversation_id, messageCount: Number(t.message_count) || 0 };
+}
+
+/**
  * The StudentItem payload. `canAct` is false for the parent lens (every can*
  * false). No grade or feedback leaves unless visible (spec 0.8).
  */
-async function buildStudentItem(row, { canAct }) {
-  const [attachments, fileRows, photoUrl] = await Promise.all([
+async function buildStudentItem(row, { canAct, studentId, forGuardian = !canAct }) {
+  const [attachments, fileRows, photoUrl, thread] = await Promise.all([
     loadAttachments(row.item_id),
     row.submission_id ? db.query(q.selectSubmissionFiles, [row.submission_id]).then((r) => r.rows) : Promise.resolve([]),
     row.teacher_id ? signedPhotoUrl(row.teacher_photo_path) : Promise.resolve(null),
+    itemThreadOf(row, { studentId, forGuardian }),
   ]);
   const identity = identityOf(row);
   const w = toWork(row, identity);
@@ -379,7 +399,7 @@ async function buildStudentItem(row, { canAct }) {
     attachments,
     submission,
     grade: gradeBlock(row, w),
-    thread: null, // T17
+    thread,
   };
 }
 
@@ -392,8 +412,11 @@ async function getStudentItem({ studentId, school, itemId, canAct, open }) {
   const row = await loadItemRow(db, { studentId, school, itemId });
   if (!row) return null;
   if (open && row.turn_in) await db.query(q.openSubmission, [itemId, studentId]);
-  return buildStudentItem(row, { canAct });
+  return buildStudentItem(row, { canAct, studentId });
 }
+
+/** The item row when the student can see it (ITEM_VISIBLE, live class, their school), else null. */
+const findVisibleItem = ({ studentId, school, itemId }) => loadItemRow(db, { studentId, school, itemId });
 
 // ── Writes (the student's own work) ───────────────────────────────────────
 
@@ -556,6 +579,9 @@ async function missingCountsByClass({ studentId, school, classIds }) {
 module.exports = {
   MESSAGES,
   TEXT_MAX,
+  THREAD_KINDS,
+  takesThread,
+  findVisibleItem,
   toWork,
   toTodoItem,
   toStudentItemSummary,

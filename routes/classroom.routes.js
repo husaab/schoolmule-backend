@@ -105,5 +105,10 @@ router.post("/items/:itemId/publish", requireClassroomResource("item"), grading.
 router.post("/items/:itemId/mark-missing", requireClassroomResource("item"), grading.markMissing);
 router.post("/items/:itemId/excuse", requireClassroomResource("item"), grading.excuse);
 router.get("/classes/:classId/grid-overlay", requireClassOwnership, grading.getGridOverlay);
+// Messages about one student's work on an item (T17): the thread includes
+// the student and their guardians; the teacher posts in it through
+// /api/messaging/conversations/:id/messages.
+router.get("/items/:itemId/students/:studentId/thread", requireClassroomResource("item"), grading.getStudentThread);
+router.post("/items/:itemId/students/:studentId/thread", requireClassroomResource("item"), grading.ensureStudentThread);
 
 module.exports = router;

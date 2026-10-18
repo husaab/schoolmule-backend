@@ -34,7 +34,8 @@ SELECT s.student_id, s.name, ${studentAvatarSql('s')},
        ${GRADE_VISIBLE} AS grade_visible,
        CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS visible_score,
        CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS visible_status,
-       CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS visible_published_at
+       CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS visible_published_at,
+       EXISTS (SELECT 1 FROM conversations cv WHERE cv.student_id = s.student_id AND cv.classwork_item_id = i.item_id) AS has_thread
 FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 JOIN class_students cs ON cs.class_id = i.class_id

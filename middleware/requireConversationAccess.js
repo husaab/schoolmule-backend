@@ -6,10 +6,18 @@
 // from another school — or an unknown id — is a 404 so tenants cannot probe
 // each other; a malformed id is a 403 like verifyParentOwnsStudent.
 //
+// Student portal (T17): a STUDENT is a member only of a thread that includes
+// the student (includes_student) through their own live login, never of an
+// older parent–teacher thread about them. Guardians are always derived in,
+// except on an item thread the school keeps from guardians
+// (guardians_hidden): then guardianIds is empty, so they are not members and
+// get no email.
+//
 // On success: req.conversation = { conversationId, school, studentId,
 //   studentName, classId, classSubject, assessmentId, title, status,
 //   leadTeacherId, teacherIds, guardianIds, adminParticipantIds,
-//   schoolYearId, lastMessageAt, createdAt }
+//   schoolYearId, lastMessageAt, createdAt, includesStudent,
+//   classworkItemId, studentUserIds, guardiansHidden }
 
 const db = require('../config/database');
 const logger = require('../logger');
@@ -33,17 +41,22 @@ const accessRowToConversation = (c) => ({
   status: c.status,
   leadTeacherId: c.lead_teacher_id,
   teacherIds: [c.lead_teacher_id, ...(c.co_teacher_ids || [])].filter(Boolean),
-  guardianIds: c.guardian_ids || [],
+  guardianIds: c.guardians_hidden ? [] : c.guardian_ids || [],
   adminParticipantIds: c.admin_participant_ids || [],
   schoolYearId: c.school_year_id,
   lastMessageAt: c.last_message_at,
   createdAt: c.created_at,
+  includesStudent: Boolean(c.includes_student),
+  classworkItemId: c.classwork_item_id || null,
+  studentUserIds: c.student_user_ids || [],
+  guardiansHidden: Boolean(c.guardians_hidden),
 });
 
 const isMember = (conv, user) =>
   user.role === 'ADMIN' ||
   (user.role === 'TEACHER' && conv.teacherIds.includes(user.userId)) ||
-  (user.role === 'PARENT' && conv.guardianIds.includes(user.userId));
+  (user.role === 'PARENT' && conv.guardianIds.includes(user.userId)) ||
+  (user.role === 'STUDENT' && conv.includesStudent && conv.studentUserIds.includes(user.userId));
 
 const requireConversationAccess = async (req, res, next) => {
   const { id } = req.params;
@@ -65,3 +78,4 @@ const requireConversationAccess = async (req, res, next) => {
 
 module.exports = requireConversationAccess;
 module.exports.accessRowToConversation = accessRowToConversation;
+module.exports.isMember = isMember;

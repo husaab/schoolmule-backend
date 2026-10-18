@@ -36,7 +36,9 @@ const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 // A malformed id in a query string is a client mistake, not a server error.
 const badId = (...values) => values.some((v) => v != null && v !== '' && !isUuid(v));
 const pctOf = (score, max) => (score == null || !max ? null : Math.round((Number(score) / Number(max)) * 1000) / 10);
-const side = (role) => (role === 'PARENT' ? 'parent' : 'staff');
+// The two sides of the table: the family (guardians and, in a student
+// thread, the student) and the school's staff.
+const side = (role) => (role === 'PARENT' || role === 'STUDENT' ? 'family' : 'staff');
 // A staff member in their parent view may not open a thread with themself.
 const SELF_THREAD_MESSAGE = "You teach this class, so there's no one to ask. Switch to Teacher view to see it there.";
 
@@ -59,6 +61,8 @@ const toItem = (r) => ({
   guardianNames: r.guardian_names ?? [],
   unreadCount: r.unread_count ?? 0,
   lastMessage: r.last_message ?? null,
+  includesStudent: Boolean(r.includes_student),
+  classworkItemId: r.classwork_item_id ?? null,
 });
 
 // "Needs reply" = the last real (not removed, not system) message came from the
@@ -127,7 +131,9 @@ async function persistMessage({ conversationId, school, sender, kind = 'message'
  */
 async function queueEmails(conv, senderId) {
   try {
-    const recipients = [...new Set([...conv.guardianIds, ...conv.teacherIds, ...conv.adminParticipantIds])]
+    // guardianIds is already empty on an item thread the school keeps from guardians.
+    const students = conv.includesStudent ? conv.studentUserIds || [] : [];
+    const recipients = [...new Set([...conv.guardianIds, ...conv.teacherIds, ...conv.adminParticipantIds, ...students])]
       .filter((id) => id && id !== senderId);
     if (recipients.length) {
       await db.query(q.enqueueEmailJobs, [conv.conversationId, recipients, conv.school, EMAIL_DELAY]);
@@ -190,7 +196,9 @@ async function sendGuardianInvite({ school, to, recipientFirstName, teacherName,
  * (they will get the ordinary digest). Never throws.
  */
 async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, body }) {
-  if (user.role === 'PARENT' || invite === false) return [];
+  // Staff only, and never on an item thread the school keeps from guardians
+  // (the invite would carry the message itself).
+  if (!['TEACHER', 'ADMIN'].includes(user.role) || invite === false || conv.guardiansHidden) return [];
   const results = [];
   try {
     const { rows: links } = await db.query(q.selectUnlinkedGuardians, [conv.studentId]);
@@ -269,7 +277,7 @@ async function loadConversation(conversationId) {
 }
 
 async function buildThread(conv, user) {
-  const isStaff = user.role !== 'PARENT';
+  const isStaff = user.role === 'ADMIN' || user.role === 'TEACHER';
   const [{ rows: msgRows }, { rows: parts }, { rows: stateRows }, ctxRes, studentRes] = await Promise.all([
     db.query(q.selectMessages, [conv.conversationId]),
     db.query(q.selectParticipants, [conv.conversationId]),
@@ -290,12 +298,14 @@ async function buildThread(conv, user) {
     byMessage.get(a.messageId).push(a);
   }
 
-  // The publish gate holds inside a thread: a parent never sees a score, a
-  // class average or the teacher's note until the assessment is shared.
+  // The publish gate holds inside a thread: a parent (or the student) never
+  // sees a score, a class average or the teacher's note until the assessment
+  // is shared.
+  const family = user.role === 'PARENT' || user.role === 'STUDENT';
   let context = null;
   const c = ctxRes.rows[0];
   if (c) {
-    const hideScore = user.role === 'PARENT' && !c.is_published;
+    const hideScore = family && !c.is_published;
     context = {
       assessmentId: c.assessment_id,
       name: c.name,
@@ -308,7 +318,7 @@ async function buildThread(conv, user) {
       status: hideScore ? null : c.status === 'missing' || c.status === 'excused' ? c.status : c.score == null ? 'blank' : 'graded',
       isPublished: Boolean(c.is_published),
       parentComment: hideScore ? null : c.parent_comment,
-      classAvgPct: user.role === 'PARENT' || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
+      classAvgPct: family || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
     };
   }
 
@@ -341,6 +351,8 @@ async function buildThread(conv, user) {
       created_at: conv.createdAt,
       lead_teacher_name: leadTeacher?.name ?? null,
       lead_teacher_avatar: leadTeacher?.avatar ?? null,
+      includes_student: conv.includesStudent,
+      classwork_item_id: conv.classworkItemId,
     }),
   };
 
@@ -586,7 +598,7 @@ const getStubs = async (req, res) => {
     } else if (user.role !== 'ADMIN') {
       return failed(res, 403, 'classId is required');
     }
-    const { rows } = await db.query(q.selectStubs, [user.userId, classId || null, studentId || null, user.school]);
+    const { rows } = await db.query(q.selectStubs, [user.userId, classId || null, studentId || null, user.school, user.role]);
     return res.status(200).json({
       status: 'success',
       data: rows.map((r) => ({
@@ -917,4 +929,18 @@ module.exports = {
   // exported for unit tests
   validateBody,
   needsReplyFor,
+  // shared with the student portal (controllers/studentMessaging.controller.js)
+  toItem,
+  buildThread,
+  persistMessage,
+  queueEmails,
+  loadConversation,
+  resolveCurrentTerm,
+  termParams,
+  badId,
+  isUuid,
+  MAX_BODY,
+  MAX_TITLE,
+  EDIT_WINDOW_MS,
+  PAST_TERM_MESSAGE,
 };
