@@ -353,6 +353,48 @@ describe('Integration: classroom emails', () => {
     expect((await jobs('missing_alert')).map((r) => r.recipient_email)).toContain('rania.karim@example.com');
   });
 
+  it("a family alert never takes a sibling another worker has claimed (no item emailed twice)", async () => {
+    const cells = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
+    const spelling = await createItem(engId, {
+      kind: 'assignment', title: 'Spelling list 4', submissionMode: 'done', dueAt: hoursFrom(FRIDAY, -2).toISOString(),
+    });
+    await classroom.runSchedule(FRIDAY);
+    const rows = await jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
+    expect(rows).toHaveLength(2);
+    const amalJob = rows.find((r) => r.payload.itemId === cells.itemId);
+    const samiJob = rows.find((r) => r.payload.itemId === spelling.itemId);
+
+    // Two workers overlap at the drain: A has claimed Amal's alert while B
+    // claimed Sami's (claimDueJob: attempts + 1, pushed 5 minutes out).
+    for (const j of [amalJob, samiJob]) {
+      await pool.query(
+        `UPDATE classroom_email_jobs SET attempts = attempts + 1, send_after = NOW() + interval '5 minutes' WHERE job_id = $1`, [j.job_id],
+      );
+    }
+    // A's email leaves B's job alone: it lists only Amal's item, and B's row is untouched.
+    expect((await processJob(await reload(amalJob.job_id), FRIDAY)).outcome).toBe('sent');
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0].subject).toBe('Missing work: Amal (1)');
+    expect(await reload(samiJob.job_id)).toMatchObject({ status: 'pending', attempts: 1 });
+    // B then sends Sami's: each item reached the family exactly once.
+    expect((await processJob(await reload(samiJob.job_id), FRIDAY)).outcome).toBe('sent');
+    expect(sent()).toHaveLength(2);
+    expect(sent()[1].subject).toBe('Missing work: Sami (1)');
+    expect(sent()[1].html).not.toContain('Plant cell diagram');
+
+    // A sibling nobody holds (never claimed, or a retry whose wait is over) still rides along.
+    await pool.query(`DELETE FROM classroom_email_jobs`);
+    getResend().emails.send.mockClear();
+    classroom.resetScheduleState();
+    await classroom.runSchedule(FRIDAY);
+    const again = await jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
+    const retried = again.find((r) => r.payload.itemId === spelling.itemId);
+    await pool.query(`UPDATE classroom_email_jobs SET attempts = 1, send_after = NOW() - interval '1 minute' WHERE job_id = $1`, [retried.job_id]);
+    expect((await processJob(again.find((r) => r.payload.itemId === cells.itemId), FRIDAY)).outcome).toBe('sent');
+    expect(sent().map((m) => m.subject)).toEqual(['Missing work: Amal (1), Sami (1)']);
+    expect((await jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`)).map((r) => r.status)).toEqual(['sent', 'sent']);
+  });
+
   it('missing alerts never repeat an item: a restart re-reads the same 4 pm window and an item is alerted once per address', async () => {
     const monaAlerts = () => jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
     // Due Friday 13:30 and graded in the gradebook (so it can be confirmed Missing later).

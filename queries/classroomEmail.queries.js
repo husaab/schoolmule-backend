@@ -245,13 +245,18 @@ const classroomEmailQueries = {
 
   //  The other pending missing alerts for this address, taken with the one
   //  being sent so the family gets one email (pushed 5 minutes out, like a
-  //  claim, so another instance leaves them alone). $1 address, $2 the claimed job
+  //  claim). Only alerts nobody holds: never claimed (attempts = 0), or a
+  //  retry whose wait is over. A job another worker has just claimed (or
+  //  taken as its own sibling) has attempts > 0 and send_after ahead, so
+  //  two overlapping workers never put the same item in two emails. The
+  //  row lock re-checks both against the latest version. $1 address, $2 the claimed job
   claimSiblingAlerts: `
     UPDATE classroom_email_jobs
     SET attempts = attempts + 1, send_after = NOW() + interval '5 minutes'
     WHERE job_id IN (
       SELECT job_id FROM classroom_email_jobs
       WHERE kind = 'missing_alert' AND status = 'pending' AND LOWER(recipient_email) = LOWER($1) AND job_id <> $2
+        AND (attempts = 0 OR send_after <= NOW())
       FOR UPDATE SKIP LOCKED
     )
     RETURNING job_id, payload`,
