@@ -401,6 +401,9 @@ async function buildStudentItem(row, { canAct, studentId, forGuardian = !canAct 
     submission,
     grade: gradeBlock(row, w),
     thread,
+    // Whether the student's parents read the messages about this work (the
+    // school's parents_read_private_comments), for the page's copy.
+    parentsCanRead: Boolean(row.parents_can_read),
   };
 }
 

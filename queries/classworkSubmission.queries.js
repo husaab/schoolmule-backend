@@ -67,7 +67,9 @@ WHERE ${WORK_WHERE}
 ORDER BY i.sort_order, COALESCE(i.posted_at, i.publish_at, i.created_at) DESC, i.created_at DESC, i.item_id`,
 
   //  One item the student can see, with what the item page needs. closed:
-  //  past due in a class that takes no late work.
+  //  past due in a class that takes no late work. parents_can_read: the
+  //  school lets guardians read messages about a piece of work
+  //  (parents_read_private_comments; no settings row = the default, yes).
   //  $1 student_id, $2 school, $3 item_id
   selectStudentItem: `
 SELECT ${WORK_COLUMNS},
@@ -77,7 +79,9 @@ SELECT ${WORK_COLUMNS},
             THEN sub.feedback END AS visible_feedback,
        sub.published_at AS sub_published_at,
        (i.due_at IS NOT NULL AND NOW() > i.due_at AND NOT c.accept_late) AS closed,
-       sub.submission_id, sub.text_answer, sub.text_saved_at
+       sub.submission_id, sub.text_answer, sub.text_saved_at,
+       COALESCE((SELECT scs.parents_read_private_comments FROM school_classroom_settings scs
+                  WHERE scs.school = c.school), TRUE) AS parents_can_read
 ${WORK_FROM}
 WHERE ${WORK_WHERE} AND i.item_id = $3::uuid`,
 

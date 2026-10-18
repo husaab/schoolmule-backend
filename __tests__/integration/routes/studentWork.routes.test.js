@@ -188,6 +188,16 @@ describe('Integration: student work', () => {
     expect((await get(`/api/student/items/${material.itemId}`)).data.submissionMode).toBe('none');
   });
 
+  it("parentsCanRead follows the school's parents-read-private-comments setting", async () => {
+    const item = await assignment();
+    const url = `/api/student/items/${item.itemId}`;
+    expect((await get(url)).data.parentsCanRead).toBe(true);
+    await pool.query(`UPDATE school_classroom_settings SET parents_read_private_comments = FALSE WHERE school = 'ALHAADIACADEMY'`);
+    expect((await get(url)).data.parentsCanRead).toBe(false);
+    await pool.query(`UPDATE school_classroom_settings SET parents_read_private_comments = TRUE WHERE school = 'ALHAADIACADEMY'`);
+    expect((await get(url)).data.parentsCanRead).toBe(true);
+  });
+
   it('text answer autosaves and turn-in needs a non-blank answer', async () => {
     const item = await assignment({ submissionMode: 'text' });
     const url = `/api/student/items/${item.itemId}`;
