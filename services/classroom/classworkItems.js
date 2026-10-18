@@ -20,11 +20,14 @@ const { signedUrlMap } = require('../../utils/attachmentUpload');
 const engine = require('../analyticsEngine');
 const { cellsToDrafts, reconcileAudience } = require('./publish');
 const { enqueueNewWork } = require('./classroomNotifier');
+const { ON_SUBMIT_MESSAGE } = require('./quizScoring');
+const quizQueries = require('../../queries/quiz.queries');
 
 const ITEM_KINDS = ['assessment', 'assignment', 'quiz', 'material'];
 const SUBMISSION_MODES = ['file', 'text', 'done', 'none'];
 const STATUSES = ['draft', 'scheduled', 'posted'];
 const AUDIENCES = ['all', 'some'];
+const QUIZ_RELEASES = ['after_review', 'on_submit'];
 const TITLE_MAX = 200;
 const INSTRUCTIONS_MAX = 20000;
 const MAX_AUDIENCE = 500;
@@ -206,10 +209,24 @@ function validateItemInput(input, ctx) {
     flags[key] = v;
   }
 
+  // A quiz's settings (T23): when students see their scores, shuffle, and
+  // the right answers once published. An edit keeps what it doesn't send.
+  let quiz = null;
+  if (kind === 'quiz') {
+    const curQuiz = cur && cur.kind === 'quiz' && cur.quiz ? cur.quiz : { release: 'after_review', shuffle: false, showAnswers: false };
+    const release = has(body, 'quizRelease') ? body.quizRelease : curQuiz.release;
+    if (!QUIZ_RELEASES.includes(release)) return fail('quizRelease must be after_review or on_submit');
+    const shuffle = has(body, 'quizShuffle') ? body.quizShuffle : curQuiz.shuffle;
+    const showAnswers = has(body, 'quizShowAnswers') ? body.quizShowAnswers : curQuiz.showAnswers;
+    if (typeof shuffle !== 'boolean') return fail('quizShuffle must be true or false');
+    if (typeof showAnswers !== 'boolean') return fail('quizShowAnswers must be true or false');
+    quiz = { release, shuffle, showAnswers };
+  }
+
   return {
     value: {
       kind, title, instructions, topicId, dueAt, date, submissionMode, gradebook,
-      status, publishAt, audience, studentIds, ...flags,
+      status, publishAt, audience, studentIds, ...flags, quiz,
     },
   };
 }
@@ -268,6 +285,13 @@ function toItemSummary(row) {
   };
 }
 
+/** A quiz item's settings ({ release, shuffle, showAnswers }); null for other kinds. */
+const quizSettingsOf = (row) => (row.kind === 'quiz' ? {
+  release: row.quiz_release ?? 'after_review',
+  shuffle: Boolean(row.quiz_shuffle),
+  showAnswers: Boolean(row.quiz_show_answers),
+} : null);
+
 /** ITEM_SELECT row + its students and attachments → Item. */
 function toItem(row, studentIds, attachments) {
   return {
@@ -277,6 +301,7 @@ function toItem(row, studentIds, attachments) {
     remindStudents: Boolean(row.remind_students),
     studentIds,
     attachments,
+    quiz: quizSettingsOf(row),
   };
 }
 
@@ -300,6 +325,7 @@ function toCurrent(row, studentIds) {
     assessmentId: row.assessment_id ?? null,
     categoryId: row.category_id ?? null,
     maxScore: num(row.max_score),
+    quiz: quizSettingsOf(row),
   };
 }
 
@@ -469,9 +495,21 @@ async function createItem(client, { classId, userId, value }) {
     item = await one(client, q.insertItem, [classId, value.title, ...params, userId]);
   }
   if (value.audience === 'some') await replaceStudents(client, item.item_id, value);
+  if (value.quiz) await saveQuizSettings(client, item.item_id, value.quiz);
   // An assignment or quiz filling an unpublished column takes its cells as drafts (D3).
   if (assessmentId && TURN_IN_KINDS.has(value.kind)) await cellsToDrafts(client, { itemId: item.item_id, assessmentId });
   return { itemId: item.item_id, gradebookChanged: Boolean(assessmentId), posted: value.status === 'posted' };
+}
+
+/**
+ * A quiz's settings (T23), in the caller's transaction (the item locked by
+ * an edit). Release on submit needs every question auto-graded (400).
+ */
+async function saveQuizSettings(client, itemId, quiz) {
+  if (quiz.release === 'on_submit' && (await one(client, quizQueries.selectHasWritten, [itemId]))?.has_written) {
+    throw httpError(400, ON_SUBMIT_MESSAGE);
+  }
+  await client.query(quizQueries.updateQuizSettings, [itemId, quiz.release, quiz.shuffle, quiz.showAnswers]);
 }
 
 const sameList = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
@@ -584,6 +622,7 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   }
 
   await replaceStudents(client, itemId, value);
+  if (value.quiz) await saveQuizSettings(client, itemId, value.quiz);
   // An assignment or quiz newly filling an unpublished column (or a plain
   // assessment becoming one) takes its students' cells as drafts (D3); a
   // changed audience moves grades between drafts and plain cells (round 3).

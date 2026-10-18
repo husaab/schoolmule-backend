@@ -1914,3 +1914,52 @@ CREATE TABLE IF NOT EXISTS classroom_email_jobs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_classroom_email_jobs_digest ON classroom_email_jobs (LOWER(recipient_email), kind, digest_key);
 CREATE INDEX IF NOT EXISTS idx_classroom_email_jobs_due ON classroom_email_jobs (send_after) WHERE status = 'pending';
+
+-- student_portal_30_quizzes.sql: quiz settings on the item, questions, one
+-- attempt per student and its answers (RLS is migration-only).
+ALTER TABLE classwork_items ADD COLUMN IF NOT EXISTS quiz_release TEXT NOT NULL DEFAULT 'after_review'
+  CHECK (quiz_release IN ('after_review', 'on_submit'));
+ALTER TABLE classwork_items ADD COLUMN IF NOT EXISTS quiz_shuffle BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE classwork_items ADD COLUMN IF NOT EXISTS quiz_show_answers BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS quiz_questions (
+  question_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id         UUID NOT NULL REFERENCES classwork_items(item_id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK (kind IN ('one', 'many', 'short', 'long')),
+  prompt          TEXT NOT NULL,
+  image_path      TEXT,
+  options         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  correct         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  accepted        TEXT[] NOT NULL DEFAULT '{}',
+  points          NUMERIC(6, 2) NOT NULL DEFAULT 1 CHECK (points >= 0),
+  partial_credit  BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order      INT NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_item ON quiz_questions(item_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+  attempt_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id         UUID NOT NULL REFERENCES classwork_items(item_id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  question_order  UUID[] NOT NULL DEFAULT '{}',
+  started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  submitted_at    TIMESTAMPTZ,
+  auto_score      NUMERIC(8, 2),
+  CONSTRAINT uq_quiz_attempt UNIQUE (item_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS quiz_answers (
+  answer_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  attempt_id      UUID NOT NULL REFERENCES quiz_attempts(attempt_id) ON DELETE CASCADE,
+  question_id     UUID NOT NULL REFERENCES quiz_questions(question_id) ON DELETE CASCADE,
+  answer          JSONB,
+  auto_points     NUMERIC(6, 2),
+  teacher_points  NUMERIC(6, 2),
+  teacher_note    TEXT,
+  saved_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  graded_by       UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  graded_at       TIMESTAMPTZ,
+  CONSTRAINT uq_quiz_answer UNIQUE (attempt_id, question_id)
+);

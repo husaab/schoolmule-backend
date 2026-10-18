@@ -90,6 +90,21 @@ async function publishSubmissions(client, { item, studentIds, userId, school }) 
 }
 
 /**
+ * Every Classwork publish of a gradebook column is a publish batch: the
+ * history shows it and the parent digest is logged against it. The column's
+ * first Publish made one already (publishSubmissions); a later one makes it
+ * here. Inside the caller's transaction, after publishSubmissions.
+ * @returns {Promise<string|null>} the batch id (null: nothing published, or no column)
+ */
+async function ensurePublishBatch(client, { item, school, userId, published }) {
+  if (published.batchId) return published.batchId;
+  if (!item.assessment_id || published.publishedStudentIds.length === 0) return null;
+  const { rows: [batch] } = await client.query(publishQueries.insertBatch,
+    [item.class_id, school, 'publish', [item.assessment_id], null, userId, 0]);
+  return batch.batch_id;
+}
+
+/**
  * Spec D3, when an assignment or quiz takes over a gradebook column that is
  * not published (it fills an existing column, or a plain assessment becomes
  * one): the column's cells become drafts on the item's submissions, so the
@@ -159,4 +174,6 @@ async function afterPublish({ school, studentIds, itemId }) {
   await enqueueGraded({ school, studentIds });
 }
 
-module.exports = { publishSubmissions, cellsToDrafts, reconcileAudience, afterPublish, OUTSIDE_AUDIENCE_MESSAGE };
+module.exports = {
+  publishSubmissions, ensurePublishBatch, cellsToDrafts, reconcileAudience, afterPublish, OUTSIDE_AUDIENCE_MESSAGE,
+};

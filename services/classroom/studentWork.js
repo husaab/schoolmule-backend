@@ -93,7 +93,7 @@ function toWork(row, identity = identityOf(row)) {
     date: row.date ?? null,
     status: row.work_status,
     isLate: Boolean(row.is_late),
-    questionCount: 0, // T23 fills it for quizzes
+    questionCount: Number(row.question_count) || 0, // a quiz's questions; 0 for other kinds
     turnedInAt: iso(row.turned_in_at),
     publishedAt: iso(row.grade_published_at),
     topicId: row.topic_id ?? null,

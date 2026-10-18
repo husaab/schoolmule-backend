@@ -20,13 +20,13 @@ const logger = require('../logger');
 const engine = require('../services/analyticsEngine');
 const q = require('../queries/grading.queries');
 const classworkQueries = require('../queries/classwork.queries');
-const publishQueries = require('../queries/assessmentPublish.queries');
 const { toItemSummary, httpError, inTransaction } = require('../services/classroom/classworkItems');
-const { publishSubmissions, afterPublish } = require('../services/classroom/publish');
+const { publishSubmissions, ensurePublishBatch, afterPublish } = require('../services/classroom/publish');
 const { sendGradeDigest } = require('./assessmentPublish.controller');
 const { SUBMISSION_BUCKET, SIGNED_URL_TTL } = require('../utils/classworkUpload');
 const { STATUSES } = require('../services/gradeEngine');
 const messagingQueries = require('../queries/messaging.queries');
+const { loadQuizDetail } = require('../services/classroom/quizzes');
 const { resolveCurrentTerm, termParams, PAST_TERM_MESSAGE } = require('./messaging.controller');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -80,7 +80,7 @@ function gradingLabel(row) {
  * while the column itself is unpublished (unpublished in the gradebook after
  * a publish), since nothing of it shows until it is published again.
  */
-function toGradingRow(r, { linked, assessmentPublished = false }) {
+function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) {
   const draftScore = linked ? num(r.draft_score) : null;
   const draftStatus = linked ? r.draft_status ?? null : null;
   const hasDraft = draftScore !== null || draftStatus !== null;
@@ -101,7 +101,8 @@ function toGradingRow(r, { linked, assessmentPublished = false }) {
     publishedStatus,
     publishedAt: iso(linked ? r.visible_published_at : r.sub_published_at),
     feedback,
-    needsPublish: (hasDraft || (!linked && feedback !== null)) && unpublished,
+    // workState.UNLINKED_PUBLISHABLE: with no column, feedback or a turned-in quiz's results.
+    needsPublish: (hasDraft || (!linked && (feedback !== null || (quiz && Boolean(turnedInAt))))) && unpublished,
     hasThread: Boolean(r.has_thread),
   };
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
@@ -135,7 +136,9 @@ async function loadGradingItem(itemId, runner = db) {
   return item;
 }
 
-const shapeOptions = (item) => ({ linked: Boolean(item.assessment_id), assessmentPublished: Boolean(item.is_published) });
+const shapeOptions = (item) => ({
+  linked: Boolean(item.assessment_id), assessmentPublished: Boolean(item.is_published), quiz: item.kind === 'quiz',
+});
 
 /** One student's GradingRow, or null when the item is not for them. */
 async function loadRow(item, studentId, runner = db) {
@@ -236,12 +239,16 @@ const getSubmission = async (req, res) => {
     const item = await loadGradingItem(itemId);
     const found = await loadRow(item, studentId);
     if (!found) return failed(res, 404, MESSAGES.STUDENT_NOT_FOUND);
-    const [files, thread] = await Promise.all([signedFiles(found.raw.submission_id), findThread(studentId, itemId)]);
+    const [files, thread, quiz] = await Promise.all([
+      signedFiles(found.raw.submission_id),
+      findThread(studentId, itemId),
+      item.kind === 'quiz' ? loadQuizDetail(itemId, studentId) : null,
+    ]);
     return ok(res, {
       row: found.row,
       textAnswer: found.raw.text_answer ?? null,
       files,
-      quiz: null, // T23
+      quiz, // the student's attempt and answers (null until they start)
       thread: thread.conversationId ? thread : null,
     });
   } catch (error) {
@@ -404,12 +411,7 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
         : { publishedStudentIds: [], assessmentPublished: false, batchId: null };
       // Every Classwork publish of a gradebook column is a publish batch:
       // the history shows it and the parent digest is logged against it.
-      let { batchId } = published;
-      if (item.assessment_id && published.publishedStudentIds.length > 0 && !batchId) {
-        const { rows: [batch] } = await client.query(publishQueries.insertBatch,
-          [item.class_id, school, 'publish', [item.assessment_id], null, userId, 0]);
-        batchId = batch.batch_id;
-      }
+      const batchId = await ensurePublishBatch(client, { item, school, userId, published });
       // A listed student holding a grade that was not published again: it is
       // already published and nothing changed since (no second email).
       const notPublished = Array.isArray(targets) ? targets.filter((id) => !published.publishedStudentIds.includes(id)) : [];

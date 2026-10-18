@@ -91,6 +91,7 @@ SELECT i.item_id, i.class_id, i.kind, COALESCE(a.name, i.title) AS title, i.topi
        COALESCE(i.posted_at, CASE WHEN i.status = 'scheduled' AND i.publish_at <= NOW() THEN i.publish_at END) AS posted_at,
        i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date, i.submission_mode, i.show_early, i.audience,
        i.instructions, i.email_students, i.remind_students, i.sort_order, i.created_by, i.created_at, i.edited_at,
+       i.quiz_release, i.quiz_shuffle, i.quiz_show_answers,
        a.assessment_id, a.parent_assessment_id AS category_id, p.name AS category_name, a.max_score, a.weight_points,
        COALESCE(a.is_published, FALSE) AS is_published,
        (SELECT COUNT(*) FROM student_assessments sa WHERE sa.assessment_id = a.assessment_id AND ${HAS_GRADE()})::int AS score_count,

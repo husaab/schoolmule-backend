@@ -57,6 +57,14 @@ describe('toGradingRow', () => {
     expect(published).toMatchObject({ needsPublish: false, label: 'Published', publishedAt: PUBLISHED });
   });
 
+  it('a quiz with no gradebook column publishes its results: a turned-in quiz needs a Publish even with no feedback', () => {
+    expect(toGradingRow(raw({ ...TURNED_IN }), { linked: false, quiz: true }).row).toMatchObject({ needsPublish: true, label: 'Turned in' });
+    expect(toGradingRow(raw({ ...TURNED_IN }), { linked: false }).row.needsPublish).toBe(false); // an assignment needs feedback
+    expect(toGradingRow(raw(), { linked: false, quiz: true }).row.needsPublish).toBe(false); // nothing turned in
+    const published = toGradingRow(raw({ ...TURNED_IN, sub_published_at: PUBLISHED }), { linked: false, quiz: true }).row;
+    expect(published).toMatchObject({ needsPublish: false, label: 'Published' });
+  });
+
   it('a published draft needs a Publish again while its column is unpublished in the gradebook', () => {
     const synced = raw({ ...TURNED_IN, draft_score: '8.00', draft_status: 'graded', sub_published_at: PUBLISHED });
     expect(toGradingRow(synced, { linked: true, assessmentPublished: false }).row).toMatchObject({ needsPublish: true, label: 'Graded · draft' });

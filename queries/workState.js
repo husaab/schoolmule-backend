@@ -52,12 +52,17 @@ const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)
 const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND NOT ${GRADE_VISIBLE}
   AND (i.assessment_id IS NOT NULL OR sub.published_at IS NULL))`;
 
+// On an item with no gradebook column, what a Publish releases: the
+// teacher's feedback, and for a quiz its results (T23), so a turned-in quiz
+// is something to publish even with no feedback.
+const UNLINKED_PUBLISHABLE = `(sub.feedback IS NOT NULL OR (i.kind = 'quiz' AND sub.turned_in_at IS NOT NULL))`;
+
 // What "Publish to N students" counts (T16): on a gradebook column, a draft
 // not published yet, or any draft while the column itself is unpublished; on
-// an item with no column, feedback not published yet.
+// an item with no column, feedback (or a quiz's results) not published yet.
 const NEEDS_PUBLISH = `(CASE WHEN i.assessment_id IS NOT NULL
     THEN ${HAS_DRAFT} AND (sub.published_at IS NULL OR NOT COALESCE(a.is_published, FALSE))
-    ELSE sub.feedback IS NOT NULL AND sub.published_at IS NULL END)`;
+    ELSE ${UNLINKED_PUBLISHABLE} AND sub.published_at IS NULL END)`;
 
 // The joins that give one student's `sub`, `sa` and `wst` (their students
 // row, for SIGNS_IN) for item `i`. `student` is a SQL expression for the
@@ -69,4 +74,5 @@ LEFT JOIN students wst ON wst.student_id = ${student}`;
 
 module.exports = {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_AT, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH,
+  UNLINKED_PUBLISHABLE,
 };

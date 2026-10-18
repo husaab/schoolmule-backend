@@ -2,6 +2,7 @@ const express = require("express");
 const requireStudent = require("../middleware/requireStudent");
 const controller = require("../controllers/studentPortal.controller");
 const messaging = require("../controllers/studentMessaging.controller");
+const quiz = require("../controllers/quiz.controller");
 const requireStudentConversationAccess = require("../middleware/requireStudentConversationAccess");
 const { uploadSubmissionFiles } = require("../utils/classworkUpload");
 
@@ -67,6 +68,14 @@ router.post("/items/:itemId/turn-in", controller.turnIn);
 router.post("/items/:itemId/unsubmit", controller.unsubmit);
 router.delete("/files/:fileId", controller.deleteFile);
 router.get("/files/:fileId/url", controller.fileUrl);
+
+// A quiz (T23): one attempt, started once, answers autosaved, then a
+// confirmed submit. Keyed on the caller's own row; no answer key is sent
+// until the student's grade is visible.
+router.get("/items/:itemId/quiz", quiz.getStudentQuiz);
+router.post("/items/:itemId/quiz/start", quiz.startStudentQuiz);
+router.put("/items/:itemId/quiz-answers", quiz.saveStudentAnswers);
+router.post("/items/:itemId/quiz-submit", quiz.submitStudentQuiz);
 
 // The class Stream: announcements whose audience includes this student.
 router.get("/announcements", controller.listAnnouncements);

@@ -5,12 +5,15 @@ const requireClassroomResource = require("../middleware/requireClassroomResource
 const controller = require("../controllers/classroom.controller");
 const classwork = require("../controllers/classwork.controller");
 const grading = require("../controllers/grading.controller");
+const quiz = require("../controllers/quiz.controller");
 const { singleImage } = require("../utils/imageUpload");
 const { uploadFiles, uploadFile } = require("../utils/classworkUpload");
 
 const BANNER_MAX_BYTES = 3 * 1024 * 1024;
 // Checked after requireClassOwnership: a stranger's upload is never read.
 const bannerImage = singleImage({ field: "banner", maxBytes: BANNER_MAX_BYTES });
+const QUESTION_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const questionImage = singleImage({ field: "image", maxBytes: QUESTION_IMAGE_MAX_BYTES });
 
 // The teacher's classroom. Staff only; every :classId route also passes
 // requireClassOwnership (the caller teaches the class, or is an admin).
@@ -38,6 +41,10 @@ router.param("topicId", (req, res, next, id) => {
 });
 router.param("attachmentId", (req, res, next, id) => {
   if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Attachment not found" });
+  next();
+});
+router.param("answerId", (req, res, next, id) => {
+  if (!UUID_RE.test(id)) return res.status(404).json({ status: "failed", message: "Answer not found" });
   next();
 });
 
@@ -110,5 +117,14 @@ router.get("/classes/:classId/grid-overlay", requireClassOwnership, grading.getG
 // /api/messaging/conversations/:id/messages.
 router.get("/items/:itemId/students/:studentId/thread", requireClassroomResource("item"), grading.getStudentThread);
 router.post("/items/:itemId/students/:studentId/thread", requireClassroomResource("item"), grading.ensureStudentThread);
+
+// Quizzes (T23): the builder's questions (bulk, upsert by id) and their
+// images, and the teacher's points on one answer. A quiz's scores follow
+// the grading routes above (drafts until Publish). The image is read only
+// after the ownership check passes.
+router.get("/items/:itemId/questions", requireClassroomResource("item"), quiz.getQuestions);
+router.put("/items/:itemId/questions", requireClassroomResource("item"), quiz.putQuestions);
+router.post("/items/:itemId/question-images", requireClassroomResource("item"), questionImage, quiz.uploadQuestionImage);
+router.patch("/quiz-answers/:answerId", requireClassroomResource("quizAnswer"), quiz.updateQuizAnswer);
 
 module.exports = router;

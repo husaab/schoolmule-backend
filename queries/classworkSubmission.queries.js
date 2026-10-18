@@ -28,6 +28,7 @@ const WORK_COLUMNS = `
   sub.turned_in_at, sub.is_late AS sub_is_late,
   ${WORK_STATE_SQL} AS work_status,
   ${WORK_LATE_SQL} AS is_late,
+  CASE WHEN i.kind = 'quiz' THEN (SELECT COUNT(*) FROM quiz_questions qq WHERE qq.item_id = i.item_id)::int ELSE 0 END AS question_count,
   c.subject, c.grade::text AS grade, c.banner_key, c.banner_path, c.icon_key, c.color,
   tu.user_id AS teacher_id, tu.avatar AS teacher_avatar, tu.photo_path AS teacher_photo_path,
   COALESCE(NULLIF(TRIM(CONCAT(tu.first_name, ' ', tu.last_name)), ''), c.teacher_name) AS teacher_name`;

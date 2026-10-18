@@ -11,7 +11,9 @@
 // submission, `sa` the gradebook cell.
 
 const { studentAvatarSql } = require('../utils/avatar');
-const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE } = require('./workState');
+const {
+  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE,
+} = require('./workState');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
 // The item's students: the class roster (not archived), narrowed to the
@@ -164,7 +166,8 @@ const gradingQueries = {
   //  ("Publish to N students": not published yet, or the column is
   //  unpublished); a list = those students, published again even when
   //  already published (a re-publish after a regrade). Only students the
-  //  item is for. An unlinked item publishes its feedback.
+  //  item is for. An unlinked item publishes its feedback (a quiz's results
+  //  too: UNLINKED_PUBLISHABLE).
   //  $1 item_id, $2 student_id[]|null, $3 linked to a gradebook column
   lockPublishable: `
     SELECT sub.submission_id, sub.student_id, sub.draft_score, sub.draft_status
@@ -182,7 +185,7 @@ const gradingQueries = {
       AND NOT ($2::uuid[] IS NOT NULL AND sub.published_at IS NOT NULL AND sub.updated_at <= sub.published_at
                AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE)))
       AND ${IN_ITEM_AUDIENCE}
-      AND (${HAS_DRAFT} OR (NOT $3::boolean AND sub.feedback IS NOT NULL))
+      AND (${HAS_DRAFT} OR (NOT $3::boolean AND ${UNLINKED_PUBLISHABLE}))
     ORDER BY sub.student_id
     FOR UPDATE OF sub`,
 
@@ -191,8 +194,9 @@ const gradingQueries = {
   //  $1 item_id, $2 student_id[], $3 linked to a gradebook column
   selectPublishHolders: `
     SELECT sub.student_id FROM classwork_submissions sub
+    JOIN classwork_items i ON i.item_id = sub.item_id
     WHERE sub.item_id = $1 AND sub.student_id = ANY($2::uuid[])
-      AND (${HAS_DRAFT} OR (NOT $3::boolean AND sub.feedback IS NOT NULL))`,
+      AND (${HAS_DRAFT} OR (NOT $3::boolean AND ${UNLINKED_PUBLISHABLE}))`,
 
   //  Spec D3, for an unpublished column only: the gradebook cells of the
   //  item's students become drafts on their submissions (a turn-in item took
