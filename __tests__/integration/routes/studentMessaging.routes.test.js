@@ -495,6 +495,24 @@ describe('Integration: student messaging', () => {
       await startThread({ teacherId: ADMIN_CO_ID, subject: 'Hi', body: 'Hello' }, asBilal, 201);
     });
 
+    it('an admin who is the homeroom teacher is a target like a homeroom teacher, with the parents in the thread', async () => {
+      await user(ADMIN_LEAD_ID, 'rami.principal@example.com', 'Rami', 'Principal', 'ADMIN');
+      // Bilal's homeroom teacher is an admin who teaches none of his classes.
+      await pool.query(`UPDATE students SET homeroom_teacher_id = $2 WHERE student_id = $1`, [bilalId, ADMIN_LEAD_ID]);
+
+      const targets = (await get('/api/student/conversations/targets', asBilal)).data.teachers;
+      expect(targets.find((t) => t.userId === ADMIN_LEAD_ID)).toEqual({ userId: ADMIN_LEAD_ID, name: 'Rami Principal', avatar: null, classes: [] });
+      const thread = (await startThread({ teacherId: ADMIN_LEAD_ID, subject: 'Bus', body: 'My bus was late.' }, asBilal)).data;
+      expect(thread.conversation).toMatchObject({ classId: null, teacherId: ADMIN_LEAD_ID, includesStudent: true });
+      expect(sorted(thread.participants.map((p) => p.userId))).toEqual(sorted([RANIA_ID, BILAL_USER_ID, ADMIN_LEAD_ID]));
+      expect(await pendingJobs(thread.conversation.conversationId)).toEqual(sorted([RANIA_ID, ADMIN_LEAD_ID]));
+      await startThread({ teacherId: ADMIN_LEAD_ID, classId: sciId, subject: 'Hi', body: 'x' }, asBilal, 400); // teaches no class of his
+
+      // The admin is no one's target through Bilal's homeroom: Amal is refused.
+      expect((await startThread({ teacherId: ADMIN_LEAD_ID, subject: 'Hi', body: 'Hello' }, asAmal, 403)).message)
+        .toBe('You can message your own teachers only.');
+    });
+
     it('guardians are derived at read time: one linked after the thread began is in it; one unlinked is out', async () => {
       await user(AUNT_ID, 'nadia.haddad@example.com', 'Nadia', 'Haddad', 'PARENT');
       const asAunt = { userId: AUNT_ID, username: 'Nadia Haddad', email: 'nadia.haddad@example.com', role: 'PARENT' };

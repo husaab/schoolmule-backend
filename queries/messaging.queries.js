@@ -745,12 +745,12 @@ const messagingQueries = {
 
   // ── Student portal (T17): students in conversations ─────────
   // The teachers a student may write to: the lead and co-teachers of the
-  // student's live current-term classes of the year (an admin who leads or
-  // co-teaches one of those classes is that class's teacher, like anyone
-  // else), plus the homeroom teacher (not term-bound; a TEACHER account).
-  // Archived accounts are never offered, and neither is an admin who teaches
-  // none of the student's classes. Each person once, with the classes they
-  // teach the student.
+  // student's live current-term classes of the year, plus the homeroom
+  // teacher (not term-bound). An admin is a target under exactly the same
+  // rule as a teacher (leading or co-teaching one of those classes, or being
+  // the homeroom teacher); an admin with none of those relations to the
+  // student is never offered. Archived accounts are never offered. Each
+  // person once, with the classes they teach the student.
   // $1 student_id, $2 school_year_id|null, $3 current term_id|null, $4 current term name|null
   selectStudentTeacherTargets: `
     SELECT t.user_id, t.name, t.avatar,
@@ -771,7 +771,7 @@ const messagingQueries = {
       UNION
       SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.avatar, NULL::uuid, NULL
       FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
-      WHERE s.student_id = $1 AND u.is_archived = FALSE AND u.role = 'TEACHER'
+      WHERE s.student_id = $1 AND u.is_archived = FALSE AND u.role IN ('TEACHER', 'ADMIN')
     ) t
     GROUP BY t.user_id, t.name, t.avatar
     ORDER BY t.name, t.user_id
