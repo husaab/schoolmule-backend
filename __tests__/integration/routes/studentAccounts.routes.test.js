@@ -208,8 +208,8 @@ describe('Integration: Student accounts', () => {
     const data = await list();
 
     expect(data.settings).toMatchObject({ enabled: true, loginFromGrade: '1', qrUntilGrade: '3' });
-    // Grades 1-8 first (shorter code), then JK/SK; by name within a grade.
-    expect(data.students.map((s) => s.name)).toEqual(['Amal Haddad', 'Rami Haddad', 'Sami Haddad', 'Lina Haddad']);
+    // JK and SK first, then Grades 1-8 (the T7 ruling, M5); by name within a grade.
+    expect(data.students.map((s) => s.name)).toEqual(['Lina Haddad', 'Amal Haddad', 'Rami Haddad', 'Sami Haddad']);
 
     const amal = rowOf(data, amalId);
     const amalUser = await userOf(amalId);
@@ -547,6 +547,35 @@ describe('Integration: Student accounts', () => {
     expect(created.body.data.studentEmail).toBe('dalia.haddad@example.com');
   });
 
+  it('M1: a student login is never offered as a parent, and linking one is refused', async () => {
+    await invite([amalId]);
+    const login = await userOf(amalId);
+    const picker = await authenticatedRequest('get', '/api/parents', asAdmin);
+    expect(picker.status).toBe(200);
+    const ids = (picker.body.data || []).map((p) => p.userId ?? p.user_id);
+    expect(ids).toContain(MOTHER_ID);
+    expect(ids).not.toContain(login.user_id);
+    const link = await authenticatedRequest('post', '/api/parent-students', asAdmin)
+      .send({ studentId: ramiId, parentId: login.user_id, relation: 'Sibling' });
+    expect(link.status).toBe(400);
+    expect((await pool.query(`SELECT 1 FROM parent_students WHERE parent_id = $1`, [login.user_id])).rows).toEqual([]);
+  });
+
+  it("M6: /api/students shows a student's own address to admins only", async () => {
+    const admin = await authenticatedRequest('get', `/api/students/${amalId}`, asAdmin);
+    expect(admin.status).toBe(200);
+    expect(admin.body.data.studentEmail).toBe('Amal.Haddad@Example.com');
+    expect((await authenticatedRequest('get', '/api/students', asAdmin)).body.data.find((x) => x.studentId === amalId).studentEmail)
+      .toBe('Amal.Haddad@Example.com');
+    for (const who of [asTeacher, asParent]) {
+      const one = await authenticatedRequest('get', `/api/students/${amalId}`, who);
+      expect(one.status).toBe(200);
+      expect(one.body.data).not.toHaveProperty('studentEmail');
+      const all = await authenticatedRequest('get', '/api/students', who);
+      expect(JSON.stringify(all.body)).not.toMatch(/amal\.haddad@example\.com/i);
+    }
+  });
+
   it("only an admin of the student's school can set a student email on the student form", async () => {
     const studentEmailOf = async (id) =>
       (await pool.query(`SELECT student_email FROM students WHERE student_id = $1`, [id])).rows[0].student_email;
@@ -564,7 +593,8 @@ describe('Integration: Student accounts', () => {
     // The rest of the form still works for a teacher.
     const rename = await authenticatedRequest('patch', `/api/students/${ramiId}`, asTeacher).send({ name: 'Rami K. Haddad' });
     expect(rename.status).toBe(200);
-    expect(rename.body.data.studentEmail).toBeNull();
+    expect(rename.body.data).not.toHaveProperty('studentEmail'); // admins only (M6)
+    expect(await studentEmailOf(ramiId)).toBeNull();
 
     const created = await authenticatedRequest('post', '/api/students', asTeacher)
       .send({ name: 'Dalia Haddad', grade: '3', studentEmail: 'taken.over@example.com' });

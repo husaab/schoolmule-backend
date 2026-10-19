@@ -24,6 +24,15 @@ const STUDENT_EMAIL_ADMIN_ONLY =
 const carriesStudentEmail = (body) =>
   Boolean(body) && Object.prototype.hasOwnProperty.call(body, "studentEmail") && body.studentEmail !== undefined;
 
+// The student's own address leaves the server for admins only (final review
+// M6): any signed-in role reads /api/students, and the address is where the
+// student's SchoolMule invite goes.
+const hideStudentEmail = (req) => (student) => {
+  if (req.user?.role === "ADMIN" || !student) return student;
+  const { studentEmail, ...rest } = student;
+  return rest;
+};
+
 // Convert database row to camelCase
 const toCamel = (s) => ({
   studentId: s.student_id,
@@ -69,7 +78,7 @@ const getAllStudents = async (req, res) => {
     logger.info("All students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel)
+      data: rows.map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);
@@ -88,7 +97,7 @@ const getStudentById = async (req, res) => {
 
     return res.status(200).json({
       status: "success",
-      data: toCamel(rows[0])
+      data: hideStudentEmail(req)(toCamel(rows[0]))
     });
   } catch (error) {
     logger.error(error);
@@ -155,7 +164,7 @@ const createStudent = async (req, res) => {
     logger.info(`Student created with id ${rows[0].student_id}`);
     return res.status(201).json({
       status: "success",
-      data: toCamel(rows[0])
+      data: hideStudentEmail(req)(toCamel(rows[0]))
     });
   } catch (error) {
     logger.error(error);
@@ -243,7 +252,7 @@ const updateStudent = async (req, res) => {
     logger.info(`Student ${id} updated`);
     return res.status(200).json({
       status: "success",
-      data: toCamel(rows[0])
+      data: hideStudentEmail(req)(toCamel(rows[0]))
     });
   } catch (error) {
     logger.error(error);
@@ -278,7 +287,7 @@ const getArchivedStudents = async (req, res) => {
     logger.info("Archived students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel)
+      data: rows.map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);
@@ -315,7 +324,7 @@ const archiveStudent = async (req, res) => {
     return res.status(200).json({
       status: "success",
       message: "Student archived successfully",
-      data: toCamel(rows[0])
+      data: hideStudentEmail(req)(toCamel(rows[0]))
     });
   } catch (error) {
     logger.error(error);
@@ -351,7 +360,7 @@ const unarchiveStudent = async (req, res) => {
     return res.status(200).json({
       status: "success",
       message: "Student unarchived successfully",
-      data: toCamel(rows[0])
+      data: hideStudentEmail(req)(toCamel(rows[0]))
     });
   } catch (error) {
     logger.error(error);
@@ -370,7 +379,7 @@ const getAllStudentsWithArchived = async (req, res) => {
     logger.info("All students (including archived) fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel)
+      data: rows.map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);
