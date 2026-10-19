@@ -5,7 +5,7 @@
 // controller stays small and every payload agrees.
 
 const { identityOf, optionsOf } = require('./classView');
-const { deriveStatus, isQrEligible } = require('./studentAccounts');
+const { deriveStatus, isQrEligible, latestInvite, signInMethodOf } = require('./studentAccounts');
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 
@@ -143,6 +143,9 @@ function toPeopleStudent(row, settings) {
       userId: row.user_id ?? null,
       lastSeenAt: iso(row.last_seen_at),
       qrEligible: isQrEligible(status, row.grade, settings),
+      // The login's latest invite and how it signs in, as on Student accounts.
+      invite: row.user_id ? latestInvite(row) : null,
+      signInMethod: signInMethodOf(row),
     },
     parents: dedupeParents(row.parents),
     missingCount: Number(row.missing_count) || 0,

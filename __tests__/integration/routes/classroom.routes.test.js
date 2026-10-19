@@ -382,13 +382,37 @@ describe('Integration: classroom teacher read API', () => {
       const data = await people(sciId);
       const byId = Object.fromEntries(data.students.map((s) => [s.studentId, s]));
 
-      expect(byId[amalId].account).toEqual({ status: 'active', userId: AMAL_USER_ID, lastSeenAt: '2026-10-14T15:00:00.000Z', qrEligible: false });
-      expect(byId[samiId].account).toEqual({ status: 'invited', userId: SAMI_USER_ID, lastSeenAt: null, qrEligible: false });
-      expect(byId[ramiId].account).toEqual({ status: 'not_invited', userId: null, lastSeenAt: null, qrEligible: false });
-      expect(byId[linaId].account).toEqual({ status: 'not_eligible', userId: null, lastSeenAt: null, qrEligible: false });
+      expect(byId[amalId].account).toEqual({
+        status: 'active', userId: AMAL_USER_ID, lastSeenAt: '2026-10-14T15:00:00.000Z', qrEligible: false, invite: null, signInMethod: 'password',
+      });
+      expect(byId[samiId].account).toEqual({
+        status: 'invited', userId: SAMI_USER_ID, lastSeenAt: null, qrEligible: false, invite: null, signInMethod: null,
+      });
+      expect(byId[ramiId].account).toEqual({
+        status: 'not_invited', userId: null, lastSeenAt: null, qrEligible: false, invite: null, signInMethod: null,
+      });
+      expect(byId[linaId].account).toEqual({
+        status: 'not_eligible', userId: null, lastSeenAt: null, qrEligible: false, invite: null, signInMethod: null,
+      });
       expect(data.students.map((s) => s.name)).toEqual(['Amal Haddad', 'Lina Haddad', 'Rami Haddad', 'Sami Haddad']);
       expect(data.students[0]).toMatchObject({ photoUrl: null, avatar: null, missingCount: 0 });
       expect(data.counts).toEqual({ students: 4, notSignedIn: 2, missingWork: 0 });
+    });
+
+    it("rows carry the login's latest invite and how it signs in (a first card scan makes it active)", async () => {
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())`, [SAMI_USER_ID]);
+      await pool.query(
+        `INSERT INTO student_invites (school, user_id, student_id, school_year_id, email, token_hash, expires_at, send_status, sent_at)
+         SELECT 'ALHAADIACADEMY', $1, $2, school_year_id, 'sami.haddad@example.com', 'hash-sami', NOW() + interval '14 days', 'sent', NOW()
+           FROM students WHERE student_id = $2`, [SAMI_USER_ID, samiId],
+      );
+      let sami = (await people(sciId)).students.find((s) => s.studentId === samiId);
+      expect(sami.account).toMatchObject({
+        status: 'invited', signInMethod: null, invite: { state: 'pending', sentAt: expect.any(String), expiresAt: expect.any(String) },
+      });
+      await pool.query(`UPDATE student_accounts SET activated_at = NOW(), activated_via = 'card' WHERE user_id = $1`, [SAMI_USER_ID]);
+      sami = (await people(sciId)).students.find((s) => s.studentId === samiId);
+      expect(sami.account).toMatchObject({ status: 'active', signInMethod: 'card' });
     });
 
     it('an archived student login shows as archived and is not counted as not signed in', async () => {

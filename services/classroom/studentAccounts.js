@@ -504,6 +504,8 @@ module.exports = {
   isBelowLoginGrade,
   conflictMessage,
   deriveStatus,
+  signInMethodOf,
+  latestInvite,
   isQrEligible,
   toStudentAccountRow,
   loadSchoolInfo,

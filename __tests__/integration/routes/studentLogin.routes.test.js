@@ -474,6 +474,9 @@ describe('Integration: student sign-in', () => {
     expect(mockSend.mock.calls[0][0]).toMatchObject({
       to: 'amal.haddad@example.com', subject: 'Set up your Al Haadi Academy SchoolMule account',
     });
+    // The teacher's resend is a real invite, recorded with the teacher as its sender.
+    const { rows: invites } = await pool.query(`SELECT created_by, end_reason FROM student_invites WHERE user_id = $1`, [AMAL_USER]);
+    expect(invites).toEqual([{ created_by: TEACHER_ID, end_reason: null }]);
   });
 
   // 9

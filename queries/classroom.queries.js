@@ -199,6 +199,9 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
   selectPeopleStudents: `
     SELECT s.student_id, s.name, s.grade::text AS grade, ${studentAvatarSql('s')},
            u.user_id, u.is_archived, (u.password = '!') AS invite_pending, u.last_seen_at,
+           (u.google_sub IS NOT NULL) AS has_google, sa.activated_at, sa.activated_via,
+           inv.send_status AS invite_send_status, inv.sent_at AS invite_sent_at, inv.expires_at AS invite_expires_at,
+           inv.ended_at AS invite_ended_at, inv.end_reason AS invite_end_reason, inv.send_error AS invite_send_error,
            COALESCE((SELECT json_agg(json_build_object(
                        'name', g.name, 'relation', g.relation, 'hasAccount', g.has_account, 'emailKey', g.email_key)
                      ORDER BY g.has_account DESC, g.src, g.created_at, g.link_id)
@@ -226,6 +229,10 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
     JOIN students s ON s.student_id = cs.student_id
     LEFT JOIN student_account_links sal ON sal.student_id = s.student_id
     LEFT JOIN users u ON u.user_id = sal.user_id
+    LEFT JOIN student_accounts sa ON sa.user_id = u.user_id
+    LEFT JOIN LATERAL (
+      SELECT si.send_status, si.sent_at, si.expires_at, si.ended_at, si.end_reason, si.send_error
+        FROM student_invites si WHERE si.user_id = u.user_id ORDER BY si.created_at DESC LIMIT 1) inv ON TRUE
     WHERE cs.class_id = $1 AND s.is_archived IS NOT TRUE
     ORDER BY s.name, s.student_id
   `,
