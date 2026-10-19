@@ -12,16 +12,24 @@
 // student_avatar: the displayed avatar (the login's own pick over the teacher-set one).
 const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
+const { conflictLateral } = require('../services/classroom/emailProblems');
 
+// The latest invite of the login (inv.*) and the first conflict on the
+// student's own address (services/classroom/emailProblems.js conflictLateral).
 const ROW_SELECT = `
 SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_year_id,
        ${studentAvatarSql('s', 'student_avatar')},
        NULLIF(TRIM(CONCAT(h.first_name, ' ', h.last_name)), '') AS homeroom_teacher_name,
        u.user_id, u.email AS account_email, u.is_archived, (u.password = '!') AS invite_pending,
+       (u.google_sub IS NOT NULL) AS has_google,
        u.created_at AS account_created_at, u.last_login_at, u.last_seen_at,
        sa.consent_at, sa.consent_notice_version, NULLIF(TRIM(CONCAT(cb.first_name, ' ', cb.last_name)), '') AS consent_by_name,
        sa.qr_issued_at, sa.qr_voided_at, (sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL) AS qr_active,
-       cf.kind AS conflict_kind, cf.role AS conflict_role
+       sa.activated_at, sa.activated_via,
+       inv.send_status AS invite_send_status, inv.sent_at AS invite_sent_at, inv.expires_at AS invite_expires_at,
+       inv.ended_at AS invite_ended_at, inv.end_reason AS invite_end_reason, inv.send_error AS invite_send_error,
+       cf.kind AS conflict_kind, cf.role AS conflict_role, cf.same_school AS conflict_same_school,
+       cf.other_name AS conflict_other_name, cf.other_grade AS conflict_other_grade
 FROM students s
 LEFT JOIN users h ON h.user_id = s.homeroom_teacher_id
 LEFT JOIN student_account_links sal ON sal.student_id = s.student_id
@@ -29,17 +37,9 @@ LEFT JOIN users u ON u.user_id = sal.user_id
 LEFT JOIN student_accounts sa ON sa.user_id = u.user_id
 LEFT JOIN users cb ON cb.user_id = sa.consent_by
 LEFT JOIN LATERAL (
-  SELECT 'email_in_use' AS kind, x.role::text AS role FROM users x
-   WHERE s.student_email IS NOT NULL AND LOWER(x.email) = LOWER(s.student_email) AND x.user_id IS DISTINCT FROM u.user_id
-  UNION ALL
-  SELECT 'family_address', NULL
-   WHERE s.student_email IS NOT NULL
-     AND LOWER(s.student_email) IN (LOWER(TRIM(COALESCE(s.mother_email, ''))), LOWER(TRIM(COALESCE(s.father_email, ''))))
-  UNION ALL
-  SELECT 'family_address', NULL FROM parent_students ps LEFT JOIN users pu ON pu.user_id = ps.parent_id
-   WHERE ps.student_id = s.student_id AND s.student_email IS NOT NULL
-     AND LOWER(s.student_email) = LOWER(TRIM(COALESCE(pu.email, ps.parent_email, '')))
-  LIMIT 1) cf ON TRUE`;
+  SELECT si.send_status, si.sent_at, si.expires_at, si.ended_at, si.end_reason, si.send_error
+    FROM student_invites si WHERE si.user_id = u.user_id ORDER BY si.created_at DESC LIMIT 1) inv ON TRUE
+${conflictLateral('s', 's.student_email', 'u.user_id')}`;
 
 const studentAccountQueries = {
   //  $1 = school, $2 = school_year_id
@@ -248,6 +248,14 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
            OR EXISTS (SELECT 1 FROM parent_students ps LEFT JOIN users pu ON pu.user_id = ps.parent_id
                        WHERE ps.student_id = s.student_id
                          AND LOWER($2::text) = LOWER(TRIM(COALESCE(pu.email, ps.parent_email, '')))))
+  `,
+
+  //  The roster of one class of the school. $1 = class_id, $2 = school
+  selectClassRosterIds: `
+    SELECT cs.student_id
+    FROM class_students cs
+    JOIN classes c ON c.class_id = cs.class_id
+    WHERE cs.class_id = $1 AND c.school = $2
   `,
 
   //  $1 = student_id

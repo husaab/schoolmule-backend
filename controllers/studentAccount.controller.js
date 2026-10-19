@@ -15,7 +15,7 @@ const { GRADE_CODES } = require('../utils/gradeRank');
 const { getSettings, MAX_NOTICE_VERSION } = require('../services/classroom/classroomSettings');
 const {
   EMAIL_RE,
-  ACCOUNT_STATUSES,
+  STATUS_FILTERS,
   normalizeEmail,
   conflictMessage,
   deriveStatus,
@@ -71,15 +71,18 @@ async function inTransaction(fn) {
   }
 }
 
-// GET /api/admin/student-accounts?grade=&status=&q=
+// GET /api/admin/student-accounts?grade=&status=&q=&classId=
+// status also takes 'needs_attention'; classId keeps one class's roster.
 const listStudentAccounts = async (req, res) => {
   const { school } = req.user;
   const grade = typeof req.query.grade === 'string' ? req.query.grade.trim() : '';
   const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
   const term = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+  const classId = typeof req.query.classId === 'string' ? req.query.classId.trim() : '';
 
   if (grade && !GRADE_CODES.includes(grade)) return failed(res, 400, 'Unknown grade');
-  if (status && !ACCOUNT_STATUSES.includes(status)) return failed(res, 400, 'Unknown account status');
+  if (status && !STATUS_FILTERS.includes(status)) return failed(res, 400, 'Unknown account status');
+  if (classId && !UUID_RE.test(classId)) return failed(res, 400, 'Unknown class');
 
   try {
     const settings = await getSettings(school);
@@ -87,11 +90,15 @@ const listStudentAccounts = async (req, res) => {
     const { rows } = schoolYearId
       ? await db.query(q.selectStudentAccountRows, [school, schoolYearId])
       : { rows: [] };
+    const roster = classId
+      ? new Set((await db.query(q.selectClassRosterIds, [classId, school])).rows.map((r) => r.student_id))
+      : null;
 
     const students = rows
       .map((row) => toStudentAccountRow(row, settings))
+      .filter((s) => !roster || roster.has(s.studentId))
       .filter((s) => !grade || s.grade === grade)
-      .filter((s) => !status || s.status === status)
+      .filter((s) => !status || (status === 'needs_attention' ? s.needsAttention : s.status === status))
       .filter((s) => !term || [s.name, s.studentEmail, s.account?.email]
         .some((v) => typeof v === 'string' && v.toLowerCase().includes(term)));
 

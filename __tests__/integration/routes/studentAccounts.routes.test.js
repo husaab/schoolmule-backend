@@ -141,7 +141,7 @@ describe('Integration: Student accounts', () => {
     expect(res.body.data).toMatchObject({ invited: 0, skipped: 1 });
     expect(res.body.data.results[0]).toEqual({
       studentId: samiId, outcome: 'skipped', reason: 'email_in_use',
-      message: 'Already used by a parent account. Each student needs their own address.',
+      message: 'Already used by a parent account in this school. Each student needs their own address.',
     });
     const { rows } = await pool.query(`SELECT 1 FROM users WHERE role::text = 'STUDENT'`);
     expect(rows).toHaveLength(0);
@@ -232,17 +232,22 @@ describe('Integration: Student accounts', () => {
       },
       qrEligible: true,
       conflict: null,
+      warnings: [],
+      // Task 4 records the invite; until then the login has no invite row.
+      invite: null,
+      signInMethod: null,
+      needsAttention: true,
     });
 
     const sami = rowOf(data, samiId);
-    expect(sami).toMatchObject({ status: 'active', qrEligible: false, conflict: null });
+    expect(sami).toMatchObject({ status: 'active', qrEligible: false, conflict: null, signInMethod: 'password', needsAttention: false });
 
     const rami = rowOf(data, ramiId);
     expect(rami).toMatchObject({
       status: 'not_invited',
       account: null,
       qrEligible: false,
-      conflict: { kind: 'email_in_use', message: 'Already used by a parent account. Each student needs their own address.' },
+      conflict: { kind: 'email_in_use', message: 'Already used by a parent account in this school. Each student needs their own address.' },
     });
 
     expect(rowOf(data, linaId).status).toBe('not_eligible');
@@ -656,5 +661,122 @@ describe('Integration: Student accounts', () => {
       .send({ mappings: [{ fieldId: field.field_id, targetField: 'studentEmail', valueMap: null }] });
     expect(saved.status).toBe(200);
     expect(saved.body.data.mappings[0].targetField).toBe('studentEmail');
+  });
+
+  describe('address checks and invite state on each row (student invitations, Task 3)', () => {
+    // A login as an invite leaves it: the placeholder password, a consent
+    // record, this year's link and (optionally) one invite row.
+    const seedLogin = async (studentId, email, { inviteRow = { send_status: 'sent', expiresIn: '14 days' } } = {}) => {
+      const { rows: [u] } = await pool.query(
+        `INSERT INTO users (email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ($1, 'Seeded Student', '!', 'Seeded', 'Student', 'ALHAADIACADEMY', 'STUDENT', true, true) RETURNING user_id`, [email],
+      );
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_by, consent_at, consent_notice_version, created_by)
+                        VALUES ($1, 'ALHAADIACADEMY', $2, NOW(), '2026-10', $2)`, [u.user_id, ADMIN_ID]);
+      await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id, linked_by) VALUES ($1, $2, $3, $4)`,
+        [u.user_id, studentId, yearId, ADMIN_ID]);
+      if (inviteRow) {
+        await pool.query(
+          `INSERT INTO student_invites (school, user_id, student_id, school_year_id, email, token_hash, expires_at, send_status, sent_at)
+           VALUES ('ALHAADIACADEMY', $1, $2, $3, $4, md5(random()::text), NOW() + $5::interval, $6, NOW())`,
+          [u.user_id, studentId, yearId, email, inviteRow.expiresIn, inviteRow.send_status],
+        );
+      }
+      return u.user_id;
+    };
+    it('two students of one year with one address are both flagged, each naming the other', async () => {
+      await setEmail(ramiId, 'amal.haddad@example.com');
+      const data = await list();
+      expect(rowOf(data, amalId).conflict).toEqual({
+        kind: 'shared_with_student', message: 'Same address as Rami Haddad (Grade 2). Each student needs their own.',
+      });
+      expect(rowOf(data, ramiId).conflict).toEqual({
+        kind: 'shared_with_student', message: 'Same address as Amal Haddad (Grade 2). Each student needs their own.',
+      });
+      // Last year's row of the same child is not a sibling.
+      const lastYear = (await pool.query(
+        `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+         SELECT school, school_id, '2024-2025', '2024-09-01', '2025-06-30', false FROM school_years WHERE school_year_id = $1
+         RETURNING school_year_id`, [yearId],
+      )).rows[0].school_year_id;
+      const samiLastYear = await student('Sami Haddad', '4', { yearId: lastYear, studentEmail: 'sami.haddad@example.com' });
+      expect(samiLastYear).toBeTruthy();
+      expect(rowOf(await list(), samiId).conflict).toBeNull();
+    });
+
+    it("names the role of an account in this school, and never the role of another school's account (R12)", async () => {
+      await setEmail(ramiId, 'mona.haddad@example.com');
+      expect(rowOf(await list(), ramiId).conflict).toEqual({
+        kind: 'email_in_use', message: 'Already used by a parent account in this school. Each student needs their own address.',
+      });
+      await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
+      await pool.query(
+        `INSERT INTO users (email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ('elsewhere@example.com', 'Elsewhere Teacher', 'x', 'Elsewhere', 'Teacher', 'PLAYGROUND', 'TEACHER', true, true)`,
+      );
+      await setEmail(ramiId, 'elsewhere@example.com');
+      expect(rowOf(await list(), ramiId).conflict).toEqual({
+        kind: 'email_in_use', message: 'Already used by another SchoolMule account.',
+      });
+    });
+
+    it('rows carry warnings for an address outside the school domain or not mentioning the student', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET student_email_domains = '{students.example.org}'`);
+      await setEmail(ramiId, 'zaid.m@students.example.org');
+      const data = await list();
+      expect(rowOf(data, amalId).warnings).toEqual([
+        { code: 'outside_domain', message: 'Not a school address (students.example.org)' },
+      ]);
+      expect(rowOf(data, ramiId).warnings).toEqual([
+        { code: 'name_mismatch', message: "This address doesn't mention Rami or Haddad" },
+      ]);
+      expect(rowOf(data, linaId).warnings).toEqual([]);
+    });
+
+    it('an invited login with no invite row, or an expired or failed one, needs attention; ?status=needs_attention lists them', async () => {
+      await seedLogin(amalId, 'amal.haddad@example.com');
+      await seedLogin(samiId, 'sami.haddad@example.com');
+      await seedLogin(ramiId, 'rami.haddad@example.com', { inviteRow: { send_status: 'failed', expiresIn: '14 days' } });
+      await seedLogin(linaId, 'lina.haddad@example.com', { inviteRow: null });
+      await pool.query(`UPDATE school_classroom_settings SET login_from_grade = 'SK'`);
+      const fresh = await list();
+      expect(rowOf(fresh, amalId)).toMatchObject({ status: 'invited', needsAttention: false, signInMethod: null });
+      expect(rowOf(fresh, amalId).invite).toMatchObject({ state: 'pending', expiresAt: expect.any(String), sentAt: expect.any(String) });
+      expect(rowOf(fresh, ramiId)).toMatchObject({ needsAttention: true, invite: { state: 'failed' } });
+      expect(rowOf(fresh, linaId)).toMatchObject({ status: 'invited', needsAttention: true, invite: null });
+
+      await pool.query(
+        `UPDATE student_invites SET expires_at = NOW() - interval '1 minute'
+          WHERE user_id = (SELECT user_id FROM student_account_links WHERE student_id = $1)`, [amalId],
+      );
+      const later = await list();
+      expect(rowOf(later, amalId)).toMatchObject({ needsAttention: true, invite: { state: 'expired' } });
+      expect(rowOf(later, samiId).needsAttention).toBe(false);
+      const attention = await list('?status=needs_attention');
+      expect(attention.students.map((r) => r.studentId).sort()).toEqual([amalId, ramiId, linaId].sort());
+    });
+
+    it('a login activated by its QR card is active with sign-in method card, even with the invite placeholder password', async () => {
+      const userId = await seedLogin(amalId, 'amal.haddad@example.com');
+      await pool.query(`UPDATE student_accounts SET activated_at = NOW(), activated_via = 'card' WHERE user_id = $1`, [userId]);
+      expect(rowOf(await list(), amalId)).toMatchObject({ status: 'active', signInMethod: 'card', needsAttention: false });
+      // Promoted past the card grades (Grade 4 with cards up to Grade 3): it needs attention.
+      await pool.query(`UPDATE students SET grade = '4' WHERE student_id = $1`, [amalId]);
+      expect(rowOf(await list(), amalId)).toMatchObject({ status: 'active', signInMethod: 'card', needsAttention: true });
+      // A password set later makes it a password login.
+      await activate(amalId);
+      expect(rowOf(await list(), amalId)).toMatchObject({ signInMethod: 'password', needsAttention: false });
+    });
+
+    it('?classId= keeps only the class roster, and refuses a malformed id', async () => {
+      const { rows: [c] } = await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+         VALUES ('ALHAADIACADEMY', '2', 'Math', 'Ziad Teacher', $1, $2) RETURNING class_id`, [TEACHER_ID, yearId],
+      );
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2), ($1, $3)`, [c.class_id, amalId, ramiId]);
+      const data = await list(`?classId=${c.class_id}`);
+      expect(data.students.map((r) => r.studentId).sort()).toEqual([amalId, ramiId].sort());
+      expect((await authenticatedRequest('get', `${BASE}?classId=nope`, asAdmin)).status).toBe(400);
+    });
   });
 });

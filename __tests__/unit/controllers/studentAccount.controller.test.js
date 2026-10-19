@@ -158,6 +158,8 @@ describe('PUT /api/admin/classroom-settings', () => {
       summaryDow: 4,
       studentPhotos: true,
       consentNoticeVersion: '2026-11',
+      studentEmailDomains: [],
+      studentSignIn: 'google_or_password',
     });
 
     expect(res.status).toBe(200);
@@ -170,6 +172,8 @@ describe('PUT /api/admin/classroom-settings', () => {
       summaryDow: 4,
       studentPhotos: true,
       consentNoticeVersion: '2026-11',
+      studentEmailDomains: [],
+      studentSignIn: 'google_or_password',
       updatedAt: '2026-10-16T12:00:00.000Z',
     });
   });

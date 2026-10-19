@@ -24,12 +24,16 @@ const { getStudentInviteEmailHTML, getStudentPasswordResetEmailHTML } = require(
 const { renderStudentCardsHTML } = require('../../templates/studentCardsTemplate');
 const { getSettings } = require('./classroomSettings');
 const { issueQrSecret, qrPayload } = require('./studentLogin');
+const { conflictMessage, addressWarnings } = require('./emailProblems');
+const { inviteState } = require('./studentInvites');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The most students one request may act on (invite, cards, void).
 const MAX_STUDENT_BATCH = 200;
 const ACCOUNT_STATUSES = ['not_invited', 'invited', 'active', 'archived', 'not_eligible'];
+// The list's ?status= filter also takes the Needs attention chip.
+const STATUS_FILTERS = [...ACCOUNT_STATUSES, 'needs_attention'];
 const LINK_CONSTRAINTS = new Set(['uq_student_account_links_student', 'student_account_links_pkey']);
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
@@ -54,22 +58,63 @@ const isBelowLoginGrade = (grade, settings) => {
   return rank === null || rank < gradeRank(settings.loginFromGrade);
 };
 
-const ROLE_WORD = { ADMIN: 'an admin', TEACHER: 'a teacher', PARENT: 'a parent', STUDENT: 'a student' };
-
-const conflictMessage = (kind, role) =>
-  kind === 'family_address'
-    ? "This is a parent's address on file. Use the student's own school address."
-    : `Already used by ${ROLE_WORD[role] || 'another'} account. Each student needs their own address.`;
+/** A ROW_SELECT row's conflict as conflictMessage's details. */
+const rowConflict = (row) => ({
+  role: row.conflict_role,
+  sameSchool: row.conflict_same_school,
+  otherName: row.conflict_other_name,
+  otherGrade: row.conflict_other_grade,
+});
 
 /**
  * not_eligible / not_invited when no login is linked (by grade); otherwise
- * archived / invited (password still the invite sentinel) / active.
+ * archived / invited (never signed in: the invite sentinel password and no
+ * activation, e.g. a first QR scan) / active.
  */
 const deriveStatus = (row, settings) => {
   if (!row.user_id) return isBelowLoginGrade(row.grade, settings) ? 'not_eligible' : 'not_invited';
   if (row.is_archived) return 'archived';
-  if (row.invite_pending) return 'invited';
+  if (row.invite_pending && !row.activated_at) return 'invited';
   return 'active';
+};
+
+/** How the login signs in: Google, a password, only the QR card, or not yet. */
+const signInMethodOf = (row) => {
+  if (!row.user_id) return null;
+  if (row.has_google) return 'google';
+  if (!row.invite_pending) return 'password';
+  if (row.activated_via === 'card') return 'card';
+  return null;
+};
+
+/** The login's latest invite, or null. */
+const latestInvite = (row) => (row.invite_expires_at
+  ? {
+    state: inviteState({
+      ended_at: row.invite_ended_at,
+      end_reason: row.invite_end_reason,
+      send_status: row.invite_send_status,
+      expires_at: row.invite_expires_at,
+    }),
+    sentAt: iso(row.invite_sent_at),
+    expiresAt: iso(row.invite_expires_at),
+    endedAt: iso(row.invite_ended_at),
+    error: row.invite_send_status === 'failed' ? (row.invite_send_error || 'The email could not be sent') : null,
+  }
+  : null);
+
+/**
+ * Something for the office to do: an invite that didn't go out, expired or
+ * was cancelled (or a login with no invite at all), or a card-only student
+ * whose grade no longer uses the card.
+ */
+const needsAttentionOf = ({ status, invite, signInMethod, grade }, settings) => {
+  if (status === 'invited') return !invite || invite.state !== 'pending';
+  if (status === 'active' && signInMethod === 'card') {
+    const rank = gradeRank(grade);
+    return rank === null || rank > gradeRank(settings.qrUntilGrade);
+  }
+  return false;
 };
 
 /** A QR card goes to a student with a login (invited or active) at or below the school's QR grade ceiling. */
@@ -81,6 +126,8 @@ const isQrEligible = (status, grade, settings) => {
 /** selectStudentAccountRow(s) row → StudentAccountRow. */
 const toStudentAccountRow = (row, settings) => {
   const status = deriveStatus(row, settings);
+  const signInMethod = signInMethodOf(row);
+  const invite = row.user_id ? latestInvite(row) : null;
   return {
     studentId: row.student_id,
     name: row.name,
@@ -104,7 +151,13 @@ const toStudentAccountRow = (row, settings) => {
         }
       : null,
     qrEligible: isQrEligible(status, row.grade, settings),
-    conflict: row.conflict_kind ? { kind: row.conflict_kind, message: conflictMessage(row.conflict_kind, row.conflict_role) } : null,
+    conflict: row.conflict_kind ? { kind: row.conflict_kind, message: conflictMessage(row.conflict_kind, rowConflict(row)) } : null,
+    warnings: row.student_email
+      ? addressWarnings(row.student_email, row.name, settings.studentEmailDomains).map(({ code, message }) => ({ code, message }))
+      : [],
+    invite,
+    signInMethod,
+    needsAttention: needsAttentionOf({ status, invite, signInMethod, grade: row.grade }, settings),
   };
 };
 
@@ -336,7 +389,7 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
     return skipped(studentId, 'below_login_grade', `Student logins start at ${gradeLabel(settings.loginFromGrade)}.`);
   }
   if (student.conflict_kind) {
-    return skipped(studentId, student.conflict_kind, conflictMessage(student.conflict_kind, student.conflict_role));
+    return skipped(studentId, student.conflict_kind, conflictMessage(student.conflict_kind, rowConflict(student)));
   }
 
   const { firstName, lastName } = splitName(student.name);
@@ -402,6 +455,7 @@ module.exports = {
   EMAIL_RE,
   MAX_STUDENT_BATCH,
   ACCOUNT_STATUSES,
+  STATUS_FILTERS,
   normalizeEmail,
   splitName,
   isBelowLoginGrade,
