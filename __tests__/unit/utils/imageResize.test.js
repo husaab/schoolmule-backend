@@ -119,3 +119,19 @@ describe('normalizeUploadedFiles', () => {
     expect(renameFor('a.webp', 'webp')).toBe('a.webp');
   });
 });
+
+describe('without sharp', () => {
+  it('a server whose sharp binary failed to load still boots and stores uploads unchanged', async () => {
+    const input = await phonePhoto();
+    let mod;
+    jest.isolateModules(() => {
+      jest.doMock('sharp', () => { throw new Error('Could not load the "sharp" module'); });
+      mod = require('../../../utils/imageResize');
+    });
+    expect(await mod.normalizeImage(input, 'image/jpeg')).toBeNull();
+    const files = [{ originalname: 'a.jpg', mimetype: 'image/jpeg', buffer: input, size: input.length }];
+    await mod.normalizeUploadedFiles(files);
+    expect(files[0].buffer).toBe(input);
+    jest.dontMock('sharp');
+  });
+});
