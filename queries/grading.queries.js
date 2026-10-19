@@ -411,6 +411,56 @@ const gradingQueries = {
     LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
     WHERE i.item_id = $1 AND (sub.draft_status = 'excused' OR sa.status = 'excused')`,
 
+  //  Fable I1 / post-Fable m1: the item's students whose draft is held (made
+  //  before the work was taken back or turned in again). $1 item_id
+  selectHeldStudents: `
+    SELECT sub.student_id
+    FROM classwork_submissions sub
+    JOIN classwork_items i ON i.item_id = sub.item_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE sub.item_id = $1 AND sub.draft_predates_work AND ${IN_ITEM_AUDIENCE}
+    ORDER BY sub.student_id`,
+
+  //  A Grades publish of a turn-in column (post-Fable m1): a held student's
+  //  gradebook cell can only be the grade from before the column was
+  //  unpublished by hand (a held draft is never published), so publishing
+  //  the column must not show it again. The cell goes back to a draft (the
+  //  draft wins when there is one, so the teacher's draft is never dropped)
+  //  and the earlier publish of that work is withdrawn, so its feedback stays
+  //  hidden too. Inside publishAssessments, after the columns are locked.
+  //  $1 item_id, $2 assessment_id, $3 student_id[] (the held students)
+  holdCellsAsDrafts: `
+    WITH moved AS (
+      DELETE FROM student_assessments sa
+      WHERE sa.assessment_id = $2 AND sa.student_id = ANY($3::uuid[])
+      RETURNING sa.student_id, sa.score, sa.status
+    )
+    UPDATE classwork_submissions sub
+    SET draft_score = CASE WHEN sub.draft_score IS NULL AND sub.draft_status IS NULL
+                           THEN CASE WHEN m.status = 'missing' THEN NULL ELSE m.score END ELSE sub.draft_score END,
+        draft_status = CASE WHEN sub.draft_score IS NULL AND sub.draft_status IS NULL
+                            THEN m.status ELSE sub.draft_status END,
+        updated_at = NOW()
+    FROM moved m
+    WHERE sub.item_id = $1 AND sub.student_id = m.student_id`,
+  //  $1 item_id, $2 student_id[] (the held students)
+  withdrawHeldPublish: `
+    UPDATE classwork_submissions SET published_at = NULL, updated_at = NOW()
+    WHERE item_id = $1 AND student_id = ANY($2::uuid[]) AND published_at IS NOT NULL`,
+
+  //  The cells a Grades publish will hold back (holdCellsAsDrafts), as
+  //  (student, column) pairs, so its preview, cascade and digest leave them
+  //  out. $1 class_id
+  selectHeldCells: `
+    SELECT sub.student_id, i.assessment_id
+    FROM classwork_items i
+    JOIN classwork_submissions sub ON sub.item_id = i.item_id
+    JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
+    JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
+    WHERE i.class_id = $1 AND i.assessment_id IS NOT NULL AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL
+      AND sub.draft_predates_work AND ${IN_ITEM_AUDIENCE}`,
+
   //  The live turn-in items among these columns (publishAssessments).
   //  $1 class_id, $2 assessment_id[]
   selectTurnInItemsForAssessments: `

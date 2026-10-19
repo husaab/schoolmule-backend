@@ -465,7 +465,7 @@ describe('Integration: grading and per-student Publish', () => {
 
     const res = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
       .send({ assessmentIds: [homeworkId, testId] }), 201);
-    expect(res.data.classworkPublished).toEqual([{ assessmentId: columnId, itemId: item.itemId, studentCount: 2 }]);
+    expect(res.data.classworkPublished).toEqual([{ assessmentId: columnId, itemId: item.itemId, studentCount: 2, skipped: [] }]);
     expect(await gradebook()).toEqual(
       [{ student_id: amalId, score: 8, status: 'graded' }, { student_id: bilalId, score: 6, status: 'graded' }]
         .sort((x, y) => x.student_id.localeCompare(y.student_id)),
@@ -908,7 +908,7 @@ describe('Integration: grading and per-student Publish', () => {
 
         // The gradebook's own Publish of the column releases both, as on main.
         const res = await trayPublish([colId]);
-        expect(res.data.classworkPublished).toEqual([{ assessmentId: colId, itemId: makeUp.itemId, studentCount: 1 }]);
+        expect(res.data.classworkPublished).toEqual([{ assessmentId: colId, itemId: makeUp.itemId, studentCount: 1, skipped: [] }]);
         expect(await gradebook(colId)).toEqual(
           [{ student_id: amalId, score: 5, status: 'graded' }, { student_id: daliaId, score: 7, status: 'graded' }]
             .sort((x, y) => x.student_id.localeCompare(y.student_id)),
@@ -1299,6 +1299,46 @@ describe('Integration: grading and per-student Publish', () => {
       expect(out).toMatchObject({ publishedStudentIds: [amalId], skipped: [] });
       expect(await cell(amalId)).toEqual({ student_id: amalId, score: 6, status: 'graded' });
       expect((await studentItem(asAmal)).grade).toMatchObject({ score: 6, feedback: 'Redo question 3' });
+    });
+
+    it('m1: a column unpublished by hand, the work turned in again, then a Grades publish: the old grade stays a held draft, unannounced', async () => {
+      await patch(amalId, { draftScore: 6, feedback: 'Redo question 3' });
+      await publish([amalId]);
+      expect((await studentItem(asAmal)).grade).toMatchObject({ score: 6, feedback: 'Redo question 3' });
+      await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [columnId] });
+
+      // Amal takes the work back and turns in a new one; Bilal is graded meanwhile.
+      await unsubmit(item.itemId, asAmal);
+      await turnIn(item.itemId, asAmal);
+      expect(await rowOf(amalId)).toMatchObject({ draftPredatesWork: true, needsPublish: false });
+      await patch(bilalId, { draftScore: 8 });
+
+      // The Grades preview counts only Bilal's family.
+      const preview = (await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [homeworkId] })).data;
+      expect(preview.studentCount).toBe(1);
+
+      // The whole column published in Grades: Amal is skipped like "Publish to N"; her old grade and feedback stay hidden.
+      getResend().emails.send.mockClear();
+      const res = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+        .send({ assessmentIds: [homeworkId] }), 201);
+      expect(res.data.classworkPublished).toEqual([{
+        assessmentId: columnId, itemId: item.itemId, studentCount: 1, skipped: [{ studentId: amalId, reason: 'draft_predates_work' }],
+      }]);
+      expect(await isPublished()).toBe(true);
+      expect(await cell(amalId)).toBeUndefined();
+      expect(await cell(bilalId)).toEqual({ student_id: bilalId, score: 8, status: 'graded' });
+      expect((await studentItem(asAmal)).grade).toBeNull();
+      expect(await studentGrade(asAmal)).toBeNull();
+      expect(parentScore(await parentGrades(asParentA, amalId))?.score ?? null).toBeNull();
+      expect(sent().flatMap((m) => m.to)).toEqual(['rania.karim@example.com']);
+      // The teacher's draft and feedback are kept, still held.
+      expect(await submission(amalId)).toMatchObject({ draft_score: 6, draft_status: 'graded', feedback: 'Redo question 3', published_at: null });
+      expect(await rowOf(amalId)).toMatchObject({ draftPredatesWork: true, needsPublish: false, draftScore: 6 });
+
+      // Re-confirmed, then published for the new work.
+      await patch(amalId, { feedback: 'Better: question 3 is right now.' });
+      expect((await publish([amalId])).data.publishedStudentIds).toEqual([amalId]);
+      expect((await studentItem(asAmal)).grade).toMatchObject({ score: 6, feedback: 'Better: question 3 is right now.' });
     });
 
     it('I1: a typed score, Mark missing or Excuse re-confirms; lifting an excuse does not; work with no column is held too', async () => {

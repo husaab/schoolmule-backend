@@ -270,12 +270,20 @@ const previewPublish = async (req, res) => {
  * to the class. Returns everything the publish/preview paths need.
  */
 async function resolveSelection(classId, assessmentIds) {
-  const [{ rows: requested }, { rows: allAssessments }, { rows: scoreRows }, { rows: pendingDrafts }] = await Promise.all([
+  const [{ rows: requested }, { rows: allAssessments }, { rows: cellRows }, { rows: pendingDrafts }, { rows: held }] = await Promise.all([
     db.query(publishQueries.selectAssessmentsInClass, [classId, assessmentIds]),
     db.query(publishQueries.selectAllAssessmentsInClass, [classId]),
     db.query(publishQueries.selectClassScoreRows, [classId]),
     db.query(gradingQueries.selectPendingDrafts, [classId]),
+    db.query(gradingQueries.selectHeldCells, [classId]),
   ]);
+  // A held draft's student (Fable I1, post-Fable m1): the cell on that
+  // turn-in column is the grade from before the new work, which Publish
+  // holds back (holdCellsAsDrafts), so every figure reads it as blank.
+  const heldPairs = new Set(held.map((h) => `${h.student_id}:${h.assessment_id}`));
+  const scoreRows = heldPairs.size === 0 ? cellRows : cellRows.map((r) => (heldPairs.has(`${r.student_id}:${r.assessment_id}`)
+    ? { ...r, score: null, status: 'graded', is_excluded: false }
+    : r));
 
   if (requested.length !== assessmentIds.length) {
     const found = new Set(requested.map((a) => a.assessment_id));
@@ -404,6 +412,8 @@ const publishAssessments = async (req, res) => {
   // transaction (spec D3), so "Publish" means the same here and in Classwork.
   const classworkPublished = [];
   const classworkStudents = new Map();
+  // A held student's old cell went back to a draft (post-Fable m1).
+  let heldAny = false;
 
   try {
     const resolved = await resolveSelection(classId, assessmentIds);
@@ -448,6 +458,17 @@ const publishAssessments = async (req, res) => {
         cascade.finalIds,
       ]);
       for (const row of turnInItems) {
+        // A held draft (Fable I1) is skipped exactly as "Publish to N" skips
+        // it, and the grade from before the column was unpublished by hand
+        // goes back to a draft instead of showing again (post-Fable m1).
+        // The columns are locked (markPublished) before the submissions.
+        const { rows: heldRows } = await client.query(gradingQueries.selectHeldStudents, [row.item_id]);
+        const heldIds = heldRows.map((h) => h.student_id);
+        if (heldIds.length > 0) {
+          await client.query(gradingQueries.holdCellsAsDrafts, [row.item_id, row.assessment_id, heldIds]);
+          await client.query(gradingQueries.withdrawHeldPublish, [row.item_id, heldIds]);
+          heldAny = true;
+        }
         const result = await publishSubmissions(client, {
           item: { ...row, is_published: true },
           studentIds: 'graded',
@@ -458,6 +479,7 @@ const publishAssessments = async (req, res) => {
           assessmentId: row.assessment_id,
           itemId: row.item_id,
           studentCount: result.publishedStudentIds.length,
+          skipped: heldIds.map((studentId) => ({ studentId, reason: 'draft_predates_work' })),
         });
         if (result.publishedStudentIds.length > 0) classworkStudents.set(row.item_id, result.publishedStudentIds);
       }
@@ -493,7 +515,7 @@ const publishAssessments = async (req, res) => {
     // Classwork drafts were copied under lock inside the transaction: the
     // email reads the committed gradebook, so it says exactly what was
     // published (a draft edited meanwhile is never emailed unpublished).
-    if (classworkStudents.size > 0) {
+    if (classworkStudents.size > 0 || heldAny) {
       const { rows: committedRows } = await db.query(publishQueries.selectClassScoreRows, [classId]);
       committedScoreRows = groupScoreRowsByStudent(committedRows);
     }
