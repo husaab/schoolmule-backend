@@ -279,6 +279,14 @@ describe('Integration: student sign-in', () => {
     expect(me.body).toMatchObject({ success: false, code: 'QR_INVALID' });
     // Signing in with the password is a different session: it carries on.
     expect((await withToken('get', '/api/student/me', byPassword)).status).toBe(200);
+    // Its own profile too (re-review N4): the voided card's session can't change the avatar or photo.
+    const avatar = await withToken('put', '/api/profile/avatar', fromCard).send({ avatar: { style: 'long', skin: 1, bg: 2 } });
+    expect(avatar.status).toBe(401);
+    expect(avatar.body).toMatchObject({ code: 'QR_INVALID' });
+    expect((await withToken('get', '/api/profile', fromCard)).status).toBe(401);
+    expect((await withToken('delete', '/api/profile/photo', fromCard)).status).toBe(401);
+    expect((await pool.query(`SELECT avatar FROM users WHERE user_id = $1`, [AMAL_USER])).rows[0].avatar).toBeNull();
+    expect((await withToken('put', '/api/profile/avatar', byPassword).send({ avatar: { style: 'long', skin: 1, bg: 2 } })).status).toBe(200);
 
     // A new card: its session works; reprinting replaces the card and ends that session too.
     const second = await issueCard(AMAL_USER);
