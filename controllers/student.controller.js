@@ -321,5 +321,7 @@ module.exports = {
   getArchivedStudents,
   archiveStudent,
   unarchiveStudent,
-  getAllStudentsWithArchived
+  getAllStudentsWithArchived,
+  // Shared with studentOverview.controller so the profile's student shape matches.
+  toCamel
 };
