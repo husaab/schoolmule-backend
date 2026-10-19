@@ -438,6 +438,26 @@ describe('Integration: classroom teacher read API', () => {
       expect(byId[ramiId].parents).toEqual([]);
     });
 
+    it("S3: guardians on the student record (mother/father email) are parents too, as the Stream's email counts say", async () => {
+      await parentLink(amalId, { parentId: MONA_ID, name: 'Mona H.', email: 'mona.haddad@example.com', relation: 'Mother' });
+      // Amal's record also names her mother (the same address, another case) and her father.
+      await pool.query(
+        `UPDATE students SET mother_name = 'Mona Haddad', mother_email = 'Mona.Haddad@example.com',
+                             father_name = 'Karim Haddad', father_email = 'karim.haddad@example.com' WHERE student_id = $1`, [amalId],
+      );
+      // Rami has nobody linked, only a mother's address on his record.
+      await pool.query(`UPDATE students SET mother_name = 'Lina Haddad', mother_email = 'lina.haddad@example.com' WHERE student_id = $1`, [ramiId]);
+
+      const res = await get(`${BASE}/classes/${sciId}/people`);
+      const byId = Object.fromEntries(res.body.data.students.map((s) => [s.studentId, s]));
+      expect(byId[amalId].parents).toEqual([
+        { name: 'Mona Haddad', relation: 'Mother', hasAccount: true },
+        { name: 'Karim Haddad', relation: 'Father', hasAccount: false },
+      ]);
+      expect(byId[ramiId].parents).toEqual([{ name: 'Lina Haddad', relation: 'Mother', hasAccount: false }]);
+      expect(JSON.stringify(res.body)).not.toContain('lina.haddad@example.com');
+    });
+
     it('a parent with no name on file shows as "Parent" and the address never leaves the server', async () => {
       await parentLink(ramiId, { email: 'only.address@example.com' });
       const res = await get(`${BASE}/classes/${sciId}/people`);

@@ -191,20 +191,35 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
   `,
 
   //  The roster. Each student with the linked login (if any), the displayed
-  //  avatar (login pick over the teacher-set one) and every parent on file;
-  //  the service dedupes parents by address. $1 class_id
+  //  avatar (login pick over the teacher-set one) and every parent on file:
+  //  the linked parents, then the mother and father on the student record
+  //  (S3: the same guardians the Stream's "who gets emails" counts, matched
+  //  to an account by address). The service dedupes parents by address,
+  //  keeping the account holder's copy. $1 class_id
   selectPeopleStudents: `
     SELECT s.student_id, s.name, s.grade::text AS grade, ${studentAvatarSql('s')},
            u.user_id, u.is_archived, (u.password = '!') AS invite_pending, u.last_seen_at,
            COALESCE((SELECT json_agg(json_build_object(
-                       'name', COALESCE(NULLIF(TRIM(CONCAT(pu.first_name, ' ', pu.last_name)), ''), NULLIF(TRIM(ps.parent_name), '')),
-                       'relation', NULLIF(TRIM(ps.relation), ''),
-                       'hasAccount', pu.user_id IS NOT NULL,
-                       'emailKey', LOWER(TRIM(COALESCE(pu.email, ps.parent_email, ''))))
-                     ORDER BY (pu.user_id IS NOT NULL) DESC, ps.created_at, ps.parent_student_link_id)
-                     FROM parent_students ps
-                     LEFT JOIN users pu ON pu.user_id = ps.parent_id
-                    WHERE ps.student_id = s.student_id), '[]') AS parents,
+                       'name', g.name, 'relation', g.relation, 'hasAccount', g.has_account, 'emailKey', g.email_key)
+                     ORDER BY g.has_account DESC, g.src, g.created_at, g.link_id)
+                     FROM (
+                       SELECT COALESCE(NULLIF(TRIM(CONCAT(pu.first_name, ' ', pu.last_name)), ''), NULLIF(TRIM(ps.parent_name), '')) AS name,
+                              NULLIF(TRIM(ps.relation), '') AS relation, pu.user_id IS NOT NULL AS has_account,
+                              LOWER(TRIM(COALESCE(pu.email, ps.parent_email, ''))) AS email_key,
+                              0 AS src, ps.created_at, ps.parent_student_link_id::text AS link_id
+                       FROM parent_students ps
+                       LEFT JOIN users pu ON pu.user_id = ps.parent_id
+                       WHERE ps.student_id = s.student_id
+                       UNION ALL
+                       SELECT COALESCE(NULLIF(TRIM(CONCAT(ru.first_name, ' ', ru.last_name)), ''), NULLIF(TRIM(r.name), '')),
+                              r.relation, ru.user_id IS NOT NULL, LOWER(TRIM(r.email)), 1, NULL::timestamptz, r.relation
+                       FROM (VALUES ('Mother', s.mother_name, s.mother_email), ('Father', s.father_name, s.father_email)) AS r(relation, name, email)
+                       LEFT JOIN LATERAL (
+                         SELECT gu.user_id, gu.first_name, gu.last_name FROM users gu
+                         WHERE LOWER(gu.email) = LOWER(TRIM(r.email)) AND gu.school = s.school AND gu.is_archived IS NOT TRUE
+                         ORDER BY gu.user_id LIMIT 1) ru ON TRUE
+                       WHERE TRIM(COALESCE(r.email, '')) <> ''
+                     ) g), '[]') AS parents,
            ${PEOPLE_MISSING} AS missing_count
     FROM class_students cs
     JOIN students s ON s.student_id = cs.student_id
