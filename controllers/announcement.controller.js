@@ -21,6 +21,7 @@ const { getSchoolName } = require('../utils/schoolUtils');
 const { BUCKET, SIGNED_URL_TTL, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 const { scopeLabel } = require('../utils/announcementScope');
 const { canMutate } = require('../middleware/requireAnnouncementAccess');
+const { authorPhotoUrls } = require('../services/profile/photos');
 
 const MAX_TITLE = 120;
 const MAX_BODY = 5000;
@@ -138,6 +139,8 @@ const toListItem = (r, user) => {
     authorId: r.author_id ?? null,
     authorName: r.author_name || 'SchoolMule',
     authorRole: r.author_role,
+    authorAvatar: r.author_avatar ?? null,
+    authorPhotoUrl: r.author_photo_url ?? null,
     publishedAt: r.published_at,
     pinnedUntil: r.pinned_until ?? null,
     isPinned: Boolean(r.is_pinned),
@@ -169,7 +172,8 @@ const toListItem = (r, user) => {
 const fromAccess = (ann) => ({
   announcement_id: ann.announcementId, scope: ann.scope, class_id: ann.classId, class_subject: ann.classSubject,
   class_grade: ann.classGrade, grade: ann.grade, title: ann.title, body: ann.body, author_id: ann.authorId,
-  author_name: ann.authorName, author_role: ann.authorRole, published_at: ann.publishedAt, pinned_until: ann.pinnedUntil,
+  author_name: ann.authorName, author_role: ann.authorRole, author_avatar: ann.authorAvatar, author_photo_path: ann.authorPhotoPath,
+  published_at: ann.publishedAt, pinned_until: ann.pinnedUntil,
   is_pinned: ann.isPinned, edited_at: ann.editedAt, attachment_count: ann.attachmentCount,
   ack_requested: ann.ackRequested, acked_at: ann.ackedAt, student_count: ann.studentCount, student_names_preview: ann.studentNamesPreview,
   send_email: ann.sendEmail,
@@ -244,7 +248,11 @@ const list = async (req, res) => {
       const { rows: f } = await db.query(q.selectFailedEmailAnnouncements, [rows.map((r) => r.announcement_id)]);
       failedSet = new Set(f.map((r) => r.announcement_id));
     }
-    const items = rows.map((r) => ({ ...toListItem(r, req.user), ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.announcement_id) } : {}) }));
+    const photos = await authorPhotoUrls(rows);
+    const items = rows.map((r) => ({
+      ...toListItem({ ...r, author_photo_url: photos.get(r.author_id) }, req.user),
+      ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.announcement_id) } : {}),
+    }));
     return res.status(200).json({ status: 'success', data: items });
   } catch (error) {
     logger.error('Error listing announcements:', error);
@@ -473,11 +481,13 @@ const get = async (req, res) => {
   const ann = req.announcement;
   const user = req.user;
   try {
-    const [attachments, readRes] = await Promise.all([
+    const row = fromAccess(ann);
+    const [attachments, readRes, photos] = await Promise.all([
       signedAttachments(ann.announcementId),
       db.query('SELECT read_at FROM announcement_reads WHERE announcement_id = $1 AND user_id = $2', [ann.announcementId, user.userId]),
+      authorPhotoUrls([row]),
     ]);
-    const item = toListItem({ ...fromAccess(ann), read: readRes.rows.length > 0 }, user);
+    const item = toListItem({ ...row, author_photo_url: photos.get(row.author_id), read: readRes.rows.length > 0 }, user);
     if (!isStaff(user)) return res.status(200).json({ status: 'success', data: { ...item, attachments } });
 
     const [{ rows: receipts }, { rows: [stats] }, { rows: picked }, { rows: [studentCounts] }] = await Promise.all([
@@ -587,9 +597,11 @@ const update = async (req, res) => {
         }
       }
     }
+    const row = fromAccess(ann);
+    const photos = await authorPhotoUrls([row]);
     const item = toListItem({
-      ...fromAccess(ann), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true, ack_requested: ackRequested,
-      student_count: studentIds ? studentIds.length : ann.studentCount,
+      ...row, author_photo_url: photos.get(row.author_id), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true,
+      ack_requested: ackRequested, student_count: studentIds ? studentIds.length : ann.studentCount,
     }, req.user);
     return res.status(200).json({ status: 'success', data: { ...item, attachments: await signedAttachments(ann.announcementId) } });
   } catch (error) {

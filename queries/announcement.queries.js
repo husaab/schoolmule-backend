@@ -127,6 +127,7 @@ const BASE_COLUMNS = `
   TO_CHAR(a.pinned_until, 'YYYY-MM-DD') AS pinned_until,  -- DATE as the YYYY-MM-DD the API promises, not a JS Date
   cl.subject AS class_subject, cl.grade AS class_grade,
   TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
+  au.avatar AS author_avatar, au.photo_path AS author_photo_path,
   ${IS_PINNED} AS is_pinned,
   (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
   (SELECT COUNT(*) FROM announcement_students x JOIN students xs ON xs.student_id = x.student_id
@@ -530,7 +531,7 @@ const announcementQueries = {
   // ── Student feed (T12 reuses it for the parent lens with the parent as reader) ──
   // $1 student_id, $2 school, $3 school_year_id, $4 class_id|null, $5 reader user_id, $6 limit
   listStudentAnnouncements: `
-    SELECT ${BASE_COLUMNS}, au.avatar AS author_avatar, au.photo_path AS author_photo_path,
+    SELECT ${BASE_COLUMNS},
            (r.user_id IS NOT NULL) AS read, k.acked_at
     ${BASE_FROM}
     LEFT JOIN announcement_reads r ON r.announcement_id = a.announcement_id AND r.user_id = $5

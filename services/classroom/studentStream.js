@@ -9,7 +9,7 @@
 
 const db = require('../../config/database');
 const q = require('../../queries/announcement.queries');
-const { signedPhotoUrl } = require('../profile/photos');
+const { authorPhotoUrls } = require('../profile/photos');
 
 const REMOVED = { status: 'failed', code: 'REMOVED', message: 'This announcement was removed' };
 const NOT_FOUND = { status: 'failed', message: 'Announcement not found' };
@@ -37,14 +37,6 @@ function toStudentAnnouncement(row, attachments = [], photoUrl = null) {
     ackRequested: Boolean(row.ack_requested),
     ackedAt: row.acked_at ?? null,
   };
-}
-
-/** Signed photo URLs for the authors who have a photo (adults: never gated), one signing per author. */
-async function authorPhotoUrls(rows) {
-  const paths = new Map();
-  for (const r of rows) if (r.author_id && r.author_photo_path) paths.set(r.author_id, r.author_photo_path);
-  const entries = await Promise.all([...paths].map(async ([id, path]) => [id, await signedPhotoUrl(path)]));
-  return new Map(entries);
 }
 
 /**

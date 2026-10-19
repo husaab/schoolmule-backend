@@ -60,4 +60,16 @@ async function removePhotoObject(path) {
   }
 }
 
-module.exports = { BUCKET, SIGNED_URL_TTL, STUDENT_PHOTOS_OFF, photosAllowed, signedPhotoUrl, photoUrlFor, removePhotoObject };
+/**
+ * Signed photo URLs for the authors of these rows who have a photo (adults:
+ * never gated), one signing per author. Rows carry author_id and author_photo_path.
+ * @returns {Promise<Map<string, string|null>>} author_id → URL
+ */
+async function authorPhotoUrls(rows) {
+  const paths = new Map();
+  for (const r of rows) if (r.author_id && r.author_photo_path) paths.set(r.author_id, r.author_photo_path);
+  const entries = await Promise.all([...paths].map(async ([id, path]) => [id, await signedPhotoUrl(path)]));
+  return new Map(entries);
+}
+
+module.exports = { BUCKET, SIGNED_URL_TTL, STUDENT_PHOTOS_OFF, photosAllowed, signedPhotoUrl, photoUrlFor, removePhotoObject, authorPhotoUrls };

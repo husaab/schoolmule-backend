@@ -112,6 +112,19 @@ describe('Integration: Announcements', () => {
     expect(zahra).toMatchObject({ userId: null, relation: 'Mother', studentNames: ['Zayd Test'], state: 'no-account' });
   });
 
+  it("list and detail carry the author's avatar (null when none is picked)", async () => {
+    const id = (await postClass(asTeacher)).body.data.announcementId;
+    let item = (await authenticatedRequest('get', '/api/announcements', asMom)).body.data[0];
+    expect(item).toMatchObject({ authorName: 'Teacher One', authorAvatar: null, authorPhotoUrl: null });
+
+    await pool.query(`UPDATE users SET avatar = '{"style":"beard","skin":2,"bg":5}' WHERE user_id = $1`, [TEACHER_ID]);
+    item = (await authenticatedRequest('get', '/api/announcements', asMom)).body.data[0];
+    expect(item.authorAvatar).toEqual({ style: 'beard', skin: 2, bg: 5 });
+    const detail = (await authenticatedRequest('get', `/api/announcements/${id}`, asMom)).body.data;
+    expect(detail.authorAvatar).toEqual({ style: 'beard', skin: 2, bg: 5 });
+    expect(detail.authorPhotoUrl).toBeNull();
+  });
+
   it('read marks, unread counts and the badge', async () => {
     const id = (await postClass(asTeacher)).body.data.announcementId;
     let badge = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', asMom);

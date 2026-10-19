@@ -29,6 +29,8 @@ const accessRowToAnnouncement = (r) => ({
   authorId: r.author_id,
   authorRole: r.author_role,
   authorName: r.author_name || 'SchoolMule',
+  authorAvatar: r.author_avatar ?? null,
+  authorPhotoPath: r.author_photo_path ?? null,
   publishedAt: r.published_at,
   pinnedUntil: r.pinned_until,
   isPinned: Boolean(r.is_pinned),
