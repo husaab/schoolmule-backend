@@ -7,7 +7,7 @@ const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
 const { v4: uuidv4 } = require("uuid");
 const { identityOf, optionsOf } = require("../services/classroom/classView");
-const { copyAttachments } = require("../services/classroom/classworkItems");
+const { copyAttachments, copyQuizContent } = require("../services/classroom/classworkItems");
 const { removeObjects } = require("../utils/attachmentUpload");
 
 // ── Shared helper: fetch additional teachers for a single class ──
@@ -826,6 +826,10 @@ const duplicateClass = async (req, res) => {
       await copyAttachments(client, {
         fromItemId: item.item_id, toItemId: newItemId, school: sourceClass.school, userId: copiedBy, copied: copiedFiles,
       });
+      // A quiz comes with its questions and settings, never its students' work (T23).
+      if (item.kind === 'quiz') {
+        await copyQuizContent(client, { fromItemId: item.item_id, toItemId: newItemId, school: sourceClass.school, copied: copiedFiles });
+      }
     }
 
     // 5) Copy student enrollments

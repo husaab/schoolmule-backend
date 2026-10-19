@@ -176,6 +176,94 @@ const quizQueries = {
     JOIN classes c ON c.class_id = i.class_id
     WHERE qa.answer_id = $1`,
 
+  // ── The quiz's own score on the submission (fix round 1) ───────────────
+  //
+  // The quiz writes the score only while score_set_by_teacher is false: a
+  // score a teacher typed (grading view, grid: grading.queries'
+  // upsertDraftScore / syncLiveSubmission set the flag) always wins. These
+  // writes leave the flag false.
+
+  //  The quiz's draft. A changed draft is unpublished again (needs a Publish).
+  //  $1 item_id, $2 student_id, $3 score, $4 status ('graded'), $5 graded_by
+  writeQuizDraft: `
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, score_set_by_teacher, updated_at)
+    VALUES ($1, $2, $3::numeric, $4::text, $5, FALSE, NOW())
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        score_set_by_teacher = FALSE,
+        published_at = CASE WHEN (classwork_submissions.draft_score, classwork_submissions.draft_status)
+                                 IS DISTINCT FROM (EXCLUDED.draft_score, EXCLUDED.draft_status)
+                            THEN NULL ELSE classwork_submissions.published_at END,
+        updated_at = NOW()`,
+
+  //  The submission mirrors the quiz's live write on a published column
+  //  (D17): the draft equals the cell and the work counts as published.
+  //  $1 item_id, $2 student_id, $3 score, $4 status, $5 graded_by
+  syncQuizLive: `
+    UPDATE classwork_submissions
+    SET draft_score = $3::numeric, draft_status = $4::text, graded_by = $5, score_set_by_teacher = FALSE,
+        published_at = COALESCE(published_at, NOW()), published_by = COALESCE(published_by, $5), updated_at = NOW()
+    WHERE item_id = $1 AND student_id = $2`,
+
+  //  Back to the quiz's score: the teacher's typed score no longer wins. $1 item_id, $2 student_id
+  clearTeacherScore: `
+    UPDATE classwork_submissions SET score_set_by_teacher = FALSE, updated_at = NOW() WHERE item_id = $1 AND student_id = $2`,
+
+  //  A turned-in attempt is new, unpublished work: whatever was published
+  //  before (feedback, a confirmed Missing) no longer releases it (I1).
+  //  $1 submission_id
+  unpublishSubmission: `
+    UPDATE classwork_submissions SET published_at = NULL, published_by = NULL, updated_at = NOW() WHERE submission_id = $1`,
+
+  //  Whether this student's results are released: their work was published
+  //  AFTER the attempt was turned in (an on-submit release stamps both with
+  //  the transaction's instant, hence >=), and whether a teacher typed the
+  //  score. Compared in SQL, to the microsecond. $1 item_id, $2 student_id
+  selectRelease: `
+    SELECT (qt.submitted_at IS NOT NULL AND sub.published_at IS NOT NULL AND sub.published_at >= qt.submitted_at) AS released,
+           COALESCE(sub.score_set_by_teacher, FALSE) AS score_set_by_teacher
+    FROM quiz_attempts qt
+    LEFT JOIN classwork_submissions sub ON sub.item_id = qt.item_id AND sub.student_id = qt.student_id
+    WHERE qt.item_id = $1 AND qt.student_id = $2`,
+
+  //  $1 item_id, $2 student_id
+  selectScoreSetByTeacher: `
+    SELECT COALESCE(score_set_by_teacher, FALSE) AS score_set_by_teacher
+    FROM classwork_submissions WHERE item_id = $1 AND student_id = $2`,
+
+  //  The highest score in the quiz's column that a key change won't
+  //  recompute: typed by a teacher, or held by a student with no turned-in
+  //  attempt (a grade entered in the grid, a student the quiz isn't for).
+  //  $1 item_id, $2 assessment_id
+  selectKeptTop: `
+    SELECT MAX(x.score)::float AS top FROM (
+      SELECT sub.student_id, sub.draft_score AS score FROM classwork_submissions sub WHERE sub.item_id = $1
+      UNION ALL
+      SELECT sa.student_id, sa.score FROM student_assessments sa WHERE sa.assessment_id = $2
+    ) x
+    LEFT JOIN classwork_submissions s2 ON s2.item_id = $1 AND s2.student_id = x.student_id
+    WHERE x.score IS NOT NULL
+      AND (COALESCE(s2.score_set_by_teacher, FALSE)
+           OR NOT EXISTS (SELECT 1 FROM quiz_attempts qt WHERE qt.item_id = $1 AND qt.student_id = x.student_id AND qt.submitted_at IS NOT NULL))`,
+
+  //  Has any student started the quiz? $1 item_id
+  selectHasAttempts: `SELECT EXISTS (SELECT 1 FROM quiz_attempts WHERE item_id = $1) AS has_attempts`,
+
+  //  Has any student turned in, been graded or been published on this item? $1 item_id
+  selectHasStudentWork: `
+    SELECT EXISTS (SELECT 1 FROM classwork_submissions
+                   WHERE item_id = $1 AND (turned_in_at IS NOT NULL OR published_at IS NOT NULL
+                                           OR draft_score IS NOT NULL OR draft_status IS NOT NULL)) AS has_work`,
+
+  // ── Copies (fix round 1) ────────────────────────────────────────────────
+
+  //  The copy takes the source quiz's settings. $1 copy item_id, $2 source item_id
+  copyQuizSettings: `
+    UPDATE classwork_items t
+    SET quiz_release = s.quiz_release, quiz_shuffle = s.quiz_shuffle, quiz_show_answers = s.quiz_show_answers
+    FROM classwork_items s
+    WHERE t.item_id = $1 AND s.item_id = $2`,
+
   //  A quiz's column takes the quiz's points as its "out of". $1 assessment_id, $2 max_score
   setColumnMax: `
     UPDATE assessments SET max_score = $2::numeric, last_modified_at = NOW()

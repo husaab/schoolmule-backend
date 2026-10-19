@@ -97,18 +97,20 @@ function parseOverride(body) {
 }
 
 // PATCH /api/classroom/quiz-answers/:answerId  { teacherPoints: number | null, teacherNote? }
-// → { answer, totals: { earned, possible, needsReview } }
+// → { answer, totals: { earned, possible, needsReview }, scoreSetByTeacher }
+// (scoreSetByTeacher: a typed score holds the student's grade, so the new
+// total did not replace it; POST …/submissions/:studentId/quiz-score does).
 const updateQuizAnswer = async (req, res) => {
   const { answerId, itemId } = req.quizAnswer;
   const { school } = req.class;
   const parsed = parseOverride(req.body);
   if (parsed.error) return failed(res, 400, parsed.error);
   try {
-    const { answer, totals, wroteLive } = await quizzes.overrideAnswer({
+    const { answer, totals, wroteLive, scoreSetByTeacher } = await quizzes.overrideAnswer({
       answerId, itemId, userId: req.user.userId, ...parsed.value,
     });
     if (wroteLive) engine.invalidateCache(school);
-    return ok(res, { answer, totals });
+    return ok(res, { answer, totals, scoreSetByTeacher });
   } catch (error) {
     return fail(res, error, 'Error saving the points', { answerId });
   }
@@ -172,6 +174,4 @@ const submitStudentQuiz = async (req, res) => {
 module.exports = {
   getQuestions, putQuestions, uploadQuestionImage, updateQuizAnswer,
   getStudentQuiz, startStudentQuiz, saveStudentAnswers, submitStudentQuiz,
-  // exported for unit testing
-  parseOverride,
 };

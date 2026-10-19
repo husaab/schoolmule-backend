@@ -46,6 +46,10 @@ const MESSAGES = Object.freeze({
   OVERRIDE_ABOVE: (n, points) => `A score you gave on question ${n} is above its ${points} points. Change it first.`,
   NOT_SUBMITTED: "This quiz isn't turned in yet.",
   POINTS_RANGE: (max) => `Points must be from 0 to ${max}`,
+  KEPT_ABOVE: (total) => `Some grades on students' work are above ${total}, the quiz's new total. Change them in the grading view first.`,
+  NO_COLUMN: "This quiz isn't in the gradebook, so it has no score to use.",
+  STILL_TO_GRADE: 'Grade the written answers first, then use the quiz score.',
+  STUDENT_NOT_FOUND: 'Student not found',
   // The student's.
   STUDENT_NOT_A_QUIZ: "This isn't a quiz.",
   SUBMITTED: "You've already turned in this quiz.",
@@ -179,29 +183,35 @@ const sameTotals = (x, y) => Boolean(x) && Boolean(y) && x.earned === y.earned &
 
 /**
  * The score a quiz leaves for one student, in the caller's transaction (the
- * column already locked). `mode`: 'submit' (always a draft: the score waits
- * for Publish), 'override' (live on a published column, D17, as a typed
- * score), 'regrade' (live only for a student whose grade is already
- * published; otherwise their draft follows). `earned` null clears the draft
- * (written answers still to grade). An excused student keeps the excuse.
- * Nothing for a quiz with no column or a student the item is not for.
- * @returns {Promise<boolean>} whether the gradebook was written live
+ * column already locked), once nothing is left to grade by hand (`earned`
+ * null: nothing is written, the cell is left as it is). `mode`: 'submit'
+ * (always a draft: the score waits for Publish), 'override' (live on a
+ * published column, D17, as a typed score), 'regrade' (live only for a
+ * student whose grade is already published; otherwise their draft follows).
+ * A score a teacher typed (score_set_by_teacher) always wins: the quiz never
+ * overwrites it (fix round 1; POST …/quiz-score goes back to the quiz's
+ * score). An excused student keeps the excuse. Nothing for a quiz with no
+ * column or a student the item is not for.
+ * @returns {Promise<{ live: boolean, kept: boolean, wrote: boolean }>}
+ *   live: the gradebook was written live; kept: a teacher's typed score stayed
  */
 async function writeScore(client, { item, studentId, isPublished, earned, mode, userId = null }) {
-  if (!item.assessment_id) return false;
+  const none = { live: false, kept: false, wrote: false };
+  if (!item.assessment_id || earned === null) return none;
   const { rows: [inAudience] } = await client.query(gradingQ.selectAudienceIds, [item.item_id, [studentId]]);
-  if (!inAudience) return false;
+  if (!inAudience) return none;
   await client.query(gradingQ.ensureSubmission, [item.item_id, studentId]);
   const { rows: [cur] } = await client.query(gradingQ.lockSubmission, [item.item_id, studentId]);
-  if (cur.draft_status === 'excused' || cur.live_status === 'excused') return false;
-  const live = earned !== null && isPublished && (mode === 'override' || (mode === 'regrade' && Boolean(cur.published_at)));
+  if (cur.score_set_by_teacher) return { ...none, kept: true };
+  if (cur.draft_status === 'excused' || cur.live_status === 'excused') return none;
+  const live = isPublished && (mode === 'override' || (mode === 'regrade' && Boolean(cur.published_at)));
   if (live) {
     const { rows: [cell] } = await client.query(gradingQ.upsertStudentAssessment, [studentId, item.assessment_id, earned, 'graded']);
-    await client.query(gradingQ.syncLiveSubmission, [item.item_id, studentId, cell.score, cell.status, userId]);
-    return true;
+    await client.query(q.syncQuizLive, [item.item_id, studentId, cell.score, cell.status, userId]);
+    return { live: true, kept: false, wrote: true };
   }
-  await client.query(gradingQ.upsertDraftScore, [item.item_id, studentId, earned, earned === null ? null : 'graded', userId]);
-  return false;
+  await client.query(q.writeQuizDraft, [item.item_id, studentId, earned, 'graded', userId]);
+  return { live: false, kept: false, wrote: true };
 }
 
 /** The machine's points for these answers, written where they changed; returns the answers with them. */
@@ -250,7 +260,7 @@ async function regrade(client, { item, isPublished, before, beforeQuestions, que
     if (num(attempt.auto_score) !== autoScore) await client.query(q.updateAutoScore, [attempt.attempt_id, autoScore]);
     const totals = scoring.attemptTotals(questions, mine);
     if (sameTotals(before.get(attempt.attempt_id), totals) || totals.needsReview) continue;
-    const live = await writeScore(client, { item, studentId: attempt.student_id, isPublished, earned: totals.earned, mode: 'regrade', userId });
+    const { live } = await writeScore(client, { item, studentId: attempt.student_id, isPublished, earned: totals.earned, mode: 'regrade', userId });
     wroteLive = wroteLive || live;
   }
   return wroteLive;
@@ -318,6 +328,12 @@ async function saveQuestions({ itemId, school, userId, input }) {
     let gradebookChanged = false;
     const total = totalPointsOf(questions);
     if (item.assessment_id && total > 0) {
+      // A score the quiz won't recompute (typed by a teacher, or a grid grade
+      // with no attempt) must fit the new "out of" (T16's DRAFT_ABOVE_MAX).
+      const { rows: [kept] } = await client.query(q.selectKeptTop, [itemId, item.assessment_id]);
+      if (kept?.top !== null && kept?.top !== undefined && kept.top > total) {
+        throw httpError(409, MESSAGES.KEPT_ABOVE(total), 'DRAFT_ABOVE_MAX');
+      }
       const { rows } = await client.query(q.setColumnMax, [item.assessment_id, total]);
       gradebookChanged = rows.length > 0;
     }
@@ -363,12 +379,53 @@ async function overrideAnswer({ answerId, itemId, userId, teacherPoints, setNote
       client.query(q.selectAttemptAnswers, [attempt.attempt_id]),
     ]);
     const totals = scoring.attemptTotals(questions, answers);
-    const wroteLive = totals.needsReview ? false : await writeScore(client, {
-      item, studentId: attempt.student_id, isPublished, earned: totals.earned, mode: 'override', userId,
+    const { live: wroteLive } = await writeScore(client, {
+      item, studentId: attempt.student_id, isPublished, earned: totals.needsReview ? null : totals.earned, mode: 'override', userId,
     });
+    const scoreSetByTeacher = await scoreSetByTeacherOf(client, item, attempt.student_id);
     const answer = answers.find((a) => a.answer_id === answerId);
     const question = questions.find((qq) => qq.question_id === answer.question_id);
-    return { answer: toTeacherAnswer(question, answer), totals, wroteLive };
+    return { answer: toTeacherAnswer(question, answer), totals, wroteLive, scoreSetByTeacher };
+  });
+}
+
+/** Whether a teacher's typed score holds the student's quiz score (only with a gradebook column). */
+async function scoreSetByTeacherOf(runner, item, studentId) {
+  if (!item.assessment_id) return false;
+  const { rows: [r] } = await runner.query(q.selectScoreSetByTeacher, [item.item_id, studentId]);
+  return Boolean(r?.score_set_by_teacher);
+}
+
+/**
+ * POST …/submissions/:studentId/quiz-score: back to the quiz's own score.
+ * The teacher's typed score stops winning, and the quiz total applies now
+ * (live on a published column, D17, as an override; else a draft). Needs a
+ * turned-in attempt with nothing left to grade by hand.
+ * @returns {Promise<{ wroteLive: boolean }>}
+ */
+async function useQuizScore({ itemId, studentId, userId }) {
+  return inTransaction(async (client) => {
+    const { rows: [locked] } = await client.query(q.lockItemShare, [itemId]);
+    if (!locked) throw httpError(404, MESSAGES.ITEM_NOT_FOUND);
+    const item = await loadQuizItem(client, itemId);
+    if (!item.assessment_id) throw httpError(400, MESSAGES.NO_COLUMN);
+    const { rows: [a] } = await client.query(gradingQ.lockAssessmentUpdate, [item.assessment_id]);
+    const isPublished = Boolean(a?.is_published);
+    const { rows: [inAudience] } = await client.query(gradingQ.selectAudienceIds, [itemId, [studentId]]);
+    if (!inAudience) throw httpError(404, MESSAGES.STUDENT_NOT_FOUND);
+    const { rows: [attempt] } = await client.query(q.lockAttempt, [itemId, studentId]);
+    if (!attempt?.submitted_at) throw httpError(409, MESSAGES.NOT_SUBMITTED);
+    const [{ rows: questions }, { rows: answers }] = await Promise.all([
+      client.query(q.selectQuestions, [itemId]),
+      client.query(q.selectAttemptAnswers, [attempt.attempt_id]),
+    ]);
+    const totals = scoring.attemptTotals(questions, answers);
+    if (totals.needsReview) throw httpError(409, MESSAGES.STILL_TO_GRADE);
+    await client.query(gradingQ.ensureSubmission, [itemId, studentId]);
+    await client.query(gradingQ.lockSubmission, [itemId, studentId]);
+    await client.query(q.clearTeacherScore, [itemId, studentId]);
+    const { live } = await writeScore(client, { item, studentId, isPublished, earned: totals.earned, mode: 'override', userId });
+    return { wroteLive: live };
   });
 }
 
@@ -382,12 +439,15 @@ async function loadQuizDetail(itemId, studentId, runner = db) {
   ]);
   const byQ = new Map(answers.map((a) => [a.question_id, a]));
   const totals = scoring.attemptTotals(questions, answers);
+  const { rows: [item] } = await runner.query(q.selectQuizItem, [itemId]);
   return {
     attemptId: attempt.attempt_id,
     submittedAt: iso(attempt.submitted_at),
     earned: totals.earned,
     possible: totals.possible,
     needsReview: totals.needsReview,
+    // A typed score holds the gradebook cell; `earned` is still the quiz's own total.
+    scoreSetByTeacher: item ? await scoreSetByTeacherOf(runner, item, studentId) : false,
     answers: orderQuestions(questions, attempt.question_order).map((qq) => toTeacherAnswer(qq, byQ.get(qq.question_id))),
   };
 }
@@ -433,15 +493,16 @@ async function ensureAttempt(client, { row, quiz, studentId }) {
 }
 
 /**
- * Results are the quiz's feedback: visible with the grade (spec 0.8) once the
- * student's work is published (Feedback visible: published_at set). The
- * published_at check matters when the column already showed a grade for the
- * student (a score typed before the quiz): the new attempt's score is a
- * draft until Publish, so its results wait too. With no column, once the
- * work is published.
+ * Results (score, per-question points, the key) are released only by a
+ * Publish for this student AFTER the attempt was turned in (controller
+ * ruling, fix round 1): whatever was published before it (feedback, a
+ * confirmed Missing) never releases them. An on-submit release is such a
+ * Publish (publishSubmissions in the submit's transaction). With a column,
+ * the grade must be visible too (spec 0.8): unpublished in Grades, hidden.
+ * `released` is selectRelease's, compared in SQL.
  */
-function resultsVisible(row, attempt) {
-  if (!attempt?.submitted_at || !row.sub_published_at) return false;
+function resultsVisible(row, release) {
+  if (!release?.released) return false;
   if (row.assessment_id) return Boolean(row.grade_visible) && row.grade_status === 'graded';
   return true;
 }
@@ -457,21 +518,29 @@ async function buildStudentQuiz({ studentId, school, itemId }, runner = db) {
     runner.query(q.selectStudentQuestions, [itemId]),
     runner.query(q.selectAttempt, [itemId, studentId]),
   ]);
-  const answers = attempt ? (await runner.query(q.selectAttemptAnswers, [attempt.attempt_id])).rows : [];
+  const [answers, release] = attempt ? await Promise.all([
+    runner.query(q.selectAttemptAnswers, [attempt.attempt_id]).then((r) => r.rows),
+    runner.query(q.selectRelease, [itemId, studentId]).then((r) => r.rows[0]),
+  ]) : [[], null];
   const ordered = orderQuestions(questions, attempt?.question_order);
   const urls = await imageUrls(ordered);
   const w = toWork(row);
 
   let results = null;
-  if (resultsVisible(row, attempt)) {
+  if (resultsVisible(row, release)) {
     const totals = scoring.attemptTotals(questions, answers);
     const byQ = new Map(answers.map((a) => [a.question_id, a]));
     const key = quiz.quiz_show_answers
       ? new Map((await runner.query(q.selectQuestions, [itemId])).rows.map((k) => [k.question_id, k]))
       : null;
+    const setByTeacher = Boolean(row.assessment_id && release.score_set_by_teacher);
     results = {
       earned: totals.earned,
       possible: totals.possible,
+      // The score that counts (the published grade; with no column, the
+      // quiz's total), and whether the teacher set it by hand.
+      score: row.assessment_id ? num(row.grade_score) : totals.earned,
+      scoreSetByTeacher: setByTeacher,
       perQuestion: ordered.map((qq) => {
         const a = byQ.get(qq.question_id);
         const out = { questionId: qq.question_id, points: a ? scoring.effectivePoints(a) : null, note: a?.teacher_note ?? null };
@@ -632,10 +701,16 @@ async function submitQuiz({ studentId, school, itemId }) {
     await client.query(workQ.ensureSubmission, [itemId, studentId]);
     const { rows: [sub] } = await client.query(workQ.lockSubmission, [itemId, studentId]);
     await client.query(workQ.turnIn, [sub.submission_id]);
-    await writeScore(client, { item: quiz, studentId, isPublished, earned: totals.needsReview ? null : totals.earned, mode: 'submit' });
+    // The attempt is new work: nothing published before it releases it (I1).
+    await client.query(q.unpublishSubmission, [sub.submission_id]);
+    const quizScore = await writeScore(client, {
+      item: quiz, studentId, isPublished, earned: totals.needsReview ? null : totals.earned, mode: 'submit',
+    });
 
     let published = { publishedStudentIds: [], assessmentPublished: false, batchId: null };
-    if (onSubmit && !totals.needsReview) {
+    // Released on submit: published at once, unless a teacher's typed score
+    // holds the cell (that stays theirs to publish).
+    if (onSubmit && !totals.needsReview && (!quiz.assessment_id || quizScore.wrote)) {
       const item = { item_id: itemId, class_id: quiz.class_id, assessment_id: quiz.assessment_id, is_published: isPublished };
       try {
         published = await publishSubmissions(client, { item, studentIds: [studentId], userId: null, school });
@@ -652,20 +727,16 @@ async function submitQuiz({ studentId, school, itemId }) {
 }
 
 module.exports = {
-  MESSAGES,
   imagePrefixOf,
-  orderQuestions,
-  toQuestion,
-  toTeacherAnswer,
   loadQuizItem,
   loadBuilder,
   saveQuestions,
   overrideAnswer,
+  useQuizScore,
   loadQuizDetail,
   buildStudentQuiz,
   startQuiz,
   parseAnswersBody,
-  normalizeAnswer,
   saveAnswers,
   submitQuiz,
 };

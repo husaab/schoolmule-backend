@@ -335,8 +335,10 @@ const classroomEmailQueries = {
   //  Every grade that reached the login since $2 (spec D6), minus what an
   //  earlier graded email already carried. Two sources, one row each:
   //  - work published to the student on Classwork (a submission published,
-  //    feedback included), keyed by submission and publish instant; only on
-  //    an item the student can see (ITEM_VISIBLE);
+  //    feedback included), keyed by submission and publish instant. A grade
+  //    reaches every student on the roster whose grade it released (their
+  //    Grades page shows it), the item's feedback only one they can open
+  //    (ITEM_VISIBLE; item_visible false links to the Grades page);
   //  - a whole gradebook column published in Grades (a plain assessment, or
   //    a student a turn-in item isn't for), keyed by column and its publish
   //    instant; never a live edit of an already-published column (D17).
@@ -353,9 +355,9 @@ const classroomEmailQueries = {
              i.item_id, i.kind, COALESCE(a.name, i.title) AS title, c.subject, a.max_score,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
-             sub.feedback,
+             CASE WHEN ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')} THEN sub.feedback END AS feedback,
              ${TEACHER_NAME('gb', 'tu')} AS teacher_name,
-             TRUE AS item_visible
+             ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')} AS item_visible
       FROM students s
       ${STUDENT_EMAIL_FROM('s')}
       JOIN classwork_submissions sub ON sub.student_id = s.student_id AND sub.published_at > $2::timestamptz
@@ -367,8 +369,9 @@ const classroomEmailQueries = {
       LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
       WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
         AND ${FEEDBACK_VISIBLE}
-        AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
-        AND (${GRADE_VISIBLE} OR sub.feedback IS NOT NULL)
+        AND i.deleted_at IS NULL
+        AND EXISTS (SELECT 1 FROM class_students ro WHERE ro.class_id = c.class_id AND ro.student_id = s.student_id)
+        AND (${GRADE_VISIBLE} OR (sub.feedback IS NOT NULL AND ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}))
         AND NOT (${GRADE_VISIBLE} AND sa.status = 'missing')
       UNION ALL
       SELECT 'col:' || a.assessment_id::text, ${PUBLISHED_KEY('a.published_at')}, a.published_at,

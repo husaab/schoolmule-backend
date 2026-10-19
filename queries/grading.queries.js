@@ -12,7 +12,7 @@
 
 const { studentAvatarSql } = require('../utils/avatar');
 const {
-  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE,
+  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED,
 } = require('./workState');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
@@ -32,6 +32,8 @@ const GRADING_ROWS = `
 SELECT s.student_id, s.name, ${studentAvatarSql('s')},
        sub.submission_id, sub.turned_in_at, COALESCE(sub.is_late, FALSE) AS sub_is_late, sub.text_answer,
        sub.draft_score, sub.draft_status, sub.feedback, sub.published_at AS sub_published_at,
+       COALESCE(sub.score_set_by_teacher, FALSE) AS score_set_by_teacher,
+       (i.kind = 'quiz' AND NOT ${QUIZ_GRADED}) AS quiz_needs_review,
        ${WORK_STATE_SQL} AS work_status,
        ${GRADE_VISIBLE} AS grade_visible,
        CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS visible_score,
@@ -92,7 +94,7 @@ const gradingQueries = {
     INSERT INTO classwork_submissions (item_id, student_id) VALUES ($1, $2)
     ON CONFLICT (item_id, student_id) DO NOTHING`,
   lockSubmission: `
-    SELECT sub.submission_id, sub.draft_score, sub.draft_status, sub.feedback, sub.published_at,
+    SELECT sub.submission_id, sub.draft_score, sub.draft_status, sub.feedback, sub.published_at, sub.score_set_by_teacher,
            sa.score AS live_score, sa.status AS live_status,
            (sa.student_id IS NOT NULL AND ${SA_HAS_GRADE}) AS live_has_grade
     FROM classwork_submissions sub
@@ -101,10 +103,13 @@ const gradingQueries = {
     WHERE sub.item_id = $1 AND sub.student_id = $2
     FOR UPDATE OF sub`,
 
-  //  A draft write. A cleared cell (no score, no flag) is no draft at all,
-  //  unless the gradebook still holds a grade for the student (a column
-  //  unpublished after a publish): then it is an explicit clear for the next
-  //  Publish. A changed draft is unpublished again (it needs a Publish).
+  //  A teacher's draft write (the grading view, the grid). A cleared cell
+  //  (no score, no flag) is no draft at all, unless the gradebook still holds
+  //  a grade for the student (a column unpublished after a publish): then it
+  //  is an explicit clear for the next Publish. A changed draft is
+  //  unpublished again (it needs a Publish). A typed score marks the
+  //  submission score_set_by_teacher: on a quiz it then wins over the quiz's
+  //  own score (T23 fix round 1); the quiz writes through quiz.queries.
   //  $1 item_id, $2 student_id, $3 score|null, $4 status|null, $5 graded_by
   upsertDraftScore: `
     WITH v AS (
@@ -114,27 +119,31 @@ const gradingQueries = {
                                         WHERE i.item_id = $1 AND sa.student_id = $2 AND ${SA_HAS_GRADE})
                   THEN NULL ELSE COALESCE($4::text, 'graded') END AS status
     )
-    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, updated_at)
-    SELECT $1, $2, v.score, v.status, $5, NOW() FROM v
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, score_set_by_teacher, updated_at)
+    SELECT $1, $2, v.score, v.status, $5, v.score IS NOT NULL, NOW() FROM v
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        score_set_by_teacher = EXCLUDED.score_set_by_teacher,
         published_at = CASE WHEN (classwork_submissions.draft_score, classwork_submissions.draft_status)
                                  IS DISTINCT FROM (EXCLUDED.draft_score, EXCLUDED.draft_status)
                             THEN NULL ELSE classwork_submissions.published_at END,
         updated_at = NOW()
     RETURNING student_id, draft_score, draft_status`,
 
-  //  The submission mirrors a live gradebook write (the assessment is
-  //  published): the draft equals the cell and the work counts as published.
-  //  A cleared cell (no score, no flag) is no draft, so the work is back in
-  //  To review. $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
+  //  The submission mirrors a teacher's live gradebook write (the assessment
+  //  is published): the draft equals the cell and the work counts as
+  //  published. A cleared cell (no score, no flag) is no draft, so the work
+  //  is back in To review. A typed score marks score_set_by_teacher (see
+  //  upsertDraftScore). $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
   syncLiveSubmission: `
-    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, published_at, published_by, updated_at)
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, published_at, published_by,
+                                       score_set_by_teacher, updated_at)
     VALUES ($1, $2, $3::numeric,
             CASE WHEN $3::numeric IS NULL AND COALESCE($4::text, 'graded') = 'graded' THEN NULL ELSE $4::text END,
-            $5, NOW(), $5, NOW())
+            $5, NOW(), $5, $3::numeric IS NOT NULL, NOW())
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        score_set_by_teacher = EXCLUDED.score_set_by_teacher,
         published_at = COALESCE(classwork_submissions.published_at, NOW()),
         published_by = COALESCE(classwork_submissions.published_by, EXCLUDED.published_by),
         updated_at = NOW()`,
@@ -218,11 +227,14 @@ const gradingQueries = {
                      WHERE i.item_id = $1 AND ${IN_ITEM_AUDIENCE})
       RETURNING sa.student_id, sa.score, sa.status
     )
-    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, updated_at)
-    SELECT $1, m.student_id, CASE WHEN m.status = 'missing' THEN NULL ELSE m.score END, m.status, NOW() FROM moved m
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, score_set_by_teacher, updated_at)
+    SELECT $1, m.student_id, CASE WHEN m.status = 'missing' THEN NULL ELSE m.score END, m.status,
+           m.status <> 'missing' AND m.score IS NOT NULL, NOW() FROM moved m
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = CASE WHEN classwork_submissions.draft_score IS NULL AND classwork_submissions.draft_status IS NULL
                            THEN EXCLUDED.draft_score ELSE classwork_submissions.draft_score END,
+        score_set_by_teacher = CASE WHEN classwork_submissions.draft_score IS NULL AND classwork_submissions.draft_status IS NULL
+                                    THEN EXCLUDED.score_set_by_teacher ELSE classwork_submissions.score_set_by_teacher END,
         draft_status = CASE WHEN classwork_submissions.draft_score IS NULL AND classwork_submissions.draft_status IS NULL
                             THEN EXCLUDED.draft_status ELSE classwork_submissions.draft_status END,
         published_at = NULL,

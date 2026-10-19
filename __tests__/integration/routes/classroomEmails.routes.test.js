@@ -654,6 +654,21 @@ describe('Integration: classroom emails', () => {
     expect(sent()[0].html).not.toContain('7/10');
   });
 
+  it("a Grades publish of a draft on work a student can't open yet emails the grade, not the feedback, linked to Grades", async () => {
+    // Still a draft item: Amal can't open it, but her grade shows on her Grades page once published.
+    const item = await assignment({ title: 'Seed journal', status: 'draft', gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
+    await patchReq(`/api/classroom/items/${item.itemId}/submissions/${amalId}`, { draftScore: 8, feedback: 'Neat labels.' });
+    await post(`/api/assessment-publications/classes/${sciId}/publish`, { assessmentIds: [item.gradebook.assessmentId] }, asTeacher, 201);
+    const job = (await jobs('graded')).find((r) => r.recipient_email === 'amal.haddad@example.com');
+    getResend().emails.send.mockClear();
+    expect((await processJob(job)).outcome).toBe('sent');
+    const [email] = sent();
+    expect(text(email.html)).toContain('Seed journal · Science 8/10');
+    expect(email.html).not.toContain('Neat labels.');
+    expect(email.html).toContain('http://localhost:3000/student/grades');
+    expect(email.html).not.toContain(`/student/items/${item.itemId}`);
+  });
+
   it('processing renders and sends through the school sender with no teacher Reply-To', async () => {
     await pool.query(`UPDATE schools SET email_reply_to = '{office@example.org}' WHERE school_code = 'ALHAADIACADEMY'`);
     await pool.query(`UPDATE users SET avatar = '{"style":"kufi","skin":1,"bg":3}' WHERE user_id = $1`, [TEACHER_ID]);

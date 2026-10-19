@@ -1963,3 +1963,5 @@ CREATE TABLE IF NOT EXISTS quiz_answers (
   graded_at       TIMESTAMPTZ,
   CONSTRAINT uq_quiz_answer UNIQUE (attempt_id, question_id)
 );
+CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers(question_id);
+ALTER TABLE classwork_submissions ADD COLUMN IF NOT EXISTS score_set_by_teacher BOOLEAN NOT NULL DEFAULT FALSE;

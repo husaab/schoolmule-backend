@@ -108,6 +108,8 @@ router.post("/classes/:classId/copy", requireClassOwnership, classwork.copyFromC
 router.get("/items/:itemId/submissions", requireClassroomResource("item"), grading.listSubmissions);
 router.get("/items/:itemId/submissions/:studentId", requireClassroomResource("item"), grading.getSubmission);
 router.patch("/items/:itemId/submissions/:studentId", requireClassroomResource("item"), grading.updateSubmission);
+// A quiz: back to the quiz's own score after a teacher typed one (T23).
+router.post("/items/:itemId/submissions/:studentId/quiz-score", requireClassroomResource("item"), grading.useQuizScore);
 router.post("/items/:itemId/publish", requireClassroomResource("item"), grading.publish);
 router.post("/items/:itemId/mark-missing", requireClassroomResource("item"), grading.markMissing);
 router.post("/items/:itemId/excuse", requireClassroomResource("item"), grading.excuse);

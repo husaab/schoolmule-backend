@@ -393,7 +393,7 @@ describe('Integration: quizzes', () => {
     ]);
     const { data } = await submit(item.itemId);
     expect(data.results).toEqual({
-      earned: 3, possible: 5,
+      earned: 3, possible: 5, score: 3, scoreSetByTeacher: false,
       perQuestion: [
         { questionId: questions[0].questionId, points: 2, note: null },
         { questionId: questions[1].questionId, points: 0, note: null },
@@ -468,6 +468,7 @@ describe('Integration: quizzes', () => {
     expect(graded.data).toEqual({
       answer: expect.objectContaining({ answerId: written.answerId, teacherPoints: 2.5, teacherNote: 'Good: rigid. Add: protection.', autoPoints: null }),
       totals: { earned: 4.5, possible: 5, needsReview: false },
+      scoreSetByTeacher: false,
     });
     expect(await submission(item.itemId, amalId)).toMatchObject({ draft_score: 4.5, draft_status: 'graded', published_at: null });
     expect((await studentQuiz(item.itemId)).results).toBeNull();
@@ -475,7 +476,7 @@ describe('Integration: quizzes', () => {
     await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
     quiz = await studentQuiz(item.itemId);
     expect(quiz.results).toEqual({
-      earned: 4.5, possible: 5,
+      earned: 4.5, possible: 5, score: 4.5, scoreSetByTeacher: false,
       perQuestion: [
         { questionId: questions[0].questionId, points: 2, note: null },
         { questionId: questions[1].questionId, points: 2.5, note: 'Good: rigid. Add: protection.' },
@@ -680,6 +681,237 @@ describe('Integration: quizzes', () => {
     await submit(item.itemId, asBilal);
     expect((await studentQuiz(item.itemId, asBilal)).results).toMatchObject({ earned: 0, possible: 3 });
     expect((await pool.query(`SELECT COUNT(*)::int AS n FROM student_assessments WHERE student_id = ANY($1::uuid[])`, [[amalId, bilalId]])).rows[0].n).toBe(0);
+  });
+
+  it('submitting never releases results or the key: only a Publish for the student after the submission does (fix round 1, I1)', async () => {
+    // The reviewer's probe: no gradebook column, right answers shown once
+    // published, after review; Amal's feedback published before she takes it.
+    const { item, questions } = await quizWith([ONE], { gradebook: { mode: 'none' }, quizShowAnswers: true });
+    await patch(`/api/classroom/items/${item.itemId}/submissions/${amalId}`, { feedback: 'Read pages 4 to 6 first.' });
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+    expect((await submission(item.itemId, amalId)).published_at).not.toBeNull();
+
+    await answer(item.itemId, [{ questionId: questions[0].questionId, answer: { choice: 'a' } }]);
+    const { data } = await submit(item.itemId);
+    expect(data.results).toBeNull();
+    expectNoKey(data);
+    expectNoKey(await studentQuiz(item.itemId));
+    // The attempt is unpublished work: counted in "Publish N", labelled Turned in.
+    const list = (await get(`/api/classroom/items/${item.itemId}/submissions`)).data;
+    expect(list.students.find((s) => s.studentId === amalId)).toMatchObject({ needsPublish: true, label: 'Turned in' });
+    expect(list.counts.drafts).toBe(1);
+    // A Publish after the submission releases the results and the key.
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+    const released = await studentQuiz(item.itemId);
+    expect(released.results).toMatchObject({ earned: 0, possible: 2, perQuestion: [{ points: 0, correct: ['b'] }] });
+
+    // Linked too: Amal's work was published before her attempt (a confirmed
+    // Missing on the published column); her late attempt's results and key
+    // wait for a Publish after it.
+    const linked = await quizWith([ONE, SHORT], { quizShowAnswers: true });
+    await post(`/api/classroom/items/${linked.item.itemId}/mark-missing`, { studentIds: [amalId] });
+    expect(await cell(linked.item.gradebook.assessmentId, amalId)).toEqual({ score: null, status: 'missing' });
+    await answer(linked.item.itemId, [{ questionId: linked.questions[0].questionId, answer: { choice: 'b' } }]);
+    const late = await submit(linked.item.itemId);
+    expect(late.data.results).toBeNull();
+    expectNoKey(late);
+    await post(`/api/classroom/items/${linked.item.itemId}/publish`, { studentIds: [amalId] });
+    expect((await studentQuiz(linked.item.itemId)).results).toMatchObject({ earned: 2, perQuestion: [{ correct: ['b'] }, { correct: ['cytoplasm'] }] });
+  });
+
+  it("a key change never releases or overwrites a not-yet-published student's draft on a published column", async () => {
+    const { item, questions } = await quizWith([ONE, SHORT]);
+    for (const who of [asAmal, asBilal]) {
+      await answer(item.itemId, [{ questionId: questions[0].questionId, answer: { choice: 'b' } }], who);
+      await submit(item.itemId, who);
+    }
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] }); // column published, Bilal's still a draft
+    await putQuestions(item.itemId, [{ ...ONE, questionId: questions[0].questionId, correct: ['a'] }, { ...SHORT, questionId: questions[1].questionId }]);
+    expect(await cell(item.gradebook.assessmentId, amalId)).toEqual({ score: 0, status: 'graded' }); // published: follows live
+    expect(await cell(item.gradebook.assessmentId, bilalId)).toBeUndefined(); // not published: still a draft
+    expect(await submission(item.itemId, bilalId)).toMatchObject({ draft_score: 0, published_at: null });
+    expect((await studentQuiz(item.itemId, asBilal)).results).toBeNull();
+  });
+
+  it('results hide again while the column is unpublished in Grades', async () => {
+    const { item, questions } = await quizWith([ONE]);
+    await answer(item.itemId, [{ questionId: questions[0].questionId, answer: { choice: 'b' } }]);
+    await submit(item.itemId);
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+    expect((await studentQuiz(item.itemId)).results).toMatchObject({ earned: 2 });
+    await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [item.gradebook.assessmentId] }, asTeacher, 200);
+    expect((await studentQuiz(item.itemId)).results).toBeNull();
+  });
+
+  it('a score the teacher typed always wins: regrades and overrides keep it, and it can be reverted to the quiz score (fix round 1, I3)', async () => {
+    const { item, questions } = await quizWith([ONE, { ...MANY, points: 2 }]);
+    const [one, many] = questions;
+    const column = item.gradebook.assessmentId;
+    await answer(item.itemId, [
+      { questionId: one.questionId, answer: { choice: 'b' } },
+      { questionId: many.questionId, answer: { choices: ['a'] } },
+    ]);
+    await submit(item.itemId);
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+    expect(await cell(column, amalId)).toEqual({ score: 2, status: 'graded' });
+    expect((await detail(item.itemId, amalId)).quiz).toMatchObject({ scoreSetByTeacher: false, earned: 2 });
+
+    // The reviewer's probe: the teacher types 3.5 (live, D17), then fixes the key.
+    const typed = await patch(`/api/classroom/items/${item.itemId}/submissions/${amalId}`, { draftScore: 3.5 });
+    expect(typed.data.row).toMatchObject({ publishedScore: 3.5, scoreSetByTeacher: true });
+    await putQuestions(item.itemId, [{ ...ONE, questionId: one.questionId }, { ...MANY, questionId: many.questionId, correct: ['a'] }]);
+    expect(await cell(column, amalId)).toEqual({ score: 3.5, status: 'graded' }); // kept
+    let quiz = (await detail(item.itemId, amalId)).quiz;
+    expect(quiz).toMatchObject({ earned: 4, scoreSetByTeacher: true }); // the auto total moved; the typed score stayed
+    // An override on an answer keeps it too.
+    const res = await override(quiz.answers[0].answerId, { teacherPoints: 1 });
+    expect(res.data).toMatchObject({ totals: { earned: 3 }, scoreSetByTeacher: true });
+    expect(await cell(column, amalId)).toEqual({ score: 3.5, status: 'graded' });
+    // The student sees the score that counts, marked as set by the teacher.
+    const results = (await studentQuiz(item.itemId)).results;
+    expect(results).toMatchObject({ earned: 3, score: 3.5, scoreSetByTeacher: true });
+
+    // Revert to the quiz's score: the auto total applies again, live on this published column.
+    const back = await post(`/api/classroom/items/${item.itemId}/submissions/${amalId}/quiz-score`, undefined);
+    expect(back.data.quiz).toMatchObject({ scoreSetByTeacher: false, earned: 3 });
+    expect(back.data.row).toMatchObject({ scoreSetByTeacher: false, publishedScore: 3 });
+    expect(await cell(column, amalId)).toEqual({ score: 3, status: 'graded' });
+    // From here the quiz keeps the score in step again.
+    quiz = (await detail(item.itemId, amalId)).quiz;
+    await override(quiz.answers[0].answerId, { teacherPoints: null });
+    expect(await cell(column, amalId)).toEqual({ score: 4, status: 'graded' });
+
+    // A score typed in the grid on a draft column before the student takes the
+    // quiz wins over the submit too (it stays the draft).
+    const second = await quizWith([ONE]);
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+      scores: [{ studentId: bilalId, assessmentId: second.item.gradebook.assessmentId, score: 1.5 }],
+    });
+    expect(await submission(second.item.itemId, bilalId)).toMatchObject({ draft_score: 1.5 });
+    await answer(second.item.itemId, [{ questionId: second.questions[0].questionId, answer: { choice: 'b' } }], asBilal);
+    await submit(second.item.itemId, asBilal);
+    expect(await submission(second.item.itemId, bilalId)).toMatchObject({ draft_score: 1.5 });
+    expect((await detail(second.item.itemId, bilalId)).quiz).toMatchObject({ earned: 2, scoreSetByTeacher: true });
+    // Without a submitted attempt there is no quiz score to go back to.
+    expect((await post(`/api/classroom/items/${second.item.itemId}/submissions/${amalId}/quiz-score`, undefined, asTeacher, 409)).message)
+      .toBe("This quiz isn't turned in yet.");
+  });
+
+  describe('copies carry the whole quiz, never the students\' work (fix round 1, I2)', () => {
+    const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+    // A quiz with an image, settings off their defaults, and a student's
+    // turned-in, overridden, published attempt.
+    const sourceQuiz = async () => {
+      const item = await createQuiz({ quizShuffle: true, quizShowAnswers: true });
+      const image = (await expectStatus(authenticatedRequest('post', `/api/classroom/items/${item.itemId}/question-images`, asTeacher)
+        .attach('image', PNG, { filename: 'cell.png', contentType: 'image/png' }), 201)).data.imagePath;
+      const built = (await putQuestions(item.itemId, [{ ...ONE, imagePath: image }, { ...MANY, partialCredit: true }, SHORT, LONG])).data;
+      await answer(item.itemId, [{ questionId: built.questions[0].questionId, answer: { choice: 'b' } }]);
+      await submit(item.itemId);
+      const written = (await detail(item.itemId, amalId)).quiz.answers.find((a) => a.kind === 'long');
+      await override(written.answerId, { teacherPoints: 2 });
+      await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+      return { item, built, image };
+    };
+    const shape = (questions) => questions.map(({ kind, prompt, options, correct, accepted, points, partialCredit, sortOrder }) => ({
+      kind, prompt, options, correct, accepted, points, partialCredit, sortOrder,
+    }));
+    const expectCopied = async (copyId, source) => {
+      const copy = (await get(`/api/classroom/items/${copyId}`)).data;
+      expect(copy).toMatchObject({ kind: 'quiz', title: 'Cells quiz', status: 'draft', quiz: { release: 'after_review', shuffle: true, showAnswers: true } });
+      const builder = (await get(`/api/classroom/items/${copyId}/questions`)).data;
+      expect(shape(builder.questions)).toEqual(shape(source.built.questions));
+      expect(builder).toMatchObject({ hasSubmissions: false, totalPoints: 8, settings: { release: 'after_review', shuffle: true, showAnswers: true } });
+      expect(builder.questions.map((q) => q.questionId).some((id) => idsOf(source.built.questions).includes(id))).toBe(false);
+      // The image is a copy in the new quiz's folder (so the next PUT accepts it).
+      expect(builder.questions[0].imagePath).toMatch(new RegExp(`^ALHAADIACADEMY/classwork/${copyId}/questions/[0-9a-f-]+\\.png$`));
+      expect(supabase._mockStorage.copy).toHaveBeenCalledWith(source.image, builder.questions[0].imagePath);
+      await putQuestions(copyId, builder.questions.map((q) => ({ ...q })));
+      // The column is out of the quiz's points.
+      expect(copy.gradebook.maxScore).toBe(8);
+      // No attempts, answers, scores or submissions come along.
+      for (const table of ['quiz_attempts', 'classwork_submissions']) {
+        expect((await pool.query(`SELECT COUNT(*)::int AS n FROM ${table} WHERE item_id = $1`, [copyId])).rows[0].n).toBe(0);
+      }
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM student_assessments WHERE assessment_id = $1`, [copy.gradebook.assessmentId])).rows[0].n).toBe(0);
+      // The source keeps its own.
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM quiz_answers qa JOIN quiz_attempts qt ON qt.attempt_id = qa.attempt_id
+        WHERE qt.item_id = $1`, [source.item.itemId])).rows[0].n).toBe(4);
+    };
+
+    it('copy from another class', async () => {
+      const source = await sourceQuiz();
+      const targetId = await makeClass('Science', TEACHER_ID);
+      await pool.query(`INSERT INTO assessments (class_id, name, is_parent, weight_points) VALUES ($1, 'Quizzes', TRUE, 40)`, [targetId]);
+      supabase._mockStorage.copy.mockClear();
+      const res = await post(`/api/classroom/classes/${targetId}/copy`, { sourceClassId: sciId, itemIds: [source.item.itemId] });
+      expect(res.data).toMatchObject({ copied: 1, warnings: [] });
+      await expectCopied(res.data.items[0].itemId, source);
+    });
+
+    it('duplicating the class', async () => {
+      const source = await sourceQuiz();
+      supabase._mockStorage.copy.mockClear();
+      const res = await post(`/api/classes/${sciId}/duplicate`, {
+        grade: '5', subject: 'Science', teacherName: 'Ziad Teacher', teacherId: TEACHER_ID, termId, termName: 'Term 1',
+      }, asTeacher, 201);
+      const { rows: [copy] } = await pool.query(
+        `SELECT item_id FROM classwork_items WHERE class_id = $1 AND kind = 'quiz' AND deleted_at IS NULL`, [res.data.classId],
+      );
+      await expectCopied(copy.item_id, source);
+    });
+
+    it("a question image that can't be copied is left off, with a warning", async () => {
+      const source = await sourceQuiz();
+      const targetId = await makeClass('Science', TEACHER_ID);
+      await pool.query(`INSERT INTO assessments (class_id, name, is_parent, weight_points) VALUES ($1, 'Quizzes', TRUE, 40)`, [targetId]);
+      supabase._mockStorage.copy.mockResolvedValueOnce({ data: null, error: { message: 'not found' } });
+      const res = await post(`/api/classroom/classes/${targetId}/copy`, { sourceClassId: sciId, itemIds: [source.item.itemId] });
+      expect(res.data.warnings).toEqual([{ title: 'Cells quiz', message: "The image on question 1 couldn't be copied." }]);
+      const builder = (await get(`/api/classroom/items/${res.data.items[0].itemId}/questions`)).data;
+      expect(builder.questions[0]).toMatchObject({ imagePath: null, prompt: ONE.prompt });
+    });
+  });
+
+  it('fix round 1 minors: written answers gate an unlinked Publish, a pending submit leaves a Missing alone, kind and "out of" guards', async () => {
+    // An unlinked quiz with a written answer isn't publishable until it's graded.
+    const open = await quizWith([ONE, LONG], { gradebook: { mode: 'none' } });
+    await answer(open.item.itemId, [{ questionId: open.questions[0].questionId, answer: { choice: 'b' } }]);
+    await submit(open.item.itemId);
+    let row = (await get(`/api/classroom/items/${open.item.itemId}/submissions`)).data.students.find((r) => r.studentId === amalId);
+    expect(row).toMatchObject({ needsPublish: false, label: 'Turned in' });
+    expect((await post(`/api/classroom/items/${open.item.itemId}/publish`, { studentIds: 'graded' })).data.publishedStudentIds).toEqual([]);
+    const written = (await detail(open.item.itemId, amalId)).quiz.answers.find((a) => a.kind === 'long');
+    await override(written.answerId, { teacherPoints: 1 });
+    row = (await get(`/api/classroom/items/${open.item.itemId}/submissions`)).data.students.find((r) => r.studentId === amalId);
+    expect(row.needsPublish).toBe(true);
+
+    // A late submit with a written answer pending leaves a confirmed Missing as it is (no "clear" draft).
+    const linked = await quizWith([ONE, LONG]);
+    await post(`/api/classroom/items/${linked.item.itemId}/mark-missing`, { studentIds: [amalId] });
+    await submit(linked.item.itemId);
+    expect(await submission(linked.item.itemId, amalId)).toMatchObject({ draft_score: null, draft_status: 'missing' });
+    expect(await cell(linked.item.gradebook.assessmentId, amalId)).toEqual({ score: null, status: 'missing' });
+
+    // Kind changes: a started quiz stays a quiz; turned-in work never becomes one.
+    const itemUrl = `/api/classroom/items/${linked.item.itemId}`;
+    expect((await patch(itemUrl, { kind: 'assignment', submissionMode: 'done' }, asTeacher, 409)).code).toBe('QUIZ_TAKEN');
+    const lab = (await post(`/api/classroom/classes/${sciId}/items`, {
+      kind: 'assignment', title: 'Lab', submissionMode: 'done', gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    }, asTeacher, 201)).data;
+    await post(`${quizUrl(lab.itemId)}/turn-in`, undefined, asBilal);
+    expect((await patch(`/api/classroom/items/${lab.itemId}`, { kind: 'quiz' }, asTeacher, 409)).code).toBe('QUIZ_TAKEN');
+    const fresh = (await post(`/api/classroom/classes/${sciId}/items`, { kind: 'assignment', title: 'Fresh', submissionMode: 'done' }, asTeacher, 201)).data;
+    expect((await patch(`/api/classroom/items/${fresh.itemId}`, { kind: 'quiz' })).data.kind).toBe('quiz');
+
+    // A quiz's column stays out of its points; a kept grade above a new total is refused.
+    const auto = await quizWith([ONE, SHORT]);
+    const autoUrl = `/api/classroom/items/${auto.item.itemId}`;
+    expect((await patch(autoUrl, { gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 20 } })).data.gradebook.maxScore).toBe(3);
+    await patch(`${autoUrl}/submissions/${bilalId}`, { draftScore: 3 }); // typed, no attempt
+    const cut = await putQuestions(auto.item.itemId, [{ ...ONE, questionId: auto.questions[0].questionId }], 409);
+    expect(cut).toMatchObject({ code: 'DRAFT_ABOVE_MAX' });
+    expect((await get(`${autoUrl}/questions`)).data.totalPoints).toBe(3);
   });
 
   it('a Grades publish of the column releases a quiz draft like any turn-in draft', async () => {

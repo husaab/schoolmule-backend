@@ -42,6 +42,9 @@ const GRADED_WORK_CODE = 'GRADED_WORK_EXISTS';
 const GRADED_WORK_MESSAGE = "Students' work on this item is already graded. Clear those grades in the grading view before changing how it counts in the gradebook.";
 const DRAFT_ABOVE_MAX_CODE = 'DRAFT_ABOVE_MAX';
 const TURN_IN_KINDS = new Set(['assignment', 'quiz']);
+const QUIZ_KIND_CODE = 'QUIZ_TAKEN';
+const QUIZ_STARTED_MESSAGE = 'Students have already started this quiz, so it stays a quiz.';
+const WORK_BEFORE_QUIZ_MESSAGE = "Students have already turned in or been graded on this work, so it can't become a quiz.";
 const HAS_THREAD_CODE = 'ITEM_HAS_MESSAGES';
 const HAS_THREAD_MESSAGE = 'Students have messages about this work, so it stays an assignment or quiz.';
 
@@ -564,6 +567,15 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   if (leavesTurnIn && (await one(client, q.selectHasThread, [itemId]))?.has_thread) {
     throw httpError(409, HAS_THREAD_MESSAGE, HAS_THREAD_CODE);
   }
+  // A quiz students have started stays a quiz (its attempts and scores are
+  // the quiz's); work students turned in, or were graded on, never becomes
+  // one (T23).
+  if (cur.kind === 'quiz' && value.kind !== 'quiz' && (await one(client, quizQueries.selectHasAttempts, [itemId]))?.has_attempts) {
+    throw httpError(409, QUIZ_STARTED_MESSAGE, QUIZ_KIND_CODE);
+  }
+  if (cur.kind !== 'quiz' && value.kind === 'quiz' && (await one(client, quizQueries.selectHasStudentWork, [itemId]))?.has_work) {
+    throw httpError(409, WORK_BEFORE_QUIZ_MESSAGE, QUIZ_KIND_CODE);
+  }
   const newMax = target.mode === 'category' ? target.maxScore : null;
   const maxChanges = Boolean(assessmentId) && newMax !== null && newMax !== cur.maxScore;
   if (assessmentId && (dropping || switching || leavesTurnIn || maxChanges)) {
@@ -619,6 +631,12 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
     const maxScore = target.mode === 'category' ? target.maxScore : null;
     await client.query(q.updateLinkedAssessment, [assessmentId, value.title, setDate, gradebookDate(value), maxScore]);
     if (maxScore !== null && maxScore !== cur.maxScore) gradebookChanged = true;
+    // A quiz with questions is out of its points, whatever the form sent (T23).
+    if (value.kind === 'quiz') {
+      const { rows: questions } = await client.query(quizQueries.selectQuestions, [itemId]);
+      const total = Math.round(questions.reduce((sum, qq) => sum + Number(qq.points), 0) * 100) / 100;
+      if (total > 0 && (await client.query(quizQueries.setColumnMax, [assessmentId, total])).rows.length) gradebookChanged = true;
+    }
   }
 
   await replaceStudents(client, itemId, value);
@@ -715,6 +733,47 @@ async function copyAttachments(client, { fromItemId, toItemId, school, userId, c
   return failed;
 }
 
+/**
+ * Copies a quiz's content to another quiz item (T23 fix round 1): its three
+ * settings and every question (type, prompt, choices, right answers,
+ * accepted answers, points, partial credit, order), each image copied in
+ * storage into the new quiz's folder. Never an attempt, an answer, a score
+ * or a submission. The copy's gradebook column is out of the quiz's points.
+ * Best effort for images (a failed copy leaves the question without it).
+ * `copied` collects new object paths for the caller's rollback cleanup.
+ * @returns {Promise<string[]>} warnings, e.g. "The image on question 2 couldn't be copied."
+ */
+async function copyQuizContent(client, { fromItemId, toItemId, school, copied }) {
+  await client.query(quizQueries.copyQuizSettings, [toItemId, fromItemId]);
+  const { rows: questions } = await client.query(quizQueries.selectQuestions, [fromItemId]);
+  const warnings = [];
+  let total = 0;
+  for (const [idx, qq] of questions.entries()) {
+    let imagePath = null;
+    if (qq.image_path) {
+      const next = `${school}/classwork/${toItemId}/questions/${crypto.randomUUID()}${path.extname(qq.image_path).toLowerCase()}`;
+      try {
+        const { error } = await supabase.storage.from(BUCKET).copy(qq.image_path, next);
+        if (error) throw error;
+        copied.push(next);
+        imagePath = next;
+      } catch (error) {
+        logger.warn({ from: qq.image_path, err: error?.message || error }, 'Copying a quiz image failed; skipped');
+        warnings.push(`The image on question ${idx + 1} couldn't be copied.`);
+      }
+    }
+    await client.query(quizQueries.insertQuestion, [
+      toItemId, qq.kind, qq.prompt, imagePath, JSON.stringify(qq.options ?? []), JSON.stringify(qq.correct ?? []),
+      qq.accepted ?? [], qq.points, qq.partial_credit, Number(qq.sort_order) || idx,
+    ]);
+    total += Number(qq.points);
+  }
+  const { rows: [copy] } = await client.query(`SELECT assessment_id FROM classwork_items WHERE item_id = $1`, [toItemId]);
+  const totalPoints = Math.round(total * 100) / 100;
+  if (copy?.assessment_id && totalPoints > 0) await client.query(quizQueries.setColumnMax, [copy.assessment_id, totalPoints]);
+  return warnings;
+}
+
 /** Target topic id for each source topic, by name (case-insensitive); missing ones are created. */
 async function mapTopics(client, { sourceClassId, targetClassId, topicIds }) {
   const map = new Map();
@@ -787,6 +846,10 @@ async function copyClasswork(client, { sourceClassId, targetClassId, school, use
     created.push(itemId);
     const failed = await copyAttachments(client, { fromItemId: src.item_id, toItemId: itemId, school, userId, copied });
     for (const name of failed) warnings.push({ title: src.title, message: `${name} could not be copied.` });
+    if (src.kind === 'quiz') {
+      const quizWarnings = await copyQuizContent(client, { fromItemId: src.item_id, toItemId: itemId, school, copied });
+      for (const message of quizWarnings) warnings.push({ title: src.title, message });
+    }
   }
   return { itemIds: created, warnings, gradebookChanged };
 }
@@ -804,5 +867,5 @@ module.exports = {
   httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput,
   toAttachment, toItemSummary, toItem, toCurrent, toCategoryOption, toColumnOption, toTopic,
   loadContext, loadItem, loadAttachments, withClassAverages,
-  createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, signedFileUrl, notifyPosted,
+  createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, copyQuizContent, signedFileUrl, notifyPosted,
 };

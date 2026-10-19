@@ -52,10 +52,16 @@ const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)
 const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND NOT ${GRADE_VISIBLE}
   AND (i.assessment_id IS NOT NULL OR sub.published_at IS NULL))`;
 
+// A quiz attempt of this student with every answer given points (auto or
+// the teacher's): nothing is left to grade by hand (T23).
+const QUIZ_GRADED = `NOT EXISTS (SELECT 1 FROM quiz_attempts gqt JOIN quiz_answers gqa ON gqa.attempt_id = gqt.attempt_id
+   WHERE gqt.item_id = i.item_id AND gqt.student_id = sub.student_id AND gqa.auto_points IS NULL AND gqa.teacher_points IS NULL)`;
+
 // On an item with no gradebook column, what a Publish releases: the
 // teacher's feedback, and for a quiz its results (T23), so a turned-in quiz
-// is something to publish even with no feedback.
-const UNLINKED_PUBLISHABLE = `(sub.feedback IS NOT NULL OR (i.kind = 'quiz' AND sub.turned_in_at IS NOT NULL))`;
+// is something to publish even with no feedback, once its written answers
+// are graded.
+const UNLINKED_PUBLISHABLE = `(sub.feedback IS NOT NULL OR (i.kind = 'quiz' AND sub.turned_in_at IS NOT NULL AND ${QUIZ_GRADED}))`;
 
 // What "Publish to N students" counts (T16): on a gradebook column, a draft
 // not published yet, or any draft while the column itself is unpublished; on
@@ -74,5 +80,5 @@ LEFT JOIN students wst ON wst.student_id = ${student}`;
 
 module.exports = {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_AT, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH,
-  UNLINKED_PUBLISHABLE,
+  UNLINKED_PUBLISHABLE, QUIZ_GRADED,
 };

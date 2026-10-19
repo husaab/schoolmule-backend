@@ -26,7 +26,7 @@ const { sendGradeDigest } = require('./assessmentPublish.controller');
 const { SUBMISSION_BUCKET, SIGNED_URL_TTL } = require('../utils/classworkUpload');
 const { STATUSES } = require('../services/gradeEngine');
 const messagingQueries = require('../queries/messaging.queries');
-const { loadQuizDetail } = require('../services/classroom/quizzes');
+const { loadQuizDetail, useQuizScore: useQuizScoreFlow } = require('../services/classroom/quizzes');
 const { resolveCurrentTerm, termParams, PAST_TERM_MESSAGE } = require('./messaging.controller');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -101,9 +101,14 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
     publishedStatus,
     publishedAt: iso(linked ? r.visible_published_at : r.sub_published_at),
     feedback,
-    // workState.UNLINKED_PUBLISHABLE: with no column, feedback or a turned-in quiz's results.
-    needsPublish: (hasDraft || (!linked && (feedback !== null || (quiz && Boolean(turnedInAt))))) && unpublished,
+    // workState.UNLINKED_PUBLISHABLE: with no column, feedback or a turned-in
+    // quiz's results once its written answers are graded.
+    needsPublish: (hasDraft || (!linked && (feedback !== null || (quiz && Boolean(turnedInAt) && !r.quiz_needs_review))))
+      && unpublished,
     hasThread: Boolean(r.has_thread),
+    // A quiz score a teacher typed (grading view or grid): the quiz never
+    // overwrites it; POST …/quiz-score goes back to the quiz's score.
+    scoreSetByTeacher: Boolean(quiz && linked && r.score_set_by_teacher),
   };
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {
@@ -253,6 +258,27 @@ const getSubmission = async (req, res) => {
     });
   } catch (error) {
     return fail(res, error, 'Error loading the submission', { itemId, studentId });
+  }
+};
+
+// POST /api/classroom/items/:itemId/submissions/:studentId/quiz-score → { row, quiz }
+// A quiz score a teacher typed always wins over the quiz's own (T23 fix
+// round 1). This goes back to the quiz's score: the typed score stops
+// winning and the quiz total applies (live on a published column, D17).
+const useQuizScore = async (req, res) => {
+  const { itemId } = req.item;
+  const { school } = req.class;
+  const studentId = req.params.studentId.toLowerCase();
+  try {
+    const item = await loadGradingItem(itemId);
+    if (item.kind !== 'quiz') throw httpError(400, 'Only a quiz has a quiz score.');
+    const { wroteLive } = await useQuizScoreFlow({ itemId, studentId, userId: req.user.userId });
+    if (wroteLive) engine.invalidateCache(school);
+    const found = await loadRow(item, studentId);
+    if (!found) return failed(res, 404, MESSAGES.STUDENT_NOT_FOUND);
+    return ok(res, { row: found.row, quiz: await loadQuizDetail(itemId, studentId) });
+  } catch (error) {
+    return fail(res, error, 'Error using the quiz score', { itemId, studentId });
   }
 };
 
@@ -555,7 +581,7 @@ const getGridOverlay = async (req, res) => {
 };
 
 module.exports = {
-  listSubmissions, getSubmission, updateSubmission, publish, markMissing, excuse, getGridOverlay,
+  listSubmissions, getSubmission, updateSubmission, useQuizScore, publish, markMissing, excuse, getGridOverlay,
   getStudentThread, ensureStudentThread,
   // exported for unit testing
   toGradingRow, gradingCounts, gradingLabel, nextGrade,

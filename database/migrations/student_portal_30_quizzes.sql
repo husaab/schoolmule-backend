@@ -1,19 +1,21 @@
 -- ============================================================
 -- Student portal, phase 3 (Task 23): quizzes. Questions per quiz item, one
 -- attempt per student (v1), autosaved answers with the machine's points and
--- a per-answer teacher override.
+-- a per-answer teacher override. Effective points are
+-- COALESCE(teacher_points, auto_points), so a regrade never wipes an override.
+-- classwork_submissions.score_set_by_teacher marks a quiz score a teacher
+-- typed (grading view or grid): the quiz never overwrites it (fix round 1).
 --
 -- Controller applies after review, BEFORE the backend that reads it (the
 -- student's work rows count a quiz's questions). Run after
 -- student_portal_23_classroom_emails.sql.
 --
--- Additive only: three defaulted columns on classwork_items (every existing
--- row gets after_review / no shuffle / no answers shown, which is what a quiz
--- with no questions means) and three new tables that the code on main never
--- reads or writes. No existing constraint changes. Safe to re-run.
+-- Additive only: four defaulted columns (three on classwork_items, one on
+-- classwork_submissions; every existing row gets after_review / no shuffle /
+-- no answers shown / not set by a teacher) and three new tables that the
+-- code on main never reads or writes. No existing constraint changes. Safe
+-- to re-run.
 -- ============================================================
--- Student portal, phase 3: quizzes. Effective points are
--- COALESCE(teacher_points, auto_points), so a regrade never wipes an override.
 BEGIN;
 -- Give up rather than queue every classwork request behind a long transaction.
 SET LOCAL lock_timeout = '5s';
@@ -65,5 +67,8 @@ CREATE TABLE IF NOT EXISTS quiz_answers (
   graded_at       TIMESTAMPTZ,
   CONSTRAINT uq_quiz_answer UNIQUE (attempt_id, question_id)
 );
+CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers(question_id);
 ALTER TABLE quiz_answers ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE classwork_submissions ADD COLUMN IF NOT EXISTS score_set_by_teacher BOOLEAN NOT NULL DEFAULT FALSE;
 COMMIT;

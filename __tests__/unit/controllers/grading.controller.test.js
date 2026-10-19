@@ -61,8 +61,15 @@ describe('toGradingRow', () => {
     expect(toGradingRow(raw({ ...TURNED_IN }), { linked: false, quiz: true }).row).toMatchObject({ needsPublish: true, label: 'Turned in' });
     expect(toGradingRow(raw({ ...TURNED_IN }), { linked: false }).row.needsPublish).toBe(false); // an assignment needs feedback
     expect(toGradingRow(raw(), { linked: false, quiz: true }).row.needsPublish).toBe(false); // nothing turned in
+    expect(toGradingRow(raw({ ...TURNED_IN, quiz_needs_review: true }), { linked: false, quiz: true }).row.needsPublish).toBe(false); // a written answer to grade
     const published = toGradingRow(raw({ ...TURNED_IN, sub_published_at: PUBLISHED }), { linked: false, quiz: true }).row;
     expect(published).toMatchObject({ needsPublish: false, label: 'Published' });
+  });
+
+  it('scoreSetByTeacher is a quiz-column flag only', () => {
+    expect(toGradingRow(raw({ ...TURNED_IN, draft_score: '3.50', draft_status: 'graded', score_set_by_teacher: true }), { linked: true, quiz: true }).row.scoreSetByTeacher).toBe(true);
+    expect(toGradingRow(raw({ ...TURNED_IN, draft_score: '3.50', draft_status: 'graded', score_set_by_teacher: true }), { linked: true }).row.scoreSetByTeacher).toBe(false);
+    expect(toGradingRow(raw({ ...TURNED_IN, score_set_by_teacher: true }), { linked: false, quiz: true }).row.scoreSetByTeacher).toBe(false);
   });
 
   it('a published draft needs a Publish again while its column is unpublished in the gradebook', () => {
