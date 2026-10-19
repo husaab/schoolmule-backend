@@ -1,3 +1,5 @@
+// supertest's servers listen on 127.0.0.1 only (see the helper; M8 flakes).
+require('../../helpers/loopbackListen');
 const { Pool } = require('pg');
 
 // All tables in the test schema — order doesn't matter with CASCADE

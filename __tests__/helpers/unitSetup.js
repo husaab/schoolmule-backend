@@ -1,3 +1,6 @@
+// supertest's servers listen on 127.0.0.1 only (see the helper; M8 flakes).
+require('./loopbackListen');
+
 // Set env vars BEFORE any controller modules load
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret-key-for-unit-tests';
 process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 'test_resend_key';
