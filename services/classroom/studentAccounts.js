@@ -11,6 +11,7 @@
 
 const QRCode = require('qrcode');
 const db = require('../../config/database');
+const { inTransaction } = require('../../utils/transaction');
 const logger = require('../../logger');
 const q = require('../../queries/studentAccount.queries');
 const adminUserQueries = require('../../queries/adminUser.queries');
@@ -47,10 +48,10 @@ const normalizeEmail = (raw) => {
   return v === '' ? null : v;
 };
 
-/** "Amal Noor Haddad" → { firstName: 'Amal', lastName: 'Noor Haddad' }; lastName may be ''. */
+/** "Amal Noor Haddad" → { firstName: 'Amal', lastName: 'Noor Haddad', fullName: 'Amal Noor Haddad' }; lastName may be ''. */
 const splitName = (name) => {
   const words = String(name || '').trim().split(/\s+/).filter(Boolean);
-  return { firstName: words[0] || '', lastName: words.slice(1).join(' ') };
+  return { firstName: words[0] || '', lastName: words.slice(1).join(' '), fullName: words.join(' ') };
 };
 
 const gradeLabel = (g) => (g === 'JK' || g === 'SK' ? g : `Grade ${g}`);
@@ -213,22 +214,6 @@ function parseStudentIds(studentIds) {
 
 const refused = (status, message) => ({ sent: false, status, message });
 
-// Runs fn(client) in a transaction on one pooled connection.
-async function inTransaction(fn) {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
 /**
  * "Resend invite" for a student row with a login that has never set up
  * email sign-in (invited, or a card student): a new invite replaces the open
@@ -239,7 +224,7 @@ async function inTransaction(fn) {
 async function resendInviteFor(row, { school, actorId }) {
   if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
   if (!row.invite_pending) return refused(400, 'This student has already set up sign-in. Send a password link instead.');
-  const { firstName, lastName } = splitName(row.name);
+  const { firstName, fullName } = splitName(row.name);
   if (await invitesSentToday(row.student_id) >= MAX_INVITE_EMAILS_PER_DAY) {
     return refused(429, `Too many invites for ${firstName} today. Try again tomorrow.`);
   }
@@ -260,7 +245,7 @@ async function resendInviteFor(row, { school, actorId }) {
     ...invite,
     email: row.account_email,
     firstName,
-    fullName: [firstName, lastName].filter(Boolean).join(' '),
+    fullName,
     school,
     schoolInfo,
     studentSignIn: settings.studentSignIn,
@@ -281,11 +266,16 @@ async function cancelInviteFor(row, { school, actorId }) {
   if (open.length === 0) return refused(409, "There's no open invite to cancel.");
   const unused = row.invite_pending && !row.has_google && !row.last_login_at && !row.activated_at && !row.qr_active;
 
-  await inTransaction(async (client) => {
-    await endOpenInvites(client, { userId: row.user_id, reason: 'cancelled', endedBy: actorId });
+  const ended = await inTransaction(async (client) => {
+    // 0 when the student accepted (or someone else cancelled) since the row was read:
+    // then nothing is deleted, and the login the student just set up stays.
+    const n = await endOpenInvites(client, { userId: row.user_id, reason: 'cancelled', endedBy: actorId });
+    if (n === 0) return false;
     await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
     if (unused) await client.query(q.deleteStudentUser, [row.user_id, school]);
+    return true;
   });
+  if (!ended) return refused(409, "There's no open invite to cancel.");
   return { cancelled: true, deletedLogin: unused };
 }
 
@@ -431,28 +421,26 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
     return skipped(studentId, student.conflict_kind, conflictMessage(student.conflict_kind, rowConflict(student)));
   }
 
-  const { firstName, lastName } = splitName(student.name);
-  const fullName = [firstName, lastName].filter(Boolean).join(' ');
+  const { firstName, lastName, fullName } = splitName(student.name);
   const schoolYearId = student.school_year_id || admin.schoolYearId || null;
   let userId;
   let invite;
-  const client = await db.connect();
   try {
-    await client.query('BEGIN');
-    const { rows } = await client.query(adminUserQueries.insertInvitedUser, [
-      email, fullName, firstName, lastName, admin.school, 'STUDENT',
-    ]);
-    userId = rows[0].user_id;
-    await client.query(q.insertStudentAccount, [userId, admin.school, admin.userId, noticeVersion]);
-    await client.query(q.insertStudentAccountLink, [userId, studentId, schoolYearId, admin.userId]);
-    // Next year's row, when rollover already made it (R5).
-    await linkSuccessorRows(client, { userId, studentId, linkedBy: admin.userId });
-    invite = await createInvite(client, {
-      school: admin.school, userId, studentId, schoolYearId, email, createdBy: admin.userId,
-    });
-    await client.query('COMMIT');
+    ({ userId, invite } = await inTransaction(async (client) => {
+      const { rows } = await client.query(adminUserQueries.insertInvitedUser, [
+        email, fullName, firstName, lastName, admin.school, 'STUDENT',
+      ]);
+      const newUserId = rows[0].user_id;
+      await client.query(q.insertStudentAccount, [newUserId, admin.school, admin.userId, noticeVersion]);
+      await client.query(q.insertStudentAccountLink, [newUserId, studentId, schoolYearId, admin.userId]);
+      // Next year's row, when rollover already made it (R5).
+      await linkSuccessorRows(client, { userId: newUserId, studentId, linkedBy: admin.userId });
+      const created = await createInvite(client, {
+        school: admin.school, userId: newUserId, studentId, schoolYearId, email, createdBy: admin.userId,
+      });
+      return { userId: newUserId, invite: created };
+    }));
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') {
       // Another request got there first. A double-clicked invite loses on the
       // users email (the winner created this student's login with it), so
@@ -466,8 +454,6 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
         : skipped(studentId, 'email_in_use', 'An account already uses this email. Each student needs their own address.');
     }
     throw err;
-  } finally {
-    client.release();
   }
 
   const { sent: inviteSent } = await sendInvite({

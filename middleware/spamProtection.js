@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const logger = require('../logger');
 
@@ -118,10 +119,18 @@ const loginLimiter = failedSignInLimiter({ max: 100 });
 const loginAccountLimiter = failedSignInLimiter({ max: 10, key: typedEmail });
 // Per network and card, failed QR sign-ins.
 const qrCardLimiter = failedSignInLimiter({ max: 10, key: cardUser });
-// Per network, failed student invite checks and acceptances (unknown, dead
-// or refused links). An invite secret is 256 random bits, so this only keeps
-// a page that is being hammered quiet.
-const inviteTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'invite' });
+// Student invite links (/api/auth/student-invite, /accept). A class sets up
+// its accounts together from one school network, and a wrong Google account
+// or a too-easy password is a normal mistake, so failures are limited per
+// link: 10 per 15 minutes per network for one link, plus a ceiling of 300 per
+// network across all links. An invite secret is 256 random bits, so this
+// only keeps a hammered page quiet. Neither touches the sign-in budget.
+const inviteLink = (req) => {
+  const token = req.body && typeof req.body.token === 'string' ? req.body.token.trim() : '';
+  return `invite:${crypto.createHash('sha256').update(token).digest('hex').slice(0, 16)}`;
+};
+const inviteTokenLimiter = failedSignInLimiter({ max: 10, key: inviteLink });
+const inviteNetworkLimiter = failedSignInLimiter({ max: 300, key: () => 'invites' });
 // Per network, failed uses of password links (unknown, expired or refused).
 const resetTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'reset' });
 
@@ -198,6 +207,7 @@ module.exports = {
   loginAccountLimiter,
   qrCardLimiter,
   inviteTokenLimiter,
+  inviteNetworkLimiter,
   resetTokenLimiter,
   honeypotValidation,
   validateInput

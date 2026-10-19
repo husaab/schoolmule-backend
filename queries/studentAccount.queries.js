@@ -13,6 +13,7 @@
 const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { conflictLateral } = require('../services/classroom/emailProblems');
+const { INVITE_COLUMNS, latestInviteLateral } = require('../utils/inviteSql');
 
 // The latest invite of the login (inv.*) and the first conflict on the
 // student's own address (services/classroom/emailProblems.js conflictLateral).
@@ -25,9 +26,7 @@ SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_y
        u.created_at AS account_created_at, u.last_login_at, u.last_seen_at,
        sa.consent_at, sa.consent_notice_version, NULLIF(TRIM(CONCAT(cb.first_name, ' ', cb.last_name)), '') AS consent_by_name,
        sa.qr_issued_at, sa.qr_voided_at, (sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL) AS qr_active,
-       sa.activated_at, sa.activated_via,
-       inv.send_status AS invite_send_status, inv.sent_at AS invite_sent_at, inv.expires_at AS invite_expires_at,
-       inv.ended_at AS invite_ended_at, inv.end_reason AS invite_end_reason, inv.send_error AS invite_send_error,
+       sa.activated_at, sa.activated_via,${INVITE_COLUMNS},
        cf.kind AS conflict_kind, cf.role AS conflict_role, cf.same_school AS conflict_same_school,
        cf.other_name AS conflict_other_name, cf.other_grade AS conflict_other_grade
 FROM students s
@@ -36,9 +35,7 @@ LEFT JOIN student_account_links sal ON sal.student_id = s.student_id
 LEFT JOIN users u ON u.user_id = sal.user_id
 LEFT JOIN student_accounts sa ON sa.user_id = u.user_id
 LEFT JOIN users cb ON cb.user_id = sa.consent_by
-LEFT JOIN LATERAL (
-  SELECT si.send_status, si.sent_at, si.expires_at, si.ended_at, si.end_reason, si.send_error
-    FROM student_invites si WHERE si.user_id = u.user_id ORDER BY si.created_at DESC LIMIT 1) inv ON TRUE
+${latestInviteLateral('u.user_id')}
 ${conflictLateral('s', 's.student_email', 'u.user_id')}`;
 
 const studentAccountQueries = {

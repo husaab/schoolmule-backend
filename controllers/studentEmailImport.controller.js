@@ -40,22 +40,28 @@ const receiveFile = (req, res, next) => upload.single('file')(req, res, (err) =>
   return failed(res, 400, "We couldn't read this upload. Try again.");
 });
 
-const ROSTER_SQL = `
-  SELECT student_id, name, grade::text AS grade, student_email
-  FROM students
-  WHERE school = $1 AND school_year_id = $2 AND is_archived IS NOT TRUE`;
-
 /** The active year's roster, or null (after answering) when the request isn't for it. */
 async function activeRoster(req, res) {
   if (!req.schoolYear || !req.schoolYear.isActive) {
     failed(res, 409, NOT_ACTIVE_YEAR);
     return null;
   }
-  const { rows } = await db.query(ROSTER_SQL, [req.user.school, req.schoolYear.schoolYearId]);
+  const { rows } = await db.query(inviteQueries.selectActiveRoster, [req.user.school, req.schoolYear.schoolYearId]);
   return rows;
 }
 
 const problem = (code, message) => ({ code, blocking: true, message });
+
+/** How many times each key occurs. */
+const tally = (keys) => keys.reduce((counts, k) => counts.set(k, (counts.get(k) || 0) + 1), new Map());
+
+/** Problems only the list itself can have: one student on two rows, one address on two rows. */
+function duplicateProblems({ studentId, name, email }, { students, emails }) {
+  const out = [];
+  if (studentId && students.get(studentId) > 1) out.push(problem('duplicate_in_list', `Two rows are for ${name}.`));
+  if (email && emails.get(email) > 1) out.push(problem('duplicate_in_list', 'This address is on more than one row.'));
+  return out;
+}
 
 /**
  * Which roster rows a file row may be for: 'matched' (one student with that
@@ -119,13 +125,10 @@ const previewImport = async (req, res) => {
     const checked = await checkStudentEmails({ school: req.user.school, domains: settings.studentEmailDomains, items: pairs, forImport: true });
 
     // Within the file: one address on two rows, or two confident rows for one student.
-    const emailCount = new Map();
-    parsed.forEach((p) => { if (p.email) emailCount.set(p.email, (emailCount.get(p.email) || 0) + 1); });
-    const matchedCount = new Map();
-    parsed.filter((p) => p.kind === 'matched').forEach((p) => {
-      const id = p.matches[0].student_id;
-      matchedCount.set(id, (matchedCount.get(id) || 0) + 1);
-    });
+    const counts = {
+      emails: tally(parsed.map((p) => p.email).filter(Boolean)),
+      students: tally(parsed.filter((p) => p.kind === 'matched').map((p) => p.matches[0].student_id)),
+    };
 
     let pair = 0;
     const out = parsed.map((p) => ({
@@ -136,11 +139,10 @@ const previewImport = async (req, res) => {
         candidates: p.matches.map((m) => {
           const result = checked.get(pair);
           pair += 1;
-          const problems = [...(result?.problems || [])];
-          if (emailCount.get(p.email) > 1) problems.unshift(problem('duplicate_in_list', 'This address is on more than one row.'));
-          if (p.kind === 'matched' && matchedCount.get(m.student_id) > 1) {
-            problems.unshift(problem('duplicate_in_list', `Two rows are for ${m.name}.`));
-          }
+          const problems = [
+            ...duplicateProblems({ studentId: p.kind === 'matched' ? m.student_id : null, name: m.name, email: p.email }, counts),
+            ...(result?.problems || []),
+          ];
           return { studentId: m.student_id, name: m.name, grade: m.grade, currentEmail: m.student_email ?? null, problems };
         }),
       },
@@ -171,12 +173,7 @@ const saveImport = async (req, res) => {
     const checked = await checkStudentEmails({
       school: req.user.school, domains: settings.studentEmailDomains, items: normalized, forImport: true,
     });
-    const emailCount = new Map();
-    const studentCount = new Map();
-    normalized.forEach((it) => {
-      emailCount.set(it.email, (emailCount.get(it.email) || 0) + 1);
-      studentCount.set(it.studentId, (studentCount.get(it.studentId) || 0) + 1);
-    });
+    const counts = { emails: tally(normalized.map((it) => it.email)), students: tally(normalized.map((it) => it.studentId)) };
 
     const results = [];
     let saved = 0;
@@ -186,9 +183,10 @@ const saveImport = async (req, res) => {
         results.push({ studentId, outcome: 'refused', problems: [problem('not_found', "This student isn't in this school year.")] });
         continue;
       }
-      const problems = [...(checked.get(i)?.problems || [])];
-      if (emailCount.get(email) > 1) problems.unshift(problem('duplicate_in_list', 'This address is on more than one row.'));
-      if (studentCount.get(studentId) > 1) problems.unshift(problem('duplicate_in_list', `Two rows are for ${nameOf.get(studentId)}.`));
+      const problems = [
+        ...duplicateProblems({ studentId, name: nameOf.get(studentId), email }, counts),
+        ...(checked.get(i)?.problems || []),
+      ];
       if (problems.some((p) => p.blocking)) {
         results.push({ studentId, outcome: 'refused', problems: problems.filter((p) => p.blocking) });
         continue;

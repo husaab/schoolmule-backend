@@ -277,7 +277,7 @@ describe('Integration: Student invitations', () => {
       expect(first.body.data).toEqual({
         state: 'valid',
         school: { code: 'ALHAADIACADEMY', name: 'Al Haadi Academy' },
-        student: { firstName: 'Amal', lastInitial: 'H', grade: '5' },
+        student: { firstName: 'Amal', lastName: 'Haddad', lastInitial: 'H', grade: '5' },
         email: 'amal.haddad@example.com',
         methods: { google: true, password: true },
         expiresAt: expect.any(String),
@@ -354,11 +354,46 @@ describe('Integration: Student invitations', () => {
       expect((await accept({ token: sami, password: 'cedar-river' })).body.data.state).toBe('cancelled');
     });
 
-    it('a garbled or unknown token answers 404, and 21 failures from one network answer 429', async () => {
+    it('a garbled or unknown token answers 404; one link is limited on its own, never the whole class', async () => {
       expect((await inspect('not-a-token')).status).toBe(404);
       expect((await inspect('x'.repeat(43))).body).toMatchObject({ code: 'INVITE_NOT_FOUND' });
-      for (let i = 0; i < 18; i += 1) await inspect('y'.repeat(43));
-      expect((await inspect('z'.repeat(43))).status).toBe(429);
+      // The same link failing over and over is cut off after 10…
+      for (let i = 0; i < 10; i += 1) expect((await inspect('y'.repeat(43))).status).toBe(404);
+      expect((await inspect('y'.repeat(43))).status).toBe(429);
+      // …but a class on one school network, each with their own link, is not.
+      for (let i = 0; i < 30; i += 1) {
+        expect((await inspect(`${String(i).padStart(2, '0')}${'z'.repeat(41)}`)).status).toBe(404);
+      }
+      // Invite failures never use up the network's ordinary sign-in budget.
+      const login = await pub('/api/auth/login').send({ email: 'office@example.com', password: 'wrong' });
+      expect(login.status).toBe(401);
+    });
+
+    it('a cancel racing an accept never deletes the account the student just set up', async () => {
+      const { cancelInviteFor } = require('../../../services/classroom/studentAccounts');
+      const { selectStudentAccountRow } = require('../../../queries/studentAccount.queries');
+      const secret = await invitedSecret(amalId);
+      // The admin's page read the row while the invite was still open…
+      const { rows: [stale] } = await pool.query(selectStudentAccountRow, ['ALHAADIACADEMY', amalId]);
+      // …the student accepts…
+      expect((await accept({ token: secret, password: 'cedar-river' })).status).toBe(200);
+      // …then the admin's cancel arrives.
+      const result = await cancelInviteFor(stale, { school: 'ALHAADIACADEMY', actorId: ADMIN_ID });
+      expect(result).toMatchObject({ sent: false, status: 409 });
+      const login = await loginOf(amalId);
+      expect(login).toBeTruthy();
+      expect(login.password).not.toBe('!');
+    });
+
+    it('accept needs a password or a Google code, and refuses an archived login', async () => {
+      const secret = await invitedSecret(amalId);
+      const missing = await accept({ token: secret });
+      expect(missing.status).toBe(400);
+      expect(missing.body.code).toBe('PASSWORD_REQUIRED');
+      await authenticatedRequest('post', `${BASE}/${amalId}/archive`, asAdmin);
+      const archived = await accept({ token: secret, password: 'cedar-river' });
+      expect(archived.status).toBe(410);
+      expect(archived.body.data.state).toBe('cancelled');
     });
 
     it('a weak password is refused with the reason and nothing changes', async () => {

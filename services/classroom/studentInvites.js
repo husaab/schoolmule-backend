@@ -9,8 +9,12 @@
 
 const crypto = require('crypto');
 const db = require('../../config/database');
+const { inTransaction } = require('../../utils/transaction');
 const logger = require('../../logger');
 const q = require('../../queries/studentInvite.queries');
+const adminUserQueries = require('../../queries/adminUser.queries');
+const schoolQueries = require('../../queries/school.queries');
+const studentAccountQueries = require('../../queries/studentAccount.queries');
 const { getResend, sendOrThrow, sendSafely } = require('../../utils/emailUtils');
 const { getSchoolName } = require('../../utils/schoolUtils');
 const { schoolSender } = require('../email/senderIdentity');
@@ -42,14 +46,15 @@ const TORONTO_DAY = new Intl.DateTimeFormat('en-CA', {
 const formatInviteDate = (date) => TORONTO_DAY.format(new Date(date));
 
 /**
- * The state of one invite row: how it ended, else failed (the email didn't
- * go), expired, or pending.
+ * The state of one invite row: how it ended, else expired, else failed (the
+ * email didn't go), else pending. Expiry comes before a failed send: a send
+ * can fail after Resend delivered the email, and that link must still die.
  * @param {{ ended_at, end_reason, send_status, expires_at }} row
  */
 function inviteState(row, now = new Date()) {
   if (row.ended_at) return row.end_reason;
-  if (row.send_status === 'failed') return 'failed';
   if (new Date(row.expires_at) <= now) return 'expired';
+  if (row.send_status === 'failed') return 'failed';
   return 'pending';
 }
 
@@ -202,14 +207,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * tell their guardians once, ever. Never throws: a failure is logged and the
  * student's sign-in goes on.
  */
-async function notifyGuardiansOnce({ userId, via, schoolInfo = null }) {
+async function notifyGuardiansOnce({ userId, via }) {
   try {
     const { rows: claimed } = await db.query(q.claimGuardianNotice, [userId]);
     if (claimed.length === 0) return;
     const { rows: [row] } = await db.query(q.selectLatestLinkedStudent, [userId]);
     if (!row) return;
-    const { rows: [login] } = await db.query('SELECT email FROM users WHERE user_id = $1', [userId]);
+    const { rows: [login] } = await db.query(studentAccountQueries.selectStudentUserEmail, [userId]);
     const { rows: addresses } = await db.query(q.selectGuardianAddresses, [row.student_id, login?.email || '']);
+    // The school's letterhead and contact footer ("contact the school office").
+    const { rows: [schoolInfo = null] } = await db.query(schoolQueries.selectSchoolByCode, [row.school]);
     const firstName = String(row.name).trim().split(/\s+/)[0];
     const schoolName = (schoolInfo && schoolInfo.name) || getSchoolName(row.school);
     const html = getStudentAccountReadyEmailHTML({
@@ -236,19 +243,11 @@ async function notifyGuardiansOnce({ userId, via, schoolInfo = null }) {
  * the activation is stamped and the guardians are told (R2).
  */
 async function recordGoogleAcceptance(userId) {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
+  await inTransaction(async (client) => {
     await client.query(q.acceptOpenInvite, [userId, 'google']);
-    await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+    await client.query(adminUserQueries.deleteTokensForUser, [userId]);
     await recordActivation(client, { userId, via: 'google' });
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+  });
   await notifyGuardiansOnce({ userId, via: 'google' });
 }
 

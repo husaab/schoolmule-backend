@@ -123,11 +123,19 @@ const studentInviteQueries = {
     WHERE user_id = $1 AND ended_at IS NULL
   `,
 
-  //  First sign-in by any method; later ones change nothing. $1 = user_id, $2 = via
+  //  First sign-in by any method; later ones write nothing (a class scanning
+  //  its cards in doesn't rewrite every account). $1 = user_id, $2 = via
   recordActivation: `
     UPDATE student_accounts
-    SET activated_at = COALESCE(activated_at, NOW()), activated_via = COALESCE(activated_via, $2), updated_at = NOW()
-    WHERE user_id = $1
+    SET activated_at = NOW(), activated_via = $2, updated_at = NOW()
+    WHERE user_id = $1 AND activated_at IS NULL
+  `,
+
+  //  This school year's current roster, for matching an import. $1 = school, $2 = school_year_id
+  selectActiveRoster: `
+    SELECT student_id, name, grade::text AS grade, student_email
+    FROM students
+    WHERE school = $1 AND school_year_id = $2 AND is_archived IS NOT TRUE
   `,
 
   //  Claim the one guardian notice for a login. $1 = user_id

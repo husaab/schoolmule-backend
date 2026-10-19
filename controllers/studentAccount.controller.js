@@ -8,6 +8,7 @@
 */
 
 const db = require('../config/database');
+const { inTransaction } = require('../utils/transaction');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
@@ -58,22 +59,6 @@ async function respondWithRow(res, school, studentId) {
   const [row, settings] = await Promise.all([loadRow(school, studentId), getSettings(school)]);
   if (!row) return failed(res, 404, NOT_FOUND);
   return ok(res, toStudentAccountRow(row, settings));
-}
-
-// Runs fn(client) in a transaction on one pooled connection.
-async function inTransaction(fn) {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
 }
 
 // GET /api/admin/student-accounts?grade=&status=&q=&classId=
@@ -316,11 +301,11 @@ const previewInvite = async (req, res) => {
     const row = await loadRow(school, studentId);
     if (!row) return failed(res, 404, NOT_FOUND);
     const [settings, schoolInfo] = await Promise.all([getSettings(school), loadSchoolInfo(school)]);
-    const { firstName, lastName } = splitName(row.name);
+    const { firstName, fullName } = splitName(row.name);
     const email = normalizeEmail(row.account_email || row.student_email) || 'student@example.com';
     return ok(res, renderInviteEmail({
       firstName,
-      fullName: [firstName, lastName].filter(Boolean).join(' '),
+      fullName,
       school,
       schoolInfo,
       email,

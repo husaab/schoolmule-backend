@@ -36,8 +36,9 @@ describe('inviteState', () => {
   it('an ended invite reads how it ended', () => {
     expect(inviteState({ ended_at: now, end_reason: 'replaced', send_status: 'sent', expires_at: future }, now)).toBe('replaced');
   });
-  it('a failed email reads failed, before expiry', () => {
-    expect(inviteState({ ended_at: null, send_status: 'failed', expires_at: '2026-10-01T00:00:00Z' }, now)).toBe('failed');
+  it('a failed email reads failed until the link expires, then expired (it may have been delivered)', () => {
+    expect(inviteState({ ended_at: null, send_status: 'failed', expires_at: future }, now)).toBe('failed');
+    expect(inviteState({ ended_at: null, send_status: 'failed', expires_at: '2026-10-01T00:00:00Z' }, now)).toBe('expired');
   });
   it('past its expiry reads expired; otherwise pending', () => {
     expect(inviteState({ ended_at: null, send_status: 'sent', expires_at: '2026-10-20T11:59:59Z' }, now)).toBe('expired');
@@ -112,6 +113,7 @@ describe('publicInviteState', () => {
   it('maps every row to what the page says', () => {
     expect(publicInviteState(live, now)).toBe('valid');
     expect(publicInviteState({ ...live, send_status: 'failed' }, now)).toBe('valid');
+    expect(publicInviteState({ ...live, send_status: 'failed', expires_at: '2026-10-01T00:00:00Z' }, now)).toBe('expired');
     expect(publicInviteState({ ...live, expires_at: '2026-10-01T00:00:00Z' }, now)).toBe('expired');
     expect(publicInviteState({ ...live, ended_at: now, end_reason: 'accepted' }, now)).toBe('used');
     expect(publicInviteState({ ...live, ended_at: now, end_reason: 'replaced' }, now)).toBe('replaced');

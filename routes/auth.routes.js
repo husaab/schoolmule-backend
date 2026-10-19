@@ -5,7 +5,7 @@ validateResetToken, resetPassword, validateSession, switchView} = require("../co
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
-const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
+const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, inviteNetworkLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
 const { inspectInvite, acceptInvite } = require('../controllers/studentInvite.controller');
 
 const router = express.Router();
@@ -24,8 +24,8 @@ router.post( "/google", loginLimiter, responseParser(googleSignIn));
 router.post('/student-qr', qrCardLimiter, loginLimiter, responseParser(studentQrLogin));
 // A student's invite link (/student-invite#<secret>): who it is for, then
 // accepting it with a password or Google (controllers/studentInvite.controller.js).
-router.post('/student-invite', inviteTokenLimiter, loginLimiter, responseParser(inspectInvite));
-router.post('/student-invite/accept', inviteTokenLimiter, loginLimiter, responseParser(acceptInvite));
+router.post('/student-invite', inviteTokenLimiter, inviteNetworkLimiter, responseParser(inspectInvite));
+router.post('/student-invite/accept', inviteTokenLimiter, inviteNetworkLimiter, responseParser(acceptInvite));
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 

@@ -20,6 +20,7 @@ const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/studentInvite.queries');
 const userQueries = require('../queries/user.queries');
+const adminUserQueries = require('../queries/adminUser.queries');
 const googleSignInService = require('../services/google/googleSignIn');
 const { getSchoolName } = require('../utils/schoolUtils');
 const {
@@ -61,6 +62,7 @@ function stateOf(inv) {
 }
 
 const firstWord = (name) => String(name || '').trim().split(/\s+/)[0] || '';
+const lastWords = (name) => String(name || '').trim().split(/\s+/).slice(1).join(' ');
 const lastInitial = (name) => {
   const words = String(name || '').trim().split(/\s+/);
   return words.length > 1 ? words[words.length - 1].charAt(0).toUpperCase() : '';
@@ -76,7 +78,13 @@ const inspectInvite = async (req) => {
     data: {
       state: stateOf(inv),
       school: { code: inv.school, name: inv.school_name || getSchoolName(inv.school) },
-      student: { firstName: firstWord(inv.student_name), lastInitial: lastInitial(inv.student_name), grade: inv.grade },
+      // The full last name too, for the page's password check (the email already greets the student by full name).
+      student: {
+        firstName: firstWord(inv.student_name),
+        lastName: lastWords(inv.student_name),
+        lastInitial: lastInitial(inv.student_name),
+        grade: inv.grade,
+      },
       email: inv.email,
       methods: { google: true, password: inv.student_sign_in !== 'google_only' },
       expiresAt: new Date(inv.expires_at).toISOString(),
@@ -140,7 +148,7 @@ const acceptInvite = async (req) => {
         await client.query(userQueries.updatePassword, [credential, inv.user_id]);
       }
       await client.query(q.markAccepted, [inv.invite_id, via]);
-      await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [inv.user_id]);
+      await client.query(adminUserQueries.deleteTokensForUser, [inv.user_id]);
       await recordActivation(client, { userId: inv.user_id, via });
       await client.query('COMMIT');
     } catch (err) {
