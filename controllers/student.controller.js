@@ -89,7 +89,7 @@ const getAllStudents = async (req, res) => {
 const getStudentById = async (req, res) => {
   const { id } = req.params;
   try {
-    const { rows } = await db.query(studentQueries.selectStudentById, [id]);
+    const { rows } = await db.query(studentQueries.selectStudentInSchool, [id, req.user.school]);
 
     if (rows.length === 0) {
       return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
@@ -179,7 +179,6 @@ const updateStudent = async (req, res) => {
     name,
     grade,
     oen,
-    school,
     homeroomTeacherId,
     mother = {},
     father = {},
@@ -206,7 +205,7 @@ const updateStudent = async (req, res) => {
     homeroomTeacherId ?? null,
     grade ?? null,
     oen ?? null,
-    school ?? null,
+    req.user.school,
     mother.name ?? null,
     mother.email ?? null,
     mother.phone ?? null,
@@ -221,7 +220,6 @@ const updateStudent = async (req, res) => {
     medicalNotes ?? null,
     carriesEmail,
     email.value,
-    req.user.school,
   ];
 
   try {
@@ -263,7 +261,7 @@ const updateStudent = async (req, res) => {
 const deleteStudent = async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await db.query(studentQueries.deleteStudentById, [id]);
+    const result = await db.query(studentQueries.deleteStudentById, [id, req.user.school]);
     if (result.rowCount === 0) {
       return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
     }
@@ -299,10 +297,10 @@ const getArchivedStudents = async (req, res) => {
 const archiveStudent = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId } = req.user; // Get the user ID from the authenticated user
-    
-    // Check if student exists
-    const checkResult = await db.query(studentQueries.selectStudentById, [id]);
+    const { userId, school } = req.user;
+
+    // A student of the caller's school only.
+    const checkResult = await db.query(studentQueries.selectStudentInSchool, [id, school]);
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ 
         status: "failed", 
@@ -318,7 +316,7 @@ const archiveStudent = async (req, res) => {
     }
     
     // Archive the student
-    const { rows } = await db.query(studentQueries.archiveStudent, [id, userId]);
+    const { rows } = await db.query(studentQueries.archiveStudent, [id, userId, school]);
     
     logger.info(`Student ${id} archived by user ${userId}`);
     return res.status(200).json({
@@ -336,9 +334,9 @@ const archiveStudent = async (req, res) => {
 const unarchiveStudent = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Check if student exists
-    const checkResult = await db.query(studentQueries.selectStudentById, [id]);
+
+    // A student of the caller's school only.
+    const checkResult = await db.query(studentQueries.selectStudentInSchool, [id, req.user.school]);
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ 
         status: "failed", 
@@ -354,7 +352,7 @@ const unarchiveStudent = async (req, res) => {
     }
     
     // Unarchive the student
-    const { rows } = await db.query(studentQueries.unarchiveStudent, [id]);
+    const { rows } = await db.query(studentQueries.unarchiveStudent, [id, req.user.school]);
     
     logger.info(`Student ${id} unarchived`);
     return res.status(200).json({

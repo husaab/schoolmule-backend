@@ -97,6 +97,39 @@ const studentQueries = {
     WHERE student_id = $1
   `,
 
+  // GET /students/:id and the archive checks: a student of the caller's
+  // school only. $1 = student_id, $2 = school
+  selectStudentInSchool: `
+    SELECT
+      student_id,
+      name,
+      school,
+      homeroom_teacher_id,
+      grade,
+      oen,
+      student_email,
+      mother_name,
+      mother_email,
+      mother_number,
+      father_name,
+      father_email,
+      father_number,
+      emergency_contact,
+      date_of_birth,
+      address,
+      health_card_number,
+      medical_notes,
+      source_submission_id,
+      created_at,
+      last_modified_at,
+      is_archived,
+      archived_at,
+      archived_by,
+      ${studentAvatarSql('students')}
+    FROM students
+    WHERE student_id = $1 AND school = $2
+  `,
+
   // POST   /students
   createStudent: `
     INSERT INTO students (
@@ -132,7 +165,6 @@ const studentQueries = {
       homeroom_teacher_id  = COALESCE($2, homeroom_teacher_id),
       grade                = COALESCE($3, grade),
       oen                  = COALESCE($4, oen),
-      school               = COALESCE($5, school),
       mother_name          = COALESCE($6, mother_name),
       mother_email         = COALESCE($7, mother_email),
       mother_number        = COALESCE($8, mother_number),
@@ -144,19 +176,21 @@ const studentQueries = {
       address              = COALESCE($15, address),
       health_card_number   = COALESCE($16, health_card_number),
       medical_notes        = COALESCE($17, medical_notes),
-      -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value,
-      -- $20 = the caller's school: the address is only ever written within it.
-      student_email        = CASE WHEN $18::boolean AND school::text = $20::text
+      -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value.
+      student_email        = CASE WHEN $18::boolean
                                   THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
       last_modified_at     = NOW()
-    WHERE student_id = $13
+    -- $5 = the caller's school: only their own students, and a student never
+    -- moves to another school here.
+    WHERE student_id = $13 AND school::text = $5::text
     RETURNING *
   `,
 
   // DELETE /students/:id
+  //  $1 = student_id, $2 = school
   deleteStudentById: `
     DELETE FROM students
-    WHERE student_id = $1
+    WHERE student_id = $1 AND school = $2
   `,
 
   selectStudentsByGrade: `
@@ -206,7 +240,7 @@ const studentQueries = {
       archived_at = NOW(),
       archived_by = $2,
       last_modified_at = NOW()
-    WHERE student_id = $1
+    WHERE student_id = $1 AND school = $3
     RETURNING *
   `,
 
@@ -217,7 +251,7 @@ const studentQueries = {
       archived_at = NULL,
       archived_by = NULL,
       last_modified_at = NOW()
-    WHERE student_id = $1
+    WHERE student_id = $1 AND school = $2
     RETURNING *
   `,
 

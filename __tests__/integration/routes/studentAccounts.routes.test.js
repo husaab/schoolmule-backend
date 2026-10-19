@@ -567,26 +567,27 @@ describe('Integration: Student accounts', () => {
     expect(admin.body.data.studentEmail).toBe('Amal.Haddad@Example.com');
     expect((await authenticatedRequest('get', '/api/students', asAdmin)).body.data.find((x) => x.studentId === amalId).studentEmail)
       .toBe('Amal.Haddad@Example.com');
-    for (const who of [asTeacher, asParent]) {
-      const one = await authenticatedRequest('get', `/api/students/${amalId}`, who);
-      expect(one.status).toBe(200);
-      expect(one.body.data).not.toHaveProperty('studentEmail');
-      const all = await authenticatedRequest('get', '/api/students', who);
-      expect(JSON.stringify(all.body)).not.toMatch(/amal\.haddad@example\.com/i);
-    }
+    const one = await authenticatedRequest('get', `/api/students/${amalId}`, asTeacher);
+    expect(one.status).toBe(200);
+    expect(one.body.data).not.toHaveProperty('studentEmail');
+    const all = await authenticatedRequest('get', '/api/students', asTeacher);
+    expect(JSON.stringify(all.body)).not.toMatch(/amal\.haddad@example\.com/i);
+    // A parent never reads the roster here at all (R1: /api/students is staff only).
+    expect((await authenticatedRequest('get', `/api/students/${amalId}`, asParent)).status).toBe(403);
+    expect((await authenticatedRequest('get', '/api/students', asParent)).status).toBe(403);
   });
 
   it("only an admin of the student's school can set a student email on the student form", async () => {
     const studentEmailOf = async (id) =>
       (await pool.query(`SELECT student_email FROM students WHERE student_id = $1`, [id])).rows[0].student_email;
 
-    for (const who of [asTeacher, asParent]) {
-      const res = await authenticatedRequest('patch', `/api/students/${ramiId}`, who).send({ studentEmail: 'taken.over@example.com' });
-      expect(res.status).toBe(403);
-      expect(res.body.message).toBe("Only admins can set a student's email. Use Admin Panel → Student accounts.");
-      // Clearing it is a change too.
-      expect((await authenticatedRequest('patch', `/api/students/${amalId}`, who).send({ studentEmail: null })).status).toBe(403);
-    }
+    const refused = await authenticatedRequest('patch', `/api/students/${ramiId}`, asTeacher).send({ studentEmail: 'taken.over@example.com' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.message).toBe("Only admins can set a student's email. Use Admin Panel → Student accounts.");
+    // Clearing it is a change too.
+    expect((await authenticatedRequest('patch', `/api/students/${amalId}`, asTeacher).send({ studentEmail: null })).status).toBe(403);
+    // A parent is refused before any of that (R1: staff only).
+    expect((await authenticatedRequest('patch', `/api/students/${ramiId}`, asParent).send({ studentEmail: 'taken.over@example.com' })).status).toBe(403);
     expect(await studentEmailOf(ramiId)).toBeNull();
     expect(await studentEmailOf(amalId)).toBe('Amal.Haddad@Example.com');
 

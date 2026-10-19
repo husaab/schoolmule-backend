@@ -247,4 +247,75 @@ describe('Integration: Student Routes', () => {
       expect(res.status).toBe(401);
     });
   });
+
+  // R1 (student invitations spec): any signed-in role used to reach these
+  // routes, and the :id ones were not school-scoped.
+  describe('R1: /api/students is staff-only and school-scoped', () => {
+    const asParent = { userId: '550e8400-e29b-41d4-a716-446655440002', username: 'Mona Haddad', role: 'PARENT' };
+    const asTeacher = { userId: '550e8400-e29b-41d4-a716-446655440001', username: 'Ziad Teacher', role: 'TEACHER' };
+    const asOtherAdmin = { userId: '550e8400-e29b-41d4-a716-446655440009', username: 'Other Admin', role: 'ADMIN', school: 'PLAYGROUND' };
+    let studentId;
+
+    const rowOf = async (id) => (await pool.query('SELECT * FROM students WHERE student_id = $1', [id])).rows[0];
+
+    beforeEach(async () => {
+      await pool.query(
+        `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ($1, 'teacher@example.com', 'Ziad Teacher', 'hashed', 'Ziad', 'Teacher', 'ALHAADIACADEMY', 'TEACHER', true, true)`,
+        [asTeacher.userId],
+      );
+      const { rows } = await pool.query(
+        `INSERT INTO students (name, grade, school, school_year_id, medical_notes)
+         VALUES ('Amal Haddad', '5', 'ALHAADIACADEMY', $1, 'Peanut allergy') RETURNING student_id`,
+        [activeYearId],
+      );
+      studentId = rows[0].student_id;
+    });
+
+    it('a parent token gets 403 on every students route and nothing changes', async () => {
+      const calls = [
+        ['get', '/api/students'],
+        ['get', `/api/students/${studentId}`],
+        ['patch', `/api/students/${studentId}`, { name: 'Changed' }],
+        ['delete', `/api/students/${studentId}`],
+        ['post', `/api/students/${studentId}/archive`],
+        ['post', '/api/students', { name: 'New Kid', grade: '2' }],
+      ];
+      for (const [method, url, body] of calls) {
+        const req = authenticatedRequest(method, url, asParent);
+        const res = body ? await req.send(body) : await req;
+        expect([method, url, res.status]).toEqual([method, url, 403]);
+      }
+      const row = await rowOf(studentId);
+      expect(row).toMatchObject({ name: 'Amal Haddad', is_archived: false });
+      const { rows: created } = await pool.query(`SELECT 1 FROM students WHERE name = 'New Kid'`);
+      expect(created).toHaveLength(0);
+    });
+
+    it("an admin of another school gets 404 on another school's student and nothing changes", async () => {
+      // A configured school (with an active year), so writes reach the controller.
+      await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
+      expect((await authenticatedRequest('get', `/api/students/${studentId}`, asOtherAdmin)).status).toBe(404);
+      expect((await authenticatedRequest('patch', `/api/students/${studentId}`, asOtherAdmin)
+        .send({ name: 'Changed', school: 'PLAYGROUND' })).status).toBe(404);
+      expect((await authenticatedRequest('post', `/api/students/${studentId}/archive`, asOtherAdmin)).status).toBe(404);
+      expect((await authenticatedRequest('post', `/api/students/${studentId}/unarchive`, asOtherAdmin)).status).toBe(404);
+      expect((await authenticatedRequest('delete', `/api/students/${studentId}`, asOtherAdmin)).status).toBe(404);
+      expect(await rowOf(studentId)).toMatchObject({ name: 'Amal Haddad', school: 'ALHAADIACADEMY', is_archived: false });
+    });
+
+    it('a PATCH never moves a student to another school', async () => {
+      const res = await authenticatedRequest('patch', `/api/students/${studentId}`).send({ school: 'PLAYGROUND' });
+      expect(res.status).toBe(200);
+      expect((await rowOf(studentId)).school).toBe('ALHAADIACADEMY');
+    });
+
+    it('a teacher of the same school can still read, edit and archive', async () => {
+      expect((await authenticatedRequest('get', `/api/students/${studentId}`, asTeacher)).status).toBe(200);
+      const patched = await authenticatedRequest('patch', `/api/students/${studentId}`, asTeacher).send({ name: 'Amal N. Haddad' });
+      expect(patched.status).toBe(200);
+      expect((await authenticatedRequest('post', `/api/students/${studentId}/archive`, asTeacher)).status).toBe(200);
+      expect(await rowOf(studentId)).toMatchObject({ name: 'Amal N. Haddad', is_archived: true });
+    });
+  });
 });
