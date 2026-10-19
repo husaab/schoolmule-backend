@@ -511,6 +511,39 @@ describe('Integration: classroom emails', () => {
     expect(await rowsFor('mona.haddad@example.com')).toHaveLength(1);
   });
 
+  it('post-Fable I-new: a Grades publish of the category never silences a derived Missing its digest did not mention', async () => {
+    const rowsFor = (email) => jobs('missing_alert', `AND recipient_email = '${email}'`);
+    const due = hoursFrom(FRIDAY, -3); // Friday 13:30
+    // Homework: A (Amal graded 8) and B (Bilal turned in and was graded; Amal turned in nothing).
+    const a = await assignment({ title: 'Leaf rubbing', dueAt: inDays(5), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
+    const b = await assignment({ title: 'Plant cell diagram', dueAt: due.toISOString(), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
+    await patchReq(`/api/classroom/items/${a.itemId}/submissions/${amalId}`, { draftScore: 8 });
+    await turnIn(b.itemId, asBilal);
+    await patchReq(`/api/classroom/items/${b.itemId}/submissions/${bilalId}`, { draftScore: 7 });
+
+    // The teacher publishes Homework in Grades: Mona's digest lists the category line (A only, for Amal).
+    await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+      .send({ assessmentIds: [homeworkId] }), 201);
+    const amalDigest = (await pool.query(
+      `SELECT e.assessment_ids, b.assessment_ids AS batch_ids FROM assessment_publication_emails e
+       JOIN assessment_publication_batches b ON b.batch_id = e.batch_id WHERE e.student_id = $1 AND e.status = 'sent'`, [amalId],
+    )).rows;
+    expect(amalDigest).toHaveLength(1);
+    expect(amalDigest[0].assessment_ids).toEqual([homeworkId]);
+    expect(amalDigest[0].batch_ids).toEqual(expect.arrayContaining([b.gradebook.assessmentId]));
+    // Sent after B was due (Friday 14:30).
+    await pool.query(`UPDATE assessment_publication_emails SET sent_at = $1`, [hoursFrom(FRIDAY, -2)]);
+
+    await classroom.runSchedule(FRIDAY);
+    // B is Missing by its due date and no digest said so: Mona is alerted once.
+    expect((await rowsFor('mona.haddad@example.com')).map((r) => r.digest_key)).toEqual([missingKey(amalId, b.itemId, due)]);
+    expect(await rowsFor('rania.karim@example.com')).toEqual([]);
+    const [job] = await rowsFor('mona.haddad@example.com');
+    getResend().emails.send.mockClear();
+    expect((await processJob(job, FRIDAY)).outcome).toBe('sent');
+    expect(sent()[0].html).toContain('Plant cell diagram');
+  });
+
   it("a family alert never takes a sibling another worker has claimed (no item emailed twice)", async () => {
     const cells = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
     const spelling = await createItem(engId, {

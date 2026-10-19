@@ -69,14 +69,16 @@ const MISSING_SINCE = `(CASE WHEN ${GRADE_VISIBLE} THEN sub.published_at ELSE i.
 // digest that listed it reached this address at or after `after` (when the
 // Missing came to be). assessment_publication_emails rows are one per child
 // and send; assessment_ids are the lines it listed (a Classwork publish adds
-// the column under a category line); the publish batch names every column it
-// published (a Grades publish lists only top-level lines, so a column under a
-// category is matched through its batch).
-const IN_SENT_DIGEST = (student, assessment, email, after) => `EXISTS (
+// the column under a category line). A Grades publish lists only top-level
+// lines, so a `confirmed` Missing it published under a category is matched
+// through the publish batch, which names every column it published (the
+// Missing is in that category line's rollup). A derived Missing never is: it
+// has no cell, so the category line said nothing about it (post-Fable I-new).
+const IN_SENT_DIGEST = (student, assessment, email, after, confirmed) => `EXISTS (
     SELECT 1 FROM assessment_publication_emails ape
     JOIN assessment_publication_batches apb ON apb.batch_id = ape.batch_id
     WHERE ape.student_id = ${student} AND ape.status = 'sent' AND ape.sent_at >= ${after}
-      AND (${assessment} = ANY(ape.assessment_ids) OR ${assessment} = ANY(apb.assessment_ids))
+      AND (${assessment} = ANY(ape.assessment_ids) OR (${confirmed} AND ${assessment} = ANY(apb.assessment_ids)))
       AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(ape.email_addresses) ape_to
                   WHERE LOWER(TRIM(ape_to)) = LOWER(TRIM(${email}))))`;
 
@@ -213,7 +215,7 @@ const classroomEmailQueries = {
     ),
     fresh AS (
       SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id, i.assessment_id, i.due_at,
-             ${MISSING_SINCE} AS missing_since
+             ${MISSING_SINCE} AS missing_since, ${GRADE_VISIBLE} AS confirmed
       FROM kids k
       JOIN class_students ro ON ro.student_id = k.student_id
       JOIN classes c ON c.class_id = ro.class_id AND c.archived_at IS NULL
@@ -234,7 +236,7 @@ const classroomEmailQueries = {
     JOIN users gu ON gu.user_id = f.parent_id AND ${GUARDIAN_OK('gu')}
     LEFT JOIN notification_prefs np ON np.user_id = gu.user_id
     WHERE COALESCE(np.missing_alerts, TRUE) AND NOT ${GETS_DAILY_SUMMARY('np')}
-      AND NOT ${IN_SENT_DIGEST('f.student_id', 'f.assessment_id', 'gu.email', 'f.missing_since')}
+      AND NOT ${IN_SENT_DIGEST('f.student_id', 'f.assessment_id', 'gu.email', 'f.missing_since', 'f.confirmed')}
     ORDER BY LOWER(TRIM(gu.email)), f.student_id, f.item_id, gu.user_id
     ${ON_CONFLICT}
     RETURNING job_id`,
@@ -490,7 +492,7 @@ const classroomEmailQueries = {
     SELECT ro.student_id, i.item_id, i.kind, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
            i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
            ${WORK_STATE_AT('$3::timestamptz')} AS state,
-           ${IN_SENT_DIGEST('ro.student_id', 'i.assessment_id', '$4::text', MISSING_SINCE)} AS announced
+           ${IN_SENT_DIGEST('ro.student_id', 'i.assessment_id', '$4::text', MISSING_SINCE, GRADE_VISIBLE)} AS announced
     FROM unnest($1::uuid[], $2::uuid[]) AS p(student_id, item_id)
     JOIN classwork_items i ON i.item_id = p.item_id
     JOIN class_students ro ON ro.class_id = i.class_id AND ro.student_id = p.student_id
