@@ -91,6 +91,9 @@ const listBody = (scopeSql) => `
     s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     lt.avatar AS lead_teacher_avatar,
+    -- Who the thread is addressed to: its own teacher (a student's co-teacher,
+    -- homeroom teacher or teaching admin), else the class lead.
+    NULLIF(TRIM(CONCAT(adr.first_name, ' ', adr.last_name)), '') AS addressee_name,
     cl.term_name,
     -- No guardian names on an item thread the school keeps from guardians (they aren't in it).
     CASE WHEN ${GUARDIANS_HIDDEN} THEN '{}'::text[] ELSE
@@ -106,6 +109,7 @@ const listBody = (scopeSql) => `
   JOIN students s  ON s.student_id = c.student_id
   LEFT JOIN classes cl ON cl.class_id = c.class_id
   LEFT JOIN users lt ON lt.user_id = COALESCE(cl.teacher_id, c.teacher_id)
+  LEFT JOIN users adr ON adr.user_id = COALESCE(c.teacher_id, cl.teacher_id)
   LEFT JOIN conversation_participants cp ON cp.conversation_id = c.conversation_id AND cp.user_id = $1
   WHERE c.school = $2
     AND ($3::uuid IS NULL OR s.school_year_id = $3)

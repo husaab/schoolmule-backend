@@ -602,6 +602,17 @@ describe('Integration: student messaging', () => {
     });
   });
 
+  it("the admin inbox names each thread's addressee: a co-teacher or homeroom teacher, not only the class lead", async () => {
+    const co = (await startThread({ teacherId: CO_TEACHER_ID, classId: sciId, subject: 'Lab', body: 'Can I stay late?' })).data.conversation.conversationId;
+    const home = (await startThread({ teacherId: HOMEROOM_ID, subject: 'Bus', body: 'The bus was late.' })).data.conversation.conversationId;
+    const rows = (await get('/api/messaging/conversations?status=all', asAdmin)).data;
+    const byId = Object.fromEntries(rows.map((r) => [r.conversationId, r]));
+    expect(byId[co]).toMatchObject({ leadTeacherName: 'Ziad Teacher', addresseeName: 'Omar Coteacher' });
+    expect(byId[home]).toMatchObject({ addresseeName: 'Huda Homeroom' });
+    // Teachers' and parents' list rows are unchanged.
+    expect((await get('/api/messaging/conversations', asTeacher)).data.find((r) => r.conversationId === co)).not.toHaveProperty('addresseeName');
+  });
+
   describe('email digests on student threads', () => {
     const notifier = require('../../../services/messageNotifier');
     const { getResend } = require('../../../utils/emailUtils');

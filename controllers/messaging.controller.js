@@ -431,7 +431,8 @@ const listConversations = async (req, res) => {
     const items = rows.map((r) => ({
       ...toItem(r),
       needsReply: needsReplyFor(role, r),
-      ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id) } : {}),
+      // The admin inbox names whom each thread is addressed to (a student may write to a co-teacher or homeroom teacher).
+      ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id), addresseeName: r.addressee_name ?? null } : {}),
     }));
     return res.status(200).json({ status: 'success', data: items });
   } catch (error) {
