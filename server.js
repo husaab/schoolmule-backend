@@ -1,7 +1,7 @@
 const express = require("express")
 require("dotenv").config();
 const cors = require("cors");
-const rateLimit = require('express-rate-limit');
+const { globalLimiter } = require('./middleware/globalRateLimit');
 const verifyUser = require('./middleware/verifyUserMiddleware');
 const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
@@ -94,13 +94,9 @@ app.use(cors(corsOptions));
 app.use("/api/finance/families/import", express.json({ limit: "2mb" }));
 app.use(express.json());
 
-const limiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 1000,
-});
-
-// Apply the limiter to all requests
-app.use(limiter);
+// 1000 requests a minute per signed-in user (anonymous: per network), on
+// every request: a school's users share one public IP (final review I3).
+app.use(globalLimiter);
 app.use(httpLogger);
 
 app.use("/api/health", healthRoutes);
