@@ -790,10 +790,12 @@ const duplicateClass = async (req, res) => {
       assessmentsCopied++;
     }
 
-    // 4b) Classwork, as drafts: topics first (ids mapped), then each live item.
-    //     A linked item reshapes the row the insert trigger gave its copied
-    //     column; an item with no column is inserted. Files are copied in
-    //     storage (best effort; a failed copy is skipped).
+    // 4b) Classwork: topics first (ids mapped), then each live item.
+    //     Assignments, quizzes and materials come over as drafts: a linked
+    //     one reshapes the row the insert trigger gave its copied column, one
+    //     with no column is inserted. A plain gradebook assessment keeps that
+    //     trigger row posted (final ruling I2). Files are copied in storage
+    //     (best effort; a failed copy is skipped).
     const { rows: sourceTopics } = await client.query(classQueries.duplicateSelectTopics, [sourceClassId]);
     const topicMap = {};
     for (const t of sourceTopics) {
@@ -806,7 +808,14 @@ const duplicateClass = async (req, res) => {
     for (const item of sourceItems) {
       const topicId = item.topic_id ? topicMap[item.topic_id] ?? null : null;
       let newItemId = null;
-      if (item.assessment_id) {
+      if (item.assessment_id && item.kind === 'assessment') {
+        const newAssessmentId = idMap[item.assessment_id];
+        if (!newAssessmentId) continue;
+        const { rows } = await client.query(classQueries.duplicateShapeAssessmentItem, [
+          newAssessmentId, item.instructions, topicId, item.show_early, item.sort_order,
+        ]);
+        newItemId = rows[0]?.item_id ?? null;
+      } else if (item.assessment_id) {
         const newAssessmentId = idMap[item.assessment_id];
         if (!newAssessmentId) continue;
         const { rows } = await client.query(classQueries.duplicateConvertLinkedItem, [

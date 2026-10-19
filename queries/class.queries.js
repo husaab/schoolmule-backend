@@ -440,7 +440,7 @@ const classQueries = {
     `,
 
     // The copied column's item (made by the insert trigger) takes the source
-    // item's shape, as a draft with no dates.
+    // assignment's or quiz's shape, as a draft with no dates.
     // $1 new assessment_id, $2 kind, $3 instructions, $4 topic_id, $5 submission_mode,
     // $6 email_students, $7 remind_students, $8 show_early, $9 sort_order, $10 created_by
     duplicateConvertLinkedItem: `
@@ -450,6 +450,18 @@ const classQueries = {
           email_students = $6, remind_students = $7, show_early = $8, sort_order = $9,
           created_by = $10, created_at = NOW(), edited_at = NULL
       WHERE assessment_id = $1
+      RETURNING item_id
+    `,
+
+    // A plain gradebook assessment stays the posted item the insert trigger
+    // made for its copied column (final ruling I2, D11: plain assessments
+    // show in Classwork like a new column's); it takes the source's topic,
+    // instructions, "show early" and order only.
+    // $1 new assessment_id, $2 instructions, $3 topic_id, $4 show_early, $5 sort_order
+    duplicateShapeAssessmentItem: `
+      UPDATE classwork_items
+      SET instructions = $2, topic_id = $3, show_early = $4, sort_order = $5
+      WHERE assessment_id = $1 AND kind = 'assessment'
       RETURNING item_id
     `,
 

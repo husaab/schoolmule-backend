@@ -840,8 +840,13 @@ describe('Integration: classwork', () => {
       expect((await call('get', `${BASE}/classes/${plain}/topics`)).body.data).toEqual([]);
     });
 
-    it('duplicating a class copies topics and classwork as drafts', async () => {
+    it('duplicating a class copies topics and classwork as drafts; plain gradebook assessments stay posted', async () => {
       const src = await seedScienceClasswork();
+      // The plain column's item carries a topic, instructions and "show early" to the copy.
+      await pool.query(
+        `UPDATE classwork_items SET topic_id = $2, instructions = 'Chapters 1 to 3.', show_early = TRUE WHERE assessment_id = $1`,
+        [unit1Id, src.topic.topicId],
+      );
       supabase._mockStorage.copy.mockClear();
       const res = await call('post', `/api/classes/${sciId}/duplicate`, asTeacher).send({
         grade: '5', subject: 'Science', teacherName: 'Ziad Teacher', teacherId: TEACHER_ID, termId, termName: 'Term 1',
@@ -860,11 +865,26 @@ describe('Integration: classwork', () => {
       expect(Object.keys(byName).sort()).toEqual([
         'Cells quiz', 'Cells reading', 'Homework 1', 'Homework 2', 'Homework 3', 'Homework 4', 'Plant cell diagram', 'Unit 1 test',
       ]);
-      for (const r of rows) expect(r).toMatchObject({ status: 'draft', posted_at: null, due_at: null, publish_at: null });
+      // Assignments, quizzes and materials come over as drafts; a plain
+      // gradebook assessment stays posted, as a new column's item is (final
+      // ruling I2), so it shows in Classwork and the parents' summaries.
+      for (const r of rows.filter((x) => x.kind !== 'assessment')) {
+        expect(r).toMatchObject({ status: 'draft', posted_at: null, due_at: null, publish_at: null });
+      }
+      for (const r of rows.filter((x) => x.kind === 'assessment')) {
+        expect(r).toMatchObject({ status: 'posted', due_at: null, publish_at: null });
+        expect(r.posted_at).not.toBeNull();
+      }
       expect(byName['Plant cell diagram']).toMatchObject({ kind: 'assignment', submission_mode: 'file', cat: 'Homework', title: null, topic_id: topics[0].topic_id });
       expect(byName['Cells quiz']).toMatchObject({ kind: 'quiz', cat: 'Quizzes' });
       expect(byName['Cells reading']).toMatchObject({ kind: 'material', assessment_id: null, topic_id: topics[0].topic_id });
-      expect(byName['Unit 1 test']).toMatchObject({ kind: 'assessment', cat: 'Tests' });
+      expect(byName['Unit 1 test']).toMatchObject({
+        kind: 'assessment', cat: 'Tests', topic_id: topics[0].topic_id, instructions: 'Chapters 1 to 3.', show_early: true, title: null,
+      });
+      expect(byName['Homework 1']).toMatchObject({ kind: 'assessment', status: 'posted' });
+      // In the teacher's Classwork list only the assignment, quiz and material are drafts.
+      const listed = (await call('get', `${BASE}/classes/${newId}/items`)).body.data.items;
+      expect(listed.filter((i) => i.status === 'draft').map((i) => i.kind).sort()).toEqual(['assignment', 'material', 'quiz']);
       // One item per copied column, none for the categories.
       const cols = (await pool.query(`SELECT assessment_id, is_parent FROM assessments WHERE class_id = $1`, [newId])).rows;
       for (const c of cols) expect((await itemsOf(c.assessment_id)).length).toBe(c.is_parent ? 0 : 1);
