@@ -75,7 +75,8 @@ const userQueries = {
     // "Forgot password": the same case-insensitive match as loginUser.
     // $1 = the typed address, trimmed.
     selectByEmailIgnoringCase: `
-      SELECT user_id, email, username, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at
+      SELECT user_id, email, username, first_name, last_name, school, role, email_token, is_verified, created_at, last_modified_at,
+             (password = '!') AS invite_pending
       FROM users
       WHERE LOWER(email) = LOWER($1)
     `,

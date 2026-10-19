@@ -11,10 +11,11 @@ const crypto = require('crypto');
 const db = require('../../config/database');
 const logger = require('../../logger');
 const q = require('../../queries/studentInvite.queries');
-const { getResend, sendOrThrow } = require('../../utils/emailUtils');
+const { getResend, sendOrThrow, sendSafely } = require('../../utils/emailUtils');
 const { getSchoolName } = require('../../utils/schoolUtils');
 const { schoolSender } = require('../email/senderIdentity');
-const { getStudentInviteEmailHTML } = require('../../templates/emailTemplate');
+const { getStudentInviteEmailHTML, getStudentAccountReadyEmailHTML } = require('../../templates/emailTemplate');
+const { normalizeName } = require('../import/matching');
 
 /** How long an invite link works. */
 const INVITE_VALID_DAYS = 14;
@@ -124,6 +125,133 @@ async function sendInvite({ inviteId, secret, expiresAt, email, firstName, fullN
   }
 }
 
+/**
+ * What a dead or live invite link says on the public page: valid, expired,
+ * used (accepted), replaced (a newer invite) or cancelled (cancelled, the
+ * address changed, the account archived, or the login deleted).
+ */
+function publicInviteState(row, now = new Date()) {
+  if (!row.ended_at && !row.user_id) return 'cancelled';
+  const state = inviteState(row, now);
+  if (state === 'pending' || state === 'failed') return 'valid';
+  if (state === 'accepted') return 'used';
+  if (state === 'replaced' || state === 'expired') return state;
+  return 'cancelled';
+}
+
+/** First sign-in by any method (the caller's transaction, or db). */
+const recordActivation = (client, { userId, via }) => client.query(q.recordActivation, [userId, via]);
+
+const PASSWORD_MIN = 8;
+const COMMON_PASSWORDS = new Set(['password', 'password1', '12345678', '123456789', '1234567890', 'qwertyui', 'qwerty123', '11111111', 'abcdefgh', 'iloveyou']);
+
+/**
+ * Why a student's chosen password won't do, or null. Students are children
+ * whose addresses are easy to guess, so their password must not be the
+ * address, their name, the school's name or a very common one.
+ */
+function passwordProblem(password, { email = '', firstName = '', lastName = '', schoolName = '' } = {}) {
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN) return `Use at least ${PASSWORD_MIN} characters.`;
+  const lower = password.toLowerCase();
+  const local = String(email).toLowerCase().split('@')[0];
+  if (lower === String(email).toLowerCase() || (local.length >= 4 && lower.includes(local))) {
+    return "Don't use your email address.";
+  }
+  const squashed = normalizeName(password).replace(/\s+/g, '');
+  const names = [firstName, lastName].flatMap((n) => normalizeName(n).split(' ')).filter((t) => t.length >= 3);
+  if (names.some((n) => squashed.includes(n))) return "Don't use your name in your password.";
+  const school = normalizeName(schoolName).replace(/\s+/g, '');
+  if (COMMON_PASSWORDS.has(lower) || (school.length >= 4 && squashed.includes(school))) {
+    return 'Choose something harder to guess.';
+  }
+  return null;
+}
+
+const domainOf = (email) => String(email).slice(String(email).lastIndexOf('@') + 1).toLowerCase();
+
+/**
+ * Whether a verified Google identity may become this student login's sign-in,
+ * as a { status, code, message } verdict or null. The Google address must be
+ * the login's, and an address on one of the school's declared student
+ * domains must come from that Google Workspace domain (hd).
+ */
+function acceptGoogleChecks(google, user, domains = []) {
+  if (!google.emailVerified) {
+    return { status: 403, code: 'GOOGLE_UNVERIFIED', message: "Google hasn't verified this account's email address, so it can't be used here." };
+  }
+  if (String(google.email).toLowerCase() !== String(user.email).toLowerCase()) {
+    return {
+      status: 409,
+      code: 'GOOGLE_WRONG_ACCOUNT',
+      message: `That Google account is ${google.email}. This invite is for ${user.email}.`,
+    };
+  }
+  const domain = domainOf(user.email);
+  if (domains.includes(domain) && String(google.hd || '').toLowerCase() !== domain) {
+    return { status: 409, code: 'GOOGLE_WRONG_DOMAIN', message: `Use your school Google account (${domain}).` };
+  }
+  return null;
+}
+
+// Resend allows ~2 requests/second.
+const GUARDIAN_EMAIL_GAP_MS = 600;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The first time a student sets up their own sign-in (a password or Google),
+ * tell their guardians once, ever. Never throws: a failure is logged and the
+ * student's sign-in goes on.
+ */
+async function notifyGuardiansOnce({ userId, via, schoolInfo = null }) {
+  try {
+    const { rows: claimed } = await db.query(q.claimGuardianNotice, [userId]);
+    if (claimed.length === 0) return;
+    const { rows: [row] } = await db.query(q.selectLatestLinkedStudent, [userId]);
+    if (!row) return;
+    const { rows: [login] } = await db.query('SELECT email FROM users WHERE user_id = $1', [userId]);
+    const { rows: addresses } = await db.query(q.selectGuardianAddresses, [row.student_id, login?.email || '']);
+    const firstName = String(row.name).trim().split(/\s+/)[0];
+    const schoolName = (schoolInfo && schoolInfo.name) || getSchoolName(row.school);
+    const html = getStudentAccountReadyEmailHTML({
+      firstName, schoolName, schoolInfo, activatedOn: formatInviteDate(new Date()), via,
+    });
+    for (let i = 0; i < addresses.length; i += 1) {
+      await sendSafely(getResend(), {
+        ...schoolSender({ school: row.school, schoolInfo, role: 'messages' }),
+        to: addresses[i].email,
+        subject: `${firstName}'s SchoolMule account is ready`,
+        html,
+      }, 'Student account-ready email failed to send', { userId });
+      if (i < addresses.length - 1) await sleep(GUARDIAN_EMAIL_GAP_MS);
+    }
+  } catch (err) {
+    logger.error({ err, userId }, 'Failed to tell guardians a student account is ready');
+  }
+}
+
+/**
+ * A pending student's first Google sign-in through /login: Google proved the
+ * address, which is what the invite is for, so it counts as accepting it
+ * (whatever its state). The open invite ends as accepted, reset links die,
+ * the activation is stamped and the guardians are told (R2).
+ */
+async function recordGoogleAcceptance(userId) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(q.acceptOpenInvite, [userId, 'google']);
+    await client.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
+    await recordActivation(client, { userId, via: 'google' });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  await notifyGuardiansOnce({ userId, via: 'google' });
+}
+
 module.exports = {
   INVITE_VALID_DAYS,
   MAX_INVITE_EMAILS_PER_DAY,
@@ -139,4 +267,10 @@ module.exports = {
   invitesSentToday,
   renderInviteEmail,
   sendInvite,
+  publicInviteState,
+  recordActivation,
+  passwordProblem,
+  acceptGoogleChecks,
+  notifyGuardiansOnce,
+  recordGoogleAcceptance,
 };

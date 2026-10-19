@@ -41,10 +41,16 @@ describe('googleSignIn.verifySignInCode', () => {
       sub: '109876543210',
       email: 'parent.demo@example.com',
       emailVerified: true,
+      hd: null,
       givenName: 'Demo',
       familyName: 'Parent',
       name: 'Demo Parent',
     });
+  });
+
+  it("passes on a school account's Google Workspace domain (hd)", async () => {
+    mockVerifyIdToken.mockResolvedValue(ticket({ ...PAYLOAD, hd: 'students.example.org' }));
+    expect((await verifySignInCode('auth-code')).hd).toBe('students.example.org');
   });
 
   it('treats anything but a literal true email_verified as unverified', async () => {

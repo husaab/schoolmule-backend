@@ -32,7 +32,7 @@ class GoogleSignInError extends Error {
  * keys and its expiry by google-auth-library, so a token minted for another
  * app can never sign anyone in here.
  *
- * @returns {Promise<{ sub: string, email: string, emailVerified: boolean,
+ * @returns {Promise<{ sub: string, email: string, emailVerified: boolean, hd: string|null,
  *   givenName: string, familyName: string, name: string }>}
  */
 async function verifySignInCode(code) {
@@ -64,6 +64,8 @@ async function verifySignInCode(code) {
     sub: payload.sub,
     email: payload.email,
     emailVerified: payload.email_verified === true,
+    // The Google Workspace domain of a school account (null for a personal one).
+    hd: payload.hd || null,
     givenName: payload.given_name || '',
     familyName: payload.family_name || '',
     name: payload.name || '',

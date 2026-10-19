@@ -7,9 +7,16 @@ jest.mock('resend', () => ({
   Resend: jest.fn(() => ({ emails: { send: (...args) => mockSend(...args) } })),
 }));
 
+jest.mock('../../../services/google/googleSignIn', () => {
+  const actual = jest.requireActual('../../../services/google/googleSignIn');
+  return { ...actual, verifySignInCode: jest.fn() };
+});
+
+const request = require('supertest');
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const { hashInviteSecret } = require('../../../services/classroom/studentInvites');
+const { verifySignInCode } = require('../../../services/google/googleSignIn');
 
 const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -229,6 +236,304 @@ describe('Integration: Student invitations', () => {
       expect(res.body.data.results.map((r) => r.reason)).toEqual(['shared_with_student', 'shared_with_student']);
       expect((await pool.query(`SELECT 1 FROM users WHERE role::text = 'STUDENT'`)).rows).toHaveLength(0);
       expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('student side', () => {
+    let ip = 0;
+    let addr;
+    // Every test gets its own network address: the sign-in limiters count
+    // failures per address for the whole file.
+    beforeEach(() => { ip += 1; addr = `10.9.0.${ip}`; });
+    const pub = (path) => request(getApp()).post(path).set('X-Forwarded-For', addr);
+    const inspect = (token) => pub('/api/auth/student-invite').send({ token });
+    const accept = (body) => pub('/api/auth/student-invite/accept').send(body);
+    const invitedSecret = async (studentId) => {
+      mockSend.mockClear();
+      await invite([studentId]);
+      return secretIn(mockSend.mock.calls[0][0].html);
+    };
+    const google = (overrides = {}) => ({
+      sub: 'google-sub-amal', email: 'amal.haddad@example.com', emailVerified: true, hd: null,
+      givenName: 'Amal', familyName: 'Haddad', name: 'Amal Haddad', ...overrides,
+    });
+    const me = (token) => request(getApp()).get('/api/student/me').set('Authorization', `Bearer ${token}`);
+
+    beforeEach(async () => {
+      // Amal's guardians: the mother's account (also her mother_email on file,
+      // so one email) and the father's contact address without an account.
+      await pool.query(
+        `INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school)
+         VALUES ($1, $2, 'Mona Haddad', 'mona.haddad@example.com', 'Mother', 'ALHAADIACADEMY'),
+                ($1, NULL, 'Karim Haddad', 'Karim.Haddad@example.com', 'Father', 'ALHAADIACADEMY')`,
+        [amalId, MOTHER_ID],
+      );
+    });
+
+    it('inspect shows who the invite is for and the ways in, and inspecting changes nothing (Review Focus 3)', async () => {
+      const secret = await invitedSecret(amalId);
+      const first = await inspect(secret);
+      expect(first.status).toBe(200);
+      expect(first.body.data).toEqual({
+        state: 'valid',
+        school: { code: 'ALHAADIACADEMY', name: 'Al Haadi Academy' },
+        student: { firstName: 'Amal', lastInitial: 'H', grade: '5' },
+        email: 'amal.haddad@example.com',
+        methods: { google: true, password: true },
+        expiresAt: expect.any(String),
+      });
+      const [before] = await invitesOf(amalId);
+      await inspect(secret);
+      const [after] = await invitesOf(amalId);
+      expect(after).toEqual(before);
+    });
+
+    it('accept with a password signs in to the SAME student row, ends the invite, and emails each guardian once', async () => {
+      const secret = await invitedSecret(amalId);
+      const login = await loginOf(amalId);
+      await pool.query(`INSERT INTO password_reset_tokens (user_id, expires_at) VALUES ($1, NOW() + interval '1 day')`, [login.user_id]);
+      const counts = async () => (await pool.query(
+        `SELECT (SELECT COUNT(*) FROM students)::int AS students, (SELECT COUNT(*) FROM users)::int AS users`,
+      )).rows[0];
+      const before = await counts();
+      mockSend.mockClear();
+
+      const res = await accept({ token: secret, password: 'cedar-river' });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ role: 'STUDENT', userId: login.user_id, token: expect.any(String) });
+      expect(await counts()).toEqual(before);
+
+      const mine = await me(res.body.data.token);
+      expect(mine.status).toBe(200);
+      expect(mine.body.data.student.studentId).toBe(amalId);
+
+      const [row] = await invitesOf(amalId);
+      expect(row).toMatchObject({ end_reason: 'accepted', accepted_via: 'password', ended_at: expect.any(Date) });
+      expect((await pool.query(`SELECT 1 FROM password_reset_tokens WHERE user_id = $1`, [login.user_id])).rows).toHaveLength(0);
+      const { rows: [acct] } = await pool.query(`SELECT * FROM student_accounts WHERE user_id = $1`, [login.user_id]);
+      expect(acct).toMatchObject({ activated_via: 'password', activated_at: expect.any(Date), guardians_notified_at: expect.any(Date) });
+
+      const sentTo = mockSend.mock.calls.map(([m]) => m.to).sort();
+      expect(sentTo).toEqual(['karim.haddad@example.com', 'mona.haddad@example.com']);
+      expect(mockSend.mock.calls[0][0].subject).toBe("Amal's SchoolMule account is ready");
+      expect(mockSend.mock.calls[0][0].html).toContain('(set a password)');
+      expect(rowOf(await list(), amalId)).toMatchObject({ status: 'active', signInMethod: 'password' });
+    });
+
+    it('a used link answers used, and of two accepts at once exactly one wins', async () => {
+      const secret = await invitedSecret(amalId);
+      const both = await Promise.all([
+        accept({ token: secret, password: 'cedar-river' }),
+        accept({ token: secret, password: 'maple-lake' }),
+      ]);
+      expect(both.map((r) => r.status).sort()).toEqual([200, 410]);
+      const again = await accept({ token: secret, password: 'cedar-river' });
+      expect(again.status).toBe(410);
+      expect(again.body).toMatchObject({ code: 'INVITE_USED', data: { state: 'used' } });
+      expect((await inspect(secret)).body.data.state).toBe('used');
+    });
+
+    it('an expired link answers expired', async () => {
+      const secret = await invitedSecret(amalId);
+      await pool.query(`UPDATE student_invites SET expires_at = NOW() - interval '1 second' WHERE student_id = $1`, [amalId]);
+      expect((await inspect(secret)).body.data.state).toBe('expired');
+      const res = await accept({ token: secret, password: 'cedar-river' });
+      expect(res.status).toBe(410);
+      expect(res.body).toMatchObject({ code: 'INVITE_EXPIRED', data: { state: 'expired' } });
+    });
+
+    it('after a resend the old link answers replaced; after a cancel, cancelled', async () => {
+      const first = await invitedSecret(amalId);
+      await authenticatedRequest('post', `${BASE}/${amalId}/resend-invite`, asAdmin);
+      expect((await inspect(first)).body.data.state).toBe('replaced');
+      expect((await accept({ token: first, password: 'cedar-river' })).status).toBe(410);
+
+      const sami = await invitedSecret(samiId);
+      await authenticatedRequest('post', `${BASE}/${samiId}/invite/cancel`, asAdmin);
+      expect((await inspect(sami)).body.data.state).toBe('cancelled');
+      expect((await accept({ token: sami, password: 'cedar-river' })).body.data.state).toBe('cancelled');
+    });
+
+    it('a garbled or unknown token answers 404, and 21 failures from one network answer 429', async () => {
+      expect((await inspect('not-a-token')).status).toBe(404);
+      expect((await inspect('x'.repeat(43))).body).toMatchObject({ code: 'INVITE_NOT_FOUND' });
+      for (let i = 0; i < 18; i += 1) await inspect('y'.repeat(43));
+      expect((await inspect('z'.repeat(43))).status).toBe(429);
+    });
+
+    it('a weak password is refused with the reason and nothing changes', async () => {
+      const secret = await invitedSecret(amalId);
+      const res = await accept({ token: secret, password: 'amalhaddad1' });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ code: 'PASSWORD_WEAK', message: "Don't use your name in your password." });
+      expect((await invitesOf(amalId))[0].ended_at).toBeNull();
+    });
+
+    it('Google with a different address is refused and changes nothing', async () => {
+      const secret = await invitedSecret(amalId);
+      verifySignInCode.mockResolvedValue(google({ email: 'mona.h@example.com' }));
+      const res = await accept({ token: secret, googleCode: 'code' });
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        code: 'GOOGLE_WRONG_ACCOUNT',
+        message: 'That Google account is mona.h@example.com. This invite is for amal.haddad@example.com.',
+      });
+      expect((await loginOf(amalId)).google_sub).toBeNull();
+    });
+
+    it('Google on a declared school domain must be that Workspace domain', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET student_email_domains = '{example.com}'`);
+      const secret = await invitedSecret(amalId);
+      verifySignInCode.mockResolvedValue(google({ hd: null }));
+      const res = await accept({ token: secret, googleCode: 'code' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('GOOGLE_WRONG_DOMAIN');
+
+      verifySignInCode.mockResolvedValue(google({ hd: 'example.com' }));
+      const ok = await accept({ token: secret, googleCode: 'code' });
+      expect(ok.status).toBe(200);
+      expect((await loginOf(amalId)).google_sub).toBe('google-sub-amal');
+      expect((await invitesOf(amalId))[0]).toMatchObject({ end_reason: 'accepted', accepted_via: 'google' });
+    });
+
+    it('a Google account already linked to someone else is refused', async () => {
+      await pool.query(`UPDATE users SET google_sub = 'google-sub-amal' WHERE user_id = $1`, [MOTHER_ID]);
+      const secret = await invitedSecret(amalId);
+      verifySignInCode.mockResolvedValue(google());
+      const res = await accept({ token: secret, googleCode: 'code' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('GOOGLE_IN_USE');
+    });
+
+    it('a Google-only school offers no password and refuses one', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET student_sign_in = 'google_only'`);
+      const secret = await invitedSecret(amalId);
+      expect(mockSend.mock.calls[0][0].html).toContain('Sign in with your school Google account');
+      expect((await inspect(secret)).body.data.methods).toEqual({ google: true, password: false });
+      const res = await accept({ token: secret, password: 'cedar-river' });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PASSWORD_SIGN_IN_OFF');
+    });
+
+    it('with classrooms off, accepting still sets up the account but signs no one in', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET enabled = FALSE`);
+      const secret = await invitedSecret(amalId);
+      const res = await accept({ token: secret, password: 'cedar-river' });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ activated: true, signedIn: false, code: 'CLASSROOM_DISABLED', message: expect.any(String) });
+      expect((await invitesOf(amalId))[0].end_reason).toBe('accepted');
+    });
+
+    it("another school's admin token changes nothing: the endpoints ignore Authorization", async () => {
+      const secret = await invitedSecret(amalId);
+      const res = await pub('/api/auth/student-invite')
+        .set('Authorization', 'Bearer not-a-real-token')
+        .send({ token: secret });
+      expect(res.status).toBe(200);
+      expect(res.body.data.school.code).toBe('ALHAADIACADEMY');
+    });
+
+    it('invited before rollover, accepted after: the student lands on the active year\'s row', async () => {
+      const secret = await invitedSecret(amalId);
+      const login = await loginOf(amalId);
+      // Roll over by hand: next year becomes active with Amal's promoted row and its link.
+      const next = await nextYear();
+      const amalNext = await student('Amal Haddad', '6', { yearId: next, studentEmail: 'amal.haddad@example.com', previousId: amalId });
+      await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [login.user_id, amalNext, next]);
+      await pool.query(`UPDATE school_years SET is_active = (school_year_id = $1) WHERE school = 'ALHAADIACADEMY'`, [next]);
+
+      const res = await accept({ token: secret, password: 'cedar-river' });
+      expect(res.status).toBe(200);
+      expect((await me(res.body.data.token)).body.data.student.studentId).toBe(amalNext);
+    });
+  });
+
+  describe('other ways in (spec §3.9)', () => {
+    let ip = 100;
+    let addr;
+    beforeEach(() => { ip += 1; addr = `10.9.1.${ip}`; });
+    const pub = (path) => request(getApp()).post(path).set('X-Forwarded-For', addr);
+
+    it('a student who has not set up yet gets INVITE_PENDING from password sign-in and from Forgot password', async () => {
+      await invite([amalId]);
+      const login = await pub('/api/auth/login').send({ email: 'amal.haddad@example.com', password: 'anything-at-all' });
+      expect(login.status).toBe(403);
+      expect(login.body).toMatchObject({
+        code: 'INVITE_PENDING',
+        message: "You haven't set up your account yet. Use the invite in your email, or Continue with Google.",
+      });
+      const forgot = await pub('/api/auth/request-password-reset').send({ email: 'amal.haddad@example.com' });
+      expect(forgot.status).toBe(403);
+      expect(forgot.body.code).toBe('INVITE_PENDING');
+      expect((await pool.query(`SELECT 1 FROM password_reset_tokens`)).rows).toHaveLength(0);
+    });
+
+    it('a Google-only school refuses student password sign-in and Forgot password', async () => {
+      await invite([amalId]);
+      const u = await loginOf(amalId);
+      await pool.query(`UPDATE users SET password = '$2b$10$hashedpasswordvalue' WHERE user_id = $1`, [u.user_id]);
+      await pool.query(`UPDATE school_classroom_settings SET student_sign_in = 'google_only'`);
+      const login = await pub('/api/auth/login').send({ email: 'amal.haddad@example.com', password: 'whatever' });
+      expect(login.status).toBe(403);
+      expect(login.body).toMatchObject({ code: 'PASSWORD_SIGN_IN_OFF', message: 'Your school uses Google to sign in. Tap Continue with Google.' });
+      expect((await pub('/api/auth/request-password-reset').send({ email: 'amal.haddad@example.com' })).body.code)
+        .toBe('PASSWORD_SIGN_IN_OFF');
+      // Staff are untouched by a student setting.
+      expect((await pub('/api/auth/login').send({ email: 'office@example.com', password: 'wrong' })).status).toBe(401);
+    });
+
+    it("a pending student's first Google sign-in on /login ends the invite, kills the reset token and tells guardians once (R2)", async () => {
+      await pool.query(
+        `INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school)
+         VALUES ($1, $2, 'Mona Haddad', 'mona.haddad@example.com', 'Mother', 'ALHAADIACADEMY')`, [amalId, MOTHER_ID],
+      );
+      await invite([amalId]);
+      const u = await loginOf(amalId);
+      await pool.query(`INSERT INTO password_reset_tokens (user_id, expires_at) VALUES ($1, NOW() + interval '1 day')`, [u.user_id]);
+      mockSend.mockClear();
+      verifySignInCode.mockResolvedValue({
+        sub: 'google-sub-amal', email: 'amal.haddad@example.com', emailVerified: true, hd: null,
+        givenName: 'Amal', familyName: 'Haddad', name: 'Amal Haddad',
+      });
+      const res = await pub('/api/auth/google').send({ code: 'c', intent: 'login' });
+      expect(res.status).toBe(200);
+      expect((await invitesOf(amalId))[0]).toMatchObject({ end_reason: 'accepted', accepted_via: 'google' });
+      expect((await pool.query(`SELECT 1 FROM password_reset_tokens WHERE user_id = $1`, [u.user_id])).rows).toHaveLength(0);
+      expect(mockSend.mock.calls.map(([m]) => m.to)).toEqual(['mona.haddad@example.com']);
+      expect(mockSend.mock.calls[0][0].html).toContain('(signed in with Google)');
+
+      // Signing in again sends nothing more.
+      mockSend.mockClear();
+      expect((await pub('/api/auth/google').send({ code: 'c', intent: 'login' })).status).toBe(200);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('Google on /login for a student on a declared domain must come from that Workspace domain', async () => {
+      await pool.query(`UPDATE school_classroom_settings SET student_email_domains = '{example.com}'`);
+      await invite([amalId]);
+      verifySignInCode.mockResolvedValue({
+        sub: 'google-sub-amal', email: 'amal.haddad@example.com', emailVerified: true, hd: null,
+        givenName: 'Amal', familyName: 'Haddad', name: 'Amal Haddad',
+      });
+      const res = await pub('/api/auth/google').send({ code: 'c', intent: 'login' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('GOOGLE_WRONG_DOMAIN');
+      expect((await loginOf(amalId)).google_sub).toBeNull();
+    });
+
+    it("a student's first QR sign-in counts as activation and sends no guardian email", async () => {
+      const { issueQrSecret, qrToken } = require('../../../services/classroom/studentLogin');
+      await invite([samiId]);
+      const u = await loginOf(samiId);
+      const { secret, hash } = issueQrSecret();
+      await pool.query(`UPDATE student_accounts SET qr_secret_hash = $2, qr_issued_at = NOW() WHERE user_id = $1`, [u.user_id, hash]);
+      mockSend.mockClear();
+      const res = await pub('/api/auth/student-qr').send({ token: qrToken(u.user_id, secret) });
+      expect(res.status).toBe(200);
+      const { rows: [acct] } = await pool.query(`SELECT * FROM student_accounts WHERE user_id = $1`, [u.user_id]);
+      expect(acct).toMatchObject({ activated_via: 'card', guardians_notified_at: null });
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(rowOf(await list(), samiId)).toMatchObject({ status: 'active', signInMethod: 'card' });
     });
   });
 });

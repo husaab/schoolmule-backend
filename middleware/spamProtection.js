@@ -118,6 +118,10 @@ const loginLimiter = failedSignInLimiter({ max: 100 });
 const loginAccountLimiter = failedSignInLimiter({ max: 10, key: typedEmail });
 // Per network and card, failed QR sign-ins.
 const qrCardLimiter = failedSignInLimiter({ max: 10, key: cardUser });
+// Per network, failed student invite checks and acceptances (unknown, dead
+// or refused links). An invite secret is 256 random bits, so this only keeps
+// a page that is being hammered quiet.
+const inviteTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'invite' });
 
 // Honeypot validation middleware (for contact form)
 // Expects a hidden field named 'website' that should be empty
@@ -191,6 +195,7 @@ module.exports = {
   loginLimiter,
   loginAccountLimiter,
   qrCardLimiter,
+  inviteTokenLimiter,
   honeypotValidation,
   validateInput
 };

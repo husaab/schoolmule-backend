@@ -54,3 +54,70 @@ describe('formatInviteDate', () => {
     expect(INVITE_VALID_DAYS).toBe(14);
   });
 });
+
+describe('passwordProblem', () => {
+  const ctx = { email: 'amal.haddad@students.example.org', firstName: 'Amal', lastName: 'Haddad', schoolName: 'Al Haadi Academy' };
+  const { passwordProblem } = require('../../../services/classroom/studentInvites');
+  it.each([
+    ['short1', 'Use at least 8 characters.'],
+    ['amal.haddad', "Don't use your email address."],
+    ['amal.haddad2026', "Don't use your email address."],
+    ['amalhaddad1', "Don't use your name in your password."],
+    ['Haddad-family', "Don't use your name in your password."],
+    ['password', 'Choose something harder to guess.'],
+    ['12345678', 'Choose something harder to guess.'],
+    ['alhaadiacademy1', 'Choose something harder to guess.'],
+  ])('refuses %p', (pw, message) => {
+    expect(passwordProblem(pw, ctx)).toBe(message);
+  });
+  it('accepts a passphrase that is none of those', () => {
+    expect(passwordProblem('cedar-river', ctx)).toBeNull();
+    expect(passwordProblem('maple lake 42', ctx)).toBeNull();
+  });
+  it('refuses a non-string', () => {
+    expect(passwordProblem(undefined, ctx)).toBe('Use at least 8 characters.');
+  });
+});
+
+describe('acceptGoogleChecks', () => {
+  const { acceptGoogleChecks } = require('../../../services/classroom/studentInvites');
+  const user = { email: 'amal.haddad@students.example.org' };
+  const google = (o = {}) => ({ email: 'Amal.Haddad@students.example.org', emailVerified: true, hd: 'students.example.org', ...o });
+  it('passes the same address (any case) from the school Workspace', () => {
+    expect(acceptGoogleChecks(google(), user, ['students.example.org'])).toBeNull();
+  });
+  it('refuses an unverified Google address', () => {
+    expect(acceptGoogleChecks(google({ emailVerified: false }), user, [])).toMatchObject({ status: 403, code: 'GOOGLE_UNVERIFIED' });
+  });
+  it('refuses another address, naming both', () => {
+    expect(acceptGoogleChecks(google({ email: 'mona@example.com' }), user, [])).toEqual({
+      status: 409,
+      code: 'GOOGLE_WRONG_ACCOUNT',
+      message: 'That Google account is mona@example.com. This invite is for amal.haddad@students.example.org.',
+    });
+  });
+  it('on a declared domain, refuses a Google account outside that Workspace', () => {
+    expect(acceptGoogleChecks(google({ hd: null }), user, ['students.example.org'])).toMatchObject({ code: 'GOOGLE_WRONG_DOMAIN' });
+    expect(acceptGoogleChecks(google({ hd: 'other.org' }), user, ['students.example.org'])).toMatchObject({ code: 'GOOGLE_WRONG_DOMAIN' });
+  });
+  it('with no declared domain, a personal Google account is fine', () => {
+    expect(acceptGoogleChecks(google({ hd: null }), user, [])).toBeNull();
+  });
+});
+
+describe('publicInviteState', () => {
+  const { publicInviteState } = require('../../../services/classroom/studentInvites');
+  const now = new Date('2026-10-20T12:00:00Z');
+  const live = { user_id: 'u', ended_at: null, send_status: 'sent', expires_at: '2026-11-01T00:00:00Z' };
+  it('maps every row to what the page says', () => {
+    expect(publicInviteState(live, now)).toBe('valid');
+    expect(publicInviteState({ ...live, send_status: 'failed' }, now)).toBe('valid');
+    expect(publicInviteState({ ...live, expires_at: '2026-10-01T00:00:00Z' }, now)).toBe('expired');
+    expect(publicInviteState({ ...live, ended_at: now, end_reason: 'accepted' }, now)).toBe('used');
+    expect(publicInviteState({ ...live, ended_at: now, end_reason: 'replaced' }, now)).toBe('replaced');
+    for (const reason of ['cancelled', 'email_changed', 'archived']) {
+      expect(publicInviteState({ ...live, ended_at: now, end_reason: reason }, now)).toBe('cancelled');
+    }
+    expect(publicInviteState({ ...live, user_id: null }, now)).toBe('cancelled');
+  });
+});

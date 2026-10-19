@@ -23,6 +23,8 @@ const {
 } = require('../services/classroom/studentLogin');
 const { photoUrlFor } = require('../services/profile/photos');
 const studentAccountQueries = require('../queries/studentAccount.queries');
+const { getSettings: getClassroomSettings } = require('../services/classroom/classroomSettings');
+const { recordActivation, acceptGoogleChecks, recordGoogleAcceptance } = require('../services/classroom/studentInvites');
 
 const SESSION_TTL = '7d';
 // Students often share school computers (spec §6): their sessions are short.
@@ -330,6 +332,28 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
   };
   
 
+// A student's password sign-in (and "Forgot password") is refused in two
+// cases, each with the way in that works: a school that signs students in
+// with Google only, and a student who hasn't set up their account yet (the
+// invite placeholder; the invite or Google is how they start).
+const PASSWORD_SIGN_IN_OFF = Object.freeze({
+  status: 403, code: 'PASSWORD_SIGN_IN_OFF', message: 'Your school uses Google to sign in. Tap Continue with Google.',
+});
+const INVITE_PENDING = Object.freeze({
+  status: 403, code: 'INVITE_PENDING',
+  message: "You haven't set up your account yet. Use the invite in your email, or Continue with Google.",
+});
+async function studentPasswordVerdict(user) {
+  const { studentSignIn } = await getClassroomSettings(user.school);
+  if (studentSignIn === 'google_only') return PASSWORD_SIGN_IN_OFF;
+  if (user.invite_pending ?? user.password === '!') return INVITE_PENDING;
+  return null;
+}
+async function assertStudentPasswordAllowed(user) {
+  const verdict = await studentPasswordVerdict(user);
+  if (verdict) throw { ...verdict };
+}
+
   const login = async (req, res) => {
     const { email, password } = req.body;
     let user = null;
@@ -349,6 +373,7 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
       }
 
       user = match.user;
+      if (user.role === 'STUDENT') await assertStudentPasswordAllowed(user);
       const isPasswordValid = await bcrypt.compare(password, user.password);
 
       if (!isPasswordValid) {
@@ -397,9 +422,14 @@ const studentQrLogin = async (req) => {
       recordLogin(req, { email: user ? user.email : '', user, outcome: 'qr_invalid' });
       return { ...QR_INVALID };
     }
-    return await openSession(req, user, {
+    const session = await openSession(req, user, {
       email: user.email, message: 'Signed in', via: 'qr', qrCard: qrCardFingerprint(user.qr_secret_hash),
     });
+    // A first scan counts as the student's activation (no guardian email: the card is used at school).
+    await recordActivation(db, { userId: user.user_id, via: 'card' }).catch((err) => {
+      logger.warn({ err, userId: user.user_id }, 'Recording a QR activation failed');
+    });
+    return session;
   } catch (error) {
     const status = Number.isInteger(error.status) ? error.status : 500;
     if (status >= 500) {
@@ -528,7 +558,18 @@ const googleSignIn = async (req) => {
     let accountCreated = false;
 
     if (user) {
+      // A student's first Google link: an address on the school's declared
+      // student domain must come from that Google Workspace domain.
+      const firstStudentLink = user.role === 'STUDENT' && !user.google_sub;
+      if (firstStudentLink) {
+        const { studentEmailDomains } = await getClassroomSettings(user.school);
+        const verdict = acceptGoogleChecks(google, user, studentEmailDomains);
+        if (verdict) throw verdict;
+      }
+      const wasPending = user.role === 'STUDENT' && user.password === '!';
       user = await linkGoogleAccount(user, google);
+      // A pending student's first Google sign-in accepts the invite (R2).
+      if (wasPending && !user.is_archived) await recordGoogleAcceptance(user.user_id);
     } else if (intent === 'signup') {
       user = await createGoogleAccount({ google, school, role });
       accountCreated = true;
@@ -801,6 +842,10 @@ const requestPasswordReset = async (req, res) => {
     }
 
     const user = match.user;
+    if (user.role === 'STUDENT') {
+      const verdict = await studentPasswordVerdict(user);
+      if (verdict) return res.status(verdict.status).json({ success: false, code: verdict.code, message: verdict.message });
+    }
 
     const tokenResult = await db.query(passwordQueries.createPasswordResetToken, [user.user_id]);
     const token = tokenResult.rows[0].token;
@@ -1038,6 +1083,9 @@ const switchView = async (req, res) => {
 };
 
 module.exports = {
+    // Shared with the student invite acceptance (controllers/studentInvite.controller.js).
+    openSession,
+    unusablePasswordHash,
     registerUser,
     login,
     googleSignIn,

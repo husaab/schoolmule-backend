@@ -157,6 +157,27 @@ const getStudentInviteEmailHTML = ({ firstName, fullName, schoolName, schoolInfo
     footer: schoolContact(schoolInfo, schoolName),
   });
 
+/**
+ * Sent once to a student's guardians when the student first sets up their
+ * own sign-in (a password or Google; a card scan at school doesn't count), so
+ * a family notices an account they didn't expect.
+ */
+const getStudentAccountReadyEmailHTML = ({ firstName, schoolName, schoolInfo, activatedOn, via }) => {
+  const how = via === 'google' ? 'signed in with Google' : 'set a password';
+  const name = escapeHtml(firstName);
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: `${firstName}'s SchoolMule account is ready`,
+    preheader: `${firstName} set up a SchoolMule student account.`,
+    content: [
+      paragraph('Hi,'),
+      paragraph(`${name} set up a SchoolMule student account on ${escapeHtml(activatedOn)} (${how}). ${name} can now see classes, work and grades there.`),
+      finePrint(`If you don't think ${name} did this, contact the school office.`),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+};
+
 /** Sent when an admin (or, later, a teacher) asks for a new password link for a student. */
 const getStudentPasswordResetEmailHTML = ({ firstName, schoolName, schoolInfo, requestedBy, url }) =>
   renderEmail({
@@ -613,6 +634,7 @@ module.exports = {
   getResetEmailHTML,
   getInviteEmailHTML,
   getStudentInviteEmailHTML,
+  getStudentAccountReadyEmailHTML,
   getStudentPasswordResetEmailHTML,
   getContactEmailHTML,
   getTicketEmailHTML,
