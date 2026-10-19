@@ -1117,6 +1117,58 @@ describe('Integration: grading and per-student Publish', () => {
       });
     });
 
+    describe('T16 N6: a grid write for a student off the item supersedes their leftover draft', () => {
+      // Bilal's draft 6 is held while he is off the class; the item is narrowed to Amal meanwhile.
+      const leaveWithDraft = async (title, publishFirst) => {
+        const colId = await assessment(sciId, title, { weight: 20, max: 10 });
+        const lab = await createItem({
+          kind: 'assignment', title, submissionMode: 'done', dueAt: inDays(2),
+          audience: 'some', studentIds: [amalId, bilalId], gradebook: { mode: 'existing', assessmentId: colId },
+        });
+        const url = `/api/classroom/items/${lab.itemId}`;
+        await patchOn(url, amalId, { draftScore: 8 });
+        await patchOn(url, bilalId, { draftScore: 6 });
+        if (publishFirst) await post(`${url}/publish`, { studentIds: [amalId] });
+        await pool.query(`DELETE FROM class_students WHERE class_id = $1 AND student_id = $2`, [sciId, bilalId]);
+        await editItem(url, { audience: 'some', studentIds: [amalId] }, 200);
+        await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [sciId, bilalId]);
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: 6, published_at: null });
+        return { colId, lab, url };
+      };
+      const grid = (scores) => post(`/api/studentAssessments/classes/${sciId}/scores`, { scores });
+
+      it('V1: on a published column the live 9 stays when he is put back; Publish N never brings the 6 back', async () => {
+        const { colId, lab, url } = await leaveWithDraft('Lab N6a', true);
+        await grid([{ studentId: bilalId, assessmentId: colId, score: 9 }]); // plain: he is off the item
+        expect(await cell(bilalId, colId)).toMatchObject({ score: 9 });
+        expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: null, draft_status: null });
+
+        await editItem(url, { audience: 'some', studentIds: [amalId, bilalId] }, 200);
+        const row = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+        expect(row).toMatchObject({ draftScore: null, needsPublish: false });
+        getResend().emails.send.mockClear();
+        expect((await publish('graded')).data.publishedStudentIds).toEqual([]);
+        expect(await cell(bilalId, colId)).toMatchObject({ score: 9 });
+        expect(sent()).toEqual([]);
+      });
+
+      it('V2: on an unpublished column the newer 9 survives an unrelated audience edit and his return', async () => {
+        const { colId, url } = await leaveWithDraft('Lab N6b', false);
+        await grid([{ studentId: bilalId, assessmentId: colId, score: 9 }]);
+        await editItem(url, { audience: 'some', studentIds: [amalId, daliaId] }, 200); // not about Bilal
+        expect(await cell(bilalId, colId)).toMatchObject({ score: 9 });
+        await editItem(url, { audience: 'some', studentIds: [amalId, bilalId, daliaId] }, 200);
+        // Back on the unpublished column, his cell is a draft again: the 9, not the 6.
+        expect((await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId)).toMatchObject({ draftScore: 9 });
+
+        // The status menu is a plain write too.
+        const { colId: col2, lab: lab2 } = await leaveWithDraft('Lab N6c', false);
+        await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+          .send({ studentId: bilalId, assessmentId: col2, status: 'excused' }), 200);
+        expect(await submission(bilalId, lab2.itemId)).toMatchObject({ draft_score: null, draft_status: null });
+      });
+    });
+
     it('M9: lifting an excuse keeps the score under it, even one only the gradebook holds', async () => {
       await patch(amalId, { draftScore: 8 });
       await publish([amalId]);

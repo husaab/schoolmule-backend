@@ -103,6 +103,15 @@ const gradingQueries = {
     WHERE sub.item_id = $1 AND sub.student_id = $2
     FOR UPDATE OF sub`,
 
+  // T16 N6: a plain gradebook write (grid or status menu) for a student the
+  // turn-in item isn't for supersedes a draft left on their submission from
+  // when they were on the item; nothing published is touched. $1 item, $2 student
+  clearStaleDraft: `
+    UPDATE classwork_submissions
+    SET draft_score = NULL, draft_status = NULL
+    WHERE item_id = $1 AND student_id = $2 AND published_at IS NULL
+      AND (draft_score IS NOT NULL OR draft_status IS NOT NULL)`,
+
   //  A teacher's draft write (the grading view, the grid). A cleared cell
   //  (no score, no flag) is no draft at all, unless the gradebook still holds
   //  a grade for the student (a column unpublished after a publish): then it

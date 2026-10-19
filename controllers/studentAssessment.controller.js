@@ -176,7 +176,7 @@ const upsertScoresByClass = async (req, res) => {
     // assessment is published; after that the grid writes live, as Save did.
     const userId = req.user?.userId ?? null;
     const studentIds = scores.map((e) => e.studentId);
-    const { syncFor, liveEntries, drafts } = await withTurnInColumns(classId, assessmentIds, studentIds, async (runner, { draftCol, liveCol, inAudience }) => {
+    const { syncFor, staleFor, liveEntries, drafts } = await withTurnInColumns(classId, assessmentIds, studentIds, async (runner, { draftCol, liveCol, inAudience }) => {
       // A draft: an unpublished turn-in column, for one of its item's students.
       const isDraft = (e) => draftCol.has(e.assessmentId) && inAudience(e.assessmentId, e.studentId);
       const out = [];
@@ -188,7 +188,9 @@ const upsertScoresByClass = async (req, res) => {
       }
       // A live cell on a published turn-in column, for one of its item's students, keeps the submission in step.
       const sync = (r) => (liveCol.has(r.assessment_id) && inAudience(r.assessment_id, r.student_id) ? liveCol.get(r.assessment_id) : null);
-      return { syncFor: sync, liveEntries: scores.filter((e) => !isDraft(e)), drafts: out };
+      // A student the turn-in item isn't for is graded plainly; that grade supersedes a leftover draft (T16 N6).
+      const staleFor = (r) => (!inAudience(r.assessment_id, r.student_id) ? (draftCol.get(r.assessment_id) ?? liveCol.get(r.assessment_id) ?? null) : null);
+      return { syncFor: sync, staleFor, liveEntries: scores.filter((e) => !isDraft(e)), drafts: out };
     });
     if (liveEntries.length === 0) {
       return res.status(200).json({ status: 'success', data: [], drafts });
@@ -227,6 +229,8 @@ const upsertScoresByClass = async (req, res) => {
     for (const r of upsertedRows) {
       const itemId = syncFor(r);
       if (itemId) await db.query(gradingQueries.syncLiveSubmission, [itemId, r.student_id, r.score, r.status, userId]);
+      const staleItemId = staleFor(r);
+      if (staleItemId) await db.query(gradingQueries.clearStaleDraft, [staleItemId, r.student_id]);
     }
     // upsertedRows is an array of { student_id, assessment_id, score }
     return res.status(200).json({
@@ -294,6 +298,10 @@ async function applyCellStatusSplit({ classId, studentId, assessmentId, status, 
     for (const r of rows) {
       if (liveCol.has(r.assessment_id) && inAudience(r.assessment_id, r.student_id)) {
         await runner.query(gradingQueries.syncLiveSubmission, [liveCol.get(r.assessment_id), r.student_id, r.score, r.status, userId]);
+      } else if (!inAudience(r.assessment_id, r.student_id)) {
+        // A student the turn-in item isn't for: the plain write supersedes a leftover draft (T16 N6).
+        const itemId = draftCol.get(r.assessment_id) ?? liveCol.get(r.assessment_id);
+        if (itemId) await runner.query(gradingQueries.clearStaleDraft, [itemId, r.student_id]);
       }
     }
     return { rows, drafts, found: true };
