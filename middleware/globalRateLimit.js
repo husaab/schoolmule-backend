@@ -6,8 +6,10 @@
 // (final review I3). A signed-in request counts against its user: the user id
 // of a token that verifies with our secret. Anonymous traffic, and any token
 // that does not verify (forged, expired, malformed), counts against the
-// network as before, so a made-up token never buys a fresh budget. The
-// sign-in limiters (spamProtection.js) are separate and unchanged.
+// network as before, so a made-up token never buys a fresh budget. So does
+// the token of an account not verified yet (public /register hands one out):
+// N sign-ups never buy N budgets (re-review N5). The sign-in limiters
+// (spamProtection.js) are separate and unchanged.
 
 const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
@@ -15,14 +17,14 @@ const jwt = require('jsonwebtoken');
 const WINDOW_MS = 60 * 1000;
 const MAX_PER_WINDOW = 1000;
 
-/** The limiter bucket for a request: `user:<id>` for a verified token, else `ip:<address>`. */
+/** The limiter bucket for a request: `user:<id>` for a verified token of a verified account, else `ip:<address>`. */
 function rateLimitKey(req) {
   const header = req.headers && req.headers.authorization;
   if (typeof header === 'string' && header.startsWith('Bearer ')) {
     try {
       const decoded = jwt.verify(header.slice(7), process.env.JWT_SECRET);
       const id = decoded && (decoded.userId || decoded.sub);
-      if (id) return `user:${id}`;
+      if (id && decoded.isVerified && decoded.isVerifiedSchool) return `user:${id}`;
     } catch {
       // Not a token we issued (or no longer valid): the network's bucket.
     }

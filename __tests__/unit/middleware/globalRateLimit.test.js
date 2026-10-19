@@ -12,7 +12,8 @@ process.env.JWT_SECRET = SECRET;
 
 const { rateLimitKey, createGlobalLimiter } = require('../../../middleware/globalRateLimit');
 
-const tokenFor = (userId, secret = SECRET) => jwt.sign({ userId, role: 'STUDENT' }, secret, { expiresIn: '1h' });
+const tokenFor = (userId, secret = SECRET, claims = { isVerified: true, isVerifiedSchool: true }) =>
+  jwt.sign({ userId, role: 'STUDENT', ...claims }, secret, { expiresIn: '1h' });
 const appWith = (max) => {
   const app = express();
   app.set('trust proxy', 1);
@@ -35,6 +36,14 @@ describe('globalRateLimit', () => {
     const expired = jwt.sign({ userId: 'u-1' }, SECRET, { expiresIn: -10 });
     expect(rateLimitKey({ headers: { authorization: `Bearer ${expired}` }, ip: '203.0.113.7' })).toBe('ip:203.0.113.7');
     expect(rateLimitKey({ headers: { authorization: 'Basic abc' }, ip: '203.0.113.7' })).toBe('ip:203.0.113.7');
+  });
+
+  it('re-review N5: a self-registered account that is not verified yet counts against the network, not its own budget', () => {
+    const at = (claims) => rateLimitKey({ headers: { authorization: `Bearer ${tokenFor('u-2', SECRET, claims)}` }, ip: '203.0.113.7' });
+    expect(at({ isVerified: false, isVerifiedSchool: false })).toBe('ip:203.0.113.7');
+    expect(at({ isVerified: true, isVerifiedSchool: false })).toBe('ip:203.0.113.7');
+    expect(at({})).toBe('ip:203.0.113.7');
+    expect(at({ isVerified: true, isVerifiedSchool: true })).toBe('user:u-2');
   });
 
   it('users on one school network each get their own budget', async () => {
