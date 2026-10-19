@@ -432,6 +432,34 @@ describe('Integration: quizzes', () => {
     expect((await pool.query(`SELECT COUNT(*)::int AS n FROM assessment_publication_batches WHERE class_id = $1`, [sciId])).rows[0].n).toBe(2);
   });
 
+  it("Fable M4: a release on submit records who released it (the quiz's creator, else the class's teacher), like any Publish", async () => {
+    const solo = (await pool.query(
+      `INSERT INTO assessments (class_id, name, weight_points, max_score) VALUES ($1, 'Cells quiz', 100, 20) RETURNING assessment_id`, [sciId],
+    )).rows[0].assessment_id;
+    const { item, questions } = await quizWith([ONE], { gradebook: { mode: 'existing', assessmentId: solo } });
+    await patch(`/api/classroom/items/${item.itemId}`, { quizRelease: 'on_submit' });
+    const actors = async (studentId) => (await pool.query(
+      `SELECT a.published_by, sub.published_by AS sub_published_by,
+              (SELECT array_agg(b.triggered_by ORDER BY b.created_at) FROM assessment_publication_batches b WHERE b.class_id = $3) AS batch_by,
+              (SELECT array_agg(e.sent_by) FROM assessment_publication_emails e WHERE e.student_id = $2) AS email_by
+       FROM assessments a JOIN classwork_submissions sub ON sub.item_id = $1 AND sub.student_id = $2
+       WHERE a.assessment_id = $4`, [item.itemId, studentId, sciId, solo],
+    )).rows[0];
+
+    await answer(item.itemId, [{ questionId: questions[0].questionId, answer: { choice: 'b' } }]);
+    await submit(item.itemId);
+    expect(await actors(amalId)).toEqual({
+      published_by: TEACHER_ID, sub_published_by: TEACHER_ID, batch_by: [TEACHER_ID], email_by: [TEACHER_ID],
+    });
+
+    // The creator's account is gone: the class's lead teacher stands behind the release.
+    await pool.query(`UPDATE classwork_items SET created_by = NULL WHERE item_id = $1`, [item.itemId]);
+    await pool.query(`UPDATE classes SET teacher_id = $2 WHERE class_id = $1`, [sciId, OTHER_TEACHER_ID]);
+    await submit(item.itemId, asBilal);
+    const bilal = await actors(bilalId);
+    expect(bilal).toMatchObject({ published_by: TEACHER_ID, sub_published_by: OTHER_TEACHER_ID, batch_by: [TEACHER_ID, OTHER_TEACHER_ID] });
+  });
+
   it('after_review leaves a draft; with a written answer the draft is null until the teacher grades it', async () => {
     // All auto-graded: the draft is the score, waiting for Publish.
     const auto = await quizWith([ONE, SHORT]);

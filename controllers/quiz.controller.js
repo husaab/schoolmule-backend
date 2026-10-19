@@ -160,7 +160,7 @@ const submitStudentQuiz = async (req, res) => {
       await afterPublish({ school: p.school, studentIds: published.publishedStudentIds, itemId: p.itemId });
       if (item.assessment_id) {
         await sendGradeDigest({
-          classId: item.class_id, school: p.school, userId: null, batchId: published.batchId,
+          classId: item.class_id, school: p.school, userId: item.release_by ?? null, batchId: published.batchId,
           assessmentIds: [item.assessment_id], studentIds: published.publishedStudentIds,
         });
       }

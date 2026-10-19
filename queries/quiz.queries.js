@@ -23,10 +23,15 @@ const quizQueries = {
   // ── The quiz item ───────────────────────────────────────────────────────
 
   //  The quiz's item, settings and gradebook column. $1 item_id
+  //  release_by: who stands behind a release on submit (Fable M4), recorded
+  //  as the publisher like any Publish: the teacher who made the quiz, else
+  //  the class's lead teacher.
   selectQuizItem: `
     SELECT i.item_id, i.class_id, i.kind, i.assessment_id, i.quiz_release, i.quiz_shuffle, i.quiz_show_answers,
-           a.max_score, COALESCE(a.is_published, FALSE) AS is_published
+           a.max_score, COALESCE(a.is_published, FALSE) AS is_published,
+           COALESCE(i.created_by, c.teacher_id) AS release_by
     FROM classwork_items i
+    JOIN classes c ON c.class_id = i.class_id
     LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
     WHERE i.item_id = $1 AND i.deleted_at IS NULL`,
 

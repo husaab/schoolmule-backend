@@ -683,6 +683,7 @@ async function saveAnswers({ studentId, school, itemId, answers }) {
  * this student at once through publishSubmissions (unless the column's
  * first per-student Publish is refused: then it stays a draft).
  * @returns {Promise<{ item, published }>} for the caller's after-COMMIT work
+ *   (item.release_by: the teacher recorded as the publisher)
  */
 async function submitQuiz({ studentId, school, itemId }) {
   return inTransaction(async (client) => {
@@ -726,12 +727,15 @@ async function submitQuiz({ studentId, school, itemId }) {
 
     let published = { publishedStudentIds: [], assessmentPublished: false, batchId: null };
     // Released on submit: published at once, unless a teacher's typed score
-    // holds the cell (that stays theirs to publish).
+    // holds the cell (that stays theirs to publish). The teacher's standing
+    // "release on submit" is the publish, so it is recorded as theirs: the
+    // quiz's creator, else the class's lead teacher (Fable M4).
     if (onSubmit && !totals.needsReview && (!quiz.assessment_id || quizScore.wrote)) {
       const item = { item_id: itemId, class_id: quiz.class_id, assessment_id: quiz.assessment_id, is_published: isPublished };
+      const userId = quiz.release_by ?? null;
       try {
-        published = await publishSubmissions(client, { item, studentIds: [studentId], userId: null, school });
-        published.batchId = await ensurePublishBatch(client, { item, school, userId: null, published });
+        published = await publishSubmissions(client, { item, studentIds: [studentId], userId, school });
+        published.batchId = await ensurePublishBatch(client, { item, school, userId, published });
       } catch (error) {
         if (error.code !== 'OUTSIDE_AUDIENCE_GRADES') throw error;
         // The column holds grades of students the quiz isn't for: it must be
