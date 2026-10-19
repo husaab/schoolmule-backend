@@ -4,7 +4,11 @@
 // WebP only. The declared type has to be one of those AND the first bytes of
 // the file have to agree, so a renamed document never reaches storage. The
 // type used on upload is the one sniffed from the bytes, never the declared one.
+// A photo too big for the app (over 2000 px or 1.5 MB) is then resized, turned
+// upright and stripped of its EXIF/GPS (utils/imageResize.js); `req.image`
+// describes what will be stored.
 const multer = require('multer');
+const { normalizeImage } = require('./imageResize');
 
 const EXT_BY_TYPE = Object.freeze({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' });
 const TYPE_ERROR = 'Use a JPEG, PNG or WebP image';
@@ -50,8 +54,12 @@ function singleImage({ field, maxBytes }) {
       if (!req.file) return reject(res, 'Choose an image to upload');
       const contentType = sniffImageType(req.file.buffer);
       if (!contentType) return reject(res, TYPE_ERROR);
-      req.image = { buffer: req.file.buffer, contentType, ext: EXT_BY_TYPE[contentType], size: req.file.size };
-      return next();
+      return normalizeImage(req.file.buffer, contentType).then((out) => {
+        req.image = out
+          ? { buffer: out.buffer, contentType: out.contentType, ext: out.ext, size: out.buffer.length }
+          : { buffer: req.file.buffer, contentType, ext: EXT_BY_TYPE[contentType], size: req.file.size };
+        return next();
+      }, next);
     });
 }
 

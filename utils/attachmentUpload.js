@@ -1,11 +1,13 @@
 // utils/attachmentUpload.js
 //
 // Multer + Supabase storage helpers shared by messaging and announcements.
-// Declared MIME must match the extension; neither alone is trusted.
+// Declared MIME must match the extension; neither alone is trusted. Photos are
+// resized and stripped of EXIF/GPS before they are stored (utils/imageResize.js).
 const path = require('path');
 const multer = require('multer');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const { normalizeUploadedFiles } = require('./imageResize');
 
 const BUCKET = 'message-attachments';
 const MAX_FILES = 5;
@@ -39,7 +41,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 // Multer errors become 400s in our envelope instead of reaching errorHandler.
 const uploadFiles = (req, res, next) =>
   upload.array('files', MAX_FILES)(req, res, (err) => {
-    if (!err) return next();
+    if (!err) return normalizeUploadedFiles(req.files).then(() => next(), next);
     const message =
       err.code === 'LIMIT_FILE_SIZE' ? 'Each file must be 10 MB or smaller'
         : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? `At most ${MAX_FILES} files per message`

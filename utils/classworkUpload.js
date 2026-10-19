@@ -13,6 +13,8 @@ const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
 const { ALLOWED: MESSAGE_ALLOWED, BUCKET, MAX_FILES, MAX_FILE_BYTES, SIGNED_URL_TTL } = require('./attachmentUpload');
+// Photos are resized and stripped of EXIF/GPS before they are stored.
+const { normalizeUploadedFiles } = require('./imageResize');
 
 // Messaging's types plus slides and short videos.
 const ALLOWED = Object.freeze({
@@ -75,7 +77,7 @@ const filesWith = (parser, typeError) => (req, res, next) =>
   parser.array('files', MAX_FILES)(req, res, (err) => {
     if (err) return reject(res, multerMessage(err, true, typeError));
     if (!req.files || req.files.length === 0) return reject(res, 'Choose a file to upload');
-    return next();
+    return normalizeUploadedFiles(req.files).then(() => next(), next);
   });
 
 /** Multipart `files` (1–5): a teacher's classwork attachments. */
@@ -89,7 +91,7 @@ const uploadFile = (req, res, next) =>
   upload.single('file')(req, res, (err) => {
     if (err) return reject(res, multerMessage(err, false));
     if (!req.file) return reject(res, 'Choose a file to upload');
-    return next();
+    return normalizeUploadedFiles([req.file]).then(() => next(), next);
   });
 
 /** Where an item's file lives in the bucket. */
