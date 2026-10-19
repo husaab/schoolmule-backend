@@ -17,12 +17,13 @@ const parentLink = (announcementId) =>
 
 /**
  * Where a student lands from an email: the class Stream with the post opened
- * for a class post, otherwise the student home. `ctx` has announcement_id,
- * scope and class_id.
+ * for a post that belongs to a class (a class post, or chosen students picked
+ * in a class Stream: a custom post with its class, M4), otherwise the student
+ * home. `ctx` has announcement_id and class_id.
  */
-const studentLink = ({ announcement_id: id, scope, class_id: classId }) => {
+const studentLink = ({ announcement_id: id, class_id: classId }) => {
   const base = process.env.FRONTEND_URL || '';
-  return scope === 'class' && classId
+  return classId
     ? `${base}/student/classes/${classId}?announcement=${id}`
     : `${base}/student?announcement=${id}`;
 };

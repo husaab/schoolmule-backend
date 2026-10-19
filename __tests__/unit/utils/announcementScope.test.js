@@ -21,4 +21,9 @@ describe('studentLink', () => {
       expect(studentLink({ announcement_id: ID, scope, class_id: null })).toBe(`https://app.example.com/student?announcement=${ID}`);
     }
   });
+
+  it("M4: a custom post composed in a class Stream opens that class's Stream", () => {
+    expect(studentLink({ announcement_id: ID, scope: 'custom', class_id: CLASS }))
+      .toBe(`https://app.example.com/student/classes/${CLASS}?announcement=${ID}`);
+  });
 });
