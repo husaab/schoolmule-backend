@@ -413,7 +413,8 @@ const messagingQueries = {
     )
     RETURNING job_id, conversation_id, recipient_id, school, attempts
   `,
-  // $1 job_id
+  // $1 job_id. since_exact is the later of last_emailed_at / last_read_at as text: a JS Date
+  // would cut Postgres microseconds to milliseconds and re-select an already-emailed message.
   selectJobContext: `
     SELECT
       j.job_id, j.conversation_id, j.recipient_id, j.school, j.attempts,
@@ -433,7 +434,8 @@ const messagingQueries = {
          WHERE ps.student_id = c.student_id) AS has_guardians,
       EXISTS (SELECT 1 FROM school_classroom_settings scs
          WHERE scs.school = s.school AND scs.enabled AND scs.student_email_from_grade IS NOT NULL
-           AND ${GRADE_RANK('s.grade::text')} >= ${GRADE_RANK('scs.student_email_from_grade')}) AS student_email_on
+           AND ${GRADE_RANK('s.grade::text')} >= ${GRADE_RANK('scs.student_email_from_grade')}) AS student_email_on,
+      GREATEST(cp.last_emailed_at, cp.last_read_at)::text AS since_exact
     FROM message_email_jobs j
     JOIN users u ON u.user_id = j.recipient_id
     JOIN conversations c ON c.conversation_id = j.conversation_id
@@ -443,9 +445,10 @@ const messagingQueries = {
     LEFT JOIN conversation_participants cp ON cp.conversation_id = j.conversation_id AND cp.user_id = j.recipient_id
     WHERE j.job_id = $1
   `,
-  // $1 conversation_id, $2 recipient_id, $3 since timestamptz|null
+  // $1 conversation_id, $2 recipient_id, $3 since timestamptz|null (pass the exact text, never a JS Date).
+  // created_at_exact keeps the microseconds for markEmailed and the next "since".
   selectMessagesForEmail: `
-    SELECT m.message_id, m.body, m.created_at,
+    SELECT m.message_id, m.body, m.created_at, m.created_at::text AS created_at_exact,
            TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
            (SELECT COUNT(*) FROM message_attachments ma WHERE ma.message_id = m.message_id)::int AS attachment_count
     FROM messages m LEFT JOIN users u ON u.user_id = m.sender_id
@@ -468,8 +471,9 @@ const messagingQueries = {
         send_after = NOW() + (attempts * interval '5 minutes')
     WHERE job_id = $1
   `,
-  // $1 conversation_id, $2 recipient_id, $3 created_at of the last message in the digest.
+  // $1 conversation_id, $2 recipient_id, $3 created_at_exact of the last message in the digest.
   // Never NOW(): a message posted while the email was being sent would be skipped forever.
+  // Never a JS Date either: at millisecond precision the same message reads as unsent and is emailed again.
   markEmailed: `
     INSERT INTO conversation_participants (conversation_id, user_id, last_emailed_at)
     VALUES ($1, $2, $3::timestamptz)

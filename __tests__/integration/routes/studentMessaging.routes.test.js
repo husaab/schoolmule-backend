@@ -601,4 +601,45 @@ describe('Integration: student messaging', () => {
       expect((await get('/api/student/conversations/unread-count', asAmal)).data).toEqual({ unreadConversations: 1, unreadMessages: 1 });
     });
   });
+
+  describe('email digests on student threads', () => {
+    const notifier = require('../../../services/messageNotifier');
+    const { getResend } = require('../../../utils/emailUtils');
+    // Postgres keeps microseconds and a JS Date keeps milliseconds. Pin a
+    // non-zero microsecond part so every run exercises the precision gap.
+    const withMicros = (id) => pool.query(
+      `UPDATE messages SET created_at = date_trunc('milliseconds', created_at) + interval '228 microseconds' WHERE conversation_id = $1`, [id]);
+    const makeDue = (id) => pool.query(
+      `UPDATE message_email_jobs SET send_after = NOW() - interval '1 minute' WHERE conversation_id = $1 AND status = 'pending'`, [id]);
+
+    it('a student-started thread emails each message once (microsecond timestamps never re-queue it), the student included', async () => {
+      const resend = getResend().emails.send;
+      resend.mockClear();
+      const id = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Lab partner', body: 'Can I switch lab partners?' })).data.conversation.conversationId;
+      await withMicros(id);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(4);
+      expect(resend.mock.calls.map(([e]) => e.to[0]).sort()).toEqual(
+        ['mona.haddad@example.com', 'omar.coteacher@example.com', 'sami.haddad@example.com', 'ziad.teacher@example.com']);
+      expect(await pendingJobs(id)).toEqual([]);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(0);
+      expect(resend).toHaveBeenCalledTimes(4);
+
+      // The teacher replies: the student (and the parents and co-teacher) get one email each, with only the reply.
+      resend.mockClear();
+      await staffPost(id, asTeacher, 'Yes, see me at lunch.');
+      await withMicros(id);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(4);
+      const toStudent = resend.mock.calls.map(([e]) => e).find((e) => e.to[0] === 'amal.haddad@example.com');
+      expect(toStudent).toBeTruthy();
+      expect(toStudent.html).toContain('Yes, see me at lunch.');
+      expect(toStudent.html).not.toContain('Can I switch lab partners?');
+      expect(await pendingJobs(id)).toEqual([]);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(0);
+      expect(resend).toHaveBeenCalledTimes(4);
+    }, 30000);
+  });
 });
