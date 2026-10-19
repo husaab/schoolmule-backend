@@ -18,7 +18,10 @@ const ctx = (over = {}) => ({
   title: 'Unit 3 Quiz', assessment_id: 'a1', student_id: 's1', last_message_at: '2026-10-07T12:00:00Z',
   student_name: 'Amina Test', class_subject: 'Math', last_read_at: null, last_emailed_at: null, muted: false, ...over,
 });
-const msg = (over = {}) => ({ message_id: 'm1', body: 'Hello', created_at: '2026-10-07T12:00:00Z', sender_name: 'Ahmed Khan', attachment_count: 0, ...over });
+const msg = (over = {}) => ({
+  message_id: 'm1', body: 'Hello', created_at: '2026-10-07T12:00:00Z', created_at_exact: '2026-10-07 12:00:00.000228+00',
+  sender_name: 'Ahmed Khan', attachment_count: 0, ...over,
+});
 
 /** Route db.query by SQL fragment; records every call. */
 function makeRouter(table) {
@@ -92,10 +95,10 @@ describe('messageNotifier', () => {
   it('sends one digest with every unread message and records sent + last_emailed_at', async () => {
     const r = makeRouter({
       'FOR UPDATE SKIP LOCKED': [job()],
-      'AS recipient_email': [ctx({ last_emailed_at: '2026-10-07T11:00:00Z' })],
+      'AS recipient_email': [ctx({ last_emailed_at: '2026-10-07T11:00:00Z', since_exact: '2026-10-07 11:00:00.123456+00' })],
       'AS attachment_count': (params) => {
-        // since = the later of last_emailed_at / last_read_at
-        expect(params[2]).toBe('2026-10-07T11:00:00.000Z');
+        // since = the later of last_emailed_at / last_read_at, from SQL as text (microseconds kept)
+        expect(params[2]).toBe('2026-10-07 11:00:00.123456+00');
         return [msg(), msg({ message_id: 'm2', body: 'Second', attachment_count: 2 })];
       },
       'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, is_published: true }],
@@ -147,13 +150,17 @@ describe('messageNotifier', () => {
     const r = makeRouter({
       'FOR UPDATE SKIP LOCKED': [job()],
       'AS recipient_email': [ctx()],
-      'AS attachment_count': () => (++calls === 1 ? [msg({ created_at: '2026-10-07T12:00:00Z' })] : [msg({ message_id: 'm2', body: 'posted mid-send', created_at: '2026-10-07T12:00:05Z' })]),
+      'AS attachment_count': () => (++calls === 1
+        ? [msg({ created_at: '2026-10-07T12:00:00Z', created_at_exact: '2026-10-07 12:00:00.934228+00' })]
+        : [msg({ message_id: 'm2', body: 'posted mid-send', created_at: '2026-10-07T12:00:05Z', created_at_exact: '2026-10-07 12:00:05.000001+00' })]),
       'AS class_avg_pct': [],
     });
     await notifier.drainOnce();
     expect(mockSend).toHaveBeenCalledTimes(1);
+    // The exact Postgres text, never a millisecond Date: '.934' would make m1 look unsent and loop.
     const [emailed] = r.ran('DO UPDATE SET last_emailed_at');
-    expect(emailed.params[2]).toBe('2026-10-07T12:00:00.000Z');
+    expect(emailed.params[2]).toBe('2026-10-07 12:00:00.934228+00');
+    expect(r.ran('AS attachment_count')[1].params[2]).toBe('2026-10-07 12:00:00.934228+00');
     const [requeue] = r.ran('INSERT INTO message_email_jobs');
     expect(requeue.params.slice(0, 3)).toEqual([CONVO, [RECIPIENT], 'ALHAADIACADEMY']);
   });

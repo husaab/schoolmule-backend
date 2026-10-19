@@ -517,4 +517,57 @@ describe('Integration: Messaging routes', () => {
       expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([MOM_ID, CO_TEACHER_ID].sort());
     });
   });
+
+  describe('email digests', () => {
+    const notifier = require('../../../services/messageNotifier');
+    const { getResend } = require('../../../utils/emailUtils');
+    // Postgres keeps microseconds and a JS Date keeps milliseconds. Pin a non-zero
+    // microsecond part (idempotent) so every run exercises the precision gap.
+    const withMicros = (id) => pool.query(
+      `UPDATE messages SET created_at = date_trunc('milliseconds', created_at) + interval '228 microseconds' WHERE conversation_id = $1`, [id]);
+    const makeDue = (id) => pool.query(
+      `UPDATE message_email_jobs SET send_after = NOW() - interval '1 minute' WHERE conversation_id = $1 AND status = 'pending'`, [id]);
+    const pending = async (id) => (await pool.query(
+      `SELECT COUNT(*)::int AS n FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [id])).rows[0].n;
+
+    it('emails each message once: a microsecond timestamp never re-queues it, and a later message gets its own email', async () => {
+      const send = getResend().emails.send;
+      send.mockClear();
+      const id = (await start(asMom, publishedId, 'First question')).body.data.conversation.conversationId;
+      await withMicros(id);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(3);
+      expect(send.mock.calls.map(([email]) => email.to[0]).sort()).toEqual(['co@example.com', 'dad@example.com', 'teacher@example.com']);
+
+      // No follow-up job is queued, so the same email never goes out again...
+      expect(await pending(id)).toBe(0);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(0);
+      expect(send).toHaveBeenCalledTimes(3);
+      // ...because last_emailed_at is the rendered message's exact timestamp.
+      const exact = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM conversation_participants cp
+         JOIN messages m ON m.conversation_id = cp.conversation_id AND m.kind = 'message'
+         WHERE cp.conversation_id = $1 AND cp.user_id = ANY($2::uuid[]) AND cp.last_emailed_at = m.created_at`,
+        [id, [DAD_ID, TEACHER_ID, CO_TEACHER_ID]]);
+      expect(exact.rows[0].n).toBe(3);
+
+      // A message posted after the send gets its own email, holding only the new message.
+      send.mockClear();
+      expect((await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asMom).field('body', 'Follow-up question')).status).toBe(201);
+      await withMicros(id);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(3);
+      expect(send).toHaveBeenCalledTimes(3);
+      for (const [email] of send.mock.calls) {
+        expect(email.subject).toBe("Mom Test sent a message about Amina Test's Unit 3 Quiz");
+        expect(email.html).toContain('Follow-up question');
+        expect(email.html).not.toContain('First question');
+      }
+      expect(await pending(id)).toBe(0);
+      await makeDue(id);
+      expect(await notifier.drainAll()).toBe(0);
+      expect(send).toHaveBeenCalledTimes(3);
+    }, 30000);
+  });
 });

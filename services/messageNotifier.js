@@ -71,12 +71,6 @@ async function contextLineFor(ctx) {
   return `${Number(a.score)}/${Number(a.max_score)} (${pct}%)`;
 }
 
-const latest = (...dates) => {
-  const times = dates.filter(Boolean).map((d) => new Date(d));
-  if (!times.length) return null;
-  return new Date(Math.max(...times.map((t) => t.getTime()))).toISOString();
-};
-
 /** Process one claimed job. Returns 'sent' | 'skipped'. Throws on a send failure. */
 async function processJob(job) {
   const { rows } = await db.query(q.selectJobContext, [job.job_id]);
@@ -96,7 +90,10 @@ async function processJob(job) {
     return 'skipped';
   }
 
-  const since = latest(ctx.last_emailed_at, ctx.last_read_at);
+  // Timestamps that go back into SQL stay as Postgres text (microseconds). A JS
+  // Date keeps milliseconds only, so the message just emailed would read as newer
+  // than last_emailed_at and be queued and sent again until the thread is read.
+  const since = ctx.since_exact;
   const { rows: msgs } = await db.query(q.selectMessagesForEmail, [job.conversation_id, job.recipient_id, since]);
   if (!msgs.length) {
     await db.query(q.finishJob, [job.job_id, 'skipped', 'nothing unread']);
@@ -151,7 +148,7 @@ async function processJob(job) {
 
   // Resend accepted it: record that FIRST so a bookkeeping hiccup can never resend.
   await db.query(q.finishJob, [job.job_id, 'sent', null]);
-  const lastRendered = new Date(msgs[msgs.length - 1].created_at).toISOString();
+  const lastRendered = msgs[msgs.length - 1].created_at_exact;
   try {
     await db.query(q.markEmailed, [job.conversation_id, job.recipient_id, lastRendered]);
     // A message posted while we were sending has no job of its own (the
