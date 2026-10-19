@@ -11,6 +11,7 @@
 // students.grade is the "GRADE" enum in prod, so it is read as text.
 // student_avatar: the displayed avatar (the login's own pick over the teacher-set one).
 const { studentAvatarSql } = require('../utils/avatar');
+const { GRADE_RANK } = require('../utils/gradeRank');
 
 const ROW_SELECT = `
 SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_year_id,
@@ -42,9 +43,10 @@ LEFT JOIN LATERAL (
 
 const studentAccountQueries = {
   //  $1 = school, $2 = school_year_id
+  //  JK and SK first, then Grades 1-8 (GRADE_RANK, the T7 ruling); by name within a grade.
   selectStudentAccountRows: `${ROW_SELECT}
 WHERE s.school = $1 AND s.school_year_id = $2 AND s.is_archived IS NOT TRUE
-ORDER BY LENGTH(s.grade::text), s.grade::text, s.name`,
+ORDER BY ${GRADE_RANK('s.grade::text')}, s.name, s.student_id`,
 
   //  $1 = school, $2 = student_id
   selectStudentAccountRow: `${ROW_SELECT}
