@@ -23,7 +23,7 @@ const { schoolSender } = require('../email/senderIdentity');
 const { getStudentInviteEmailHTML, getStudentPasswordResetEmailHTML } = require('../../templates/emailTemplate');
 const { renderStudentCardsHTML } = require('../../templates/studentCardsTemplate');
 const { getSettings } = require('./classroomSettings');
-const { issueQrSecret, qrToken } = require('./studentLogin');
+const { issueQrSecret, qrPayload } = require('./studentLogin');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -229,8 +229,6 @@ const CARD_PDF_OPTIONS = {
 // A fresh object per call: qrcode writes its defaults into the options it gets.
 const qrImageOptions = () => ({ errorCorrectionLevel: 'M', margin: 1, width: 300 });
 
-const signInUrl = (userId, secret) =>
-  `${process.env.FRONTEND_URL || 'https://schoolmule.ca'}/qr?t=${encodeURIComponent(qrToken(userId, secret))}`;
 
 // Cards come out in the order they are handed out: grade, homeroom, name.
 const byClassroom = (a, b) =>
@@ -277,7 +275,8 @@ async function issueQrCards({ school, studentIds, requestedBy }) {
         grade: row.grade,
         homeroomTeacherName: row.homeroom_teacher_name ?? null,
         email: row.account_email,
-        qrDataUrl: await QRCode.toDataURL(signInUrl(row.user_id, secret), qrImageOptions()),
+        // Plain text, not a URL: read by the app's "Scan my card" (studentLogin.js).
+        qrDataUrl: await QRCode.toDataURL(qrPayload(row.user_id, secret), qrImageOptions()),
       },
     });
   }

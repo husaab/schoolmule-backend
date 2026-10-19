@@ -65,6 +65,27 @@ describe('requireStudent', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it('is 401 QR_INVALID for a session from a QR card that was voided or reprinted; other sessions pass', async () => {
+    const hash = 'a'.repeat(64);
+    const qrUser = { role: 'STUDENT', userId: USER_ID, school: 'ALHAADIACADEMY', qrCard: 'a'.repeat(16) };
+    mockQueryResponse([row({ qr_secret_hash: hash, qr_voided_at: null })]);
+    expect((await run({ user: qrUser })).next).toHaveBeenCalled();
+
+    mockQueryResponse([row({ qr_secret_hash: hash, qr_voided_at: new Date() })]);
+    let out = await run({ user: qrUser });
+    expect(out.res.status).toHaveBeenCalledWith(401);
+    expect(out.res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'QR_INVALID' }));
+    expect(out.next).not.toHaveBeenCalled();
+
+    mockQueryResponse([row({ qr_secret_hash: 'b'.repeat(64), qr_voided_at: null })]);
+    out = await run({ user: qrUser });
+    expect(out.res.status).toHaveBeenCalledWith(401);
+
+    // A password session is untouched by the card.
+    mockQueryResponse([row({ qr_secret_hash: 'b'.repeat(64), qr_voided_at: new Date() })]);
+    expect((await run()).next).toHaveBeenCalled();
+  });
+
   it('fails closed on a database error', async () => {
     mockQueryError('DB down');
     const { res, next } = await run();

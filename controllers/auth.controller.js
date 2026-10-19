@@ -18,7 +18,9 @@ const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { GoogleSignInError } = googleSignInService;
-const { assertStudentCanSignIn, parseQrToken, secretMatches } = require('../services/classroom/studentLogin');
+const {
+  assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, MESSAGES: STUDENT_MESSAGES,
+} = require('../services/classroom/studentLogin');
 const { photoUrlFor } = require('../services/profile/photos');
 const studentAccountQueries = require('../queries/studentAccount.queries');
 
@@ -31,9 +33,12 @@ const STUDENT_SESSION_TTL = '12h';
 // user may switch to (utils/sessionContext.getRolesForUser). For most users
 // all three say the same thing. A staff member who is also a parent carries
 // roles [TEACHER, PARENT] and flips `role` through POST /auth/view.
-const signSessionToken = ({ user, role, roles, activeTerm }) =>
+// `qrCard`: a session opened with a QR card names the card (its hash's
+// first 16 hex), so it ends once that card is voided or reprinted.
+const signSessionToken = ({ user, role, roles, activeTerm, qrCard = null }) =>
   jwt.sign(
     {
+      ...(qrCard && { qrCard }),
       userId: user.user_id,
       username: user.username,
       email: user.email,
@@ -106,7 +111,7 @@ const recordLogin = (req, { email, user, outcome }) => {
 // session payload. Throws a { status, message, code? } verdict for an
 // archived account or a student who may not sign in now. `via` is 'qr' for a
 // QR card (only the youngest grades may use one).
-const openSession = async (req, user, { email, message, via = 'password' }) => {
+const openSession = async (req, user, { email, message, via = 'password', qrCard = null }) => {
   // Archived accounts keep their history but can't sign in.
   if (user.is_archived) {
     recordLogin(req, { email, user, outcome: 'archived' });
@@ -144,7 +149,7 @@ const openSession = async (req, user, { email, message, via = 'password' }) => {
   // Sign-in always starts in the database role; the parent view is a switch away.
   const roles = await getRolesForUser(user);
 
-  const token = signSessionToken({ user, role: user.role, roles, activeTerm });
+  const token = signSessionToken({ user, role: user.role, roles, activeTerm, qrCard });
   const photoUrl = await photoUrlFor(user);
 
   return {
@@ -369,13 +374,13 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
 const QR_INVALID = {
   status: 401,
   code: 'QR_INVALID',
-  message: "This card doesn't work any more. Ask your teacher for a new one.",
+  message: STUDENT_MESSAGES.QR_INVALID,
 };
 
 // POST /api/auth/student-qr { token }
 //
-// A student's printed QR card opens /qr?t=<userId>.<secret>; the page posts
-// the token here. Only the SHA-256 of the card's secret is stored, and a
+// A student's printed QR card holds SCHOOLMULE-QR:<userId>.<secret> (plain
+// text); the app's scanner posts it here (the bare token works as well). Only the SHA-256 of the card's secret is stored, and a
 // reprint or a void replaces it, so an old card answers 401 QR_INVALID. A
 // valid card then goes through the same openSession gate as a password,
 // with the QR grade limit on top. Same response as /api/auth/login.
@@ -392,7 +397,9 @@ const studentQrLogin = async (req) => {
       recordLogin(req, { email: user ? user.email : '', user, outcome: 'qr_invalid' });
       return { ...QR_INVALID };
     }
-    return await openSession(req, user, { email: user.email, message: 'Signed in', via: 'qr' });
+    return await openSession(req, user, {
+      email: user.email, message: 'Signed in', via: 'qr', qrCard: qrCardFingerprint(user.qr_secret_hash),
+    });
   } catch (error) {
     const status = Number.isInteger(error.status) ? error.status : 500;
     if (status >= 500) {
@@ -899,11 +906,16 @@ const validateSession = async (req, res) => {
     // unlinked or withdrawn student... ends the open session (401 + code, so
     // the client signs out and can say why).
     if (user.role === 'STUDENT') {
+      let gate;
       try {
-        await assertStudentCanSignIn(user);
+        gate = await assertStudentCanSignIn(user);
       } catch (v) {
         if (!v || !v.code) throw v;
         return res.status(401).json({ success: false, code: v.code, message: v.message });
+      }
+      // A session opened with a QR card ends once that card is voided or reprinted.
+      if (!qrCardLive(decoded.qrCard, gate)) {
+        return res.status(401).json({ success: false, code: 'QR_INVALID', message: STUDENT_MESSAGES.QR_INVALID });
       }
     }
 
@@ -935,7 +947,7 @@ const validateSession = async (req, res) => {
         !viewStillHeld ||
         (decoded.baseRole ?? decoded.role) !== user.role);
     const role = viewStillHeld ? decoded.role : user.role;
-    const refreshedToken = claimsDrifted ? signSessionToken({ user, role, roles, activeTerm }) : undefined;
+    const refreshedToken = claimsDrifted ? signSessionToken({ user, role, roles, activeTerm, qrCard: decoded.qrCard }) : undefined;
     const photoUrl = await photoUrlFor(user);
 
     return res.status(200).json({
@@ -1016,7 +1028,7 @@ const switchView = async (req, res) => {
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,
-        token: signSessionToken({ user, role: view, roles, activeTerm }),
+        token: signSessionToken({ user, role: view, roles, activeTerm, qrCard: req.user.qrCard }),
       },
     });
   } catch (error) {

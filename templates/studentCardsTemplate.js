@@ -2,8 +2,9 @@
 //
 // Printable QR sign-in cards for the youngest grades: US Letter sheets of
 // 2 columns × 4 rows, each card 3.375in × 2.125in (a standard ID card) with a
-// dashed cut line. The QR opens /qr?t=… on the student portal; the line under
-// it gives the email fallback for a student who has outgrown the card.
+// dashed cut line. The QR holds the plain text SCHOOLMULE-QR:<token> (no URL),
+// read by "Scan my card" on the sign-in page; the line under it gives the
+// email fallback for a student who has outgrown the card.
 
 const { escapeHtml } = require('./emailLayout');
 

@@ -2,21 +2,24 @@
 // a non-archived student row in the request's school year. Every /api/student
 // query keys on req.student.studentId — never on an id from the client.
 //
-// It also re-checks the two things that can change during a 12-hour session:
-// an archived login (401, the client signs out) and a school that turned
+// It also re-checks what can change during a 12-hour session: an archived
+// login (401, the client signs out), a session opened with a QR card that has
+// since been voided or reprinted (401 QR_INVALID) and a school that turned
 // classrooms off (403 CLASSROOM_DISABLED). Consent and grade are checked at
 // sign-in and on every /api/auth/me.
 
 const db = require('../config/database');
 const logger = require('../logger');
-const { MESSAGES } = require('../services/classroom/studentLogin');
+const { MESSAGES, qrCardLive } = require('../services/classroom/studentLogin');
 
 const SQL = `
   SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id,
-         u.is_archived AS user_archived, scs.enabled AS classrooms_enabled
+         u.is_archived AS user_archived, scs.enabled AS classrooms_enabled,
+         sa.qr_secret_hash, sa.qr_voided_at
   FROM student_account_links sal
   JOIN students s ON s.student_id = sal.student_id
   JOIN users u ON u.user_id = sal.user_id
+  LEFT JOIN student_accounts sa ON sa.user_id = sal.user_id
   LEFT JOIN school_classroom_settings scs ON scs.school = s.school
   WHERE sal.user_id = $1 AND sal.school_year_id = $2 AND s.school = $3 AND s.is_archived IS NOT TRUE`;
 
@@ -28,6 +31,9 @@ module.exports = async function requireStudent(req, res, next) {
     if (!rows[0]) return res.status(403).json({ status: 'failed', code: 'NO_STUDENT_LINK', message: MESSAGES.NO_STUDENT_LINK });
     const r = rows[0];
     if (r.user_archived) return res.status(401).json({ status: 'failed', message: 'This account has been archived' });
+    if (!qrCardLive(req.user.qrCard, { qrSecretHash: r.qr_secret_hash, qrVoidedAt: r.qr_voided_at })) {
+      return res.status(401).json({ status: 'failed', code: 'QR_INVALID', message: MESSAGES.QR_INVALID });
+    }
     if (!r.classrooms_enabled) {
       return res.status(403).json({ status: 'failed', code: 'CLASSROOM_DISABLED', message: MESSAGES.CLASSROOM_DISABLED });
     }

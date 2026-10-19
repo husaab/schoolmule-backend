@@ -262,6 +262,57 @@ describe('Integration: student sign-in', () => {
     expect(dead.body).toMatchObject({ success: false, code: 'QR_INVALID', message: QR_INVALID_MESSAGE });
   });
 
+  it('a session from a QR card ends once that card is voided or reprinted; a password session does not (T3 M1)', async () => {
+    const card = await issueCard(AMAL_USER);
+    const fromCard = (await qrLogin(card)).body.data.token;
+    const byPassword = await studentToken();
+    expect((await withToken('get', '/api/student/me', fromCard)).status).toBe(200);
+    expect((await withToken('get', '/api/auth/me', fromCard)).status).toBe(200);
+
+    // Voided: the card's session is over at the portal and at /me (the client signs out).
+    await authenticatedRequest('post', '/api/admin/student-accounts/qr/void', asAdmin).send({ studentIds: [amalId] });
+    const portal = await withToken('get', '/api/student/me', fromCard);
+    expect(portal.status).toBe(401);
+    expect(portal.body).toMatchObject({ code: 'QR_INVALID', message: QR_INVALID_MESSAGE });
+    const me = await withToken('get', '/api/auth/me', fromCard);
+    expect(me.status).toBe(401);
+    expect(me.body).toMatchObject({ success: false, code: 'QR_INVALID' });
+    // Signing in with the password is a different session: it carries on.
+    expect((await withToken('get', '/api/student/me', byPassword)).status).toBe(200);
+
+    // A new card: its session works; reprinting replaces the card and ends that session too.
+    const second = await issueCard(AMAL_USER);
+    const fromSecond = (await qrLogin(second)).body.data.token;
+    expect((await withToken('get', '/api/student/me', fromSecond)).status).toBe(200);
+    expect((await withToken('get', '/api/student/me', fromCard)).status).toBe(401); // the voided card stays over
+    await issueCard(AMAL_USER);
+    expect((await withToken('get', '/api/student/me', fromSecond)).status).toBe(401);
+    expect((await withToken('get', '/api/student/me', byPassword)).status).toBe(200);
+  });
+
+  it("printed cards encode the plain-text payload 'SCHOOLMULE-QR:<token>' (no URL), and that payload signs the student in", async () => {
+    const QRCode = require('qrcode');
+    const spy = jest.spyOn(QRCode, 'toDataURL');
+    try {
+      const res = await pdfPost('/api/admin/student-accounts/cards.pdf', asAdmin, { studentIds: [amalId] });
+      expect(res.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const payload = spy.mock.calls[0][0];
+      expect(payload).toMatch(new RegExp(`^SCHOOLMULE-QR:${AMAL_USER}\\.[A-Za-z0-9_-]{43}$`));
+      expect(payload).not.toMatch(/https?:|\/qr\?/);
+      // The scanner posts what it read; the bare token works as before.
+      const scanned = await qrLogin(payload);
+      expect(scanned.status).toBe(200);
+      expect(scanned.body.data).toMatchObject({ userId: AMAL_USER, role: 'STUDENT' });
+      expect((await qrLogin(payload.slice('SCHOOLMULE-QR:'.length))).status).toBe(200);
+      expect((await qrLogin(`  ${payload}\n`)).status).toBe(200);
+      expect((await qrLogin(`schoolmule-qr:${payload.slice(14)}`)).status).toBe(200);
+      expect((await qrLogin(`SCHOOLMULE-QR:SCHOOLMULE-QR:${payload.slice(14)}`)).status).toBe(401);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('QR login is 401 QR_INVALID for a forged secret, garbage, and a staff user id', async () => {
     await issueCard(AMAL_USER);
     const forged = qrToken(AMAL_USER, issueQrSecret().secret);

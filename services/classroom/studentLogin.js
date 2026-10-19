@@ -2,10 +2,18 @@
 //
 // Who may sign in as a student right now, and the QR card secret.
 //
-// A QR card carries `${userId}.${secret}`: the secret is 32 random bytes
+// A QR card's token is `${userId}.${secret}`: the secret is 32 random bytes
 // (base64url, 43 characters) and only its SHA-256 is stored on
 // student_accounts, so a lost card is voided by issuing a new secret and a
-// database leak never yields a working card.
+// database leak never yields a working card. The printed QR holds the plain
+// text `SCHOOLMULE-QR:<token>`, never a URL (final ruling): a phone camera
+// can't turn it into a sign-in link left in a shared device's history; the
+// app's own "Scan my card" reads it and posts it to /api/auth/student-qr,
+// which takes the token with or without the prefix.
+//
+// A session opened with a card carries `qrCard` (the first 16 hex of the
+// card's hash) and ends once that card is voided or replaced by a reprint
+// (qrCardLive, checked by requireStudent and /api/auth/me).
 
 const crypto = require('crypto');
 const db = require('../../config/database');
@@ -16,10 +24,21 @@ const issueQrSecret = () => {
   const secret = crypto.randomBytes(32).toString('base64url');
   return { secret, hash: hashQrSecret(secret) };
 };
+const QR_PAYLOAD_PREFIX = 'SCHOOLMULE-QR:';
 const qrToken = (userId, secret) => `${userId}.${secret}`;
+/** What the printed QR code holds: plain text, no URL. */
+const qrPayload = (userId, secret) => `${QR_PAYLOAD_PREFIX}${qrToken(userId, secret)}`;
+/** A card token, bare or as the scanned payload (prefix in any case), or null. */
 const parseQrToken = (token) => {
-  const m = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([A-Za-z0-9_-]{43})$/i.exec(String(token || '').trim());
+  const m = /^(?:SCHOOLMULE-QR:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([A-Za-z0-9_-]{43})$/i.exec(String(token || '').trim());
   return m ? { userId: m[1].toLowerCase(), secret: m[2] } : null;
+};
+/** The card a QR session came from, as its token claim. */
+const qrCardFingerprint = (hash) => (typeof hash === 'string' && hash.length >= 16 ? hash.slice(0, 16) : null);
+/** Is the card a session came from still the live one? A session not from a card always is. */
+const qrCardLive = (qrCard, { qrSecretHash, qrVoidedAt } = {}) => {
+  if (!qrCard) return true;
+  return !qrVoidedAt && typeof qrSecretHash === 'string' && qrSecretHash.startsWith(String(qrCard));
 };
 const secretMatches = (secret, hash) => {
   if (!hash) return false;
@@ -50,6 +69,7 @@ const MESSAGES = Object.freeze({
   CONSENT_REQUIRED: 'Your school needs a parent or guardian to agree before you can sign in.',
   GRADE_NOT_ENABLED: "Your grade doesn't use student sign-in yet.",
   QR_NOT_ENABLED: 'Sign in with your email and password.',
+  QR_INVALID: "This card doesn't work any more. Ask your teacher for a new one.",
 });
 
 /** Throws a { status, code, message } verdict when this student may not sign in now. */
@@ -66,4 +86,7 @@ async function assertStudentCanSignIn(user, { via = 'password' } = {}) {
   return { studentId: c.student_id, grade: c.grade, qrSecretHash: c.qr_secret_hash, qrVoidedAt: c.qr_voided_at };
 }
 
-module.exports = { hashQrSecret, issueQrSecret, qrToken, parseQrToken, secretMatches, assertStudentCanSignIn, MESSAGES };
+module.exports = {
+  QR_PAYLOAD_PREFIX, hashQrSecret, issueQrSecret, qrToken, qrPayload, parseQrToken, qrCardFingerprint, qrCardLive,
+  secretMatches, assertStudentCanSignIn, MESSAGES,
+};

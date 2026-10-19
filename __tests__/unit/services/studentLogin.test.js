@@ -1,7 +1,7 @@
 const db = require('../../../config/database');
 const { mockQueryResponse } = require('../../helpers/mockDb');
 const {
-  hashQrSecret, issueQrSecret, qrToken, parseQrToken, secretMatches, assertStudentCanSignIn,
+  hashQrSecret, issueQrSecret, qrToken, qrPayload, parseQrToken, qrCardFingerprint, qrCardLive, secretMatches, assertStudentCanSignIn,
 } = require('../../../services/classroom/studentLogin');
 
 const USER_ID = '550e8400-e29b-41d4-a716-446655440010';
@@ -31,6 +31,32 @@ const verdictOf = async (row, options) => {
     return v;
   }
 };
+
+describe('QR card payload and sessions', () => {
+  it('the printed payload is plain text SCHOOLMULE-QR:<token>, and parses like the bare token', () => {
+    const { secret } = issueQrSecret();
+    const payload = qrPayload(USER_ID, secret);
+    expect(payload).toBe(`SCHOOLMULE-QR:${USER_ID}.${secret}`);
+    expect(parseQrToken(payload)).toEqual({ userId: USER_ID, secret });
+    expect(parseQrToken(`\n ${payload} `)).toEqual({ userId: USER_ID, secret });
+    expect(parseQrToken(payload.replace('SCHOOLMULE-QR:', 'schoolmule-qr:'))).toEqual({ userId: USER_ID, secret });
+    expect(parseQrToken(`https://schoolmule.ca/qr?t=${qrToken(USER_ID, secret)}`)).toBeNull();
+    expect(parseQrToken(`SCHOOLMULE-QR:${payload}`)).toBeNull();
+  });
+
+  it('a QR session lives while its card is the live one', () => {
+    const { hash } = issueQrSecret();
+    const card = qrCardFingerprint(hash);
+    expect(card).toBe(hash.slice(0, 16));
+    expect(qrCardFingerprint(null)).toBeNull();
+    expect(qrCardLive(card, { qrSecretHash: hash, qrVoidedAt: null })).toBe(true);
+    expect(qrCardLive(card, { qrSecretHash: hash, qrVoidedAt: new Date() })).toBe(false); // voided
+    expect(qrCardLive(card, { qrSecretHash: issueQrSecret().hash, qrVoidedAt: null })).toBe(false); // reprinted
+    expect(qrCardLive(card, { qrSecretHash: null, qrVoidedAt: null })).toBe(false);
+    // A password (or Google) session has no card to lose.
+    expect(qrCardLive(undefined, { qrSecretHash: null, qrVoidedAt: new Date() })).toBe(true);
+  });
+});
 
 describe('QR tokens', () => {
   it('parseQrToken round-trips qrToken', () => {

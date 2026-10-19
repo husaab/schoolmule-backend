@@ -86,7 +86,8 @@ const TOO_MANY_SIGN_INS = {
   success: false,
   message: 'Too many login attempts. Please try again later.'
 };
-const UUID_PREFIX_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\./i;
+// A card token's user id, bare or in the scanned payload (SCHOOLMULE-QR:<token>).
+const UUID_PREFIX_RE = /^(?:SCHOOLMULE-QR:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\./i;
 
 const failedSignInLimiter = ({ max, key }) => rateLimit({
   windowMs: SIGN_IN_WINDOW_MS,
