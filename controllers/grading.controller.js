@@ -109,6 +109,9 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
     // A quiz score a teacher typed (grading view or grid): the quiz never
     // overwrites it; POST …/quiz-score goes back to the quiz's score.
     scoreSetByTeacher: Boolean(quiz && linked && r.score_set_by_teacher),
+    // The student signs in (studentSignsIn.SIGNS_IN, the parent lens's rule),
+    // so a publish can email them (smoke S5).
+    signsIn: Boolean(r.signs_in),
   };
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {

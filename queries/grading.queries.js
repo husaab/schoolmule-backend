@@ -14,6 +14,7 @@ const { studentAvatarSql } = require('../utils/avatar');
 const {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED, NEEDS_PUBLISH,
 } = require('./workState');
+const { SIGNS_IN } = require('./studentSignsIn');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
 // The item's students: the class roster (not archived), narrowed to the
@@ -39,7 +40,8 @@ SELECT s.student_id, s.name, ${studentAvatarSql('s')},
        CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS visible_score,
        CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS visible_status,
        CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS visible_published_at,
-       EXISTS (SELECT 1 FROM conversations cv WHERE cv.student_id = s.student_id AND cv.classwork_item_id = i.item_id) AS has_thread
+       EXISTS (SELECT 1 FROM conversations cv WHERE cv.student_id = s.student_id AND cv.classwork_item_id = i.item_id) AS has_thread,
+       ${SIGNS_IN('s')} AS signs_in
 FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 JOIN class_students cs ON cs.class_id = i.class_id

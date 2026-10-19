@@ -570,6 +570,20 @@ describe('Integration: grading and per-student Publish', () => {
     expect(rows).toHaveLength(4);
   });
 
+  it('grading rows say whether each student signs in (signsIn, the parent lens rule)', async () => {
+    // Dalia's login is still invite-pending with no QR card: she can't sign in yet.
+    await pool.query(`UPDATE users SET password = '!' WHERE user_id = $1`, [DALIA_USER_ID]);
+    const rows = (await get(`${itemUrl}/submissions`)).data.students;
+    expect(Object.fromEntries(rows.map((r) => [r.name, r.signsIn]))).toEqual({
+      'Amal Haddad': true, 'Bilal Karim': true, 'Dalia Nassar': false,
+    });
+    expect((await get(`${itemUrl}/submissions/${amalId}`)).data.row.signsIn).toBe(true);
+    // Classrooms off: nobody signs in.
+    await pool.query(`UPDATE school_classroom_settings SET enabled = FALSE WHERE school = 'ALHAADIACADEMY'`);
+    const off = (await get(`${itemUrl}/submissions`)).data.students;
+    expect(off.every((r) => r.signsIn === false)).toBe(true);
+  });
+
   it('grid-overlay reports turned_in, draft and missing_derived cells', async () => {
     await patch(amalId, { draftScore: 8 });
     const late = await createItem({
