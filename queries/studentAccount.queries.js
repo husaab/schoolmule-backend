@@ -9,8 +9,12 @@
 // consent and QR state, and the first conflict on the student's own address
 // (another account already uses it, or it is a parent's address on file).
 // students.grade is the "GRADE" enum in prod, so it is read as text.
+// student_avatar: the displayed avatar (the login's own pick over the teacher-set one).
+const { studentAvatarSql } = require('../utils/avatar');
+
 const ROW_SELECT = `
 SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_year_id,
+       ${studentAvatarSql('s', 'student_avatar')},
        NULLIF(TRIM(CONCAT(h.first_name, ' ', h.last_name)), '') AS homeroom_teacher_name,
        u.user_id, u.email AS account_email, u.is_archived, (u.password = '!') AS invite_pending,
        u.created_at AS account_created_at, u.last_login_at, u.last_seen_at,
@@ -164,6 +168,11 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
   //  The sign-in address, avatar and photo of a student login. $1 = user_id
   selectStudentUserEmail: `
     SELECT email, avatar, photo_path FROM users WHERE user_id = $1
+  `,
+
+  //  A student row's displayed avatar (the login's pick over the teacher-set one), as Home shows it. $1 = student_id
+  selectStudentDisplayAvatar: `
+    SELECT ${studentAvatarSql('s')} FROM students s WHERE s.student_id = $1
   `,
 
   //  An issued, not yet voided QR card stops working. $1 = user_id

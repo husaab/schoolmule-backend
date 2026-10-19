@@ -47,15 +47,17 @@ const NOT_ENROLLED = { status: 'failed', code: 'NOT_ENROLLED', message: "You are
 const getMe = async (req, res) => {
   const { school, userId } = req.user;
   try {
-    const [{ rows }, schoolInfo, settings] = await Promise.all([
+    const { studentId, name, firstName, grade, schoolYearId } = req.student;
+    const [{ rows }, { rows: [shown] }, schoolInfo, settings] = await Promise.all([
       db.query(q.selectStudentUserEmail, [userId]),
+      db.query(q.selectStudentDisplayAvatar, [studentId]),
       loadSchoolInfo(school),
       getSettings(school),
     ]);
-    const { studentId, name, firstName, grade, schoolYearId } = req.student;
     const login = rows[0];
     return ok(res, {
-      student: { studentId, name, firstName, grade },
+      // avatar: what Home shows (the student's own pick over the teacher-set one).
+      student: { studentId, name, firstName, grade, avatar: shown?.avatar ?? null },
       user: {
         userId,
         email: login?.email ?? req.user.email ?? null,

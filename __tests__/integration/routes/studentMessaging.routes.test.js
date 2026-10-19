@@ -602,6 +602,21 @@ describe('Integration: student messaging', () => {
     });
   });
 
+  it("staff thread rows and the student context card carry the student's displayed avatar (studentAvatar)", async () => {
+    const teacherSet = { style: 'curly', skin: 2, bg: 1 };
+    const ownPick = { style: 'kufi', skin: 4, bg: 6 };
+    await pool.query(`UPDATE students SET avatar = $2::jsonb WHERE student_id = $1`, [amalId, JSON.stringify(teacherSet)]);
+    const id = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Lab', body: 'Can I stay late?' })).data.conversation.conversationId;
+    const row = async (who) => (await get('/api/messaging/conversations?status=all', who)).data.find((r) => r.conversationId === id);
+    expect((await row(asTeacher)).studentAvatar).toEqual(teacherSet);
+    expect((await row(asAdmin)).studentAvatar).toEqual(teacherSet);
+    expect((await get(`/api/messaging/conversations/${id}`, asTeacher)).data.student).toMatchObject({ studentId: amalId, studentAvatar: teacherSet });
+    // The student's own pick wins once there is one.
+    await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [AMAL_USER_ID, JSON.stringify(ownPick)]);
+    expect((await row(asTeacher)).studentAvatar).toEqual(ownPick);
+    expect((await get(`/api/messaging/conversations/${id}`, asTeacher)).data.student.studentAvatar).toEqual(ownPick);
+  });
+
   it("the admin inbox names each thread's addressee: a co-teacher or homeroom teacher, not only the class lead", async () => {
     const co = (await startThread({ teacherId: CO_TEACHER_ID, classId: sciId, subject: 'Lab', body: 'Can I stay late?' })).data.conversation.conversationId;
     const home = (await startThread({ teacherId: HOMEROOM_ID, subject: 'Bus', body: 'The bus was late.' })).data.conversation.conversationId;

@@ -84,6 +84,8 @@ const toStudentAccountRow = (row, settings) => {
   return {
     studentId: row.student_id,
     name: row.name,
+    // The displayed avatar: the login's own pick over the teacher-set one.
+    studentAvatar: row.student_avatar ?? null,
     grade: row.grade,
     homeroomTeacherName: row.homeroom_teacher_name ?? null,
     studentEmail: row.student_email ?? null,

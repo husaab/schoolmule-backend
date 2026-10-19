@@ -341,13 +341,22 @@ describe('Integration: student sign-in', () => {
     expect(res.body).toEqual({
       status: 'success',
       data: {
-        student: { studentId: amalId, name: 'Amal Haddad', firstName: 'Amal', grade: '2' },
+        student: { studentId: amalId, name: 'Amal Haddad', firstName: 'Amal', grade: '2', avatar: null },
         user: { userId: AMAL_USER, email: 'amal.haddad@example.com', avatar: null, photoUrl: null },
         school: { code: 'ALHAADIACADEMY', name: 'Al Haadi Academy' },
         settings: { studentPhotos: false },
         schoolYear: { schoolYearId: yearId, label: '2025-2026' },
       },
     });
+
+    // student.avatar is the one Home shows: the teacher-set avatar until the student picks their own.
+    const teacherSet = { style: 'long', skin: 0, bg: 7 };
+    await pool.query(`UPDATE students SET avatar = $2::jsonb WHERE student_id = $1`, [amalId, JSON.stringify(teacherSet)]);
+    expect((await withToken('get', '/api/student/me', token)).body.data.student.avatar).toEqual(teacherSet);
+    await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [AMAL_USER, JSON.stringify({ style: 'beard', skin: 1, bg: 1 })]);
+    const me = (await withToken('get', '/api/student/me', token)).body.data;
+    expect(me.student.avatar).toEqual({ style: 'beard', skin: 1, bg: 1 });
+    expect(me.student.avatar).toEqual((await withToken('get', '/api/student/home', token)).body.data.student.avatar);
 
     const teacher = await authenticatedRequest('get', '/api/student/me', asTeacher);
     expect(teacher.status).toBe(403);

@@ -271,7 +271,9 @@ describe('messaging controller', () => {
       const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockTeacherUser());
       expect(res.status).toBe(200);
       expect(res.body.data.context).toBeNull();
-      expect(res.body.data.student).toEqual({ studentId: STUDENT, name: 'Amina Test', grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96 });
+      expect(res.body.data.student).toEqual({
+        studentId: STUDENT, name: 'Amina Test', studentAvatar: null, grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96,
+      });
     });
   });
 

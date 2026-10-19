@@ -216,6 +216,7 @@ describe('Integration: Student accounts', () => {
     expect(amal).toEqual({
       studentId: amalId,
       name: 'Amal Haddad',
+      studentAvatar: null,
       grade: '2',
       homeroomTeacherName: 'Ziad Teacher',
       studentEmail: 'Amal.Haddad@Example.com',
@@ -254,6 +255,20 @@ describe('Integration: Student accounts', () => {
   });
 
   // 6
+  it("rows carry the student's displayed avatar: the login's own pick over the teacher-set one (studentAvatar)", async () => {
+    await invite([amalId]);
+    const teacherSet = { style: 'short', skin: 1, bg: 2 };
+    const ownPick = { style: 'hijab', skin: 3, bg: 4 };
+    await pool.query(`UPDATE students SET avatar = $2::jsonb WHERE student_id = ANY($1::uuid[])`, [[amalId, ramiId], JSON.stringify(teacherSet)]);
+    let data = await list();
+    expect(rowOf(data, amalId).studentAvatar).toEqual(teacherSet);
+    expect(rowOf(data, ramiId).studentAvatar).toEqual(teacherSet);
+    expect(rowOf(data, samiId).studentAvatar).toBeNull();
+    await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [(await userOf(amalId)).user_id, JSON.stringify(ownPick)]);
+    data = await list();
+    expect(rowOf(data, amalId).studentAvatar).toEqual(ownPick);
+  });
+
   it('PATCH email on an invited account updates users.email; 409 when another user has it', async () => {
     await invite([amalId]);
     const before = await userOf(amalId);

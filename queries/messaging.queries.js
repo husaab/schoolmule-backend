@@ -17,6 +17,7 @@
 // Current-term gate for starting threads (see termScope.js).
 const { inCurrentTerm, selectCurrentTerm } = require('./termScope');
 const { GRADE_RANK } = require('../utils/gradeRank');
+const { studentAvatarSql } = require('../utils/avatar');
 
 // An item thread the school keeps from guardians. `c` is the conversations
 // alias. Never true for a thread with no classwork anchor, so every
@@ -89,6 +90,7 @@ const listBody = (scopeSql) => `
     c.conversation_id, c.student_id, c.class_id, c.assessment_id, c.kind, c.teacher_id, c.title, c.status,
     c.last_message_at, c.created_at, c.includes_student, c.classwork_item_id,
     s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
+    ${studentAvatarSql('s', 'student_avatar')},
     TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
     lt.avatar AS lead_teacher_avatar,
     -- Who the thread is addressed to: its own teacher (a student's co-teacher,
@@ -615,7 +617,7 @@ const messagingQueries = {
   `,
   // Staff context strip for a general thread. $1 student_id
   selectStudentContext: `
-    SELECT s.student_id, s.name, s.grade,
+    SELECT s.student_id, s.name, s.grade, ${studentAvatarSql('s', 'student_avatar')},
            TRIM(CONCAT(h.first_name, ' ', h.last_name)) AS homeroom_teacher_name,
            (SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE ga.status = 'PRESENT') / NULLIF(COUNT(*), 0), 0)
               FROM general_attendance ga WHERE ga.student_id = s.student_id AND ga.attendance_date >= CURRENT_DATE - 60) AS attendance_pct

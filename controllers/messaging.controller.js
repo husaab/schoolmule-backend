@@ -327,6 +327,7 @@ async function buildThread(conv, user) {
     ? {
         studentId: st.student_id,
         name: st.name,
+        studentAvatar: st.student_avatar ?? null,
         grade: st.grade,
         homeroomTeacherName: st.homeroom_teacher_name || null,
         attendancePct: st.attendance_pct == null ? null : Number(st.attendance_pct),
@@ -428,8 +429,11 @@ const listConversations = async (req, res) => {
       failedSet = new Set(f.map((r) => r.conversation_id));
     }
 
+    const staff = role !== 'PARENT';
     const items = rows.map((r) => ({
       ...toItem(r),
+      // Staff rows show the student's displayed avatar (the login's pick over the teacher-set one).
+      ...(staff ? { studentAvatar: r.student_avatar ?? null } : {}),
       needsReply: needsReplyFor(role, r),
       // The admin inbox names whom each thread is addressed to (a student may write to a co-teacher or homeroom teacher).
       ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id), addresseeName: r.addressee_name ?? null } : {}),
