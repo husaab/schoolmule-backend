@@ -54,6 +54,9 @@ describe('Integration: the class Stream reaches students', () => {
       await pool.query(
         `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [loginUserId, id, yearId],
       );
+      // Consent on file: requireStudent re-checks the sign-in gate on every request (Fable M6).
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())
+                        ON CONFLICT (user_id) DO NOTHING`, [loginUserId]);
     }
     return id;
   };

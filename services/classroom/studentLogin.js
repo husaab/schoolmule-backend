@@ -72,21 +72,34 @@ const MESSAGES = Object.freeze({
   QR_INVALID: "This card doesn't work any more. Ask your teacher for a new one.",
 });
 
+/**
+ * The consent and grade part of the sign-in gate, as a verdict or null. Used
+ * at sign-in and by requireStudent on every /api/student request (Fable M6),
+ * so a consent withdrawn or a sign-in grade raised mid-session ends it.
+ * An unknown grade never gets a login (same rule as the invite).
+ */
+function consentGradeVerdict({ consentAt, grade, loginFromGrade }) {
+  if (!consentAt) return verdict('CONSENT_REQUIRED', MESSAGES.CONSENT_REQUIRED);
+  const rank = gradeRank(grade);
+  const from = gradeRank(loginFromGrade);
+  if (rank === null || from === null || rank < from) return verdict('GRADE_NOT_ENABLED', MESSAGES.GRADE_NOT_ENABLED);
+  return null;
+}
+
 /** Throws a { status, code, message } verdict when this student may not sign in now. */
 async function assertStudentCanSignIn(user, { via = 'password' } = {}) {
   const { rows } = await db.query(SIGN_IN_CONTEXT, [user.user_id, user.school]);
   const c = rows[0] || {};
   if (!c.enabled) throw verdict('CLASSROOM_DISABLED', MESSAGES.CLASSROOM_DISABLED);
   if (!c.student_id) throw verdict('NO_STUDENT_LINK', MESSAGES.NO_STUDENT_LINK);
-  if (!c.consent_at) throw verdict('CONSENT_REQUIRED', MESSAGES.CONSENT_REQUIRED);
-  // An unknown grade never gets a login (same rule as the invite).
+  const gate = consentGradeVerdict({ consentAt: c.consent_at, grade: c.grade, loginFromGrade: c.login_from_grade });
+  if (gate) throw gate;
   const rank = gradeRank(c.grade);
-  if (rank === null || rank < gradeRank(c.login_from_grade)) throw verdict('GRADE_NOT_ENABLED', MESSAGES.GRADE_NOT_ENABLED);
   if (via === 'qr' && rank > gradeRank(c.qr_until_grade)) throw verdict('QR_NOT_ENABLED', MESSAGES.QR_NOT_ENABLED);
   return { studentId: c.student_id, grade: c.grade, qrSecretHash: c.qr_secret_hash, qrVoidedAt: c.qr_voided_at };
 }
 
 module.exports = {
   QR_PAYLOAD_PREFIX, hashQrSecret, issueQrSecret, qrToken, qrPayload, parseQrToken, qrCardFingerprint, qrCardLive,
-  secretMatches, assertStudentCanSignIn, MESSAGES,
+  secretMatches, assertStudentCanSignIn, consentGradeVerdict, MESSAGES,
 };

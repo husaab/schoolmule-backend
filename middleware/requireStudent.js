@@ -2,20 +2,22 @@
 // a non-archived student row in the request's school year. Every /api/student
 // query keys on req.student.studentId — never on an id from the client.
 //
-// It also re-checks what can change during a 12-hour session: an archived
-// login (401, the client signs out), a session opened with a QR card that has
-// since been voided or reprinted (401 QR_INVALID) and a school that turned
-// classrooms off (403 CLASSROOM_DISABLED). Consent and grade are checked at
-// sign-in and on every /api/auth/me.
+// It also re-checks what can change during a 12-hour session, in the one
+// query it runs: an archived login (401, the client signs out), a session
+// opened with a QR card that has since been voided or reprinted (401
+// QR_INVALID), a school that turned classrooms off (403 CLASSROOM_DISABLED),
+// and the sign-in gate's consent and grade (Fable M6): consent withdrawn
+// (401 CONSENT_REQUIRED) or the school's sign-in grade raised above the
+// student's (401 GRADE_NOT_ENABLED), as /api/auth/me answers.
 
 const db = require('../config/database');
 const logger = require('../logger');
-const { MESSAGES, qrCardLive } = require('../services/classroom/studentLogin');
+const { MESSAGES, qrCardLive, consentGradeVerdict } = require('../services/classroom/studentLogin');
 
 const SQL = `
   SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id,
-         u.is_archived AS user_archived, scs.enabled AS classrooms_enabled,
-         sa.qr_secret_hash, sa.qr_voided_at
+         u.is_archived AS user_archived, scs.enabled AS classrooms_enabled, scs.login_from_grade,
+         sa.qr_secret_hash, sa.qr_voided_at, sa.consent_at
   FROM student_account_links sal
   JOIN students s ON s.student_id = sal.student_id
   JOIN users u ON u.user_id = sal.user_id
@@ -37,6 +39,8 @@ module.exports = async function requireStudent(req, res, next) {
     if (!r.classrooms_enabled) {
       return res.status(403).json({ status: 'failed', code: 'CLASSROOM_DISABLED', message: MESSAGES.CLASSROOM_DISABLED });
     }
+    const gate = consentGradeVerdict({ consentAt: r.consent_at, grade: r.grade, loginFromGrade: r.login_from_grade });
+    if (gate) return res.status(401).json({ status: 'failed', code: gate.code, message: gate.message });
     req.student = {
       studentId: r.student_id,
       name: r.name,

@@ -16,7 +16,7 @@ const run = async ({ user = { role: 'STUDENT', userId: USER_ID, school: 'ALHAADI
 
 const row = (overrides = {}) => ({
   student_id: STUDENT_ID, name: '  Amal Noor Haddad', grade: '2', school_year_id: YEAR_ID,
-  user_archived: false, classrooms_enabled: true, ...overrides,
+  user_archived: false, classrooms_enabled: true, consent_at: new Date('2026-10-01T12:00:00Z'), login_from_grade: '1', ...overrides,
 });
 
 describe('requireStudent', () => {
@@ -84,6 +84,36 @@ describe('requireStudent', () => {
     // A password session is untouched by the card.
     mockQueryResponse([row({ qr_secret_hash: 'b'.repeat(64), qr_voided_at: new Date() })]);
     expect((await run()).next).toHaveBeenCalled();
+  });
+
+  it('Fable M6: re-checks consent and the login grade on every request, in the same query (401 + code, the client signs out)', async () => {
+    mockQueryResponse([row({ consent_at: null })]);
+    let out = await run();
+    expect(out.res.status).toHaveBeenCalledWith(401);
+    expect(out.res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'CONSENT_REQUIRED' }));
+    expect(out.next).not.toHaveBeenCalled();
+
+    // The admin raised the sign-in grade above the student's.
+    mockQueryResponse([row({ grade: '2', login_from_grade: '3' })]);
+    out = await run();
+    expect(out.res.status).toHaveBeenCalledWith(401);
+    expect(out.res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'GRADE_NOT_ENABLED' }));
+    expect(out.next).not.toHaveBeenCalled();
+
+    // An unknown grade never signs in (the sign-in rule); JK/SK rank below Grade 1.
+    mockQueryResponse([row({ grade: null })]);
+    expect((await run()).res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'GRADE_NOT_ENABLED' }));
+    mockQueryResponse([row({ grade: 'SK', login_from_grade: '1' })]);
+    expect((await run()).res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'GRADE_NOT_ENABLED' }));
+    mockQueryResponse([row({ grade: 'SK', login_from_grade: 'JK' })]);
+    expect((await run()).next).toHaveBeenCalled();
+    mockQueryResponse([row({ grade: '3', login_from_grade: '3' })]);
+    expect((await run()).next).toHaveBeenCalled();
+
+    // One round trip per request, as before.
+    expect(db.query).toHaveBeenCalledTimes(6);
+    expect(db.query.mock.calls[0][0]).toMatch(/consent_at/);
+    expect(db.query.mock.calls[0][0]).toMatch(/login_from_grade/);
   });
 
   it('fails closed on a database error', async () => {

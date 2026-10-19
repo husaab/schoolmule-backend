@@ -102,6 +102,8 @@ describe('Integration: the student portal read API', () => {
     await pool.query(
       `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [AMAL_USER_ID, amalId, yearId],
     );
+    // Consent on file: requireStudent re-checks the sign-in gate on every request (Fable M6).
+    await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())`, [AMAL_USER_ID]);
   });
 
   it("home lists only the student's current-term classes with identity and lead teacher", async () => {
@@ -261,6 +263,8 @@ describe('Integration: the student portal read API', () => {
 
   it('a JK student does not use marks', async () => {
     await pool.query(`UPDATE students SET grade = 'JK' WHERE student_id = $1`, [amalId]);
+    // A JK login needs a school that signs JK in (requireStudent re-checks the sign-in grade, Fable M6).
+    await pool.query(`UPDATE school_classroom_settings SET login_from_grade = 'JK' WHERE school = 'ALHAADIACADEMY'`);
     const { data } = await get('/api/student/grades');
     expect(data).toMatchObject({ studentId: amalId, usesMarks: false, classes: [] });
   });

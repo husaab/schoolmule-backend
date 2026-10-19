@@ -314,6 +314,9 @@ describe('Integration: profile (avatar and photo)', () => {
     it('GET /api/student/me returns the signed-in student\'s own avatar and photo URL', async () => {
       await pool.query(`INSERT INTO school_classroom_settings (school, enabled, student_photos) VALUES ('ALHAADIACADEMY', TRUE, TRUE)`);
       await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [STUDENT_USER_ID, studentId, yearId]);
+      // Consent on file: requireStudent re-checks the sign-in gate on every request (Fable M6).
+      await pool.query(`INSERT INTO student_accounts (user_id, school, consent_at) VALUES ($1, 'ALHAADIACADEMY', NOW())
+                        ON CONFLICT (user_id) DO UPDATE SET consent_at = NOW()`, [STUDENT_USER_ID]);
 
       const before = await authenticatedRequest('get', '/api/student/me', asStudent);
       expect(before.status).toBe(200);

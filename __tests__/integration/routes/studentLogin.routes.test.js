@@ -399,6 +399,26 @@ describe('Integration: student sign-in', () => {
     expect(portal.body.code).toBe('CLASSROOM_DISABLED');
   });
 
+  it('Fable M6: an open session ends at the next /api/student call once consent is withdrawn or the sign-in grade is raised', async () => {
+    const token = await studentToken();
+    expect((await withToken('get', '/api/student/home', token)).status).toBe(200);
+
+    // The admin raises the sign-in grade above Amal's (Grade 2).
+    await pool.query(`UPDATE school_classroom_settings SET login_from_grade = '3' WHERE school = 'ALHAADIACADEMY'`);
+    let res = await withToken('get', '/api/student/home', token);
+    expect(res.status).toBe(401);
+    expect(res.body).toMatchObject({ status: 'failed', code: 'GRADE_NOT_ENABLED', message: "Your grade doesn't use student sign-in yet." });
+    expect((await withToken('get', '/api/auth/me', token)).body.code).toBe('GRADE_NOT_ENABLED');
+    await pool.query(`UPDATE school_classroom_settings SET login_from_grade = '1' WHERE school = 'ALHAADIACADEMY'`);
+    expect((await withToken('get', '/api/student/home', token)).status).toBe(200);
+
+    // Consent withdrawn.
+    await pool.query(`UPDATE student_accounts SET consent_at = NULL WHERE user_id = $1`, [AMAL_USER]);
+    res = await withToken('get', '/api/student/me', token);
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('CONSENT_REQUIRED');
+  });
+
   // 8
   it("teacher of the class can reset a student's password (email queued via mocked resend); a teacher of another class gets 403", async () => {
     const url = `/api/classroom/classes/${classA}/students/${amalId}/reset-password`;

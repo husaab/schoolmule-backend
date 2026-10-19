@@ -684,10 +684,10 @@ describe('Integration: student work', () => {
     const lensItem = (await get(`/api/parent-portal/students/${bilalId}/classroom/items/${overdue.itemId}`, asOtherParent)).data;
     expect(lensItem.submission.status).toBe('assigned');
 
-    // The child's own reads agree (and Amal's are unchanged).
-    expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asBilal)).data.counts.missing).toBe(1);
+    // A child who can't sign in has no portal session at all (requireStudent re-checks consent, Fable M6);
+    // Amal's own reads are unchanged.
+    expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asBilal, 401)).code).toBe('CONSENT_REQUIRED');
     expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asAmal)).data.counts.missing).toBe(2);
-    expect((await get('/api/student/home', asBilal)).data.missing.map((i) => i.itemId)).toEqual([quizItemId]);
 
     // The teacher's counts, People, grading rows and the grid overlay use the same rule.
     const single = (await expectStatus(call('get', `/api/classroom/items/${overdue.itemId}`, asTeacher), 200)).data;
@@ -708,5 +708,6 @@ describe('Integration: student work', () => {
     await pool.query(`UPDATE student_accounts SET consent_at = NOW() WHERE user_id = $1`, [BILAL_USER_ID]);
     const again = (await get('/api/parent-portal/classroom/summary', asOtherParent)).data;
     expect(again.children.find((c) => c.studentId === bilalId)).toMatchObject({ signsIn: true, missingCount: 2 });
+    expect((await get(`/api/student/todo?tab=missing&classId=${sciId}`, asBilal)).data.counts.missing).toBe(2);
   });
 });
