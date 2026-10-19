@@ -20,10 +20,11 @@ const getClassroomSettings = async (req, res) => {
 
 // PUT /api/admin/classroom-settings  (full ClassroomSettings minus updatedAt)
 const putClassroomSettings = async (req, res) => {
-  const { value, error } = validateSettings(req.body);
-  if (error) return res.status(400).json({ status: 'failed', message: error });
-
   try {
+    // Settings a body leaves out (the invitation ones, from an older client) keep their saved values.
+    const { value, error } = validateSettings(req.body, await getSettings(req.user.school));
+    if (error) return res.status(400).json({ status: 'failed', message: error });
+
     const saved = await saveSettings(req.user.school, value, req.user.userId);
     return res.status(200).json({ status: 'success', data: saved });
   } catch (err) {

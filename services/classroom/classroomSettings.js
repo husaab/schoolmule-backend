@@ -17,9 +17,25 @@ const DEFAULTS = Object.freeze({
   summaryDow: 5,
   studentPhotos: false,
   consentNoticeVersion: '2026-10',
+  // The domains of the school's student addresses ([] = no domain checks).
+  studentEmailDomains: [],
+  // 'google_only' turns password sign-in off for students.
+  studentSignIn: 'google_or_password',
 });
 
+// Keys every PUT must carry. The two invitation settings came later and are
+// optional, so the body main's frontend sends keeps working (they then keep
+// their saved values).
+const REQUIRED_KEYS = [
+  'enabled', 'loginFromGrade', 'qrUntilGrade', 'studentEmailFromGrade',
+  'parentsReadPrivateComments', 'summaryDow', 'studentPhotos', 'consentNoticeVersion',
+];
+
 const MAX_NOTICE_VERSION = 40;
+const MAX_EMAIL_DOMAINS = 5;
+const STUDENT_SIGN_IN = ['google_or_password', 'google_only'];
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z]{2,}$/;
+const DOMAINS_ERROR = 'studentEmailDomains must be domain names like students.example.org';
 
 const iso = (value) => (value ? new Date(value).toISOString() : null);
 
@@ -32,27 +48,40 @@ const toSettings = (row) => ({
   summaryDow: Number(row.summary_dow),
   studentPhotos: row.student_photos,
   consentNoticeVersion: row.consent_notice_version,
+  studentEmailDomains: row.student_email_domains ?? [],
+  studentSignIn: row.student_sign_in ?? DEFAULTS.studentSignIn,
   updatedAt: iso(row.updated_at),
 });
 
 /** ClassroomSettings for a school: the saved row, or the defaults. */
 async function getSettings(school) {
   const { rows } = await db.query(q.selectSettings, [school]);
-  return rows[0] ? toSettings(rows[0]) : { ...DEFAULTS, updatedAt: null };
+  return rows[0] ? toSettings(rows[0]) : { ...DEFAULTS, studentEmailDomains: [], updatedAt: null };
 }
 
 const has = (body, key) => Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined;
 const GRADE_LIST = GRADE_CODES.join(', ');
 
+/** Trimmed, lowercased, de-duplicated domains, or { error }. */
+function parseDomains(raw) {
+  if (!Array.isArray(raw)) return { error: DOMAINS_ERROR };
+  const domains = [...new Set(raw.map((d) => (typeof d === 'string' ? d.trim().toLowerCase() : '')))];
+  if (!domains.every((d) => DOMAIN_RE.test(d))) return { error: DOMAINS_ERROR };
+  if (domains.length > MAX_EMAIL_DOMAINS) return { error: `studentEmailDomains can list up to ${MAX_EMAIL_DOMAINS} domains` };
+  return { domains };
+}
+
 /**
- * Validate a full settings body (PUT). Every field is required;
- * studentEmailFromGrade may be null (student email off). updatedAt is ignored.
+ * Validate a settings body (PUT). Every REQUIRED_KEYS field must be there;
+ * studentEmailFromGrade may be null (student email off). studentEmailDomains
+ * and studentSignIn are optional and fall back to `current` (the saved
+ * settings). updatedAt is ignored.
  * @returns {{ value: object } | { error: string }}
  */
-function validateSettings(body) {
+function validateSettings(body, current = DEFAULTS) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Send the classroom settings' };
 
-  for (const key of Object.keys(DEFAULTS)) {
+  for (const key of REQUIRED_KEYS) {
     if (!has(body, key)) return { error: `${key} is required` };
   }
   for (const key of ['enabled', 'parentsReadPrivateComments', 'studentPhotos']) {
@@ -71,6 +100,16 @@ function validateSettings(body) {
   if (version.length < 1 || version.length > MAX_NOTICE_VERSION) {
     return { error: `consentNoticeVersion must be 1 to ${MAX_NOTICE_VERSION} characters` };
   }
+  let studentEmailDomains = current.studentEmailDomains ?? DEFAULTS.studentEmailDomains;
+  if (has(body, 'studentEmailDomains')) {
+    const parsed = parseDomains(body.studentEmailDomains);
+    if (parsed.error) return { error: parsed.error };
+    studentEmailDomains = parsed.domains;
+  }
+  const studentSignIn = has(body, 'studentSignIn') ? body.studentSignIn : (current.studentSignIn ?? DEFAULTS.studentSignIn);
+  if (!STUDENT_SIGN_IN.includes(studentSignIn)) {
+    return { error: "studentSignIn must be 'google_or_password' or 'google_only'" };
+  }
 
   return {
     value: {
@@ -82,6 +121,8 @@ function validateSettings(body) {
       summaryDow: body.summaryDow,
       studentPhotos: body.studentPhotos,
       consentNoticeVersion: version,
+      studentEmailDomains,
+      studentSignIn,
     },
   };
 }
@@ -99,6 +140,8 @@ async function saveSettings(school, value, userId) {
     value.studentPhotos,
     value.consentNoticeVersion,
     userId || null,
+    value.studentEmailDomains,
+    value.studentSignIn,
   ]);
   return toSettings(rows[0]);
 }

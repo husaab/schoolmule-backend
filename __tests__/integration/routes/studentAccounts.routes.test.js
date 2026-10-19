@@ -484,6 +484,7 @@ describe('Integration: Student accounts', () => {
     expect(defaults.body.data).toEqual({
       enabled: false, loginFromGrade: '1', qrUntilGrade: '3', studentEmailFromGrade: '1',
       parentsReadPrivateComments: true, summaryDow: 5, studentPhotos: false, consentNoticeVersion: '2026-10',
+      studentEmailDomains: [], studentSignIn: 'google_or_password',
       updatedAt: null,
     });
 
@@ -493,7 +494,10 @@ describe('Integration: Student accounts', () => {
     };
     const created = await authenticatedRequest('put', '/api/admin/classroom-settings', asAdmin).send(body);
     expect(created.status).toBe(200);
-    expect(created.body.data).toEqual({ ...body, updatedAt: expect.any(String) });
+    // main's body (no studentEmailDomains / studentSignIn) still saves, keeping the defaults.
+    expect(created.body.data).toEqual({
+      ...body, studentEmailDomains: [], studentSignIn: 'google_or_password', updatedAt: expect.any(String),
+    });
     const { rows: [row] } = await pool.query(`SELECT * FROM school_classroom_settings WHERE school = 'ALHAADIACADEMY'`);
     expect(row).toMatchObject({ enabled: true, login_from_grade: '2', student_email_from_grade: null, updated_by: ADMIN_ID });
 
@@ -511,6 +515,23 @@ describe('Integration: Student accounts', () => {
 
     const bad = await authenticatedRequest('put', '/api/admin/classroom-settings', asAdmin).send({ ...body, summaryDow: 9 });
     expect(bad.status).toBe(400);
+  });
+
+  it('classroom-settings round-trips the student email domains and sign-in mode, and a later save without them keeps them', async () => {
+    const body = {
+      enabled: true, loginFromGrade: '1', qrUntilGrade: '3', studentEmailFromGrade: '1',
+      parentsReadPrivateComments: true, summaryDow: 5, studentPhotos: false, consentNoticeVersion: '2026-10',
+    };
+    const saved = await authenticatedRequest('put', '/api/admin/classroom-settings', asAdmin)
+      .send({ ...body, studentEmailDomains: ['Students.Example.org'], studentSignIn: 'google_only' });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data).toMatchObject({ studentEmailDomains: ['students.example.org'], studentSignIn: 'google_only' });
+    const { rows: [row] } = await pool.query(`SELECT student_email_domains, student_sign_in FROM school_classroom_settings`);
+    expect(row).toEqual({ student_email_domains: ['students.example.org'], student_sign_in: 'google_only' });
+
+    const mainSave = await authenticatedRequest('put', '/api/admin/classroom-settings', asAdmin).send({ ...body, summaryDow: 3 });
+    expect(mainSave.status).toBe(200);
+    expect(mainSave.body.data).toMatchObject({ summaryDow: 3, studentEmailDomains: ['students.example.org'], studentSignIn: 'google_only' });
   });
 
   // 13
