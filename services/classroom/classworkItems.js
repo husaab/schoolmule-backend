@@ -541,8 +541,10 @@ function contentChanged(value, cur) {
  * Applies a validated edit, in the caller's transaction. `row` is the item's
  * ITEM_SELECT row (before), `cur` its toCurrent form. `posted`: the edit
  * posted it (from a draft or a schedule), so students are emailed after
- * COMMIT (notifyPosted).
- * @returns {Promise<{ gradebookChanged: boolean, posted: boolean }>}
+ * COMMIT (notifyPosted). `audienceChanged`: the edit changed who the item is
+ * for, so the students it now reaches are emailed after COMMIT too (Fable M1;
+ * notifyPosted only queues the ones not emailed about it yet).
+ * @returns {Promise<{ gradebookChanged: boolean, posted: boolean, audienceChanged: boolean }>}
  */
 async function updateItem(client, { classId, userId, row, cur, value }) {
   const itemId = row.item_id;
@@ -641,12 +643,12 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
 
   await replaceStudents(client, itemId, value);
   if (value.quiz) await saveQuizSettings(client, itemId, value.quiz);
+  const audienceChanged = value.audience !== cur.audience
+    || !sameList(value.studentIds, cur.audience === 'some' ? cur.studentIds.map(lower) : []);
   // An assignment or quiz newly filling an unpublished column (or a plain
   // assessment becoming one) takes its students' cells as drafts (D3); a
   // changed audience moves grades between drafts and plain cells (round 3).
   if (assessmentId && TURN_IN_KINDS.has(value.kind)) {
-    const audienceChanged = value.audience !== cur.audience
-      || !sameList(value.studentIds, cur.audience === 'some' ? cur.studentIds.map(lower) : []);
     if (newlyLinked || !TURN_IN_KINDS.has(cur.kind)) await cellsToDrafts(client, { itemId, assessmentId });
     if (audienceChanged) {
       await reconcileAudience(client, {
@@ -655,15 +657,17 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
       gradebookChanged = true;
     }
   }
-  return { gradebookChanged, posted: value.status === 'posted' && row.status !== 'posted' };
+  return { gradebookChanged, posted: value.status === 'posted' && row.status !== 'posted', audienceChanged };
 }
 
 /**
  * After COMMIT: queues the students' "new work" emails for items that were
- * just posted. Items with "Email students" off, and students who can't see
- * the item or don't get class email, get nothing; an item that was posted
- * before never emails twice (one job per student and item). Never throws
- * (enqueueNewWork logs its own failures).
+ * just posted, or whose audience just changed (the students added). Items
+ * with "Email students" off, items students can't see yet (a draft, a
+ * schedule not reached), and students who can't see the item or don't get
+ * class email, get nothing; a student already emailed about an item is never
+ * emailed again (one job per student and item). Never throws (enqueueNewWork
+ * logs its own failures).
  */
 const notifyPosted = (itemIds) => enqueueNewWork(itemIds);
 

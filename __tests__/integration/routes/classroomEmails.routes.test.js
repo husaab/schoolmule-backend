@@ -208,6 +208,45 @@ describe('Integration: classroom emails', () => {
     expect(sent().filter((m) => m.to[0] === 'bilal.karim@example.com')).toHaveLength(1);
   });
 
+  it('Fable M1: widening a posted item emails only the students added (same gates); nobody is emailed twice', async () => {
+    const forItem = (itemId) => jobs('new_work', `AND digest_key = 'item:${itemId}'`);
+    const some = await assignment({ title: 'Catch-up sheet', audience: 'some', studentIds: [bilalId] });
+    let rows = await forItem(some.itemId);
+    expect(rows.map((r) => r.recipient_email)).toEqual(['bilal.karim@example.com']);
+    expect((await processJob(rows[0])).outcome).toBe('sent');
+
+    // Widened to the class: Amal is added and emailed; Bilal, already emailed, is not queued again.
+    // (Dalia's login is invite-pending: never emailed.)
+    await editItem(some.itemId, { audience: 'all' });
+    rows = await forItem(some.itemId);
+    expect(rows.map((r) => [r.recipient_email, r.status])).toEqual([
+      ['amal.haddad@example.com', 'pending'], ['bilal.karim@example.com', 'sent'],
+    ]);
+    expect((await processJob(rows[0])).outcome).toBe('sent');
+    expect(sent().map((m) => m.to[0])).toEqual(['bilal.karim@example.com', 'amal.haddad@example.com']);
+
+    // Narrowed and widened again: still one email each.
+    await editItem(some.itemId, { audience: 'some', studentIds: [bilalId] });
+    await editItem(some.itemId, { audience: 'all' });
+    expect((await forItem(some.itemId)).map((r) => r.status)).toEqual(['sent', 'sent']);
+
+    // A graded item (a gradebook column) widened from one chosen student to two.
+    const graded = await assignment({
+      title: 'Seed journal', audience: 'some', studentIds: [amalId], gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 },
+    });
+    expect((await forItem(graded.itemId)).map((r) => r.recipient_email)).toEqual(['amal.haddad@example.com']);
+    await editItem(graded.itemId, { audience: 'some', studentIds: [amalId, bilalId] });
+    expect((await forItem(graded.itemId)).map((r) => r.recipient_email)).toEqual(['amal.haddad@example.com', 'bilal.karim@example.com']);
+
+    // A draft, or an item with "Email students" off, still emails nobody when widened.
+    const draft = await assignment({ title: 'Leaf rubbing', status: 'draft', audience: 'some', studentIds: [bilalId] });
+    await editItem(draft.itemId, { audience: 'all' });
+    expect(await forItem(draft.itemId)).toEqual([]);
+    const quiet = await assignment({ title: 'Bark rubbing', emailStudents: false, audience: 'some', studentIds: [bilalId] });
+    await editItem(quiet.itemId, { audience: 'all' });
+    expect(await forItem(quiet.itemId)).toEqual([]);
+  });
+
   it('a scheduled item queues new_work when it is promoted', async () => {
     const item = await assignment({ status: 'scheduled', publishAt: new Date(Date.now() + HOUR_MS).toISOString() });
     expect(await jobs('new_work')).toEqual([]);
