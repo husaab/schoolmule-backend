@@ -453,6 +453,64 @@ describe('Integration: classroom emails', () => {
     expect(sent()).toHaveLength(1);
   });
 
+  it('re-review N1: a Missing that goes live on an already-published column (no digest) is announced once by the 4 pm alert', async () => {
+    const rowsFor = (email) => jobs('missing_alert', `AND recipient_email = '${email}'`);
+    const at = hoursFrom(FRIDAY, -6); // Friday 10:30, inside Friday's window
+    // Due Thursday 13:30: before Friday's window, so nothing is Missing by its due date alone today.
+    const due = hoursFrom(FRIDAY, -27);
+    const item = await assignment({ title: 'Plant cell diagram', dueAt: due.toISOString(), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
+    const columnId = item.gradebook.assessmentId;
+
+    // Friday morning: Bilal's grade is published (the column is published now, with Rania's digest)...
+    await turnIn(item.itemId, asBilal);
+    await patchReq(`/api/classroom/items/${item.itemId}/submissions/${bilalId}`, { draftScore: 8 });
+    expect((await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [bilalId] })).data.assessmentPublished).toBe(true);
+    // ...then the teacher marks Amal "M" in the grid: live at once (D17), no digest.
+    getResend().emails.send.mockClear();
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: amalId, assessmentId: columnId, score: null, status: 'missing' }] });
+    expect(sent()).toEqual([]);
+    await pool.query(`UPDATE classwork_submissions SET published_at = $2 WHERE item_id = $1 AND published_at IS NOT NULL`, [item.itemId, at]);
+    await pool.query(`UPDATE assessment_publication_emails SET sent_at = $1`, [at]);
+
+    // A second category published in Grades with a Missing in it: that digest (listing the
+    // category, not the column) announced Amal's Missing, so no alert for it.
+    const labsId = (await pool.query(
+      `INSERT INTO assessments (class_id, name, is_parent, weight_points) VALUES ($1, 'Labs', TRUE, 30) RETURNING assessment_id`, [sciId],
+    )).rows[0].assessment_id;
+    const lab = await assignment({ title: 'Seed journal', dueAt: due.toISOString(), gradebook: { mode: 'category', categoryId: labsId, maxScore: 10 } });
+    await expectStatus(authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher)
+      .send({ studentId: amalId, assessmentId: lab.gradebook.assessmentId, status: 'missing' }), 200);
+    await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+      .send({ assessmentIds: [labsId] }), 201);
+    const labDigest = (await pool.query(
+      `SELECT assessment_ids FROM assessment_publication_emails WHERE student_id = $1 AND status = 'sent' AND $2 = ANY(assessment_ids)`, [amalId, labsId],
+    )).rows;
+    expect(labDigest).toHaveLength(1);
+    expect(labDigest[0].assessment_ids).not.toContain(lab.gradebook.assessmentId);
+    await pool.query(`UPDATE classwork_submissions SET published_at = $2 WHERE item_id = $1 AND published_at IS NOT NULL`, [lab.itemId, at]);
+    await pool.query(`UPDATE assessment_publication_emails SET sent_at = $1 WHERE $2 = ANY(assessment_ids)`, [at, labsId]);
+
+    await classroom.runSchedule(FRIDAY);
+    // Mona: exactly one alert, for the live Missing; Rania (Bilal was graded): none.
+    const mona = await rowsFor('mona.haddad@example.com');
+    expect(mona.map((r) => r.digest_key)).toEqual([missingKey(amalId, item.itemId, due)]);
+    expect(await rowsFor('rania.karim@example.com')).toEqual([]);
+    getResend().emails.send.mockClear();
+    expect((await processJob(mona[0], FRIDAY)).outcome).toBe('sent');
+    expect(sent()).toHaveLength(1);
+    const [email] = sent();
+    expect(email.to).toEqual(['mona.haddad@example.com']);
+    expect(email.html).toContain('Plant cell diagram');
+    expect(email.html).not.toContain('Seed journal');
+
+    // Never again: a later sweep, a restart, or the next day's window.
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 1));
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 24));
+    expect(await rowsFor('mona.haddad@example.com')).toHaveLength(1);
+  });
+
   it("a family alert never takes a sibling another worker has claimed (no item emailed twice)", async () => {
     const cells = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
     const spelling = await createItem(engId, {
