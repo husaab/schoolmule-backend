@@ -623,6 +623,41 @@ describe('Integration: student messaging', () => {
     const makeDue = (id) => pool.query(
       `UPDATE message_email_jobs SET send_after = NOW() - interval '1 minute' WHERE conversation_id = $1 AND status = 'pending'`, [id]);
 
+    it('S10: subjects read naturally on student threads (never "Amal Haddad sent a message about Amal Haddad\'s …")', async () => {
+      const resend = getResend().emails.send;
+      const subjectsTo = (email) => resend.mock.calls.map(([e]) => e).filter((e) => e.to[0] === email).map((e) => e.subject);
+      resend.mockClear();
+      const general = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Question about the quiz', body: 'Is it open book?' })).data.conversation.conversationId;
+      await makeDue(general);
+      await notifier.drainAll();
+      expect(subjectsTo('ziad.teacher@example.com')).toEqual(['New message from Amal Haddad: Question about the quiz']);
+      expect(subjectsTo('mona.haddad@example.com')).toEqual(['New message from Amal Haddad: Question about the quiz']);
+
+      // Two replies before the digest goes: one email that counts them.
+      resend.mockClear();
+      await staffPost(general, asTeacher, 'Yes, open book.');
+      await staffPost(general, asTeacher, 'Bring your notes.');
+      await makeDue(general);
+      await notifier.drainAll();
+      expect(subjectsTo('mona.haddad@example.com')).toEqual(['2 new messages: Question about the quiz']);
+      expect(subjectsTo('amal.haddad@example.com')).toEqual(['2 new messages: Question about the quiz']);
+
+      // About a piece of work: the student's own message drops the possessive; a teacher's keeps whose work it is.
+      resend.mockClear();
+      const item = await createItem(sciId, { kind: 'assignment', title: 'Plant cell diagram', submissionMode: 'file', dueAt: inDays(3) });
+      const thread = (await send('post', `/api/student/items/${item.itemId}/thread/messages`, asAmal, { body: 'Do we label the vacuole?' }, 201))
+        .data.conversation.conversationId;
+      await makeDue(thread);
+      await notifier.drainAll();
+      expect(subjectsTo('ziad.teacher@example.com')).toEqual(['Amal Haddad sent a message about Plant cell diagram']);
+      resend.mockClear();
+      await staffPost(thread, asTeacher, 'Yes, label it.');
+      await makeDue(thread);
+      await notifier.drainAll();
+      expect(subjectsTo('mona.haddad@example.com')).toEqual(["Ziad Teacher sent a message about Amal Haddad's Plant cell diagram"]);
+      expect(subjectsTo('amal.haddad@example.com')).toEqual(['Ziad Teacher sent you a message about Plant cell diagram']);
+    }, 30000);
+
     it('a student-started thread emails each message once (microsecond timestamps never re-queue it), the student included', async () => {
       const resend = getResend().emails.send;
       resend.mockClear();

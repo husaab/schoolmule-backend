@@ -424,7 +424,7 @@ const messagingQueries = {
       j.job_id, j.conversation_id, j.recipient_id, j.school, j.attempts,
       u.email AS recipient_email, u.first_name AS recipient_first_name, u.role AS recipient_role, u.is_archived AS recipient_archived,
       (u.password = '!') AS recipient_invite_pending,
-      c.title, c.assessment_id, c.kind, c.student_id, c.last_message_at,
+      c.title, c.assessment_id, c.kind, c.student_id, c.last_message_at, c.classwork_item_id,
       s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
       cp.last_read_at, cp.last_emailed_at, COALESCE(cp.muted, FALSE) AS muted,
       -- Student threads (T17), re-checked at send time: a guardian on an item
@@ -452,7 +452,7 @@ const messagingQueries = {
   // $1 conversation_id, $2 recipient_id, $3 since timestamptz|null (pass the exact text, never a JS Date).
   // created_at_exact keeps the microseconds for markEmailed and the next "since".
   selectMessagesForEmail: `
-    SELECT m.message_id, m.body, m.created_at, m.created_at::text AS created_at_exact,
+    SELECT m.message_id, m.body, m.created_at, m.created_at::text AS created_at_exact, m.sender_role::text AS sender_role,
            TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
            (SELECT COUNT(*) FROM message_attachments ma WHERE ma.message_id = m.message_id)::int AS attachment_count
     FROM messages m LEFT JOIN users u ON u.user_id = m.sender_id

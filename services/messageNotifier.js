@@ -77,6 +77,26 @@ async function contextLineFor(ctx) {
   return `${Number(a.score)}/${Number(a.max_score)} (${pct}%)`;
 }
 
+/**
+ * The digest's subject. Parent–teacher threads keep main's wording ("Mona
+ * sent a message about Amina's Unit 3 Quiz"). A thread the student is in
+ * (S10) never names the student twice: a general thread shows its own
+ * subject line ("New message from Adam Haddad: Question about the quiz";
+ * to the student "Ziad Teacher sent you a message: …"), and there is no
+ * possessive when the student wrote about their own work.
+ */
+function digestSubject({ ctx, msgs, forStudent }) {
+  const sender = msgs[0].sender_name || 'SchoolMule';
+  const many = msgs.length > 1;
+  const general = Boolean(ctx.includes_student && !ctx.assessment_id && !ctx.classwork_item_id);
+  if (forStudent && general) return many ? `${msgs.length} new messages: ${ctx.title}` : `${sender} sent you a message: ${ctx.title}`;
+  if (forStudent) return many ? `${msgs.length} new messages about ${ctx.title}` : `${sender} sent you a message about ${ctx.title}`;
+  if (general) return many ? `${msgs.length} new messages: ${ctx.title}` : `New message from ${sender}: ${ctx.title}`;
+  if (many) return `${msgs.length} new messages about ${ctx.student_name}'s ${ctx.title}`;
+  if (ctx.includes_student && msgs[0].sender_role === 'STUDENT') return `${sender} sent a message about ${ctx.title}`;
+  return `${sender} sent a message about ${ctx.student_name}'s ${ctx.title}`;
+}
+
 /** Process one claimed job. Returns 'sent' | 'skipped'. Throws on a send failure. */
 async function processJob(job) {
   const { rows } = await db.query(q.selectJobContext, [job.job_id]);
@@ -154,16 +174,7 @@ async function processJob(job) {
     schoolName,
     schoolInfo,
   });
-  let subject;
-  if (isStudent) {
-    subject = msgs.length === 1
-      ? `${msgs[0].sender_name || 'SchoolMule'} sent you a message about ${ctx.title}`
-      : `${msgs.length} new messages about ${ctx.title}`;
-  } else {
-    subject = msgs.length === 1
-      ? `${msgs[0].sender_name || 'SchoolMule'} sent a message about ${ctx.student_name}'s ${ctx.title}`
-      : `${msgs.length} new messages about ${ctx.student_name}'s ${ctx.title}`;
-  }
+  const subject = digestSubject({ ctx, msgs, forStudent: isStudent });
 
   await sendOrThrow(getResend(), {
     ...schoolSender({ school: job.school, schoolInfo, role: 'messages' }),
