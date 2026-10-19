@@ -10,6 +10,7 @@ jest.mock('resend', () => ({
   Resend: jest.fn(() => ({ emails: { send: jest.fn().mockResolvedValue({ data: { id: 'email-1' } }) } })),
 }));
 
+const { TINY_PNG } = require('../../helpers/imageFixtures');
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
@@ -220,7 +221,7 @@ describe('Integration: quizzes', () => {
 
     // An image: uploaded under the quiz's folder, then referenced.
     const upload = await expectStatus(authenticatedRequest('post', `/api/classroom/items/${item.itemId}/question-images`, asTeacher)
-      .attach('image', Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]), { filename: 'cell.png', contentType: 'image/png' }), 201);
+      .attach('image', TINY_PNG, { filename: 'cell.png', contentType: 'image/png' }), 201);
     expect(upload.data.imagePath).toMatch(new RegExp(`^ALHAADIACADEMY/classwork/${item.itemId}/questions/[0-9a-f-]+\\.png$`));
     const withImage = (await putQuestions(item.itemId, [{ ...ONE, questionId: q1.questionId, imagePath: upload.data.imagePath }])).data;
     expect(withImage.questions[0].imageUrl).toEqual(expect.stringContaining(upload.data.imagePath));
@@ -875,7 +876,7 @@ describe('Integration: quizzes', () => {
   });
 
   describe('copies carry the whole quiz, never the students\' work (fix round 1, I2)', () => {
-    const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+    const PNG = TINY_PNG; // a real image: uploads are decoded (re-review N2)
     // A quiz with an image, settings off their defaults, and a student's
     // turned-in, overridden, published attempt.
     const sourceQuiz = async () => {

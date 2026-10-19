@@ -9,6 +9,7 @@ jest.mock('resend', () => ({
 
 const fs = require('fs');
 const path = require('path');
+const { TINY_PNG } = require('../../helpers/imageFixtures');
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
@@ -618,7 +619,7 @@ describe('Integration: classwork', () => {
       const item = await createItem(sciId, homeworkAssignment());
       const up = await call('post', `${BASE}/items/${item.itemId}/attachments`)
         .attach('files', Buffer.from('%PDF-1.4 checklist'), { filename: 'cell-parts-checklist.pdf', contentType: 'application/pdf' })
-        .attach('files', Buffer.from('fake png bytes'), { filename: 'example-plant-cell.png', contentType: 'image/png' });
+        .attach('files', TINY_PNG, { filename: 'example-plant-cell.png', contentType: 'image/png' }); // a real image (decoded, N2)
       expect(up.status).toBe(201);
       expect(up.body.data).toEqual([
         expect.objectContaining({ kind: 'file', fileName: 'cell-parts-checklist.pdf', mimeType: 'application/pdf', sizeBytes: 18, title: null, youtubeId: null }),

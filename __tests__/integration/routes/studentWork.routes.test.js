@@ -14,6 +14,10 @@ const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
 const { workStatus } = require('../../../services/classroom/workStatus');
 const { WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS } = require('../../../queries/classworkSubmission.queries');
+const { TINY_JPEG, TINY_PNG, TINY_WEBP } = require('../../helpers/imageFixtures');
+
+// A photo is decoded on upload (re-review N2), so photos are real images.
+const PHOTO_BYTES = { 'image/jpeg': TINY_JPEG, 'image/png': TINY_PNG, 'image/webp': TINY_WEBP };
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const OTHER_TEACHER_ID = '550e8400-e29b-41d4-a716-446655440003';
@@ -100,7 +104,10 @@ describe('Integration: student work', () => {
   const graded = (extra = {}) => assignment({ gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 }, ...extra });
   const upload = (itemId, files, who = asAmal) => {
     let req = call('post', `/api/student/items/${itemId}/files`, who);
-    for (const f of files) req = req.attach('files', Buffer.from(f.body || 'file bytes'), { filename: f.name, contentType: f.type });
+    for (const f of files) {
+      const bytes = f.body ? Buffer.from(f.body) : PHOTO_BYTES[f.type] || Buffer.from('file bytes');
+      req = req.attach('files', bytes, { filename: f.name, contentType: f.type });
+    }
     return req;
   };
 
@@ -245,7 +252,7 @@ describe('Integration: student work', () => {
       { name: 'Notes.PDF', type: 'application/pdf' },
     ]), 201);
     expect(up.data.files).toEqual([
-      { fileId: expect.any(String), fileName: 'diagram.jpg', mimeType: 'image/jpeg', sizeBytes: 10 },
+      { fileId: expect.any(String), fileName: 'diagram.jpg', mimeType: 'image/jpeg', sizeBytes: TINY_JPEG.length },
       { fileId: expect.any(String), fileName: 'Notes.PDF', mimeType: 'application/pdf', sizeBytes: 10 },
     ]);
     expect(supabase.storage.from).toHaveBeenCalledWith(BUCKET);

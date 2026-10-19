@@ -6,9 +6,10 @@
 // type used on upload is the one sniffed from the bytes, never the declared one.
 // A photo too big for the app (over 2000 px or 1.5 MB) is then resized, turned
 // upright and stripped of its EXIF/GPS (utils/imageResize.js); `req.image`
-// describes what will be stored.
+// describes what will be stored. An image over the pixel cap, or one that
+// can't be decoded, is a 400 with its code (IMAGE_TOO_LARGE / IMAGE_UNREADABLE).
 const multer = require('multer');
-const { normalizeImage } = require('./imageResize');
+const { normalizeImage, isImageRejected } = require('./imageResize');
 
 const EXT_BY_TYPE = Object.freeze({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' });
 const TYPE_ERROR = 'Use a JPEG, PNG or WebP image';
@@ -59,7 +60,9 @@ function singleImage({ field, maxBytes }) {
           ? { buffer: out.buffer, contentType: out.contentType, ext: out.ext, size: out.buffer.length }
           : { buffer: req.file.buffer, contentType, ext: EXT_BY_TYPE[contentType], size: req.file.size };
         return next();
-      }, next);
+      }, (error) => (isImageRejected(error)
+        ? res.status(400).json({ status: 'failed', code: error.code, message: error.message })
+        : next(error)));
     });
 }
 

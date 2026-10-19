@@ -57,7 +57,8 @@ function makeRouter(overrides = {}) {
 }
 
 const post = (token) => authenticatedRequest('post', '/api/announcements', token);
-const png = Buffer.from('89504e470d0a1a0a', 'hex');
+// A real image: uploaded photos are decoded (re-review N2).
+const { TINY_PNG: png } = require('../../helpers/imageFixtures');
 
 describe('announcement controller', () => {
   beforeEach(() => { db._reset(); supabase._reset(); });

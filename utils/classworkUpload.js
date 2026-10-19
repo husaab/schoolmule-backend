@@ -13,8 +13,9 @@ const crypto = require('crypto');
 const path = require('path');
 const multer = require('multer');
 const { ALLOWED: MESSAGE_ALLOWED, BUCKET, MAX_FILES, MAX_FILE_BYTES, SIGNED_URL_TTL } = require('./attachmentUpload');
-// Photos are resized and stripped of EXIF/GPS before they are stored.
-const { normalizeUploadedFiles } = require('./imageResize');
+// Photos are resized and stripped of EXIF/GPS before they are stored; an
+// image over the pixel cap or unreadable refuses the request (400).
+const { normalizeUploadedFiles, isImageRejected } = require('./imageResize');
 
 // Messaging's types plus slides and short videos.
 const ALLOWED = Object.freeze({
@@ -64,6 +65,10 @@ const upload = multer({ storage: multer.memoryStorage(), limits, fileFilter });
 const submissionUpload = multer({ storage: multer.memoryStorage(), limits, fileFilter: submissionFileFilter });
 
 const reject = (res, message) => res.status(400).json({ status: 'failed', message });
+/** The photos resized, then next(); a refused image is a 400 with its code. */
+const normalizeThen = (files, res, next) => normalizeUploadedFiles(files).then(() => next(), (error) => (isImageRejected(error)
+  ? res.status(400).json({ status: 'failed', code: error.code, message: error.message })
+  : next(error)));
 const multerMessage = (err, many, typeError = TYPE_ERROR) => {
   if (err.code === 'LIMIT_FILE_SIZE') return 'Each file must be 10 MB or smaller';
   if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
@@ -77,7 +82,7 @@ const filesWith = (parser, typeError) => (req, res, next) =>
   parser.array('files', MAX_FILES)(req, res, (err) => {
     if (err) return reject(res, multerMessage(err, true, typeError));
     if (!req.files || req.files.length === 0) return reject(res, 'Choose a file to upload');
-    return normalizeUploadedFiles(req.files).then(() => next(), next);
+    return normalizeThen(req.files, res, next);
   });
 
 /** Multipart `files` (1–5): a teacher's classwork attachments. */
@@ -91,7 +96,7 @@ const uploadFile = (req, res, next) =>
   upload.single('file')(req, res, (err) => {
     if (err) return reject(res, multerMessage(err, false));
     if (!req.file) return reject(res, 'Choose a file to upload');
-    return normalizeUploadedFiles([req.file]).then(() => next(), next);
+    return normalizeThen([req.file], res, next);
   });
 
 /** Where an item's file lives in the bucket. */

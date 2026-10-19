@@ -14,6 +14,7 @@ const sharp = require('sharp');
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
+const { pngBomb } = require('../../helpers/imageFixtures');
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const AMAL_USER_ID = '550e8400-e29b-41d4-a716-446655440010';
@@ -182,5 +183,43 @@ describe('Integration: uploaded images are resized and stripped on the server', 
       .field('scope', 'class').field('classId', classId).field('title', 'Science fair').field('body', 'Our boards.')
       .attach('files', PHOTO, { filename: 'fair.jpg', contentType: 'image/jpeg' }), 201);
     await expectStoredPhoto(uploads()[0]);
+  });
+  it('re-review N2: a decompression bomb or an unreadable image is a 400 on every upload route, and nothing is stored', async () => {
+    const BOMB = pngBomb(20000, 20000); // 74 bytes claiming 400 megapixels
+    const tooLarge = (body, name) => {
+      expect(body).toMatchObject({ status: 'failed', code: 'IMAGE_TOO_LARGE' });
+      expect(body.message).toContain('too large (over 50 megapixels)');
+      if (name) expect(body.message).toContain(`"${name}"`);
+    };
+    // Single-image uploads: profile photo and class banner.
+    tooLarge(await expectStatus(authenticatedRequest('post', '/api/profile/photo', asTeacher)
+      .attach('photo', BOMB, { filename: 'me.png', contentType: 'image/png' }), 400));
+    tooLarge(await expectStatus(authenticatedRequest('post', `/api/classroom/classes/${classId}/banner`, asTeacher)
+      .attach('banner', BOMB, { filename: 'banner.png', contentType: 'image/png' }), 400));
+    // Classwork attachments: the whole request is refused, the good photo with it.
+    const item = await createItem({ kind: 'material', title: 'Cells reading' });
+    tooLarge(await expectStatus(authenticatedRequest('post', `/api/classroom/items/${item.itemId}/attachments`, asTeacher)
+      .attach('files', PHOTO, { filename: 'board.jpg', contentType: 'image/jpeg' })
+      .attach('files', BOMB, { filename: 'bomb.png', contentType: 'image/png' }), 400), 'bomb.png');
+    // A student's turned-in work.
+    const work = await createItem({ kind: 'assignment', title: 'Plant cell diagram', submissionMode: 'file', dueAt: inDays(2), gradebook: { mode: 'none' } });
+    tooLarge(await expectStatus(authenticatedRequest('post', `/api/student/items/${work.itemId}/files`, asAmal)
+      .attach('files', BOMB, { filename: 'IMG_0042.png', contentType: 'image/png' }), 400), 'IMG_0042.png');
+    // Message and announcement attachments.
+    const thread = (await expectStatus(authenticatedRequest('post', '/api/student/conversations', asAmal)
+      .send({ teacherId: TEACHER_ID, classId, subject: 'Lab photo', body: 'Here is my lab.' }), 201)).data.conversation.conversationId;
+    tooLarge(await expectStatus(authenticatedRequest('post', `/api/messaging/conversations/${thread}/messages`, asTeacher)
+      .field('body', 'Your setup.').attach('files', BOMB, { filename: 'lab.png', contentType: 'image/png' }), 400), 'lab.png');
+    tooLarge(await expectStatus(authenticatedRequest('post', '/api/announcements', asTeacher)
+      .field('scope', 'class').field('classId', classId).field('title', 'Science fair').field('body', 'Our boards.')
+      .attach('files', BOMB, { filename: 'fair.png', contentType: 'image/png' }), 400), 'fair.png');
+    expect(uploads()).toEqual([]);
+    expect((await pool.query(`SELECT COUNT(*)::int AS n FROM messages WHERE conversation_id = $1`, [thread])).rows[0].n).toBe(1);
+
+    // Bytes that only claim to be a JPEG: refused the same way.
+    const fake = await expectStatus(authenticatedRequest('post', `/api/classroom/items/${item.itemId}/attachments`, asTeacher)
+      .attach('files', Buffer.from('this is not a photo at all'), { filename: 'photo.jpg', contentType: 'image/jpeg' }), 400);
+    expect(fake).toMatchObject({ code: 'IMAGE_UNREADABLE', message: `"photo.jpg" couldn't be read. Try another file.` });
+    expect(uploads()).toEqual([]);
   });
 });

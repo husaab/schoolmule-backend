@@ -3,7 +3,10 @@
 // and without transparency, WebP, GIF and non-images.
 
 const sharp = require('sharp');
-const { normalizeImage, normalizeUploadedFiles, renameFor, MAX_EDGE } = require('../../../utils/imageResize');
+const {
+  normalizeImage, normalizeUploadedFiles, renameFor, runLimited, isImageRejected, MAX_EDGE, MAX_INPUT_PIXELS, MAX_CONCURRENT_RESIZES,
+} = require('../../../utils/imageResize');
+const { pngBomb } = require('../../helpers/imageFixtures');
 
 // A 3200 × 2400 phone photo, stored sideways (EXIF orientation 6) with the
 // camera's make and a GPS position.
@@ -75,7 +78,7 @@ describe('normalizeImage', () => {
     expect((await metaOf(png.buffer)).exif).toBeUndefined();
   });
 
-  it('leaves a small clean image, GIF, HEIC, PDF and unreadable bytes untouched (null)', async () => {
+  it('leaves a small clean image, GIF, HEIC and PDF untouched (null)', async () => {
     const clean = await solid(640, 480).jpeg().toBuffer();
     expect(await normalizeImage(clean, 'image/jpeg')).toBeNull();
     const gif = await solid(3000, 3000).gif().toBuffer();
@@ -83,7 +86,45 @@ describe('normalizeImage', () => {
     expect(await normalizeImage(gif, 'image/png')).toBeNull(); // a GIF named .png stays a GIF
     expect(await normalizeImage(Buffer.from('not really heic'), 'image/heic')).toBeNull();
     expect(await normalizeImage(Buffer.from('%PDF-1.4'), 'application/pdf')).toBeNull();
-    expect(await normalizeImage(Buffer.from('garbage that claims to be a jpeg'), 'image/jpeg')).toBeNull();
+  });
+
+  it('re-review N2: a tiny file claiming a huge picture is refused at once (400 IMAGE_TOO_LARGE), never decoded', async () => {
+    const bomb = pngBomb(20000, 20000);
+    expect(bomb.length).toBeLessThan(200);
+    const started = Date.now();
+    const error = await normalizeImage(bomb, 'image/png', { name: 'diagram.png' }).then(() => null, (e) => e);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(isImageRejected(error)).toBe(true);
+    expect(error).toMatchObject({ status: 400, expose: true, code: 'IMAGE_TOO_LARGE' });
+    expect(error.message).toBe('"diagram.png" is too large (over 50 megapixels). Make it smaller and try again.');
+    // Just over the cap is refused too; a 48 MP phone photo (8064 × 6048) is under it.
+    expect(MAX_INPUT_PIXELS).toBe(50_000_000);
+    expect((await normalizeImage(pngBomb(7072, 7072), 'image/png').catch((e) => e)).code).toBe('IMAGE_TOO_LARGE');
+    expect(8064 * 6048).toBeLessThan(MAX_INPUT_PIXELS);
+  });
+
+  it('re-review N2: bytes that are not the image they claim to be are refused (400 IMAGE_UNREADABLE), never a 500', async () => {
+    const error = await normalizeImage(Buffer.from('garbage that claims to be a jpeg'), 'image/jpeg').catch((e) => e);
+    expect(error).toMatchObject({ status: 400, code: 'IMAGE_UNREADABLE', message: "This image couldn't be read. Try another file." });
+    const header = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('not a jpeg body '.repeat(40))]);
+    expect((await normalizeImage(header, 'image/jpeg').catch((e) => e)).code).toBe('IMAGE_UNREADABLE');
+  });
+
+  it('N3: a truncated phone photo is still stripped of its GPS (decoded leniently), not stored as uploaded', async () => {
+    const whole = await sharp({ create: { width: 1200, height: 900, channels: 3, noise: { type: 'gaussian', mean: 128, sigma: 20 } } })
+      .jpeg().withExifMerge({ IFD3: { GPSLatitudeRef: 'N', GPSLatitude: '43/1 39/1 0/1' } }).toBuffer();
+    const truncated = whole.subarray(0, Math.floor(whole.length * 0.6));
+    expect((await metaOf(truncated)).exif).toBeDefined();
+    const out = await normalizeImage(truncated, 'image/jpeg');
+    expect(out).toMatchObject({ contentType: 'image/jpeg', width: 1200, height: 900, resized: false });
+    expect((await metaOf(out.buffer)).exif).toBeUndefined();
+  });
+
+  it('re-review N2: sharp runs single-threaded with its cache off, so one upload is one bounded decode', () => {
+    expect(sharp.concurrency()).toBe(1);
+    const cache = sharp.cache();
+    expect(cache.memory.max).toBe(0);
+    expect(cache.items.max).toBe(0);
   });
 
   it(`never makes an image larger than ${MAX_EDGE} px on its long edge`, async () => {
@@ -111,12 +152,50 @@ describe('normalizeUploadedFiles', () => {
     expect(files[2]).toMatchObject({ originalname: 'worksheet.pdf', mimetype: 'application/pdf', buffer: pdf, size: pdf.length });
   });
 
+  it('re-review N2: a refused image stops the batch with that file named; nothing after it is decoded', async () => {
+    const photo = await phonePhoto();
+    const files = [
+      { originalname: 'ok.jpg', mimetype: 'image/jpeg', buffer: photo, size: photo.length },
+      { originalname: 'bomb.png', mimetype: 'image/png', buffer: pngBomb(), size: 74 },
+    ];
+    const error = await normalizeUploadedFiles(files).catch((e) => e);
+    expect(error).toMatchObject({ status: 400, code: 'IMAGE_TOO_LARGE' });
+    expect(error.message).toContain('"bomb.png"');
+  });
+
   it('renameFor swaps the extension only when the type changed', () => {
     expect(renameFor('a.png', 'jpg')).toBe('a.jpg');
     expect(renameFor('a.jpeg', 'jpg')).toBe('a.jpeg');
     expect(renameFor('a.JPG', 'jpg')).toBe('a.JPG');
     expect(renameFor('noext', 'jpg')).toBe('noext.jpg');
     expect(renameFor('a.webp', 'webp')).toBe('a.webp');
+  });
+});
+
+describe('runLimited (the upload resize queue)', () => {
+  it(`runs at most ${MAX_CONCURRENT_RESIZES} jobs at once, in order, passing results and errors through`, async () => {
+    expect(MAX_CONCURRENT_RESIZES).toBe(2);
+    let running = 0;
+    let peak = 0;
+    const order = [];
+    const job = (n, fail = false) => () => new Promise((resolve, reject) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      order.push(n);
+      setTimeout(() => {
+        running -= 1;
+        if (fail) reject(new Error(`job ${n} failed`));
+        else resolve(n * 10);
+      }, 15);
+    });
+    const results = await Promise.allSettled([1, 2, 3, 4, 5, 6].map((n) => runLimited(job(n, n === 3))));
+    expect(peak).toBe(2);
+    expect(order).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(results.map((r) => (r.status === 'fulfilled' ? r.value : r.reason.message)))
+      .toEqual([10, 20, 'job 3 failed', 40, 50, 60]);
+    // A job that throws synchronously frees its slot too.
+    await expect(runLimited(() => { throw new Error('sync'); })).rejects.toThrow('sync');
+    await expect(runLimited(async () => 'next')).resolves.toBe('next');
   });
 });
 

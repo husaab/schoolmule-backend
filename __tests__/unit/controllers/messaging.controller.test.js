@@ -76,7 +76,8 @@ function makeRouter(overrides = {}) {
   return { calls, ran };
 }
 
-const png = Buffer.from('89504e470d0a1a0a', 'hex');
+// A real image: uploaded photos are decoded (re-review N2).
+const { TINY_PNG: png } = require('../../helpers/imageFixtures');
 
 const HOMEROOM = '77777777-7777-4777-8777-777777777777';
 const LINK = '88888888-8888-4888-8888-888888888888';
