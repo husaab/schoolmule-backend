@@ -61,9 +61,11 @@ describe('people shaping', () => {
 
   it('derives the status and QR eligibility from the login', () => {
     const active = toPeopleStudent({ ...base, user_id: 'u1', is_archived: false, invite_pending: false, last_seen_at: '2026-10-14T15:00:00Z' }, SETTINGS);
-    expect(active.account).toEqual({ status: 'active', userId: 'u1', lastSeenAt: '2026-10-14T15:00:00.000Z', qrEligible: true });
+    expect(active.account).toEqual({
+      status: 'active', userId: 'u1', lastSeenAt: '2026-10-14T15:00:00.000Z', qrEligible: true, invite: null, signInMethod: 'password',
+    });
     const none = toPeopleStudent({ ...base, grade: 'SK', user_id: null }, SETTINGS);
-    expect(none.account).toEqual({ status: 'not_eligible', userId: null, lastSeenAt: null, qrEligible: false });
+    expect(none.account).toEqual({ status: 'not_eligible', userId: null, lastSeenAt: null, qrEligible: false, invite: null, signInMethod: null });
   });
 
   it('counts students not signed in and with missing work', () => {
