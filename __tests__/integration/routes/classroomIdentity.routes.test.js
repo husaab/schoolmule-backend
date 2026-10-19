@@ -394,6 +394,19 @@ describe('Integration: class identity, options, archive, student avatar', () => 
       expect(res.status).toBe(400);
     });
 
+    it('T5: a malformed student id is a clean 404 (never a 500), on every per-student classroom route', async () => {
+      const bad = 'not-a-uuid';
+      const calls = [
+        authenticatedRequest('put', `${BASE}/${classId}/students/${bad}/avatar`, asTeacher).send({ avatar: spec }),
+        authenticatedRequest('post', `${BASE}/${classId}/students/${bad}/reset-password`, asTeacher),
+        authenticatedRequest('post', `${BASE}/${classId}/students/${bad}/resend-invite`, asTeacher),
+      ];
+      for (const res of await Promise.all(calls)) {
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ status: 'failed', message: 'Student not found' });
+      }
+    });
+
     it("refuses a teacher who does not teach the class", async () => {
       const res = await authenticatedRequest('put', `${BASE}/${classId}/students/${studentId}/avatar`, asOtherTeacher).send({ avatar: spec });
       expect(res.status).toBe(403);
