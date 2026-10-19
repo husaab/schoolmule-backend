@@ -202,7 +202,8 @@ async function writeScore(client, { item, studentId, isPublished, earned, mode, 
   if (!inAudience) return none;
   await client.query(gradingQ.ensureSubmission, [item.item_id, studentId]);
   const { rows: [cur] } = await client.query(gradingQ.lockSubmission, [item.item_id, studentId]);
-  if (cur.score_set_by_teacher) return { ...none, kept: true };
+  // A typed score holds only while there is one (Mark missing clears both).
+  if (cur.score_set_by_teacher && cur.draft_score !== null) return { ...none, kept: true };
   if (cur.draft_status === 'excused' || cur.live_status === 'excused') return none;
   const live = isPublished && (mode === 'override' || (mode === 'regrade' && Boolean(cur.published_at)));
   if (live) {
@@ -427,6 +428,22 @@ async function useQuizScore({ itemId, studentId, userId }) {
     const { live } = await writeScore(client, { item, studentId, isPublished, earned: totals.earned, mode: 'override', userId });
     return { wroteLive: live };
   });
+}
+
+/**
+ * The quiz's own score for one student: { earned, needsReview } of their
+ * turned-in attempt, or null (not turned in). Un-excuse restores it (fix
+ * round 2) rather than the score from before the excuse.
+ */
+async function quizTotalFor(runner, itemId, studentId) {
+  const { rows: [attempt] } = await runner.query(q.selectAttempt, [itemId, studentId]);
+  if (!attempt?.submitted_at) return null;
+  const [{ rows: questions }, { rows: answers }] = await Promise.all([
+    runner.query(q.selectQuestions, [itemId]),
+    runner.query(q.selectAttemptAnswers, [attempt.attempt_id]),
+  ]);
+  const { earned, needsReview } = scoring.attemptTotals(questions, answers);
+  return { earned, needsReview };
 }
 
 /** The grading detail's quiz block for one student, or null when they haven't started. */
@@ -733,6 +750,7 @@ module.exports = {
   saveQuestions,
   overrideAnswer,
   useQuizScore,
+  quizTotalFor,
   loadQuizDetail,
   buildStudentQuiz,
   startQuiz,

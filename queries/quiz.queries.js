@@ -221,14 +221,14 @@ const quizQueries = {
   //  score. Compared in SQL, to the microsecond. $1 item_id, $2 student_id
   selectRelease: `
     SELECT (qt.submitted_at IS NOT NULL AND sub.published_at IS NOT NULL AND sub.published_at >= qt.submitted_at) AS released,
-           COALESCE(sub.score_set_by_teacher, FALSE) AS score_set_by_teacher
+           COALESCE(sub.score_set_by_teacher AND sub.draft_score IS NOT NULL, FALSE) AS score_set_by_teacher
     FROM quiz_attempts qt
     LEFT JOIN classwork_submissions sub ON sub.item_id = qt.item_id AND sub.student_id = qt.student_id
     WHERE qt.item_id = $1 AND qt.student_id = $2`,
 
   //  $1 item_id, $2 student_id
   selectScoreSetByTeacher: `
-    SELECT COALESCE(score_set_by_teacher, FALSE) AS score_set_by_teacher
+    SELECT COALESCE(score_set_by_teacher AND draft_score IS NOT NULL, FALSE) AS score_set_by_teacher
     FROM classwork_submissions WHERE item_id = $1 AND student_id = $2`,
 
   //  The highest score in the quiz's column that a key change won't

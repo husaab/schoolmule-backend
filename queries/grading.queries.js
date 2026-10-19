@@ -32,7 +32,7 @@ const GRADING_ROWS = `
 SELECT s.student_id, s.name, ${studentAvatarSql('s')},
        sub.submission_id, sub.turned_in_at, COALESCE(sub.is_late, FALSE) AS sub_is_late, sub.text_answer,
        sub.draft_score, sub.draft_status, sub.feedback, sub.published_at AS sub_published_at,
-       COALESCE(sub.score_set_by_teacher, FALSE) AS score_set_by_teacher,
+       COALESCE(sub.score_set_by_teacher AND sub.draft_score IS NOT NULL, FALSE) AS score_set_by_teacher,
        (i.kind = 'quiz' AND NOT ${QUIZ_GRADED}) AS quiz_needs_review,
        ${WORK_STATE_SQL} AS work_status,
        ${GRADE_VISIBLE} AS grade_visible,
@@ -121,6 +121,29 @@ const gradingQueries = {
     )
     INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, score_set_by_teacher, updated_at)
     SELECT $1, $2, v.score, v.status, $5, v.score IS NOT NULL, NOW() FROM v
+    ON CONFLICT (item_id, student_id) DO UPDATE
+    SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        score_set_by_teacher = EXCLUDED.score_set_by_teacher,
+        published_at = CASE WHEN (classwork_submissions.draft_score, classwork_submissions.draft_status)
+                                 IS DISTINCT FROM (EXCLUDED.draft_score, EXCLUDED.draft_status)
+                            THEN NULL ELSE classwork_submissions.published_at END,
+        updated_at = NOW()
+    RETURNING student_id, draft_score, draft_status`,
+
+  //  Un-excuse puts a draft score back (upsertDraftScore's rules) with the
+  //  typed flag given, not inferred: a restored score is only "typed by a
+  //  teacher" when it was before the excuse (T23 fix round 2).
+  //  $1 item_id, $2 student_id, $3 score|null, $4 status|null, $5 graded_by, $6 typed by a teacher
+  restoreDraftScore: `
+    WITH v AS (
+      SELECT $3::numeric AS score,
+             CASE WHEN $3::numeric IS NULL AND COALESCE($4::text, 'graded') = 'graded'
+                       AND NOT EXISTS (SELECT 1 FROM student_assessments sa JOIN classwork_items i ON i.assessment_id = sa.assessment_id
+                                        WHERE i.item_id = $1 AND sa.student_id = $2 AND ${SA_HAS_GRADE})
+                  THEN NULL ELSE COALESCE($4::text, 'graded') END AS status
+    )
+    INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, score_set_by_teacher, updated_at)
+    SELECT $1, $2, v.score, v.status, $5, $6::boolean AND v.score IS NOT NULL, NOW() FROM v
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = EXCLUDED.draft_score, draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
         score_set_by_teacher = EXCLUDED.score_set_by_teacher,
@@ -324,7 +347,8 @@ const gradingQueries = {
 
   //  Sets one student's draft status (Mark missing, Excuse), keeping the
   //  draft score (else the gradebook's) except for missing, as the grid's
-  //  status menu does. Created when missing.
+  //  status menu does. Created when missing. Missing has no score, so no
+  //  score typed by a teacher either (score_set_by_teacher cleared, T23).
   //  $1 item_id, $2 student_id, $3 status, $4 graded_by
   setDraftStatus: `
     INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, updated_at)
@@ -336,13 +360,16 @@ const gradingQueries = {
     ON CONFLICT (item_id, student_id) DO UPDATE
     SET draft_score = CASE WHEN EXCLUDED.draft_status = 'missing' THEN NULL
                            ELSE COALESCE(classwork_submissions.draft_score, EXCLUDED.draft_score) END,
+        score_set_by_teacher = CASE WHEN EXCLUDED.draft_status = 'missing' THEN FALSE
+                                    ELSE classwork_submissions.score_set_by_teacher END,
         draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by, updated_at = NOW()`,
 
   //  Of these students, the ones excused on this item (as a draft, or in the
   //  gradebook), with their draft score. $1 item_id, $2 student_id[]
   selectExcused: `
     SELECT s.student_id, COALESCE(sub.draft_score, sa.score) AS draft_score,
-           (sa.student_id IS NOT NULL AND sa.status = 'excused') AS live_excused
+           (sa.student_id IS NOT NULL AND sa.status = 'excused') AS live_excused,
+           COALESCE(sub.score_set_by_teacher AND sub.draft_score IS NOT NULL, FALSE) AS score_set_by_teacher
     FROM classwork_items i
     JOIN students s ON s.student_id = ANY($2::uuid[])
     LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id

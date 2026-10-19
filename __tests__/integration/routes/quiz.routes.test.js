@@ -797,6 +797,55 @@ describe('Integration: quizzes', () => {
       .toBe("This quiz isn't turned in yet.");
   });
 
+  it('the typed flag means only "a teacher typed this score": excuse, un-excuse and Mark missing never fake it (fix round 2)', async () => {
+    const { item, questions } = await quizWith([ONE, MANY]);
+    const [one, many] = questions;
+    const column = item.gradebook.assessmentId;
+    const excuse = (studentIds, excused) => post(`/api/classroom/items/${item.itemId}/excuse`, { studentIds, excused });
+    const flagOf = async (studentId) => (await get(`/api/classroom/items/${item.itemId}/submissions`)).data.students
+      .find((r) => r.studentId === studentId).scoreSetByTeacher;
+    await answer(item.itemId, [{ questionId: one.questionId, answer: { choice: 'b' } }, { questionId: many.questionId, answer: { choices: ['a'] } }]);
+    await submit(item.itemId);
+    await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [amalId] });
+    expect(await cell(column, amalId)).toEqual({ score: 2, status: 'graded' });
+
+    // Excuse then undo (a mis-click): the quiz's own score comes back, not "set by teacher".
+    await excuse([amalId], true);
+    await excuse([amalId], false);
+    expect(await cell(column, amalId)).toEqual({ score: 2, status: 'graded' });
+    expect(await flagOf(amalId)).toBe(false);
+    expect((await detail(item.itemId, amalId)).quiz.scoreSetByTeacher).toBe(false);
+
+    // Excused while the key changes, then un-excused: the cell follows the key (4), not the stale 2.
+    await excuse([amalId], true);
+    await putQuestions(item.itemId, [{ ...ONE, questionId: one.questionId }, { ...MANY, questionId: many.questionId, correct: ['a'] }]);
+    expect(await cell(column, amalId)).toEqual({ score: 2, status: 'excused' });
+    await excuse([amalId], false);
+    expect(await cell(column, amalId)).toEqual({ score: 4, status: 'graded' });
+    expect(await flagOf(amalId)).toBe(false);
+    // And keeps following it.
+    await putQuestions(item.itemId, [{ ...ONE, questionId: one.questionId, correct: ['a'] }, { ...MANY, questionId: many.questionId, correct: ['a'] }]);
+    expect(await cell(column, amalId)).toEqual({ score: 2, status: 'graded' });
+
+    // A score the teacher typed before the excuse is still theirs after it.
+    await patch(`/api/classroom/items/${item.itemId}/submissions/${amalId}`, { draftScore: 3.5 });
+    await excuse([amalId], true);
+    await excuse([amalId], false);
+    expect(await cell(column, amalId)).toEqual({ score: 3.5, status: 'graded' });
+    expect(await flagOf(amalId)).toBe(true);
+
+    // Typed, then Mark missing: the flag goes with the score, so a late attempt drafts the quiz's score.
+    const second = await quizWith([ONE]);
+    await patch(`/api/classroom/items/${second.item.itemId}/submissions/${bilalId}`, { draftScore: 1 });
+    await post(`/api/classroom/items/${second.item.itemId}/mark-missing`, { studentIds: [bilalId] });
+    const missingRow = (await get(`/api/classroom/items/${second.item.itemId}/submissions`)).data.students.find((r) => r.studentId === bilalId);
+    expect(missingRow).toMatchObject({ scoreSetByTeacher: false, label: 'Missing' });
+    await answer(second.item.itemId, [{ questionId: second.questions[0].questionId, answer: { choice: 'b' } }], asBilal);
+    await submit(second.item.itemId, asBilal);
+    expect(await submission(second.item.itemId, bilalId)).toMatchObject({ draft_score: 2, draft_status: 'graded' });
+    expect((await detail(second.item.itemId, bilalId)).quiz).toMatchObject({ earned: 2, scoreSetByTeacher: false });
+  });
+
   describe('copies carry the whole quiz, never the students\' work (fix round 1, I2)', () => {
     const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
     // A quiz with an image, settings off their defaults, and a student's

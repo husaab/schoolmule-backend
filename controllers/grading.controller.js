@@ -26,7 +26,7 @@ const { sendGradeDigest } = require('./assessmentPublish.controller');
 const { SUBMISSION_BUCKET, SIGNED_URL_TTL } = require('../utils/classworkUpload');
 const { STATUSES } = require('../services/gradeEngine');
 const messagingQueries = require('../queries/messaging.queries');
-const { loadQuizDetail, useQuizScore: useQuizScoreFlow } = require('../services/classroom/quizzes');
+const { loadQuizDetail, quizTotalFor, useQuizScore: useQuizScoreFlow } = require('../services/classroom/quizzes');
 const { resolveCurrentTerm, termParams, PAST_TERM_MESSAGE } = require('./messaging.controller');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -522,7 +522,10 @@ const excuseStudents = markAndPublish('excused', MESSAGES.NO_COLUMN_EXCUSED, 'Er
  * Lifts an excuse: the draft keeps its score as a graded one (or is cleared,
  * keeping an explicit clear when the gradebook still holds the excuse). On a
  * published column the change goes live at once (D17); on an unpublished one
- * it stays a draft.
+ * it stays a draft. On a quiz (T23 fix round 2) the score stays "typed by a
+ * teacher" only if it was before the excuse; otherwise a turned-in attempt's
+ * current quiz total comes back (a key may have changed meanwhile), not the
+ * score from before the excuse.
  */
 const unexcuseStudents = async (req, res) => {
   let requested;
@@ -538,7 +541,12 @@ const unexcuseStudents = async (req, res) => {
       if (!item.assessment_id) throw httpError(400, MESSAGES.NO_COLUMN_EXCUSED);
       const { rows: excused } = await client.query(q.selectExcused, [item.item_id, audience]);
       for (const e of excused) {
-        await client.query(q.upsertDraftScore, [item.item_id, e.student_id, e.draft_score, 'graded', req.user.userId]);
+        let score = e.draft_score;
+        if (item.kind === 'quiz' && !e.score_set_by_teacher) {
+          const total = await quizTotalFor(client, item.item_id, e.student_id);
+          if (total) score = total.needsReview ? null : total.earned;
+        }
+        await client.query(q.restoreDraftScore, [item.item_id, e.student_id, score, 'graded', req.user.userId, Boolean(e.score_set_by_teacher)]);
       }
       const ids = excused.map((e) => e.student_id);
       const { rows: [a] } = await client.query(q.lockAssessmentShare, [item.assessment_id]);
