@@ -193,6 +193,24 @@ describe('Integration: student messaging', () => {
     expect(fenced.body.code).toBe('STUDENT_FORBIDDEN');
   });
 
+  it('Fable M3: a teacher who teaches the student in two classes needs the class named (400 CLASS_REQUIRED); never a guess', async () => {
+    const labId = await makeClass('Lab Skills', TEACHER_ID);
+    await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [labId, amalId]);
+    const ziad = (await get('/api/student/conversations/targets', asAmal)).data.teachers.find((t) => t.userId === TEACHER_ID);
+    expect(ziad.classes.map((c) => c.subject).sort()).toEqual(['Lab Skills', 'Science']);
+
+    const refused = await startThread({ teacherId: TEACHER_ID, subject: 'Lab', body: 'Is the lab open at lunch?' }, asAmal, 400);
+    expect(refused).toMatchObject({ code: 'CLASS_REQUIRED', message: 'Choose which class this message is about.' });
+    expect((await pool.query(`SELECT COUNT(*)::int AS n FROM conversations WHERE student_id = $1`, [amalId])).rows[0].n).toBe(0);
+
+    // Named: the thread is filed under that class.
+    const lab = (await startThread({ teacherId: TEACHER_ID, classId: labId, subject: 'Lab', body: 'Is the lab open at lunch?' })).data;
+    expect(lab.conversation).toMatchObject({ classId: labId, classSubject: 'Lab Skills' });
+    // One class with this teacher (Omar co-teaches Science only): no class needed, it is that one.
+    const omar = (await startThread({ teacherId: CO_TEACHER_ID, subject: 'Lab', body: 'Can I stay late?' })).data;
+    expect(omar.conversation).toMatchObject({ classId: sciId });
+  });
+
   it('an existing parent–teacher thread about the student is not listed for the student and GET is 403', async () => {
     const adult = await expectStatus(call('post', '/api/messaging/conversations', asMom)
       .field('studentId', amalId).field('teacherId', TEACHER_ID).field('title', 'Pickup time').field('body', 'Can we talk privately?'), 201);

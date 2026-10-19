@@ -30,6 +30,7 @@ const failed = (res, status, message, code) => res.status(status).json({ status:
 const MESSAGES = Object.freeze({
   NOT_YOUR_TEACHER: 'You can message your own teachers only.',
   NOT_THAT_CLASS: "That teacher doesn't teach you in this class.",
+  CLASS_REQUIRED: 'Choose which class this message is about.',
   SUBJECT: `Subject must be 1–${m.MAX_TITLE} characters`,
   BODY: `Message must be 1–${m.MAX_BODY} characters`,
   ITEM_NOT_FOUND: 'Item not found',
@@ -104,7 +105,10 @@ const getTargets = async (req, res) => {
 
 // POST /api/student/conversations  { teacherId, classId?, subject, body }
 // A new thread with one of the student's own teachers; the student's
-// guardians are in it from the first message.
+// guardians are in it from the first message. The thread is filed under the
+// class it is about, never a guess (Fable M3): classId is required when the
+// teacher teaches the student in more than one class (400 CLASS_REQUIRED);
+// with one class it is that class, with none (the homeroom teacher) no class.
 const createConversation = async (req, res) => {
   const body = req.body || {};
   const teacherId = typeof body.teacherId === 'string' ? body.teacherId.toLowerCase() : body.teacherId;
@@ -120,10 +124,12 @@ const createConversation = async (req, res) => {
     const { teachers } = await loadTargets(req);
     const teacher = teachers.find((t) => t.userId === teacherId);
     if (!teacher) return failed(res, 403, MESSAGES.NOT_YOUR_TEACHER);
-    let anchorClassId = teacher.classes[0]?.classId ?? null;
+    let anchorClassId = teacher.classes.length === 1 ? teacher.classes[0].classId : null;
     if (classId) {
       if (!teacher.classes.some((c) => c.classId === classId)) return failed(res, 400, MESSAGES.NOT_THAT_CLASS);
       anchorClassId = classId;
+    } else if (teacher.classes.length > 1) {
+      return failed(res, 400, MESSAGES.CLASS_REQUIRED, 'CLASS_REQUIRED');
     }
 
     const { rows: [c] } = await db.query(q.insertStudentConversation, [
