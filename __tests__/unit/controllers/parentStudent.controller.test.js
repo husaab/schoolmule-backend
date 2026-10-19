@@ -7,6 +7,7 @@ const {
   TEST_SCHOOL,
 } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+const db = require('../../../config/database');
 const { buildParentStudentRow } = require('../../helpers/factories');
 
 let app;
@@ -247,6 +248,7 @@ describe('POST /api/parent-students', () => {
   };
 
   it('creates a parent-student relation', async () => {
+    mockQueryResponse([{ role: 'PARENT' }]); // the linked account is not a student login (M1)
     // checkExistingRelation returns no existing
     mockQueryResponse([]);
     // createParentStudent
@@ -280,6 +282,7 @@ describe('POST /api/parent-students', () => {
   });
 
   it('returns 409 when relation already exists', async () => {
+    mockQueryResponse([{ role: 'PARENT' }]);
     // checkExistingRelation returns existing
     mockQueryResponse([buildParentStudentRow()]);
 
@@ -311,6 +314,7 @@ describe('POST /api/parent-students', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockQueryResponse([{ role: 'PARENT' }]);
     // checkExistingRelation succeeds
     mockQueryResponse([]);
     // createParentStudent fails
@@ -323,6 +327,27 @@ describe('POST /api/parent-students', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.status).toBe('failed');
+  });
+});
+
+// Final review M1: a student login is never anyone's parent or guardian.
+describe('a STUDENT account as the parent', () => {
+  it('is refused on create and on update (400), and nothing is written', async () => {
+    mockQueryResponse([{ role: 'STUDENT' }]);
+    const created = await request(app).post('/api/parent-students').set(authHeader())
+      .send({ studentId: 'student-123', parentId: 'student-login-1', relation: 'Sibling' });
+    expect(created.status).toBe(400);
+    expect(created.body.message).toBe("A student account can't be a parent or guardian");
+    const writes = () => db.query.mock.calls.filter(([sql]) => /INSERT INTO parent_students|UPDATE parent_students/i.test(String(sql)));
+    expect(writes()).toEqual([]);
+
+    db.query.mockClear();
+    mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
+    mockQueryResponse([{ role: 'STUDENT' }]);
+    const updated = await request(app).patch('/api/parent-students/link-1').set(authHeader())
+      .send({ parentId: 'student-login-1', relation: 'Sibling' });
+    expect(updated.status).toBe(400);
+    expect(writes()).toEqual([]);
   });
 });
 
@@ -369,6 +394,7 @@ describe('PATCH /api/parent-students/:id', () => {
 
   it('updates with parentId when no duplicate relation exists', async () => {
     mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
+    mockQueryResponse([{ role: 'TEACHER' }]); // a staff member who is also a parent is fine
     // checkExistingRelationExcludingLink returns no existing
     mockQueryResponse([]);
     const updated = buildParentStudentRow({ relation: 'FATHER' });
@@ -386,6 +412,7 @@ describe('PATCH /api/parent-students/:id', () => {
 
   it('returns 409 when another link already relates the parent to the student', async () => {
     mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
+    mockQueryResponse([{ role: 'PARENT' }]);
     // checkExistingRelationExcludingLink returns existing
     mockQueryResponse([buildParentStudentRow()]);
 

@@ -164,6 +164,12 @@ const parentStudentQueries = {
     LIMIT 1
   `,
 
+  // The role of the account a link would point at (a student login is never
+  // a parent or guardian, final review M1). $1 user_id
+  selectLinkTargetRole: `
+    SELECT role::text AS role FROM users WHERE user_id = $1
+  `,
+
   // Check if parent-student relation already exists
   checkExistingRelation: `
     SELECT parent_student_link_id

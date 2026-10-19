@@ -176,6 +176,14 @@ const getStudentsByParentId = async (req, res) => {
   }
 };
 
+// A student login is never anyone's parent or guardian (final review M1): its
+// inbox would get a sibling's summaries, alerts and announcements.
+const STUDENT_AS_PARENT = { status: "failed", message: "A student account can't be a parent or guardian" };
+const isStudentLogin = async (userId) => {
+  const { rows } = await db.query(parentStudentQueries.selectLinkTargetRole, [userId]);
+  return rows[0]?.role === "STUDENT";
+};
+
 // POST /parent-students - Create new parent-student relation
 const createParentStudent = async (req, res) => {
   try {
@@ -199,6 +207,7 @@ const createParentStudent = async (req, res) => {
 
     // Check if relation already exists (if parentId is provided)
     if (parentId) {
+      if (await isStudentLogin(parentId)) return res.status(400).json(STUDENT_AS_PARENT);
       const { rows: existingRows } = await db.query(parentStudentQueries.checkExistingRelation, [studentId, parentId]);
       if (existingRows.length > 0) {
         return res.status(409).json({
@@ -263,6 +272,7 @@ const updateParentStudent = async (req, res) => {
 
     // Prevent duplicating an existing parent-student link (excluding this row)
     if (parentId) {
+      if (await isStudentLogin(parentId)) return res.status(400).json(STUDENT_AS_PARENT);
       const { rows: existingRows } = await db.query(
         parentStudentQueries.checkExistingRelationExcludingLink,
         [parentId, id]

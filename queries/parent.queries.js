@@ -2,7 +2,8 @@
 //
 // Accounts a student can be linked to. Any active account in the school
 // qualifies: parents, and staff who are also parents (they get the parent
-// view on their staff account). `role` lets the picker mark the staff ones.
+// view on their staff account), never a student login. `role` lets the
+// picker mark the staff ones.
 const parentQueries = {
   // GET /api/parents?school=X
   selectParentsBySchool: `
@@ -17,6 +18,8 @@ const parentQueries = {
     FROM users
     WHERE school = $1
       AND is_archived = FALSE
+      -- A student login is never a parent (final review M1).
+      AND role::text <> 'STUDENT'
     ORDER BY (role <> 'PARENT'), last_name, first_name
   `,
   // GET /api/parents/:id
