@@ -82,6 +82,27 @@ describe('toGradingRow', () => {
     expect(toGradingRow(raw({ work_status: 'missing' }), { linked: true }).row.label).toBe('Missing');
     expect(toGradingRow(raw(), { linked: true }).row.label).toBe('Not turned in yet');
   });
+
+  it('Fable I1: a draft made before the work was turned in again goes back to To grade and is not published until re-confirmed', () => {
+    const stale = raw({ ...TURNED_IN, draft_score: '6.00', draft_status: 'graded', feedback: 'Redo question 3', draft_predates_work: true });
+    const { row, awaitingGrade } = toGradingRow(stale, { linked: true });
+    // The teacher's draft is kept and shown, flagged; it is not counted by "Publish to N".
+    expect(row).toMatchObject({
+      draftScore: 6, draftStatus: 'graded', feedback: 'Redo question 3', draftPredatesWork: true, needsPublish: false, label: 'Graded · draft',
+    });
+    expect(awaitingGrade).toBe(true);
+    // Not turned in again yet (unsubmitted): flagged, not To grade, still not publishable.
+    const back = toGradingRow(raw({ draft_score: '6.00', draft_status: 'graded', draft_predates_work: true }), { linked: true });
+    expect(back.row).toMatchObject({ draftPredatesWork: true, needsPublish: false });
+    expect(back.awaitingGrade).toBe(false);
+    // No column: the feedback is the draft.
+    const loose = toGradingRow(raw({ ...TURNED_IN, feedback: 'Redo question 3', draft_predates_work: true }), { linked: false });
+    expect(loose.row).toMatchObject({ draftPredatesWork: true, needsPublish: false });
+    expect(loose.awaitingGrade).toBe(true);
+    // Unflagged rows say so.
+    expect(toGradingRow(raw({ ...TURNED_IN }), { linked: true }).row.draftPredatesWork).toBe(false);
+    expect(gradingCounts([toGradingRow(stale, { linked: true })])).toMatchObject({ toGrade: 1, drafts: 0 });
+  });
 });
 
 describe('gradingCounts', () => {

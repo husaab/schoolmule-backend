@@ -550,10 +550,17 @@ async function turnIn({ studentId, school, itemId }) {
     }
     if (mode === 'text' && !(sub.text_answer && sub.text_answer.trim())) throw httpError(400, MESSAGES.NEEDS_TEXT);
     await client.query(q.turnIn, [sub.submission_id]);
+    // A draft grade from before this work waits for the teacher again (Fable I1).
+    await client.query(q.markDraftPredatesWork, [sub.submission_id]);
   });
 }
 
-/** POST …/unsubmit: only while no grade is visible, the item isn't closed, and it isn't a quiz. */
+/**
+ * POST …/unsubmit: only while no grade is visible, the item isn't closed, and
+ * it isn't a quiz. A draft the teacher made meanwhile is kept but held
+ * (draft_predates_work): it is never published for the next turn-in until
+ * the teacher saves it again (Fable I1).
+ */
 async function unsubmit({ studentId, school, itemId }) {
   await withSubmission({ studentId, school, itemId }, async (client, row, sub) => {
     if (!sub.turned_in_at) throw httpError(409, MESSAGES.NOT_TURNED_IN);
@@ -561,6 +568,8 @@ async function unsubmit({ studentId, school, itemId }) {
     if (row.closed) throw codedError(409, 'ITEM_CLOSED', MESSAGES.CLOSED);
     if (row.kind === 'quiz') throw httpError(409, MESSAGES.QUIZ_UNSUBMIT);
     await client.query(q.unsubmit, [sub.submission_id]);
+    // The teacher's unpublished draft was for the work taken back: held, never published for the next one.
+    await client.query(q.markDraftPredatesWork, [sub.submission_id]);
   });
 }
 

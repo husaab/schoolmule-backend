@@ -47,10 +47,17 @@ const WORK_LATE_SQL = `(CASE WHEN ${WORK_STATE_SQL} IN ('graded', 'turned_in') T
 // A draft on the submission: a score or status saved for a gradebook column.
 const HAS_DRAFT = `(sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL)`;
 
+// The teacher's unpublished draft (or feedback) was made before the student
+// took the work back or turned it in again (Fable I1): it is held, the work
+// is to grade again, and no Publish takes it until the teacher saves the
+// score, status or feedback again (which clears the flag).
+const DRAFT_PREDATES_WORK = `COALESCE(sub.draft_predates_work, FALSE)`;
+
 // Turned in and waiting for the teacher: no draft and no visible grade; on an
-// item with no gradebook column, no published feedback either (T16).
-const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND NOT ${HAS_DRAFT} AND NOT ${GRADE_VISIBLE}
-  AND (i.assessment_id IS NOT NULL OR sub.published_at IS NULL))`;
+// item with no gradebook column, no published feedback either (T16). Work
+// turned in again after a draft waits too (DRAFT_PREDATES_WORK).
+const AWAITING_GRADE = `(sub.turned_in_at IS NOT NULL AND (${DRAFT_PREDATES_WORK} OR (NOT ${HAS_DRAFT} AND NOT ${GRADE_VISIBLE}
+  AND (i.assessment_id IS NOT NULL OR sub.published_at IS NULL))))`;
 
 // A quiz attempt of this student with every answer given points (auto or
 // the teacher's): nothing is left to grade by hand (T23).
@@ -66,7 +73,8 @@ const UNLINKED_PUBLISHABLE = `(sub.feedback IS NOT NULL OR (i.kind = 'quiz' AND 
 // What "Publish to N students" counts (T16): on a gradebook column, a draft
 // not published yet, or any draft while the column itself is unpublished; on
 // an item with no column, feedback (or a quiz's results) not published yet.
-const NEEDS_PUBLISH = `(CASE WHEN i.assessment_id IS NOT NULL
+// Never a held draft (DRAFT_PREDATES_WORK).
+const NEEDS_PUBLISH = `(NOT ${DRAFT_PREDATES_WORK} AND CASE WHEN i.assessment_id IS NOT NULL
     THEN ${HAS_DRAFT} AND (sub.published_at IS NULL OR NOT COALESCE(a.is_published, FALSE))
     ELSE ${UNLINKED_PUBLISHABLE} AND sub.published_at IS NULL END)`;
 
@@ -80,5 +88,5 @@ LEFT JOIN students wst ON wst.student_id = ${student}`;
 
 module.exports = {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_AT, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, NEEDS_PUBLISH,
-  UNLINKED_PUBLISHABLE, QUIZ_GRADED,
+  UNLINKED_PUBLISHABLE, QUIZ_GRADED, DRAFT_PREDATES_WORK,
 };

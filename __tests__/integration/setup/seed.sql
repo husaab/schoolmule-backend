@@ -1965,3 +1965,6 @@ CREATE TABLE IF NOT EXISTS quiz_answers (
 );
 CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers(question_id);
 ALTER TABLE classwork_submissions ADD COLUMN IF NOT EXISTS score_set_by_teacher BOOLEAN NOT NULL DEFAULT FALSE;
+-- student_portal_31_draft_predates_work.sql (Fable I1): a draft made before
+-- the work was taken back or turned in again is held until re-confirmed.
+ALTER TABLE classwork_submissions ADD COLUMN IF NOT EXISTS draft_predates_work BOOLEAN NOT NULL DEFAULT FALSE;

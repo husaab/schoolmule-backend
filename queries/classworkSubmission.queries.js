@@ -161,6 +161,21 @@ WHERE s.submission_id = $1 AND i.item_id = s.item_id`,
   unsubmit: `
 UPDATE classwork_submissions SET turned_in_at = NULL, is_late = FALSE, updated_at = NOW()
 WHERE submission_id = $1`,
+
+  //  Fable I1: the student takes the work back or turns it in while the
+  //  teacher's grade is still a draft (a score or status, or feedback, that
+  //  the student can't see yet). The draft now predates the work: it is
+  //  held, never dropped, until the teacher saves it again. A grade the
+  //  student can already see is not a draft (unsubmit is refused then).
+  //  Assignments only: a quiz is submitted once and never taken back.
+  //  $1 submission_id
+  markDraftPredatesWork: `
+UPDATE classwork_submissions sub SET draft_predates_work = TRUE
+FROM classwork_items i
+LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
+WHERE sub.submission_id = $1 AND i.item_id = sub.item_id AND NOT sub.draft_predates_work
+  AND (sub.draft_score IS NOT NULL OR sub.draft_status IS NOT NULL OR sub.feedback IS NOT NULL)
+  AND (sub.published_at IS NULL OR (i.assessment_id IS NOT NULL AND NOT COALESCE(a.is_published, FALSE)))`,
 };
 
 module.exports = classworkSubmissionQueries;

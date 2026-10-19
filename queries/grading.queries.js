@@ -13,6 +13,7 @@
 const { studentAvatarSql } = require('../utils/avatar');
 const {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED, NEEDS_PUBLISH,
+  DRAFT_PREDATES_WORK,
 } = require('./workState');
 const { SIGNS_IN } = require('./studentSignsIn');
 const { ITEM_VISIBLE } = require('./classwork.queries');
@@ -34,6 +35,7 @@ SELECT s.student_id, s.name, ${studentAvatarSql('s')},
        sub.submission_id, sub.turned_in_at, COALESCE(sub.is_late, FALSE) AS sub_is_late, sub.text_answer,
        sub.draft_score, sub.draft_status, sub.feedback, sub.published_at AS sub_published_at,
        COALESCE(sub.score_set_by_teacher AND sub.draft_score IS NOT NULL, FALSE) AS score_set_by_teacher,
+       ${DRAFT_PREDATES_WORK} AS draft_predates_work,
        (i.kind = 'quiz' AND NOT ${QUIZ_GRADED}) AS quiz_needs_review,
        ${WORK_STATE_SQL} AS work_status,
        ${GRADE_VISIBLE} AS grade_visible,
@@ -110,7 +112,7 @@ const gradingQueries = {
   // when they were on the item; nothing published is touched. $1 item, $2 student
   clearStaleDraft: `
     UPDATE classwork_submissions
-    SET draft_score = NULL, draft_status = NULL
+    SET draft_score = NULL, draft_status = NULL, draft_predates_work = FALSE
     WHERE item_id = $1 AND student_id = $2 AND published_at IS NULL
       AND (draft_score IS NOT NULL OR draft_status IS NOT NULL)`,
 
@@ -120,7 +122,8 @@ const gradingQueries = {
   //  is an explicit clear for the next Publish. A changed draft is
   //  unpublished again (it needs a Publish). A typed score marks the
   //  submission score_set_by_teacher: on a quiz it then wins over the quiz's
-  //  own score (T23 fix round 1); the quiz writes through quiz.queries.
+  //  own score (T23 fix round 1); the quiz writes through quiz.queries. The
+  //  teacher's save re-confirms a held draft (draft_predates_work, Fable I1).
   //  $1 item_id, $2 student_id, $3 score|null, $4 status|null, $5 graded_by
   upsertDraftScore: `
     WITH v AS (
@@ -138,12 +141,14 @@ const gradingQueries = {
         published_at = CASE WHEN (classwork_submissions.draft_score, classwork_submissions.draft_status)
                                  IS DISTINCT FROM (EXCLUDED.draft_score, EXCLUDED.draft_status)
                             THEN NULL ELSE classwork_submissions.published_at END,
+        draft_predates_work = FALSE,
         updated_at = NOW()
     RETURNING student_id, draft_score, draft_status`,
 
   //  Un-excuse puts a draft score back (upsertDraftScore's rules) with the
   //  typed flag given, not inferred: a restored score is only "typed by a
-  //  teacher" when it was before the excuse (T23 fix round 2).
+  //  teacher" when it was before the excuse (T23 fix round 2). A held draft
+  //  stays held: the restored score is the one from before the new work.
   //  $1 item_id, $2 student_id, $3 score|null, $4 status|null, $5 graded_by, $6 typed by a teacher
   restoreDraftScore: `
     WITH v AS (
@@ -168,7 +173,8 @@ const gradingQueries = {
   //  is published): the draft equals the cell and the work counts as
   //  published. A cleared cell (no score, no flag) is no draft, so the work
   //  is back in To review. A typed score marks score_set_by_teacher (see
-  //  upsertDraftScore). $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
+  //  upsertDraftScore). The teacher's write re-confirms a held draft.
+  //  $1 item_id, $2 student_id, $3 score|null, $4 status, $5 graded_by
   syncLiveSubmission: `
     INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, published_at, published_by,
                                        score_set_by_teacher, updated_at)
@@ -180,6 +186,7 @@ const gradingQueries = {
         score_set_by_teacher = EXCLUDED.score_set_by_teacher,
         published_at = COALESCE(classwork_submissions.published_at, NOW()),
         published_by = COALESCE(classwork_submissions.published_by, EXCLUDED.published_by),
+        draft_predates_work = FALSE,
         updated_at = NOW()`,
 
   //  A live cell write, as the grid's upsert does. $1 student_id, $2 assessment_id, $3 score|null, $4 status
@@ -200,8 +207,14 @@ const gradingQueries = {
 
   //  $1 submission_id, $2 feedback|null
   saveFeedback: `
-    UPDATE classwork_submissions SET feedback = $2, feedback_saved_at = NOW(), updated_at = NOW()
+    UPDATE classwork_submissions SET feedback = $2, feedback_saved_at = NOW(), draft_predates_work = FALSE, updated_at = NOW()
     WHERE submission_id = $1`,
+
+  //  The teacher saved this student's grade or feedback in the grading view
+  //  (even unchanged): a held draft is re-confirmed for the new work (Fable I1).
+  //  $1 submission_id
+  confirmDraft: `
+    UPDATE classwork_submissions SET draft_predates_work = FALSE WHERE submission_id = $1 AND draft_predates_work`,
 
   // ── Publish (services/classroom/publish.js) ────────────────────────────
 
@@ -210,7 +223,7 @@ const gradingQueries = {
   //  unpublished); a list = those students, published again even when
   //  already published (a re-publish after a regrade). Only students the
   //  item is for. An unlinked item publishes its feedback (a quiz's results
-  //  too: UNLINKED_PUBLISHABLE).
+  //  too: UNLINKED_PUBLISHABLE). Never a held draft (draft_predates_work).
   //  $1 item_id, $2 student_id[]|null, $3 linked to a gradebook column
   lockPublishable: `
     SELECT sub.submission_id, sub.student_id, sub.draft_score, sub.draft_status
@@ -229,8 +242,17 @@ const gradingQueries = {
                AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE)))
       AND ${IN_ITEM_AUDIENCE}
       AND (${HAS_DRAFT} OR (NOT $3::boolean AND ${UNLINKED_PUBLISHABLE}))
+      -- A draft made before the work was turned in again waits for the teacher (Fable I1).
+      AND NOT sub.draft_predates_work
     ORDER BY sub.student_id
     FOR UPDATE OF sub`,
+
+  //  Of these students, the ones whose draft is held (made before the work
+  //  was taken back or turned in again), so a Publish reports why it skipped
+  //  them. $1 item_id, $2 student_id[]
+  selectDraftsPredatingWork: `
+    SELECT student_id FROM classwork_submissions
+    WHERE item_id = $1 AND student_id = ANY($2::uuid[]) AND draft_predates_work`,
 
   //  Of these students, the ones holding something to publish (a draft, or
   //  feedback on an item with no column), to tell "unchanged" from "no draft".
@@ -336,7 +358,7 @@ const gradingQueries = {
   //  feedback already published stay published (round 5). An unpublished
   //  draft on a published column is never cleared. $1 item_id
   clearDraftsOutside: `
-    UPDATE classwork_submissions sub SET draft_score = NULL, draft_status = NULL, updated_at = NOW()
+    UPDATE classwork_submissions sub SET draft_score = NULL, draft_status = NULL, draft_predates_work = FALSE, updated_at = NOW()
     FROM classwork_items i, assessments a, class_students cs, students s
     WHERE sub.item_id = $1 AND i.item_id = sub.item_id AND a.assessment_id = i.assessment_id AND ${HAS_DRAFT}
       AND (NOT COALESCE(a.is_published, FALSE) OR sub.published_at IS NOT NULL)
@@ -360,6 +382,7 @@ const gradingQueries = {
   //  draft score (else the gradebook's) except for missing, as the grid's
   //  status menu does. Created when missing. Missing has no score, so no
   //  score typed by a teacher either (score_set_by_teacher cleared, T23).
+  //  The teacher's decision re-confirms a held draft (Fable I1).
   //  $1 item_id, $2 student_id, $3 status, $4 graded_by
   setDraftStatus: `
     INSERT INTO classwork_submissions (item_id, student_id, draft_score, draft_status, graded_by, updated_at)
@@ -373,7 +396,8 @@ const gradingQueries = {
                            ELSE COALESCE(classwork_submissions.draft_score, EXCLUDED.draft_score) END,
         score_set_by_teacher = CASE WHEN EXCLUDED.draft_status = 'missing' THEN FALSE
                                     ELSE classwork_submissions.score_set_by_teacher END,
-        draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by, updated_at = NOW()`,
+        draft_status = EXCLUDED.draft_status, graded_by = EXCLUDED.graded_by,
+        draft_predates_work = FALSE, updated_at = NOW()`,
 
   //  Of these students, the ones excused on this item (as a draft, or in the
   //  gradebook), with their draft score. $1 item_id, $2 student_id[]
@@ -396,6 +420,7 @@ const gradingQueries = {
 
   //  Every pending draft on the class's turn-in columns, as the score rows a
   //  Publish would write (publishAssessments' preview, cascade and digest).
+  //  A held draft (draft_predates_work) is not one: Publish skips it.
   //  $1 class_id
   selectPendingDrafts: `
     SELECT sub.student_id, i.assessment_id, sub.draft_score, sub.draft_status
@@ -404,7 +429,8 @@ const gradingQueries = {
     JOIN class_students cs ON cs.class_id = i.class_id AND cs.student_id = sub.student_id
     JOIN students s ON s.student_id = sub.student_id AND s.is_archived IS NOT TRUE
     WHERE i.class_id = $1 AND i.assessment_id IS NOT NULL AND i.kind IN ('assignment', 'quiz') AND i.deleted_at IS NULL
-      AND sub.published_at IS NULL AND ${HAS_DRAFT} AND ${IN_ITEM_AUDIENCE}`,
+      AND sub.published_at IS NULL AND ${HAS_DRAFT} AND ${IN_ITEM_AUDIENCE}
+      AND NOT sub.draft_predates_work`,
 
   // ── The gradebook grid (studentAssessment.controller) ──────────────────
 
@@ -446,7 +472,8 @@ const gradingQueries = {
              WHEN ${AWAITING_GRADE} THEN 'turned_in'
              WHEN ${WORK_STATE_SQL} = 'missing' AND NOT ${GRADE_VISIBLE} AND ${ITEM_VISIBLE('i', 'a', 's')} THEN 'missing_derived'
            END AS state,
-           COALESCE(${NEEDS_PUBLISH}, FALSE) AS needs_publish
+           COALESCE(${NEEDS_PUBLISH}, FALSE) AS needs_publish,
+           ${DRAFT_PREDATES_WORK} AS draft_predates_work
     FROM classwork_items i
     JOIN assessments a ON a.assessment_id = i.assessment_id
     JOIN class_students cs ON cs.class_id = i.class_id

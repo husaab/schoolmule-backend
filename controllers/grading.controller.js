@@ -79,12 +79,17 @@ function gradingLabel(row) {
  * "Publish to N students" counts: a draft not published yet, or any draft
  * while the column itself is unpublished (unpublished in the gradebook after
  * a publish), since nothing of it shows until it is published again.
+ * draftPredatesWork (Fable I1): the draft was made before the student took
+ * the work back or turned it in again. It is kept and shown, the work is to
+ * grade again, and no Publish takes it until the teacher saves the score,
+ * status or feedback again.
  */
 function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) {
   const draftScore = linked ? num(r.draft_score) : null;
   const draftStatus = linked ? r.draft_status ?? null : null;
   const hasDraft = draftScore !== null || draftStatus !== null;
   const feedback = r.feedback ?? null;
+  const predates = Boolean(r.draft_predates_work);
   const unpublished = !r.sub_published_at || (linked && !assessmentPublished);
   const turnedInAt = iso(r.turned_in_at);
   const publishedStatus = linked ? r.visible_status ?? null : null;
@@ -104,7 +109,8 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
     // workState.UNLINKED_PUBLISHABLE: with no column, feedback or a turned-in
     // quiz's results once its written answers are graded.
     needsPublish: (hasDraft || (!linked && (feedback !== null || (quiz && Boolean(turnedInAt) && !r.quiz_needs_review))))
-      && unpublished,
+      && unpublished && !predates,
+    draftPredatesWork: predates,
     hasThread: Boolean(r.has_thread),
     // A quiz score a teacher typed (grading view or grid): the quiz never
     // overwrites it; POST …/quiz-score goes back to the quiz's score.
@@ -116,8 +122,9 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {
     row: { ...row, label },
-    // workState.AWAITING_GRADE: an item with no column also waits on its feedback being published.
-    awaitingGrade: Boolean(turnedInAt) && !hasDraft && !r.grade_visible && (linked || !r.sub_published_at),
+    // workState.AWAITING_GRADE: an item with no column also waits on its feedback being published;
+    // work turned in again after a draft waits too.
+    awaitingGrade: Boolean(turnedInAt) && (predates || (!hasDraft && !r.grade_visible && (linked || !r.sub_published_at))),
   };
 }
 
@@ -359,6 +366,7 @@ function nextGrade(current, patch) {
 
 // PATCH /api/classroom/items/:itemId/submissions/:studentId  { draftScore?, draftStatus?, feedback? }
 // → { row: GradingRow, live }  (live: the grade and feedback are visible to the student now)
+// Any accepted PATCH clears row.draftPredatesWork (the teacher re-confirmed the draft).
 const updateSubmission = async (req, res) => {
   const { itemId } = req.item;
   const { school } = req.class;
@@ -401,6 +409,9 @@ const updateSubmission = async (req, res) => {
       if (has(patch, 'feedback') && patch.feedback !== (current.feedback ?? null)) {
         await client.query(q.saveFeedback, [current.submission_id, patch.feedback]);
       }
+      // Any save here (an unchanged one too) is the teacher re-confirming a
+      // draft made before the student turned the work in again (Fable I1).
+      await client.query(q.confirmDraft, [current.submission_id]);
       const found = await loadRow({ ...item, is_published: isPublished }, studentId, client);
       const { rows: [sub] } = await client.query(q.lockSubmission, [itemId, studentId]);
       const live = Boolean(sub.published_at) && (!linked || isPublished);
@@ -447,15 +458,22 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
       const unchanged = requested !== 'graded' && !prepare && notPublished.length
         ? (await client.query(q.selectPublishHolders, [itemId, notPublished, Boolean(item.assessment_id)])).rows.map((r) => r.student_id)
         : [];
-      return { item, audience, published, batchId, unchanged, extra: prepared.extra || {} };
+      // A draft made before the work was turned in again is held (Fable I1).
+      const unpublishedAudience = audience.filter((id) => !published.publishedStudentIds.includes(id));
+      const predating = unpublishedAudience.length
+        ? (await client.query(q.selectDraftsPredatingWork, [itemId, unpublishedAudience])).rows.map((r) => r.student_id)
+        : [];
+      return { item, audience, published, batchId, unchanged, predating, extra: prepared.extra || {} };
     });
 
-    const { item, audience, published, batchId, unchanged, extra } = outcome;
+    const { item, audience, published, batchId, unchanged, predating, extra } = outcome;
     const publishedSet = new Set(published.publishedStudentIds);
     const audienceSet = new Set(audience);
     const unchangedSet = new Set(unchanged);
+    const predatingSet = new Set(predating);
     const reasonFor = (id) => {
       if (!audienceSet.has(id)) return 'not_in_audience';
+      if (predatingSet.has(id)) return 'draft_predates_work';
       return unchangedSet.has(id) ? 'unchanged' : 'no_draft';
     };
     const skipped = (requested === 'graded' ? audience : requested)
@@ -585,6 +603,8 @@ const getGridOverlay = async (req, res) => {
         isLate: Boolean(r.is_late),
         // Counted by the column's "Publish N" (incl. drafts on a column unpublished by hand).
         needsPublish: Boolean(r.needs_publish),
+        // A draft made before the work was turned in again: held until re-confirmed (Fable I1).
+        draftPredatesWork: Boolean(r.draft_predates_work),
       })),
     });
   } catch (error) {
