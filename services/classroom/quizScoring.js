@@ -11,15 +11,22 @@
 const round2 = (n) => Math.round(n * 100) / 100;
 const normalizeShort = (s) => String(s ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 
-/** Points the machine can award; null = a teacher must grade it (written answers). */
+/**
+ * Points the machine can award; null = a teacher must grade it (written
+ * answers). A picked choice id that isn't one of the question's options (a
+ * choice removed after the student picked it) is ignored, never a wrong pick
+ * (T24 N1).
+ */
 function autoPoints(q, answer) {
   const pts = Number(q.points);
   const correct = Array.isArray(q.correct) ? q.correct : [];
+  const offered = Array.isArray(q.options) ? new Set(q.options.map((o) => o && o.id)) : null;
+  const isOption = (id) => !offered || offered.has(id);
   switch (q.kind) {
     case 'one':
-      return answer && correct.includes(answer.choice) ? pts : 0;
+      return answer && isOption(answer.choice) && correct.includes(answer.choice) ? pts : 0;
     case 'many': {
-      const picked = new Set(Array.isArray(answer?.choices) ? answer.choices : []);
+      const picked = new Set((Array.isArray(answer?.choices) ? answer.choices : []).filter(isOption));
       const right = [...picked].filter((c) => correct.includes(c)).length;
       if (!q.partial_credit) return right === correct.length && picked.size === correct.length ? pts : 0;
       const wrong = picked.size - right;

@@ -50,6 +50,17 @@ describe('autoPoints', () => {
     expect(autoPoints(long, null)).toBeNull();
   });
 
+  it("T24 N1: a choice id that isn't one of the question's options is ignored (a removed choice)", () => {
+    const opts = { options: [{ id: 'a' }, { id: 'b' }, { id: 'd' }] }; // 'c' was removed after the student picked it
+    expect(autoPoints(many(opts), { choices: ['a', 'b', 'c'] })).toBe(2);
+    expect(autoPoints(many({ ...opts, partial_credit: true }), { choices: ['a', 'b', 'c'] })).toBe(2);
+    expect(autoPoints(many({ ...opts, partial_credit: true }), { choices: ['a', 'c', 'd'] })).toBe(0); // d is still a wrong pick
+    expect(autoPoints(many(opts), { choices: ['c', 'z'] })).toBe(0);
+    expect(autoPoints(one, { choice: 'z' })).toBe(0);
+    // With no option list on the row, nothing is filtered (as before).
+    expect(autoPoints(many(), { choices: ['a', 'b', 'c'] })).toBe(0);
+  });
+
   it('is deterministic: the same answer always scores the same', () => {
     const answer = { choices: ['a', 'b', 'c'] };
     const q = many({ partial_credit: true });
