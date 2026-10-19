@@ -282,7 +282,8 @@ async function childrenWork(parentId, now, since) {
  * One email per family: this job and the address's other pending alerts
  * (one job per child × item, see enqueueMissingAlerts) go out together and
  * are finished together. What is no longer missing (turned in, graded,
- * excused since) is left out.
+ * excused since), or was confirmed Missing or listed in a publish digest to
+ * this address (announced there), is left out.
  */
 async function buildMissingAlert(job, recipient, now) {
   const { rows: siblings } = await db.query(q.claimSiblingAlerts, [job.recipient_email, job.job_id]);
@@ -297,9 +298,10 @@ async function buildMissingAlert(job, recipient, now) {
   const mine = new Set(children.map((c) => c.student_id));
   const wanted = pairs.filter((p) => mine.has(p.studentId));
   const { rows } = wanted.length
-    ? await db.query(q.selectAlertItems, [wanted.map((p) => p.studentId), wanted.map((p) => p.itemId), iso(now)])
+    ? await db.query(q.selectAlertItems, [wanted.map((p) => p.studentId), wanted.map((p) => p.itemId), iso(now), job.recipient_email])
     : { rows: [] };
-  const work = groupBy(rows, 'student_id');
+  // One email per Missing: what a publish digest has announced is left out.
+  const work = groupBy(rows.filter((r) => !r.announced), 'student_id');
   const blocks = children
     .map((c) => ({ ...childHeader(c), items: digest.stillMissing(work.get(c.student_id) || []).map(missingLine) }))
     .filter((c) => c.items.length);

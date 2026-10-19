@@ -46,12 +46,22 @@ const DAY_START = (date) => `((${date})::timestamp AT TIME ZONE '${TZ}')`;
 // Feedback the student and parent may read (spec 0.8).
 const FEEDBACK_VISIBLE = `(sub.published_at IS NOT NULL AND (i.assessment_id IS NULL OR COALESCE(a.is_published, FALSE)))`;
 
-// Work that became missing in (since, until]: derived (due then, not turned
-// in, a child who can sign in) or a Missing the teacher published then. The
-// state is judged at `now`.
-const NEWLY_MISSING = (now, since, until) => `(${WORK_STATE_AT(now)} = 'missing' AND CASE WHEN ${GRADE_VISIBLE}
-    THEN COALESCE(sub.published_at, a.published_at) > ${since} AND COALESCE(sub.published_at, a.published_at) <= ${until}
-    ELSE i.due_at > ${since} AND i.due_at <= ${until} END)`;
+// Work that became missing in (since, until] by its due date alone: due
+// then, not turned in, a child who can sign in, and no published grade. A
+// Missing the teacher published is announced by that publish's digest
+// (final ruling I1: one email per Missing), so it is never "newly missing"
+// here. The state is judged at `now`.
+const DERIVED_MISSING = (now, since, until) => `(${WORK_STATE_AT(now)} = 'missing' AND NOT ${GRADE_VISIBLE}
+    AND i.due_at > ${since} AND i.due_at <= ${until})`;
+
+// The family has already read about this column for this child: a publish
+// digest that listed it reached this address (assessment_publication_emails
+// rows are one per child and send; assessment_ids are the columns it listed).
+const IN_SENT_DIGEST = (student, assessment, email) => `EXISTS (
+    SELECT 1 FROM assessment_publication_emails ape
+    WHERE ape.student_id = ${student} AND ape.status = 'sent' AND ${assessment} = ANY(ape.assessment_ids)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(ape.email_addresses) ape_to
+                  WHERE LOWER(TRIM(ape_to)) = LOWER(TRIM(${email}))))`;
 
 // A guardian who reads the day's news in the daily summary instead (ruling:
 // no separate missing alert next to it). `np` is their notification_prefs row.
@@ -156,14 +166,16 @@ const classroomEmailQueries = {
     RETURNING job_id`,
 
   //  Missing work: one job per guardian address × child × item that went
-  //  missing in the sweep's fixed window ($2, $3], so the unique key makes an
-  //  item's alert happen once for that address, whatever re-runs the sweep
-  //  (a restart, a second instance, a later day whose window overlaps, or the
-  //  item going from derived to teacher-confirmed Missing). The send
-  //  coalesces an address's pending alerts into one email per family.
-  //  Active-year children in a school with classrooms on; not for guardians
-  //  who turned alerts off or who get the daily summary (it lists them).
-  //  $1 now, $2 since, $3 until
+  //  missing by its due date in the sweep's fixed window ($2, $3], so the
+  //  unique key makes an item's alert happen once for that address, whatever
+  //  re-runs the sweep (a restart, a second instance, a later day whose
+  //  window overlaps). Only derived (turn-in) Missing: a teacher-confirmed
+  //  Missing is announced by its publish digest, and an item whose column a
+  //  sent digest already listed to this address is left out (one email per
+  //  Missing). The send coalesces an address's pending alerts into one email
+  //  per family. Active-year children in a school with classrooms on; not
+  //  for guardians who turned alerts off or who get the daily summary (it
+  //  lists them). $1 now, $2 since, $3 until
   enqueueMissingAlerts: `
     WITH kids AS (
       SELECT DISTINCT s.student_id, s.school, ps.parent_id
@@ -173,18 +185,16 @@ const classroomEmailQueries = {
       WHERE ps.parent_id IS NOT NULL AND ${ACTIVE_YEAR('s')}
     ),
     fresh AS (
-      SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id
+      SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id, i.assessment_id
       FROM kids k
       JOIN class_students ro ON ro.student_id = k.student_id
       JOIN classes c ON c.class_id = ro.class_id AND c.archived_at IS NULL
       JOIN classwork_items i ON i.class_id = c.class_id
       LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
       ${WORK_JOINS('k.student_id')}
-      WHERE ((i.due_at > $2::timestamptz AND i.due_at <= $3::timestamptz)
-             OR (sub.published_at > $2::timestamptz AND sub.published_at <= $3::timestamptz)
-             OR (a.published_at > $2::timestamptz AND a.published_at <= $3::timestamptz))
+      WHERE i.due_at > $2::timestamptz AND i.due_at <= $3::timestamptz
         AND ${ITEM_VISIBLE('i', 'a', 'k', '$1::timestamptz')}
-        AND ${NEWLY_MISSING('$1::timestamptz', '$2::timestamptz', '$3::timestamptz')}
+        AND ${DERIVED_MISSING('$1::timestamptz', '$2::timestamptz', '$3::timestamptz')}
     )
     INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
     SELECT DISTINCT ON (LOWER(TRIM(gu.email)), f.student_id, f.item_id)
@@ -196,6 +206,7 @@ const classroomEmailQueries = {
     JOIN users gu ON gu.user_id = f.parent_id AND ${GUARDIAN_OK('gu')}
     LEFT JOIN notification_prefs np ON np.user_id = gu.user_id
     WHERE COALESCE(np.missing_alerts, TRUE) AND NOT ${GETS_DAILY_SUMMARY('np')}
+      AND NOT ${IN_SENT_DIGEST('f.student_id', 'f.assessment_id', 'gu.email')}
     ORDER BY LOWER(TRIM(gu.email)), f.student_id, f.item_id, gu.user_id
     ${ON_CONFLICT}
     RETURNING job_id`,
@@ -443,11 +454,14 @@ const classroomEmailQueries = {
 
   //  The alerted items (student × item pairs) of a guardian's children as
   //  they stand now: state judged at $3, only what the child may see.
-  //  $1 student ids, $2 item ids (pairwise), $3 now
+  //  `announced`: confirmed (a published Missing) or listed in a publish
+  //  digest that reached this address, so the alert leaves it out.
+  //  $1 student ids, $2 item ids (pairwise), $3 now, $4 recipient email
   selectAlertItems: `
     SELECT ro.student_id, i.item_id, i.kind, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
            i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
-           ${WORK_STATE_AT('$3::timestamptz')} AS state
+           ${WORK_STATE_AT('$3::timestamptz')} AS state,
+           (${GRADE_VISIBLE} OR ${IN_SENT_DIGEST('ro.student_id', 'i.assessment_id', '$4::text')}) AS announced
     FROM unnest($1::uuid[], $2::uuid[]) AS p(student_id, item_id)
     JOIN classwork_items i ON i.item_id = p.item_id
     JOIN class_students ro ON ro.class_id = i.class_id AND ro.student_id = p.student_id

@@ -293,13 +293,17 @@ describe('Integration: classroom emails', () => {
   it('missing alert: one email per family covering two siblings; none when prefs.missing_alerts is false', async () => {
     // Amal: derived Missing, due three hours ago and not turned in.
     const cells = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
-    // Sami: a teacher-confirmed Missing published two hours ago.
-    const spelling = (await pool.query(
+    // Sami: a derived Missing too, due two hours ago.
+    const spellingItem = (await createItem(engId, {
+      kind: 'assignment', title: 'Spelling list 4', submissionMode: 'done', dueAt: hoursFrom(FRIDAY, -2).toISOString(),
+    })).itemId;
+    // ...and a teacher-confirmed Missing published two hours ago: the publish
+    // digest announces that one (final ruling I1), so it is never alerted.
+    const confirmed = (await pool.query(
       `INSERT INTO assessments (class_id, name, max_score, date, is_published, published_at)
-       VALUES ($1, 'Spelling list 4', 10, DATE '2030-10-17', TRUE, $2) RETURNING assessment_id`, [engId, hoursFrom(FRIDAY, -2)],
+       VALUES ($1, 'Spelling list 3', 10, DATE '2030-10-17', TRUE, $2) RETURNING assessment_id`, [engId, hoursFrom(FRIDAY, -2)],
     )).rows[0].assessment_id;
-    await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, NULL, 'missing')`, [samiId, spelling]);
-    const spellingItem = (await pool.query(`SELECT item_id FROM classwork_items WHERE assessment_id = $1`, [spelling])).rows[0].item_id;
+    await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, NULL, 'missing')`, [samiId, confirmed]);
     // Bilal turned it in, so Rania's family has nothing new.
     await pool.query(
       `INSERT INTO classwork_submissions (item_id, student_id, turned_in_at)
@@ -328,6 +332,7 @@ describe('Integration: classroom emails', () => {
     expect(body).toContain('Plant cell diagram · Science · was due Fri, Oct 18');
     expect(body).toContain('Sami · Grade 3');
     expect(body).toContain('Spelling list 4 · English');
+    expect(body).not.toContain('Spelling list 3');
     expect(email.html).toContain('http://localhost:3000/parent/classes');
     expect((await jobs('missing_alert')).map((r) => r.status)).toEqual(['sent', 'sent']);
 
@@ -351,6 +356,57 @@ describe('Integration: classroom emails', () => {
     classroom.resetScheduleState();
     await classroom.runSchedule(FRIDAY);
     expect((await jobs('missing_alert')).map((r) => r.recipient_email)).toContain('rania.karim@example.com');
+  });
+
+  it('one email per Missing: Mark missing is announced by the publish digest, never again by the 4 pm alert (final I1)', async () => {
+    const rowsFor = (email) => jobs('missing_alert', `AND recipient_email = '${email}'`);
+    // A plain gradebook column the assignment fills, due at 13:30 on Friday.
+    const columnId = (await pool.query(
+      `INSERT INTO assessments (class_id, name, max_score, weight_points) VALUES ($1, 'Plant cell diagram', 10, 20) RETURNING assessment_id`, [sciId],
+    )).rows[0].assessment_id;
+    const item = await assignment({
+      title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString(), gradebook: { mode: 'existing', assessmentId: columnId },
+    });
+    // Sami's English work goes missing by its due date alone (derived): still alerted.
+    const spellingColumn = (await pool.query(
+      `INSERT INTO assessments (class_id, name, max_score, weight_points) VALUES ($1, 'Spelling list 4', 10, 20) RETURNING assessment_id`, [engId],
+    )).rows[0].assessment_id;
+    const spelling = await createItem(engId, {
+      kind: 'assignment', title: 'Spelling list 4', submissionMode: 'done', dueAt: hoursFrom(FRIDAY, -2).toISOString(),
+      gradebook: { mode: 'existing', assessmentId: spellingColumn },
+    });
+
+    // The teacher marks Bilal and Amal missing: published at once, with today's parent digest.
+    const res = await post(`/api/classroom/items/${item.itemId}/mark-missing`, { studentIds: [bilalId, amalId] });
+    expect(res.data.emailSummary).toMatchObject({ attempted: 2, sent: 2 });
+    const digests = (await pool.query(
+      `SELECT student_id, status, email_addresses, assessment_ids FROM assessment_publication_emails ORDER BY student_id`,
+    )).rows;
+    expect(digests.map((d) => [d.student_id, d.status]).sort()).toEqual([[amalId, 'sent'], [bilalId, 'sent']].sort());
+    expect(digests.every((d) => d.assessment_ids.includes(columnId))).toBe(true);
+    // Stamp the publish inside Friday's window (yesterday 4 pm to today 4 pm).
+    const at = hoursFrom(FRIDAY, -2);
+    await pool.query(`UPDATE classwork_submissions SET published_at = $2 WHERE item_id = $1 AND published_at IS NOT NULL`, [item.itemId, at]);
+    await pool.query(`UPDATE assessments SET published_at = $2 WHERE assessment_id = $1`, [columnId, at]);
+    await pool.query(`UPDATE assessment_publication_emails SET sent_at = $1`, [at]);
+
+    // Amal's Missing is then taken back on the published column (a live edit):
+    // now it is Missing by its due date only, but Mona already read about it.
+    await pool.query(`DELETE FROM student_assessments WHERE student_id = $1 AND assessment_id = $2`, [amalId, columnId]);
+
+    await classroom.runSchedule(FRIDAY);
+    // Rania (Bilal): the digest said "Missing"; no alert. Mona: only Sami's derived Missing.
+    expect(await rowsFor('rania.karim@example.com')).toEqual([]);
+    const mona = await rowsFor('mona.haddad@example.com');
+    expect(mona.map((r) => r.digest_key)).toEqual([`missing:${samiId}:${spelling.itemId}`]);
+
+    // Confirmed between the sweep and the send: the digest announces it, the alert stays quiet.
+    getResend().emails.send.mockClear();
+    expect((await post(`/api/classroom/items/${spelling.itemId}/mark-missing`, { studentIds: [samiId] })).data.emailSummary)
+      .toMatchObject({ attempted: 1, sent: 1 });
+    expect(sent().map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
+    expect((await processJob(mona[0], FRIDAY)).row).toMatchObject({ status: 'skipped', last_error: 'nothing new' });
+    expect(sent()).toHaveLength(1);
   });
 
   it("a family alert never takes a sibling another worker has claimed (no item emailed twice)", async () => {
