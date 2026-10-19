@@ -74,6 +74,12 @@ const TEACHER_NAME = (u1, u2) => `COALESCE(NULLIF(TRIM(CONCAT(${u1}.first_name, 
 // (a re-publish after a regrade, or a column published again, is a new one).
 const PUBLISHED_KEY = (expr) => `to_char(${expr} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
+// A missing alert's key: the child, the item and the due instant it was
+// missed at (Fable M2). One alert per address and due date: a due date the
+// teacher moves and the child misses again alerts once more.
+const MISSING_KEY = (student, item, due) => `'missing:' || ${student}::text || ':' || ${item}::text || ':'
+  || COALESCE(to_char(${due} AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISS'), 'none')`;
+
 const JOB_COLUMNS = '(kind, digest_key, recipient_id, recipient_email, school, payload, send_after)';
 const ON_CONFLICT = 'ON CONFLICT (LOWER(recipient_email), kind, digest_key) DO NOTHING';
 
@@ -165,11 +171,12 @@ const classroomEmailQueries = {
     ${ON_CONFLICT}
     RETURNING job_id`,
 
-  //  Missing work: one job per guardian address × child × item that went
-  //  missing by its due date in the sweep's fixed window ($2, $3], so the
-  //  unique key makes an item's alert happen once for that address, whatever
-  //  re-runs the sweep (a restart, a second instance, a later day whose
-  //  window overlaps). Only derived (turn-in) Missing: a teacher-confirmed
+  //  Missing work: one job per guardian address × child × item × due date
+  //  that went missing by its due date in the sweep's fixed window ($2, $3],
+  //  so the unique key makes an item's alert happen once per due date for
+  //  that address, whatever re-runs the sweep (a restart, a second instance,
+  //  a later day whose window overlaps); a due date moved and missed again
+  //  alerts once more (Fable M2). Only derived (turn-in) Missing: a teacher-confirmed
   //  Missing is announced by its publish digest, and an item whose column a
   //  sent digest already listed to this address is left out (one email per
   //  Missing). The send coalesces an address's pending alerts into one email
@@ -185,7 +192,7 @@ const classroomEmailQueries = {
       WHERE ps.parent_id IS NOT NULL AND ${ACTIVE_YEAR('s')}
     ),
     fresh AS (
-      SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id, i.assessment_id
+      SELECT DISTINCT k.parent_id, k.school, k.student_id, i.item_id, i.assessment_id, i.due_at
       FROM kids k
       JOIN class_students ro ON ro.student_id = k.student_id
       JOIN classes c ON c.class_id = ro.class_id AND c.archived_at IS NULL
@@ -198,7 +205,7 @@ const classroomEmailQueries = {
     )
     INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
     SELECT DISTINCT ON (LOWER(TRIM(gu.email)), f.student_id, f.item_id)
-           'missing_alert', 'missing:' || f.student_id::text || ':' || f.item_id::text,
+           'missing_alert', ${MISSING_KEY('f.student_id', 'f.item_id', 'f.due_at')},
            gu.user_id, LOWER(TRIM(gu.email)), f.school,
            jsonb_build_object('studentId', f.student_id, 'itemId', f.item_id, 'since', $2::timestamptz, 'until', $3::timestamptz),
            $1::timestamptz

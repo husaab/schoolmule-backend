@@ -40,6 +40,9 @@ const inDays = (n) => new Date(Date.now() + n * DAY_MS).toISOString();
 // Friday Oct 18, 2030, 16:30 in Toronto (EDT, UTC-4): the school's summary day.
 const FRIDAY = new Date('2030-10-18T20:30:00Z');
 const hoursFrom = (base, h) => new Date(base.getTime() + h * HOUR_MS);
+// A missing alert's key: the child, the item and the due instant it was missed at (Fable M2).
+const missingKey = (studentId, itemId, dueAt) =>
+  `missing:${studentId}:${itemId}:${new Date(dueAt).toISOString().replace(/[-:T]/g, '').slice(0, 14)}`;
 
 describe('Integration: classroom emails', () => {
   let pool, yearId, termId, sciId, engId, homeworkId;
@@ -354,7 +357,9 @@ describe('Integration: classroom emails', () => {
     await classroom.runSchedule(FRIDAY);
     const rows = await jobs('missing_alert');
     // One job per child × item (the item's alert happens once for this address), all Mona's.
-    expect(rows.map((r) => r.digest_key).sort()).toEqual([`missing:${amalId}:${cells.itemId}`, `missing:${samiId}:${spellingItem}`].sort());
+    expect(rows.map((r) => r.digest_key).sort()).toEqual([
+      missingKey(amalId, cells.itemId, hoursFrom(FRIDAY, -3)), missingKey(samiId, spellingItem, hoursFrom(FRIDAY, -2)),
+    ].sort());
     expect(rows.every((r) => r.recipient_email === 'mona.haddad@example.com' && r.recipient_id === MONA_ID)).toBe(true);
     // The window is fixed: yesterday 4 pm to today 4 pm, Toronto time.
     expect(new Date(rows[0].payload.since).toISOString()).toBe('2030-10-17T20:00:00.000Z');
@@ -437,7 +442,7 @@ describe('Integration: classroom emails', () => {
     // Rania (Bilal): the digest said "Missing"; no alert. Mona: only Sami's derived Missing.
     expect(await rowsFor('rania.karim@example.com')).toEqual([]);
     const mona = await rowsFor('mona.haddad@example.com');
-    expect(mona.map((r) => r.digest_key)).toEqual([`missing:${samiId}:${spelling.itemId}`]);
+    expect(mona.map((r) => r.digest_key)).toEqual([missingKey(samiId, spelling.itemId, hoursFrom(FRIDAY, -2))]);
 
     // Confirmed between the sweep and the send: the digest announces it, the alert stays quiet.
     getResend().emails.send.mockClear();
@@ -498,7 +503,7 @@ describe('Integration: classroom emails', () => {
     });
     await classroom.runSchedule(FRIDAY); // 16:30
     let rows = await monaAlerts();
-    expect(rows.map((r) => r.digest_key)).toEqual([`missing:${amalId}:${first.itemId}`]);
+    expect(rows.map((r) => r.digest_key)).toEqual([missingKey(amalId, first.itemId, hoursFrom(FRIDAY, -3))]);
     expect((await processJob(rows[0], FRIDAY)).outcome).toBe('sent');
 
     // Work that goes missing at 17:00, after today's window closed at 16:00; the worker restarts at 18:00.
@@ -522,8 +527,8 @@ describe('Integration: classroom emails', () => {
     await classroom.runSchedule(hoursFrom(FRIDAY, 24));
     rows = await monaAlerts();
     expect(rows.map((r) => [r.digest_key, r.status]).sort()).toEqual([
-      [`missing:${amalId}:${first.itemId}`, 'sent'],
-      [`missing:${amalId}:${late.itemId}`, 'pending'],
+      [missingKey(amalId, first.itemId, hoursFrom(FRIDAY, -3)), 'sent'],
+      [missingKey(amalId, late.itemId, hoursFrom(FRIDAY, 0.5)), 'pending'],
     ].sort());
     getResend().emails.send.mockClear();
     expect((await processJob(rows.find((r) => r.status === 'pending'), hoursFrom(FRIDAY, 24))).outcome).toBe('sent');
@@ -533,6 +538,35 @@ describe('Integration: classroom emails', () => {
     expect(email.html).not.toContain('Plant cell diagram');
 
     // A second run that day, or a second instance, adds nothing.
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 26));
+    expect(await monaAlerts()).toHaveLength(2);
+  });
+
+  it('Fable M2: a due date moved and missed again alerts once more; each due date alerts once', async () => {
+    const monaAlerts = () => jobs('missing_alert', `AND recipient_email = 'mona.haddad@example.com'`);
+    const item = await assignment({ title: 'Plant cell diagram', dueAt: hoursFrom(FRIDAY, -3).toISOString() });
+    await classroom.runSchedule(FRIDAY);
+    let rows = await monaAlerts();
+    expect(rows.map((r) => r.digest_key)).toEqual([missingKey(amalId, item.itemId, hoursFrom(FRIDAY, -3))]);
+    expect((await processJob(rows[0], FRIDAY)).outcome).toBe('sent');
+
+    // The teacher gives Amal until Saturday 13:30; she misses that too.
+    const extended = hoursFrom(FRIDAY, 21);
+    await editItem(item.itemId, { dueAt: extended.toISOString() });
+    classroom.resetScheduleState();
+    await classroom.runSchedule(hoursFrom(FRIDAY, 24)); // Saturday 16:30
+    rows = await monaAlerts();
+    expect(rows.map((r) => [r.digest_key, r.status]).sort()).toEqual([
+      [missingKey(amalId, item.itemId, hoursFrom(FRIDAY, -3)), 'sent'],
+      [missingKey(amalId, item.itemId, extended), 'pending'],
+    ].sort());
+    getResend().emails.send.mockClear();
+    expect((await processJob(rows.find((r) => r.status === 'pending'), hoursFrom(FRIDAY, 24))).outcome).toBe('sent');
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0].html).toContain('Plant cell diagram');
+
+    // A second run, or a second instance, adds nothing for either due date.
     classroom.resetScheduleState();
     await classroom.runSchedule(hoursFrom(FRIDAY, 26));
     expect(await monaAlerts()).toHaveLength(2);
