@@ -217,6 +217,7 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
                        LEFT JOIN LATERAL (
                          SELECT gu.user_id, gu.first_name, gu.last_name FROM users gu
                          WHERE LOWER(gu.email) = LOWER(TRIM(r.email)) AND gu.school = s.school AND gu.is_archived IS NOT TRUE
+                           AND gu.role::text <> 'STUDENT' -- a student login is never a guardian's account (N6)
                          ORDER BY gu.user_id LIMIT 1) ru ON TRUE
                        WHERE TRIM(COALESCE(r.email, '')) <> ''
                      ) g), '[]') AS parents,

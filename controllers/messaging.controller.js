@@ -211,7 +211,9 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
           const u = existing[0];
           // Any live account may be the guardian, staff included: a teacher
           // linked to their own child reads the thread in their parent view.
-          if (u.is_archived) {
+          // Never a student login (re-review N6): a child's own address on a
+          // guardian row would make the child their own guardian.
+          if (u.is_archived || String(u.role) === 'STUDENT') {
             results.push({ linkId: link.parent_student_link_id, name, status: 'skipped' });
             continue;
           }

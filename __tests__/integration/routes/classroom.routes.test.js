@@ -458,6 +458,14 @@ describe('Integration: classroom teacher read API', () => {
       expect(JSON.stringify(res.body)).not.toContain('lina.haddad@example.com');
     });
 
+    it("re-review N6: a guardian address that is a student login's doesn't count as the parent having an account", async () => {
+      const LOGIN_ID = '550e8400-e29b-41d4-a716-446655440078';
+      await user(LOGIN_ID, 'karim.haddad@example.com', 'Karim', 'Haddad', 'STUDENT');
+      await pool.query(`UPDATE students SET father_name = 'Karim Haddad', father_email = 'karim.haddad@example.com' WHERE student_id = $1`, [ramiId]);
+      const rami = (await people(sciId)).students.find((s) => s.studentId === ramiId);
+      expect(rami.parents).toEqual([{ name: 'Karim Haddad', relation: 'Father', hasAccount: false }]);
+    });
+
     it('a parent with no name on file shows as "Parent" and the address never leaves the server', async () => {
       await parentLink(ramiId, { email: 'only.address@example.com' });
       const res = await get(`${BASE}/classes/${sciId}/people`);

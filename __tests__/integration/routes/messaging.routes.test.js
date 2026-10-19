@@ -538,6 +538,23 @@ describe('Integration: Messaging routes', () => {
       const jobs = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [res.body.data.conversation.conversationId]);
       expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([MOM_ID, CO_TEACHER_ID].sort());
     });
+
+    it('re-review N6: an address that belongs to a student login is never linked as a guardian, nor invited', async () => {
+      const STUDENT_LOGIN_ID = '550e8400-e29b-41d4-a716-446655440077';
+      await user(STUDENT_LOGIN_ID, 'yara.test@example.com', 'Yara Test', 'STUDENT');
+      const b = await pool.query(`INSERT INTO students (name, grade, school, school_year_id) VALUES ('Yara Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);
+      const yara = b.rows[0].student_id;
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, yara]);
+      // The guardian address on file is the child's own login address (a data-entry mix-up).
+      await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Yara Test', 'Yara.Test@example.com', 'Mother', 'ALHAADIACADEMY')`, [yara]);
+      const res = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+        .field('studentId', yara).field('teacherId', TEACHER_ID).field('title', 'Welcome').field('body', 'Hello!');
+      expect(res.status).toBe(201);
+      expect(res.body.data.invites).toEqual([expect.objectContaining({ status: 'skipped' })]);
+      const link = await pool.query(`SELECT parent_id, invited_at FROM parent_students WHERE student_id = $1`, [yara]);
+      expect(link.rows[0]).toEqual({ parent_id: null, invited_at: null });
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE LOWER(email) = 'yara.test@example.com'`)).rows[0].n).toBe(1);
+    });
   });
 
   describe('email digests', () => {
