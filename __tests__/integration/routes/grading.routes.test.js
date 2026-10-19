@@ -518,6 +518,58 @@ describe('Integration: grading and per-student Publish', () => {
     expect(history[0]).toMatchObject({ action: 'publish', emailSummary: { sent: 1 } });
   });
 
+  it("S2: per-student Publish, 'Publish N' and Mark missing on a column under a category each send one digest, with the category's line", async () => {
+    // A sibling column under Homework with a score that is not published: never in the email.
+    const hidden = await assessment(sciId, 'Homework 0', { parentId: homeworkId, weight: 10, max: 10 });
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: amalId, assessmentId: hidden, score: 2 }] });
+    await pool.query(
+      `INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Lina Nassar', 'lina.nassar@example.com', 'Mother', 'ALHAADIACADEMY')`,
+      [daliaId],
+    );
+    const digestRows = async () => (await pool.query(
+      `SELECT student_id, status, assessment_ids FROM assessment_publication_emails ORDER BY sent_at, student_id`,
+    )).rows;
+
+    // "Publish N" on the unpublished column: one digest per newly published student.
+    await patch(amalId, { draftScore: 8 });
+    await patch(bilalId, { draftScore: 6 });
+    const many = (await publish('graded')).data;
+    expect(many.publishedStudentIds.sort()).toEqual([amalId, bilalId].sort());
+    expect(many.emailSummary).toMatchObject({ attempted: 2, sent: 2, failed: 0 });
+    let emails = sent();
+    expect(emails.map((m) => m.to).sort()).toEqual([['mona.haddad@example.com'], ['rania.karim@example.com']]);
+    const toAmal = emails.find((m) => m.to[0] === 'mona.haddad@example.com');
+    expect(toAmal.subject).toBe('Amal Haddad — New Grades Posted (Science)');
+    expect(toAmal.html).toContain('Homework');
+    expect(toAmal.html).toContain('80%'); // only the published column counts in the rollup
+    expect(toAmal.html).not.toContain('Homework 0');
+    expect(emails.find((m) => m.to[0] === 'rania.karim@example.com').html).toContain('60%');
+    let rows = await digestRows();
+    expect(rows).toHaveLength(2);
+    const amalRow = rows.find((r) => r.student_id === amalId);
+    expect(amalRow.status).toBe('sent');
+    expect(amalRow.assessment_ids.sort()).toEqual([homeworkId, columnId].sort());
+
+    // Per-student Publish after a regrade: one more digest, to that family only.
+    getResend().emails.send.mockClear();
+    await patch(amalId, { draftScore: 9 }); // live on the published column, no email
+    expect(sent()).toEqual([]);
+    const one = (await publish([amalId])).data;
+    expect(one.emailSummary).toMatchObject({ attempted: 1, sent: 1 });
+    emails = sent();
+    expect(emails.map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
+    expect(emails[0].html).toContain('90%');
+
+    // Mark missing: one digest saying so through the category's line.
+    getResend().emails.send.mockClear();
+    const missing = (await post(`${itemUrl}/mark-missing`, { studentIds: [daliaId] })).data;
+    expect(missing.emailSummary).toMatchObject({ attempted: 1, sent: 1 });
+    expect(sent().map((m) => m.to)).toEqual([['lina.nassar@example.com']]);
+    expect(sent()[0].html).toContain('Homework');
+    rows = await digestRows();
+    expect(rows).toHaveLength(4);
+  });
+
   it('grid-overlay reports turned_in, draft and missing_derived cells', async () => {
     await patch(amalId, { draftScore: 8 });
     const late = await createItem({

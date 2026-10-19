@@ -318,7 +318,7 @@ function planPublish({ requested, allAssessments, scoreRowsByStudent, pendingDra
  * already represented by its category's rollup, and listing both would
  * double-report the same work.
  */
-function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent) {
+function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { visibleLines = false, alsoListed = null } = {}) {
   const publishedSet = new Set(publishedIds);
   const topLevelPublished = allAssessments.filter(
     (a) => publishedSet.has(a.assessment_id) && !a.parent_assessment_id,
@@ -330,6 +330,12 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent) {
     allAssessments.filter((a) => a.is_published || publishedSet.has(a.assessment_id)).map((a) => a.assessment_id),
   );
   const parentVisible = visibleAssessments(allPublishedIds, allAssessments);
+  // A Classwork publish of one column under a category (sendGradeDigest)
+  // lists the category's line from what parents can see: a sibling column
+  // that isn't published never enters it. (The gradebook's own Publish
+  // publishes the category's graded children with it, so there the two
+  // lists agree.)
+  const lineAssessments = visibleLines ? parentVisible : allAssessments;
 
   const tasks = [];
   for (const student of scoreRowsByStudent.values()) {
@@ -338,10 +344,12 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent) {
     const gradedIds = [];
 
     for (const assessment of topLevelPublished) {
-      const result = computeAssessmentForStudent(assessment, allAssessments, lookup);
+      const result = computeAssessmentForStudent(assessment, lineAssessments, lookup);
       if (!result.isCounted) continue;
       lines.push(formatAssessmentLine(assessment, result));
       gradedIds.push(assessment.assessment_id);
+      // The audit row also names the columns under that line this publish released.
+      for (const extra of (alsoListed && alsoListed.get(assessment.assessment_id)) || []) gradedIds.push(extra);
     }
 
     if (lines.length === 0) continue;
@@ -550,11 +558,35 @@ const publishAssessments = async (req, res) => {
 };
 
 /**
+ * Each assessment's top-level line: itself, or the category it sits under
+ * (walking up). Returns the line ids and, per line, the columns under it
+ * that were asked for (named in the email's audit row too).
+ */
+function topLevelLines(assessmentIds, allAssessments) {
+  const byId = new Map(allAssessments.map((a) => [a.assessment_id, a]));
+  const lineIds = [];
+  const alsoListed = new Map();
+  for (const id of assessmentIds) {
+    let a = byId.get(id);
+    const seen = new Set();
+    while (a && a.parent_assessment_id && !seen.has(a.assessment_id)) {
+      seen.add(a.assessment_id);
+      a = byId.get(a.parent_assessment_id);
+    }
+    if (!a) continue;
+    if (!lineIds.includes(a.assessment_id)) lineIds.push(a.assessment_id);
+    if (a.assessment_id !== id) alsoListed.set(a.assessment_id, [...(alsoListed.get(a.assessment_id) || []), id]);
+  }
+  return { lineIds, alsoListed };
+}
+
+/**
  * Today's publish digest for a publish made from Classwork (the grading
- * view's Publish, Mark missing, Excuse): the same email the gradebook's
- * Publish sends, for `assessmentIds`, to the guardians of `studentIds` only.
- * Built from the committed gradebook, so another student's draft never
- * enters it. After COMMIT; never throws.
+ * view's Publish, Mark missing, Excuse, a quiz released on submit): the same
+ * email the gradebook's Publish sends, for `assessmentIds` (a column under a
+ * category is listed as its category's line, as main's digest does), to the
+ * guardians of `studentIds` only. Built from the committed gradebook, so
+ * another student's draft never enters it. After COMMIT; never throws.
  */
 async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds, studentIds }) {
   const none = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
@@ -566,7 +598,12 @@ async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds
       db.query(publishQueries.selectClassScoreRows, [classId]),
     ]);
     const byStudent = groupScoreRowsByStudent(scoreRows.filter((r) => wanted.has(r.student_id)));
-    const tasks = await resolveRecipients(buildEmailTasks(assessmentIds, freshAssessments, byStudent));
+    // The email lists top-level assessments only (main's digest): a column
+    // under a category is reported through its category's line (S2).
+    const { lineIds, alsoListed } = topLevelLines(assessmentIds, freshAssessments);
+    const tasks = await resolveRecipients(
+      buildEmailTasks(lineIds, freshAssessments, byStudent, { visibleLines: true, alsoListed }),
+    );
     return await sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment: null });
   } catch (error) {
     logger.error('Classwork publish committed, but the parent digest failed:', error);
@@ -929,6 +966,7 @@ module.exports = {
   expandCascade,
   countUngradedStudents,
   buildEmailTasks,
+  topLevelLines,
   overlayDrafts,
   planPublish,
 };

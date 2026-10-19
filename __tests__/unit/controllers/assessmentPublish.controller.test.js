@@ -2,6 +2,7 @@ const {
   expandCascade,
   countUngradedStudents,
   buildEmailTasks,
+  topLevelLines,
   overlayDrafts,
   planPublish,
 } = require('../../../controllers/assessmentPublish.controller');
@@ -177,6 +178,33 @@ describe('buildEmailTasks', () => {
   it('produces no tasks when nothing published is graded', () => {
     const scores = new Map([student('s1', 'Alice', [scoreRow('q1', null)])]);
     expect(buildEmailTasks(['q1'], [quiz], scores)).toEqual([]);
+  });
+});
+
+// S2: a Classwork publish of one column under a category emails the
+// category's line (main's digest lists top-level assessments only), built
+// from what parents can see.
+describe('topLevelLines + buildEmailTasks for a column under a category', () => {
+  const category = assessment({ assessment_id: 'cat', name: 'Homework', is_parent: true, weight_points: 40, max_score: null });
+  const kid1 = assessment({ assessment_id: 'kid1', parent_assessment_id: 'cat', max_score: 10, is_published: true });
+  const kid2 = assessment({ assessment_id: 'kid2', parent_assessment_id: 'cat', max_score: 10, is_published: false });
+  const solo = assessment({ assessment_id: 'solo', name: 'Unit Test', max_score: 50 });
+  const all = [category, kid1, kid2, solo];
+
+  it('maps a child to its category and keeps a top-level column as it is', () => {
+    expect(topLevelLines(['kid1', 'solo', 'kid2'], all)).toEqual({
+      lineIds: ['cat', 'solo'], alsoListed: new Map([['cat', ['kid1', 'kid2']]]),
+    });
+    expect(topLevelLines(['gone'], all)).toEqual({ lineIds: [], alsoListed: new Map() });
+  });
+
+  it("lists the category from published columns only, and names the child in the audit ids", () => {
+    const scores = new Map([student('s1', 'Alice', [scoreRow('kid1', 8), scoreRow('kid2', 2)])]);
+    const { lineIds, alsoListed } = topLevelLines(['kid1'], all);
+    const [task] = buildEmailTasks(lineIds, all, scores, { visibleLines: true, alsoListed });
+    // kid2 has a score but isn't published: it never enters the rollup.
+    expect(task.lines).toEqual([{ name: 'Homework', scoreLabel: '', pctLabel: '(80%)', comment: null }]);
+    expect(task.gradedAssessmentIds).toEqual(['cat', 'kid1']);
   });
 });
 
