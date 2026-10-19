@@ -19,12 +19,14 @@ const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { GoogleSignInError } = googleSignInService;
 const {
-  assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, MESSAGES: STUDENT_MESSAGES,
+  assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, sessionRevoked, MESSAGES: STUDENT_MESSAGES,
 } = require('../services/classroom/studentLogin');
 const { photoUrlFor } = require('../services/profile/photos');
 const studentAccountQueries = require('../queries/studentAccount.queries');
 const { getSettings: getClassroomSettings } = require('../services/classroom/classroomSettings');
-const { recordActivation, acceptGoogleChecks, recordGoogleAcceptance } = require('../services/classroom/studentInvites');
+const {
+  recordActivation, acceptGoogleChecks, recordGoogleAcceptance, passwordProblem,
+} = require('../services/classroom/studentInvites');
 
 const SESSION_TTL = '7d';
 // Students often share school computers (spec §6): their sessions are short.
@@ -871,8 +873,12 @@ const sendResetEmail = async (to, url) => {
   });
 };
 
+const RESET_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const INVALID_RESET_TOKEN = { success: false, message: 'Invalid or expired token.' };
+
 const validateResetToken = async (req, res) => {
   const { token } = req.query;
+  if (typeof token !== 'string' || !RESET_TOKEN_RE.test(token)) return res.status(400).json(INVALID_RESET_TOKEN);
 
   try {
     const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
@@ -889,20 +895,37 @@ const validateResetToken = async (req, res) => {
 };
 
 const resetPassword = async (req, res) => {
-  const { token, newPassword } = req.body;
+  const { token, newPassword } = req.body ?? {};
+  if (typeof token !== 'string' || !RESET_TOKEN_RE.test(token)) return res.status(400).json(INVALID_RESET_TOKEN);
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+  }
 
   try {
     const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
-    if (tokenResult.rowCount === 0) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired token.' });
-    }
+    if (tokenResult.rowCount === 0) return res.status(400).json(INVALID_RESET_TOKEN);
 
     const { user_id } = tokenResult.rows[0];
+    const { rows: [user] } = await db.query(userQueries.selectById, [user_id]);
+    // An archived account keeps its records but never gets a new password.
+    if (!user || user.is_archived) return res.status(400).json(INVALID_RESET_TOKEN);
+
+    // Students follow the invite's rules: none in a Google-only school, and
+    // the same password policy as accepting an invite.
+    if (user.role === 'STUDENT') {
+      const settings = await getClassroomSettings(user.school);
+      if (settings.studentSignIn === 'google_only') {
+        return res.status(PASSWORD_SIGN_IN_OFF.status).json({ success: false, code: PASSWORD_SIGN_IN_OFF.code, message: PASSWORD_SIGN_IN_OFF.message });
+      }
+      const problem = passwordProblem(newPassword, { email: user.email, firstName: user.first_name, lastName: user.last_name });
+      if (problem) return res.status(400).json({ success: false, code: 'PASSWORD_WEAK', message: problem });
+    }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     await db.query(userQueries.updatePassword, [hashedPassword, user_id]);
-    await db.query(passwordQueries.deletePasswordResetToken, [token]);
+    // Every open link of this user dies, not just the one used.
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user_id]);
 
     res.json({ success: true, message: 'Password updated successfully.' });
   } catch (err) {
@@ -957,6 +980,10 @@ const validateSession = async (req, res) => {
       } catch (v) {
         if (!v || !v.code) throw v;
         return res.status(401).json({ success: false, code: v.code, message: v.message });
+      }
+      // Sessions from before an address change end (student invitations).
+      if (sessionRevoked(decoded.iat, gate.sessionsRevokedAt)) {
+        return res.status(401).json({ success: false, code: 'SESSION_REVOKED', message: STUDENT_MESSAGES.SESSION_REVOKED });
       }
       // A session opened with a QR card ends once that card is voided or reprinted.
       if (!qrCardLive(decoded.qrCard, gate)) {

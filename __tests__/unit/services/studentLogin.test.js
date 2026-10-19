@@ -163,3 +163,19 @@ describe('assertStudentCanSignIn', () => {
     });
   });
 });
+
+describe('sessionRevoked', () => {
+  const { sessionRevoked } = require('../../../services/classroom/studentLogin');
+  const revokedAt = new Date('2026-10-20T12:00:00.500Z');
+  it('is false when nothing was revoked', () => {
+    expect(sessionRevoked(1, null)).toBe(false);
+  });
+  it('ends sessions issued before the revoke, and in the same second (fail closed)', () => {
+    expect(sessionRevoked(Date.parse('2026-10-20T11:59:00Z') / 1000, revokedAt)).toBe(true);
+    expect(sessionRevoked(Date.parse('2026-10-20T12:00:00Z') / 1000, revokedAt)).toBe(true);
+  });
+  it('keeps sessions issued after it, and refuses a token with no issue time', () => {
+    expect(sessionRevoked(Date.parse('2026-10-20T12:00:01Z') / 1000, revokedAt)).toBe(false);
+    expect(sessionRevoked(undefined, revokedAt)).toBe(true);
+  });
+});

@@ -11,14 +11,15 @@ const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
-const { endOpenInvites, renderInviteEmail, INVITE_VALID_DAYS } = require('../services/classroom/studentInvites');
+const { endOpenInvites, renderInviteEmail, linkSuccessorRows, INVITE_VALID_DAYS } = require('../services/classroom/studentInvites');
+const inviteQueries = require('../queries/studentInvite.queries');
+const { checkStudentEmails } = require('../services/classroom/emailProblems');
 const { GRADE_CODES } = require('../utils/gradeRank');
 const { getSettings, MAX_NOTICE_VERSION } = require('../services/classroom/classroomSettings');
 const {
   EMAIL_RE,
   STATUS_FILTERS,
   normalizeEmail,
-  conflictMessage,
   deriveStatus,
   toStudentAccountRow,
   loadSchoolInfo,
@@ -113,11 +114,20 @@ const listStudentAccounts = async (req, res) => {
   }
 };
 
+// The first blocking problem with putting this address on the student row
+// (another account's, a parent's on file, another student's this year), or null.
+async function blockingProblem(school, settings, studentId, email) {
+  const checked = await checkStudentEmails({ school, domains: settings.studentEmailDomains, items: [{ studentId, email }] });
+  return (checked.get(0)?.problems || []).find((p) => p.blocking) || null;
+}
+
 // PATCH /api/admin/student-accounts/:studentId  { studentEmail: string | null }
-// The student's own address. With an account, the sign-in address changes
-// too (and any open invite/password link, sent to the old address, dies).
+// The student's own address, refused when it can't be theirs. With an
+// account, a changed address is a new sign-in: the password and Google link
+// are reset, every session from before ends, and any link already sent dies
+// (send a new invite). The row's already-rolled later rows follow.
 const updateStudentAccount = async (req, res) => {
-  const { school } = req.user;
+  const { school, userId: adminId } = req.user;
   const { studentId } = req.params;
 
   if (!has(req.body, 'studentEmail')) return failed(res, 400, 'studentEmail is required');
@@ -129,32 +139,29 @@ const updateStudentAccount = async (req, res) => {
   try {
     const row = await loadRow(school, studentId);
     if (!row) return failed(res, 404, NOT_FOUND);
-
-    if (!row.user_id) {
-      await db.query(q.updateStudentEmail, [studentId, school, email]);
-      return respondWithRow(res, school, studentId);
-    }
-
-    if (!email) {
+    if (row.user_id && !email) {
       return failed(res, 400, 'A student with an account needs an email address. Delete the account to remove it.');
     }
-    const { rows: others } = await db.query(q.selectOtherUserByEmail, [email, row.user_id]);
-    if (others.length > 0) return failed(res, 409, 'An account already uses this email');
-    // The same rule as the list and the invite: a login never moves onto a parent's address.
-    const { rows: family } = await db.query(q.selectFamilyAddressMatch, [studentId, email]);
-    if (family.length > 0) {
-      return failed(res, 409, conflictMessage('family_address'), { code: 'FAMILY_ADDRESS' });
+
+    if (email) {
+      const problem = await blockingProblem(school, await getSettings(school), studentId, email);
+      if (problem) return failed(res, 409, problem.message, { code: problem.code.toUpperCase() });
     }
 
-    const changed = String(row.account_email || '').toLowerCase() !== email;
+    const changed = Boolean(row.user_id) && String(row.account_email || '').toLowerCase() !== email;
     try {
       await inTransaction(async (client) => {
+        await client.query(inviteQueries.setEmailOnRowAndSuccessors, [studentId, school, email]);
+        if (!row.user_id) return;
         await client.query(q.updateStudentUserEmail, [row.user_id, school, email]);
-        await client.query(q.updateStudentEmail, [studentId, school, email]);
-        if (changed) await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+        if (changed) {
+          await client.query(q.resetStudentSignIn, [row.user_id, school]);
+          await endOpenInvites(client, { userId: row.user_id, reason: 'email_changed', endedBy: adminId });
+          await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+        }
       });
     } catch (error) {
-      if (error.code === '23505') return failed(res, 409, 'An account already uses this email');
+      if (error.code === '23505') return failed(res, 409, 'Already used by another SchoolMule account.', { code: 'EMAIL_IN_USE' });
       throw error;
     }
     return respondWithRow(res, school, studentId);
@@ -457,6 +464,8 @@ const linkAccount = async (req, res) => {
     const { rows: users } = await db.query(q.selectStudentUserInSchool, [targetId, school]);
     if (users.length === 0) return failed(res, 404, 'Student account not found');
     if (row.user_id) return failed(res, 409, 'This student is already linked to an account');
+    // A login without its consent record could never sign in (R11).
+    if (!users[0].consent_at) return failed(res, 409, 'This login has no consent record. Invite the student instead.');
 
     const schoolYearId = row.school_year_id || req.schoolYear?.schoolYearId || null;
     if (!schoolYearId) return failed(res, 400, "This student isn't in a school year");
@@ -468,6 +477,7 @@ const linkAccount = async (req, res) => {
     try {
       await inTransaction(async (client) => {
         await client.query(q.insertStudentAccountLink, [targetId, studentId, schoolYearId, adminId]);
+        await linkSuccessorRows(client, { userId: targetId, studentId, linkedBy: adminId });
         await client.query(q.fillBlankStudentEmail, [studentId, users[0].email]);
       });
     } catch (error) {
@@ -491,7 +501,8 @@ const unlinkAccount = async (req, res) => {
     if (!row) return failed(res, 404, NOT_FOUND);
     if (!row.user_id) return failed(res, 404, 'No account is linked to this student');
 
-    await db.query(q.deleteLinkByStudent, [studentId]);
+    // This row's link and the same login's links on its already-rolled later rows.
+    await db.query(inviteQueries.unlinkRowAndSuccessors, [row.user_id, studentId]);
     return respondWithRow(res, school, studentId);
   } catch (error) {
     logger.error({ err: error }, 'Failed to unlink a student account');

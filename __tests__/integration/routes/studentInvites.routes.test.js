@@ -536,4 +536,78 @@ describe('Integration: Student invitations', () => {
       expect(rowOf(await list(), samiId)).toMatchObject({ status: 'active', signInMethod: 'card' });
     });
   });
+
+  describe('credential hygiene (spec §3.6)', () => {
+    let ip = 200;
+    let addr;
+    beforeEach(() => { ip += 1; addr = `10.9.2.${ip}`; });
+    const pub = (path) => request(getApp()).post(path).set('X-Forwarded-For', addr);
+    const me = (token) => request(getApp()).get('/api/student/me').set('Authorization', `Bearer ${token}`);
+    const acceptWithGoogle = async (studentId, email) => {
+      mockSend.mockClear();
+      await invite([studentId]);
+      const secret = secretIn(mockSend.mock.calls[0][0].html);
+      verifySignInCode.mockResolvedValue({
+        sub: 'google-sub-stranger', email, emailVerified: true, hd: null, givenName: 'X', familyName: 'Y', name: 'X Y',
+      });
+      const res = await pub('/api/auth/student-invite/accept').send({ token: secret, googleCode: 'code' });
+      expect(res.status).toBe(200);
+      return res.body.data.token;
+    };
+
+    it("editing the address ends the stranger's Google link and session (Review Focus 5)", async () => {
+      // The office mistyped Amal's address; whoever owns the typo accepted with Google.
+      await pool.query(`UPDATE students SET student_email = 'amal.hadad@example.com' WHERE student_id = $1`, [amalId]);
+      const strangerToken = await acceptWithGoogle(amalId, 'amal.hadad@example.com');
+      expect((await me(strangerToken)).status).toBe(200);
+
+      // Sessions are compared by the second they were issued.
+      await new Promise((r) => setTimeout(r, 1100));
+      const fixed = await authenticatedRequest('patch', `${BASE}/${amalId}`, asAdmin).send({ studentEmail: 'amal.haddad@example.com' });
+      expect(fixed.status).toBe(200);
+      // Back to Invited: the accepted invite stays the latest one, and the row needs a new invite.
+      expect(fixed.body.data).toMatchObject({
+        status: 'invited', signInMethod: null, needsAttention: true, invite: { state: 'accepted' },
+        account: { email: 'amal.haddad@example.com' },
+      });
+
+      const gone = await me(strangerToken);
+      expect(gone.status).toBe(401);
+      expect(gone.body.code).toBe('SESSION_REVOKED');
+      const auth = await request(getApp()).get('/api/auth/me').set('Authorization', `Bearer ${strangerToken}`);
+      expect(auth.status).toBe(401);
+      expect(auth.body.code).toBe('SESSION_REVOKED');
+      const profile = await request(getApp()).get('/api/profile').set('Authorization', `Bearer ${strangerToken}`);
+      expect(profile.status).toBe(401);
+
+      // The stranger's Google account no longer opens anything.
+      verifySignInCode.mockResolvedValue({
+        sub: 'google-sub-stranger', email: 'amal.hadad@example.com', emailVerified: true, hd: null, givenName: 'X', familyName: 'Y', name: 'X Y',
+      });
+      const again = await pub('/api/auth/google').send({ code: 'c', intent: 'login' });
+      expect(again.status).toBe(404);
+      expect(again.body.code).toBe('GOOGLE_NO_ACCOUNT');
+      const login = await loginOf(amalId);
+      expect(login).toMatchObject({ google_sub: null, password: '!', email: 'amal.haddad@example.com' });
+    });
+
+    it('editing the address also resets a password someone else set', async () => {
+      mockSend.mockClear();
+      await invite([ramiId]);
+      const secret = secretIn(mockSend.mock.calls[0][0].html);
+      expect((await pub('/api/auth/student-invite/accept').send({ token: secret, password: 'cedar-river' })).status).toBe(200);
+      await authenticatedRequest('patch', `${BASE}/${ramiId}`, asAdmin).send({ studentEmail: 'rami.o@example.com' });
+      const login = await pub('/api/auth/login').send({ email: 'rami.o@example.com', password: 'cedar-river' });
+      expect(login.status).toBe(403);
+      expect(login.body.code).toBe('INVITE_PENDING');
+    });
+
+    it('a Google-only school has no student password to reset', async () => {
+      await acceptWithGoogle(amalId, 'amal.haddad@example.com');
+      await pool.query(`UPDATE school_classroom_settings SET student_sign_in = 'google_only'`);
+      const res = await authenticatedRequest('post', `${BASE}/${amalId}/reset-password`, asAdmin);
+      expect(res.status).toBe(409);
+      expect(res.body.message).toBe('Your school uses Google sign-in, so students have no password to reset.');
+    });
+  });
 });

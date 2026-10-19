@@ -295,6 +295,9 @@ async function cancelInviteFor(row, { school, actorId }) {
  */
 async function resetPasswordFor(row, { school, requestedBy }) {
   if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
+  if ((await getSettings(school)).studentSignIn === 'google_only') {
+    return refused(409, 'Your school uses Google sign-in, so students have no password to reset.');
+  }
   if (row.invite_pending) return refused(400, "This student hasn't set a password yet. Resend the invite instead.");
 
   try {

@@ -40,6 +40,16 @@ const qrCardLive = (qrCard, { qrSecretHash, qrVoidedAt } = {}) => {
   if (!qrCard) return true;
   return !qrVoidedAt && typeof qrSecretHash === 'string' && qrSecretHash.startsWith(String(qrCard));
 };
+/**
+ * Was this session opened at or before the account's sessions were revoked
+ * (an admin changed the student's address)? `iat` is the JWT's issued-at
+ * second; a session from that same second is refused too (fail closed).
+ */
+const sessionRevoked = (iatSeconds, revokedAt) => {
+  if (!revokedAt) return false;
+  if (!Number.isFinite(iatSeconds)) return true;
+  return iatSeconds * 1000 <= new Date(revokedAt).getTime();
+};
 const secretMatches = (secret, hash) => {
   if (!hash) return false;
   const a = Buffer.from(hashQrSecret(secret), 'hex');
@@ -50,7 +60,7 @@ const secretMatches = (secret, hash) => {
 // $1 user_id, $2 school. The link is to the ACTIVE year's student row.
 const SIGN_IN_CONTEXT = `
   SELECT scs.enabled, scs.login_from_grade, scs.qr_until_grade,
-         sa.consent_at, sa.qr_secret_hash, sa.qr_voided_at, st.student_id, st.grade
+         sa.consent_at, sa.qr_secret_hash, sa.qr_voided_at, sa.sessions_revoked_at, st.student_id, st.grade
   FROM users u
   LEFT JOIN school_classroom_settings scs ON scs.school = u.school
   LEFT JOIN student_accounts sa ON sa.user_id = u.user_id
@@ -70,6 +80,7 @@ const MESSAGES = Object.freeze({
   GRADE_NOT_ENABLED: "Your grade doesn't use student sign-in yet.",
   QR_NOT_ENABLED: 'Sign in with your email and password.',
   QR_INVALID: "This card doesn't work any more. Ask your teacher for a new one.",
+  SESSION_REVOKED: 'You were signed out. Sign in again.',
 });
 
 /**
@@ -96,10 +107,13 @@ async function assertStudentCanSignIn(user, { via = 'password' } = {}) {
   if (gate) throw gate;
   const rank = gradeRank(c.grade);
   if (via === 'qr' && rank > gradeRank(c.qr_until_grade)) throw verdict('QR_NOT_ENABLED', MESSAGES.QR_NOT_ENABLED);
-  return { studentId: c.student_id, grade: c.grade, qrSecretHash: c.qr_secret_hash, qrVoidedAt: c.qr_voided_at };
+  return {
+    studentId: c.student_id, grade: c.grade, qrSecretHash: c.qr_secret_hash, qrVoidedAt: c.qr_voided_at,
+    sessionsRevokedAt: c.sessions_revoked_at,
+  };
 }
 
 module.exports = {
   QR_PAYLOAD_PREFIX, hashQrSecret, issueQrSecret, qrToken, qrPayload, parseQrToken, qrCardFingerprint, qrCardLive,
-  secretMatches, assertStudentCanSignIn, consentGradeVerdict, MESSAGES,
+  secretMatches, sessionRevoked, assertStudentCanSignIn, consentGradeVerdict, MESSAGES,
 };

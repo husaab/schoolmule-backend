@@ -216,6 +216,48 @@ describe('Integration: Auth Routes', () => {
     });
   });
 
+  describe('POST /api/auth/reset-password (hardening, student invitations R8)', () => {
+    const insertUser = (overrides = {}) => pool.query(
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, is_archived)
+       VALUES ($1, 'pat.reset@example.com', 'Pat Reset', 'old-hash', 'Pat', 'Reset', 'ALHAADIACADEMY', 'TEACHER', true, true, $2)`,
+      [TEST_USER_ID, overrides.archived ?? false],
+    );
+    const token = async () => (await pool.query(
+      `INSERT INTO password_reset_tokens (user_id, expires_at) VALUES ($1, NOW() + interval '1 hour') RETURNING token`, [TEST_USER_ID],
+    )).rows[0].token;
+    const reset = (body) => request(app).post('/api/auth/reset-password').set('X-Forwarded-For', '10.8.0.1').send(body);
+
+    it('a missing or short password is a 400, not a 500', async () => {
+      await insertUser();
+      const t = await token();
+      expect((await reset({ token: t })).status).toBe(400);
+      const short = await reset({ token: t, newPassword: '12345' });
+      expect(short.status).toBe(400);
+      expect(short.body.message).toBe('Password must be at least 6 characters.');
+    });
+
+    it('a malformed token is a 400 on both routes', async () => {
+      expect((await reset({ token: 'not-a-uuid', newPassword: 'long-enough' })).status).toBe(400);
+      expect((await request(app).get('/api/auth/validate-reset-token?token=not-a-uuid')).status).toBe(400);
+    });
+
+    it("using one link kills the user's other open links", async () => {
+      await insertUser();
+      const first = await token();
+      const second = await token();
+      expect((await reset({ token: first, newPassword: 'long-enough' })).status).toBe(200);
+      expect((await reset({ token: second, newPassword: 'another-one' })).status).toBe(400);
+      expect((await pool.query(`SELECT 1 FROM password_reset_tokens WHERE user_id = $1`, [TEST_USER_ID])).rows).toHaveLength(0);
+    });
+
+    it('an archived account cannot set a password', async () => {
+      await insertUser({ archived: true });
+      const res = await reset({ token: await token(), newPassword: 'long-enough' });
+      expect(res.status).toBe(400);
+      expect((await pool.query(`SELECT password FROM users WHERE user_id = $1`, [TEST_USER_ID])).rows[0].password).toBe('old-hash');
+    });
+  });
+
   describe('POST /api/auth/logout', () => {
     it('logs out successfully', async () => {
       const res = await request(app).post('/api/auth/logout');

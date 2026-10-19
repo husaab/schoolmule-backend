@@ -3,7 +3,8 @@
 // query keys on req.student.studentId — never on an id from the client.
 //
 // It also re-checks what can change during a 12-hour session, in the one
-// query it runs: an archived login (401, the client signs out), a session
+// query it runs: an archived login (401, the client signs out), sessions
+// revoked by an address change (401 SESSION_REVOKED), a session
 // opened with a QR card that has since been voided or reprinted (401
 // QR_INVALID), a school that turned classrooms off (403 CLASSROOM_DISABLED),
 // and the sign-in gate's consent and grade (Fable M6): consent withdrawn
@@ -12,12 +13,12 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
-const { MESSAGES, qrCardLive, consentGradeVerdict } = require('../services/classroom/studentLogin');
+const { MESSAGES, qrCardLive, consentGradeVerdict, sessionRevoked } = require('../services/classroom/studentLogin');
 
 const SQL = `
   SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id,
          u.is_archived AS user_archived, scs.enabled AS classrooms_enabled, scs.login_from_grade,
-         sa.qr_secret_hash, sa.qr_voided_at, sa.consent_at
+         sa.qr_secret_hash, sa.qr_voided_at, sa.consent_at, sa.sessions_revoked_at
   FROM student_account_links sal
   JOIN students s ON s.student_id = sal.student_id
   JOIN users u ON u.user_id = sal.user_id
@@ -33,6 +34,10 @@ module.exports = async function requireStudent(req, res, next) {
     if (!rows[0]) return res.status(403).json({ status: 'failed', code: 'NO_STUDENT_LINK', message: MESSAGES.NO_STUDENT_LINK });
     const r = rows[0];
     if (r.user_archived) return res.status(401).json({ status: 'failed', message: 'This account has been archived' });
+    // The admin changed the student's address: every session from before ends.
+    if (sessionRevoked(req.user.iat, r.sessions_revoked_at)) {
+      return res.status(401).json({ status: 'failed', code: 'SESSION_REVOKED', message: MESSAGES.SESSION_REVOKED });
+    }
     if (!qrCardLive(req.user.qrCard, { qrSecretHash: r.qr_secret_hash, qrVoidedAt: r.qr_voided_at })) {
       return res.status(401).json({ status: 'failed', code: 'QR_INVALID', message: MESSAGES.QR_INVALID });
     }

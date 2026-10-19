@@ -614,7 +614,8 @@ describe('GET /api/auth/validate-reset-token', () => {
   const url = '/api/auth/validate-reset-token';
 
   it('validates a valid reset token', async () => {
-    const tokenRow = buildPasswordResetTokenRow();
+    // uuid is mocked in this file; a reset token is always a real UUID.
+    const tokenRow = buildPasswordResetTokenRow({ token: '3b0c2f1e-8d4a-4c6b-9e2f-1a2b3c4d5e6f' });
     mockQueryResponse([tokenRow], 1);
 
     const res = await request(app)
@@ -641,12 +642,14 @@ describe('POST /api/auth/reset-password', () => {
   const url = '/api/auth/reset-password';
 
   it('resets password with valid token', async () => {
-    const tokenRow = buildPasswordResetTokenRow();
+    const tokenRow = buildPasswordResetTokenRow({ token: '3b0c2f1e-8d4a-4c6b-9e2f-1a2b3c4d5e6f' });
     // validatePasswordResetToken
     mockQueryResponse([tokenRow], 1);
+    // selectById: a live (not archived) teacher
+    mockQueryResponse([buildUserRow({ user_id: tokenRow.user_id, role: 'TEACHER', is_archived: false })], 1);
     // updatePassword
     mockQueryResponse([], 1);
-    // deletePasswordResetToken
+    // every open link of the user is deleted
     mockQueryResponse([], 1);
 
     const res = await request(app)

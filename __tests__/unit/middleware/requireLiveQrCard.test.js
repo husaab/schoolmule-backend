@@ -17,11 +17,24 @@ const run = async (user) => {
 };
 
 describe('requireLiveQrCard', () => {
-  it('lets staff, parents and student sessions not from a card through without a query', async () => {
-    for (const user of [
-      { role: 'TEACHER', userId: USER_ID }, { role: 'PARENT', userId: USER_ID }, { role: 'STUDENT', userId: USER_ID },
-    ]) expect((await run(user)).next).toHaveBeenCalled();
+  it('lets staff and parents through without a query', async () => {
+    for (const user of [{ role: 'TEACHER', userId: USER_ID }, { role: 'PARENT', userId: USER_ID }]) {
+      expect((await run(user)).next).toHaveBeenCalled();
+    }
     expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('lets a student session not from a card through unless its sessions were revoked (401 SESSION_REVOKED)', async () => {
+    const iat = Math.floor(Date.now() / 1000) - 60;
+    const user = { role: 'STUDENT', baseRole: 'STUDENT', userId: USER_ID, iat };
+    mockQueryResponse([{ qr_secret_hash: null, qr_voided_at: null, sessions_revoked_at: null }]);
+    expect((await run(user)).next).toHaveBeenCalled();
+
+    mockQueryResponse([{ qr_secret_hash: null, qr_voided_at: null, sessions_revoked_at: new Date() }]);
+    const out = await run(user);
+    expect(out.res.status).toHaveBeenCalledWith(401);
+    expect(out.res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'SESSION_REVOKED' }));
+    expect(out.next).not.toHaveBeenCalled();
   });
 
   it('passes a live card and ends a voided or reprinted one (401 QR_INVALID)', async () => {

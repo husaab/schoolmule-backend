@@ -122,6 +122,8 @@ const qrCardLimiter = failedSignInLimiter({ max: 10, key: cardUser });
 // or refused links). An invite secret is 256 random bits, so this only keeps
 // a page that is being hammered quiet.
 const inviteTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'invite' });
+// Per network, failed uses of password links (unknown, expired or refused).
+const resetTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'reset' });
 
 // Honeypot validation middleware (for contact form)
 // Expects a hidden field named 'website' that should be empty
@@ -196,6 +198,7 @@ module.exports = {
   loginAccountLimiter,
   qrCardLimiter,
   inviteTokenLimiter,
+  resetTokenLimiter,
   honeypotValidation,
   validateInput
 };

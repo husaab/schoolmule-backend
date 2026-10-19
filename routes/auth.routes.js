@@ -5,7 +5,7 @@ validateResetToken, resetPassword, validateSession, switchView} = require("../co
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
-const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
+const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
 const { inspectInvite, acceptInvite } = require('../controllers/studentInvite.controller');
 
 const router = express.Router();
@@ -39,8 +39,8 @@ router.post('/logout', logout);
 
 // Password reset routes
 router.post("/request-password-reset", passwordResetLimiter, requestPasswordReset);
-router.get("/validate-reset-token", validateResetToken);
-router.post("/reset-password", resetPassword);
+router.get("/validate-reset-token", resetTokenLimiter, validateResetToken);
+router.post("/reset-password", resetTokenLimiter, resetPassword);
 
 // Session validation
 router.get("/me", validateSession);

@@ -71,22 +71,6 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.school_year_id = $3
     VALUES ($1, $2, $3, $4)
   `,
 
-  //  Anyone else already signing in with this address (users.email is unique
-  //  across every school). $1 = email, $2 = user_id to ignore (or NULL)
-  selectOtherUserByEmail: `
-    SELECT user_id, role::text AS role
-    FROM users
-    WHERE LOWER(email) = LOWER($1) AND user_id IS DISTINCT FROM $2::uuid
-    LIMIT 1
-  `,
-
-  //  $1 = student_id, $2 = school, $3 = student_email (lowercased) | NULL
-  updateStudentEmail: `
-    UPDATE students
-    SET student_email = $3, last_modified_at = NOW()
-    WHERE student_id = $1 AND school = $2
-  `,
-
   //  A relinked student with no address of their own takes the login's.
   //  $1 = student_id, $2 = email
   fillBlankStudentEmail: `
@@ -207,19 +191,29 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
 
   //  $1 = user_id, $2 = school
   selectStudentUserInSchool: `
-    SELECT user_id, email, first_name, last_name, is_archived, (password = '!') AS invite_pending
-    FROM users
-    WHERE user_id = $1 AND school = $2 AND role::text = 'STUDENT'
+    SELECT u.user_id, u.email, u.first_name, u.last_name, u.is_archived, (u.password = '!') AS invite_pending, sa.consent_at
+    FROM users u
+    LEFT JOIN student_accounts sa ON sa.user_id = u.user_id
+    WHERE u.user_id = $1 AND u.school = $2 AND u.role::text = 'STUDENT'
+  `,
+
+  //  A changed address is a new sign-in: the password goes back to the
+  //  invite placeholder, the Google link is dropped, every session from before
+  //  ends and the account reads as never activated. $1 = user_id, $2 = school
+  resetStudentSignIn: `
+    WITH u AS (
+      UPDATE users SET password = '!', google_sub = NULL, last_modified_at = NOW()
+      WHERE user_id = $1 AND school = $2 AND role::text = 'STUDENT'
+      RETURNING user_id
+    )
+    UPDATE student_accounts sa
+    SET sessions_revoked_at = NOW(), activated_at = NULL, activated_via = NULL, updated_at = NOW()
+    FROM u WHERE sa.user_id = u.user_id
   `,
 
   //  $1 = user_id, $2 = school_year_id
   selectLinkForUserYear: `
     SELECT student_id FROM student_account_links WHERE user_id = $1 AND school_year_id = $2
-  `,
-
-  //  $1 = student_id
-  deleteLinkByStudent: `
-    DELETE FROM student_account_links WHERE student_id = $1 RETURNING user_id
   `,
 
   //  Cascades to student_accounts, every year's link and any open tokens.
@@ -236,18 +230,6 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
     LEFT JOIN student_account_links sal ON sal.student_id = s.student_id
     LEFT JOIN users u ON u.user_id = sal.user_id
     WHERE s.student_id = $1 AND s.school = $2
-  `,
-
-  //  Is this address a parent's on file for the student (the student row's
-  //  mother/father email, or a linked guardian's)? $1 = student_id, $2 = email
-  selectFamilyAddressMatch: `
-    SELECT 1
-    FROM students s
-    WHERE s.student_id = $1
-      AND (LOWER($2::text) IN (LOWER(TRIM(COALESCE(s.mother_email, ''))), LOWER(TRIM(COALESCE(s.father_email, ''))))
-           OR EXISTS (SELECT 1 FROM parent_students ps LEFT JOIN users pu ON pu.user_id = ps.parent_id
-                       WHERE ps.student_id = s.student_id
-                         AND LOWER($2::text) = LOWER(TRIM(COALESCE(pu.email, ps.parent_email, '')))))
   `,
 
   //  The roster of one class of the school. $1 = class_id, $2 = school

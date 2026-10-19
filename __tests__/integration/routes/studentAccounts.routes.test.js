@@ -282,7 +282,9 @@ describe('Integration: Student accounts', () => {
 
     const taken = await authenticatedRequest('patch', `${BASE}/${amalId}`, asAdmin).send({ studentEmail: 'TEACHER@example.com' });
     expect(taken.status).toBe(409);
-    expect(taken.body.message).toBe('An account already uses this email');
+    expect(taken.body).toMatchObject({
+      code: 'EMAIL_IN_USE', message: 'Already used by a teacher account in this school. Each student needs their own address.',
+    });
     expect((await userOf(amalId)).email).toBe('amal.h@example.com');
     expect((await pool.query(`SELECT student_email FROM students WHERE student_id = $1`, [amalId])).rows[0].student_email)
       .toBe('amal.h@example.com');
@@ -296,6 +298,18 @@ describe('Integration: Student accounts', () => {
     const cleared = await authenticatedRequest('patch', `${BASE}/${ramiId}`, asAdmin).send({ studentEmail: null });
     expect(cleared.status).toBe(200);
     expect(cleared.body.data.studentEmail).toBeNull();
+
+    // Without an account a bad address is refused too, not just flagged (spec §3.7).
+    await pool.query(`UPDATE students SET father_email = 'Karim.Inbox@example.com' WHERE student_id = $1`, [ramiId]);
+    const parentAddress = await authenticatedRequest('patch', `${BASE}/${ramiId}`, asAdmin).send({ studentEmail: 'karim.inbox@example.com' });
+    expect(parentAddress.status).toBe(409);
+    expect(parentAddress.body.code).toBe('FAMILY_ADDRESS');
+    const sibling = await authenticatedRequest('patch', `${BASE}/${ramiId}`, asAdmin).send({ studentEmail: 'sami.haddad@example.com' });
+    expect(sibling.status).toBe(409);
+    expect(sibling.body).toMatchObject({
+      code: 'SHARED_WITH_STUDENT', message: 'Same address as Sami Haddad (Grade 5). Each student needs their own.',
+    });
+    expect((await pool.query(`SELECT student_email FROM students WHERE student_id = $1`, [ramiId])).rows[0].student_email).toBeNull();
 
     // An account's sign-in address cannot be blanked.
     expect((await authenticatedRequest('patch', `${BASE}/${amalId}`, asAdmin).send({ studentEmail: '' })).status).toBe(400);
@@ -395,7 +409,11 @@ describe('Integration: Student accounts', () => {
     // Last year's account, linked to last year's row only.
     const amalUserId = asStudent.userId;
     await user(amalUserId, 'amal.haddad@example.com', 'Amal', 'Haddad', 'STUDENT');
-    await pool.query(`INSERT INTO student_accounts (user_id, school) VALUES ($1, 'ALHAADIACADEMY')`, [amalUserId]);
+    // A real login always has its consent record (an invite writes it).
+    await pool.query(
+      `INSERT INTO student_accounts (user_id, school, consent_at, consent_notice_version) VALUES ($1, 'ALHAADIACADEMY', NOW(), '2026-10')`,
+      [amalUserId],
+    );
     await pool.query(
       `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`,
       [amalUserId, lastYearAmal, lastYear.school_year_id],
@@ -774,6 +792,49 @@ describe('Integration: Student accounts', () => {
       const data = await list(`?classId=${c.class_id}`);
       expect(data.students.map((r) => r.studentId).sort()).toEqual([amalId, ramiId].sort());
       expect((await authenticatedRequest('get', `${BASE}?classId=nope`, asAdmin)).status).toBe(400);
+    });
+  });
+
+  describe('relinking (student invitations, Task 6)', () => {
+    const nextYearRow = async (fromId, name, grade) => {
+      const next = (await pool.query(
+        `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+         SELECT school, school_id, '2026-2027', '2026-09-01', '2027-06-30', false FROM school_years WHERE school_year_id = $1
+         ON CONFLICT DO NOTHING RETURNING school_year_id`, [yearId],
+      )).rows[0]?.school_year_id
+        ?? (await pool.query(`SELECT school_year_id FROM school_years WHERE label = '2026-2027'`)).rows[0].school_year_id;
+      const id = (await pool.query(
+        `INSERT INTO students (name, grade, school, school_year_id, previous_student_id)
+         VALUES ($1, $2, 'ALHAADIACADEMY', $3, $4) RETURNING student_id`, [name, grade, next, fromId],
+      )).rows[0].student_id;
+      return { id, yearId: next };
+    };
+
+    it('link refuses a login with no consent record', async () => {
+      const { rows: [u] } = await pool.query(
+        `INSERT INTO users (email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+         VALUES ('orphan@example.com', 'Orphan Login', '!', 'Orphan', 'Login', 'ALHAADIACADEMY', 'STUDENT', true, true) RETURNING user_id`,
+      );
+      const res = await authenticatedRequest('post', `${BASE}/${ramiId}/link`, asAdmin).send({ userId: u.user_id });
+      expect(res.status).toBe(409);
+      expect(res.body.message).toBe('This login has no consent record. Invite the student instead.');
+    });
+
+    it("link and unlink follow the student's already-rolled later rows", async () => {
+      await invite([amalId]);
+      const login = await userOf(amalId);
+      await authenticatedRequest('delete', `${BASE}/${amalId}/link`, asAdmin);
+      const later = await nextYearRow(amalId, 'Amal Haddad', '3');
+
+      const linked = await authenticatedRequest('post', `${BASE}/${amalId}/link`, asAdmin).send({ userId: login.user_id });
+      expect(linked.status).toBe(200);
+      const links = async () => (await pool.query(
+        `SELECT student_id FROM student_account_links WHERE user_id = $1 ORDER BY student_id`, [login.user_id],
+      )).rows.map((r) => r.student_id).sort();
+      expect(await links()).toEqual([amalId, later.id].sort());
+
+      await authenticatedRequest('delete', `${BASE}/${amalId}/link`, asAdmin);
+      expect(await links()).toEqual([]);
     });
   });
 });

@@ -1,6 +1,8 @@
 const db = require("../config/database");
 const studentQueries = require("../queries/student.queries");
 const studentAccountQueries = require("../queries/studentAccount.queries");
+const { checkStudentEmails } = require("../services/classroom/emailProblems");
+const { getSettings } = require("../services/classroom/classroomSettings");
 const logger = require("../logger");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -238,6 +240,15 @@ const updateStudent = async (req, res) => {
           status: "failed",
           message: "This student has a SchoolMule account. Change the email on Admin Panel → Student accounts.",
         });
+      }
+      // The same rule as Student accounts: never another account's, a parent's or another student's address.
+      if (email.value && !login.user_id) {
+        const settings = await getSettings(req.user.school);
+        const checked = await checkStudentEmails({
+          school: req.user.school, domains: settings.studentEmailDomains, items: [{ studentId: id, email: email.value }],
+        });
+        const problem = (checked.get(0)?.problems || []).find((p) => p.blocking);
+        if (problem) return res.status(409).json({ status: "failed", code: problem.code.toUpperCase(), message: problem.message });
       }
     }
 
