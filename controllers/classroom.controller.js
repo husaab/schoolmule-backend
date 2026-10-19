@@ -192,7 +192,7 @@ async function enrolledIn(classId, studentIds) {
 
 // One student's login action, for a student on the class roster.
 const studentAccountAction = (run, what) => async (req, res) => {
-  const { school, username } = req.user;
+  const { school, username, userId } = req.user;
   const { classId } = req.params;
   const studentId = req.params.studentId.toLowerCase();
   try {
@@ -204,7 +204,7 @@ const studentAccountAction = (run, what) => async (req, res) => {
     if (!row) return failed(res, 404, 'Student not found');
     if (!row.user_id) return failed(res, 400, "This student doesn't have an account yet");
 
-    const result = await run(row, { school, by: username });
+    const result = await run(row, { school, by: username, actorId: userId });
     return result.sent ? ok(res, { sent: true }) : failed(res, result.status, result.message);
   } catch (error) {
     logger.error({ err: error, classId, studentId }, `Failed to ${what}`);
@@ -220,7 +220,7 @@ const resetStudentPassword = studentAccountAction(
 
 // POST /api/classroom/classes/:classId/students/:studentId/resend-invite
 const resendStudentInvite = studentAccountAction(
-  (row, { school, by }) => resendInviteFor(row, { school, invitedBy: by }),
+  (row, { school, actorId }) => resendInviteFor(row, { school, actorId }),
   "resend a student's invite",
 );
 

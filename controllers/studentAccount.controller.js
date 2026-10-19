@@ -11,6 +11,7 @@ const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/studentAccount.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
+const { endOpenInvites, renderInviteEmail, INVITE_VALID_DAYS } = require('../services/classroom/studentInvites');
 const { GRADE_CODES } = require('../utils/gradeRank');
 const { getSettings, MAX_NOTICE_VERSION } = require('../services/classroom/classroomSettings');
 const {
@@ -25,8 +26,10 @@ const {
   MAX_STUDENT_BATCH,
   parseStudentIds,
   resendInviteFor,
+  cancelInviteFor,
   resetPasswordFor,
   issueQrCards,
+  splitName,
   voidQr,
 } = require('../services/classroom/studentAccounts');
 
@@ -41,6 +44,7 @@ const failed = (res, status, message, extra = {}) => res.status(status).json({ s
 const has = (obj, key) => Boolean(obj) && Object.prototype.hasOwnProperty.call(obj, key);
 
 const NOT_FOUND = 'Student not found';
+const NOT_ACTIVE_YEAR = "Invites go to this school year's students. Switch to the current school year to invite.";
 const NO_ACCOUNT = "This student doesn't have an account yet";
 
 /** One StudentAccountRow for a student of the school, or null. */
@@ -182,6 +186,8 @@ const inviteStudents = async (req, res) => {
   }
 
   const ids = [...new Set(studentIds.map((id) => id.toLowerCase()))];
+  // A login is linked to the row the sign-in gate reads: the active year's.
+  if (req.schoolYear && !req.schoolYear.isActive) return failed(res, 409, NOT_ACTIVE_YEAR);
 
   try {
     const settings = await getSettings(school);
@@ -226,11 +232,11 @@ const sentOrRefused = (res, result) => (result.sent ? ok(res, { sent: true }) : 
 
 // POST /api/admin/student-accounts/:studentId/resend-invite
 const resendInvite = async (req, res) => {
-  const { school, username } = req.user;
+  const { school, userId } = req.user;
   try {
     const row = await requireAccount(req, res);
     if (!row) return undefined;
-    return sentOrRefused(res, await resendInviteFor(row, { school, invitedBy: username }));
+    return sentOrRefused(res, await resendInviteFor(row, { school, actorId: userId }));
   } catch (error) {
     logger.error({ err: error }, 'Failed to resend a student invite');
     return failed(res, 500, 'Error resending the invite');
@@ -247,6 +253,77 @@ const resetPassword = async (req, res) => {
   } catch (error) {
     logger.error({ err: error }, 'Failed to send a student password link');
     return failed(res, 500, 'Error sending the password link');
+  }
+};
+
+// POST /api/admin/student-accounts/invites/resend  { studentIds }
+// Resend to each listed student who has a login waiting to be set up; the
+// rest are skipped with the reason. Paced like the invite.
+const resendInvites = async (req, res) => {
+  const { school, userId } = req.user;
+  const parsed = parseStudentIds(req.body?.studentIds);
+  if (parsed.error) return failed(res, 400, parsed.error);
+  try {
+    const results = [];
+    for (const studentId of parsed.ids) {
+      const row = await loadRow(school, studentId);
+      if (!row) { results.push({ studentId, outcome: 'skipped', message: NOT_FOUND }); continue; }
+      if (!row.user_id) { results.push({ studentId, outcome: 'skipped', message: NO_ACCOUNT }); continue; }
+      const result = await resendInviteFor(row, { school, actorId: userId });
+      if (result.sent) {
+        results.push({ studentId, outcome: 'sent', message: `Invite sent again to ${row.account_email}` });
+        if (results.length < parsed.ids.length) await sleep(EMAIL_GAP_MS);
+      } else {
+        results.push({ studentId, outcome: result.status === 502 ? 'failed' : 'skipped', message: result.message });
+      }
+    }
+    return ok(res, { results });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to resend student invites');
+    return failed(res, 500, 'Error resending the invites');
+  }
+};
+
+// POST /api/admin/student-accounts/:studentId/invite/cancel
+const cancelInvite = async (req, res) => {
+  const { school, userId } = req.user;
+  try {
+    const row = await requireAccount(req, res);
+    if (!row) return undefined;
+    const result = await cancelInviteFor(row, { school, actorId: userId });
+    if (!result.cancelled) return failed(res, result.status, result.message);
+    return respondWithRow(res, school, req.params.studentId);
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to cancel a student invite');
+    return failed(res, 500, 'Error cancelling the invite');
+  }
+};
+
+// GET /api/admin/student-accounts/invite-preview?studentId=
+// The invite email as this student would get it, with a placeholder link.
+const previewInvite = async (req, res) => {
+  const { school } = req.user;
+  const studentId = typeof req.query.studentId === 'string' ? req.query.studentId : '';
+  if (!UUID_RE.test(studentId)) return failed(res, 404, NOT_FOUND);
+  try {
+    const row = await loadRow(school, studentId);
+    if (!row) return failed(res, 404, NOT_FOUND);
+    const [settings, schoolInfo] = await Promise.all([getSettings(school), loadSchoolInfo(school)]);
+    const { firstName, lastName } = splitName(row.name);
+    const email = normalizeEmail(row.account_email || row.student_email) || 'student@example.com';
+    return ok(res, renderInviteEmail({
+      firstName,
+      fullName: [firstName, lastName].filter(Boolean).join(' '),
+      school,
+      schoolInfo,
+      email,
+      url: `${process.env.FRONTEND_URL}/student-invite#preview`,
+      expiresAt: new Date(Date.now() + INVITE_VALID_DAYS * 86400000),
+      studentSignIn: settings.studentSignIn,
+    }));
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to preview a student invite');
+    return failed(res, 500, 'Error previewing the invite');
   }
 };
 
@@ -317,6 +394,7 @@ const archiveAccount = async (req, res) => {
       if (rows.length === 0) return false;
       await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
       await client.query(q.voidQr, [row.user_id]);
+      await endOpenInvites(client, { userId: row.user_id, reason: 'archived', endedBy: adminId });
       return true;
     });
     if (!archived) return failed(res, 409, 'This account is already archived');
@@ -435,7 +513,11 @@ const deleteAccount = async (req, res) => {
     if (deriveStatus(row, settings) === 'active') return failed(res, 409, 'Archive the account first');
 
     try {
-      const result = await db.query(q.deleteStudentUser, [row.user_id, school]);
+      const result = await inTransaction(async (client) => {
+        // The row outlives the login (user_id SET NULL), so its link says "cancelled".
+        await endOpenInvites(client, { userId: row.user_id, reason: 'cancelled', endedBy: req.user.userId });
+        return client.query(q.deleteStudentUser, [row.user_id, school]);
+      });
       if (result.rowCount === 0) return failed(res, 404, NO_ACCOUNT);
     } catch (error) {
       if (error.code === '23503') {
@@ -455,6 +537,9 @@ module.exports = {
   updateStudentAccount,
   inviteStudents,
   resendInvite,
+  resendInvites,
+  cancelInvite,
+  previewInvite,
   resetPassword,
   voidQrCards,
   printQrCards,

@@ -115,18 +115,16 @@ describe('Integration: Student accounts', () => {
     expect(links).toHaveLength(1);
     expect(links[0]).toMatchObject({ student_id: amalId, school_year_id: yearId, linked_by: ADMIN_ID });
 
-    const { rows: tokens } = await pool.query(
-      `SELECT token, expires_at > NOW() + interval '6 days' AS long_lived FROM password_reset_tokens WHERE user_id = $1`,
-      [u.user_id],
-    );
-    expect(tokens).toHaveLength(1);
-    expect(tokens[0].long_lived).toBe(true);
+    // The invite is a student_invites row (studentInvites.routes.test.js covers it), not a reset token.
+    const { rows: invites } = await pool.query(`SELECT send_status FROM student_invites WHERE user_id = $1`, [u.user_id]);
+    expect(invites).toEqual([{ send_status: 'sent' }]);
+    expect((await pool.query(`SELECT 1 FROM password_reset_tokens WHERE user_id = $1`, [u.user_id])).rows).toHaveLength(0);
 
     expect(mockSend).toHaveBeenCalledTimes(1);
     const payload = mockSend.mock.calls[0][0];
     expect(payload.to).toBe('amal.haddad@example.com');
-    expect(payload.subject).toBe('Your Al Haadi Academy SchoolMule account');
-    expect(payload.html).toContain(`/reset-password?token=${tokens[0].token}&amp;invite=1&amp;next=%2Fstudent`);
+    expect(payload.subject).toBe('Set up your Al Haadi Academy SchoolMule account');
+    expect(payload.html).toMatch(/\/student-invite#[A-Za-z0-9_-]{43}/);
     expect(payload.html).toContain('Your SchoolMule student account');
     expect(payload.html).toContain('Hi Amal,');
   });
@@ -233,10 +231,9 @@ describe('Integration: Student accounts', () => {
       qrEligible: true,
       conflict: null,
       warnings: [],
-      // Task 4 records the invite; until then the login has no invite row.
-      invite: null,
+      invite: { state: 'pending', sentAt: expect.any(String), expiresAt: expect.any(String), endedAt: null, error: null },
       signInMethod: null,
-      needsAttention: true,
+      needsAttention: false,
     });
 
     const sami = rowOf(data, samiId);
@@ -331,14 +328,14 @@ describe('Integration: Student accounts', () => {
     expect((await authenticatedRequest('post', `${BASE}/${ramiId}/resend-invite`, asAdmin)).status).toBe(400);
     expect(mockSend).not.toHaveBeenCalled();
 
-    const { rows: [oldToken] } = await pool.query(`SELECT token FROM password_reset_tokens WHERE user_id = $1`, [amal.user_id]);
     const resend = await authenticatedRequest('post', `${BASE}/${amalId}/resend-invite`, asAdmin);
     expect(resend.status).toBe(200);
     expect(resend.body.data).toEqual({ sent: true });
-    const { rows: amalTokens } = await pool.query(`SELECT token FROM password_reset_tokens WHERE user_id = $1`, [amal.user_id]);
-    expect(amalTokens).toHaveLength(1);
-    expect(amalTokens[0].token).not.toBe(oldToken.token);
-    expect(mockSend.mock.calls[0][0]).toMatchObject({ to: 'amal.haddad@example.com', subject: 'Your Al Haadi Academy SchoolMule account' });
+    const { rows: amalInvites } = await pool.query(
+      `SELECT end_reason FROM student_invites WHERE user_id = $1 ORDER BY created_at`, [amal.user_id],
+    );
+    expect(amalInvites).toEqual([{ end_reason: 'replaced' }, { end_reason: null }]);
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ to: 'amal.haddad@example.com', subject: 'Set up your Al Haadi Academy SchoolMule account' });
 
     const reset = await authenticatedRequest('post', `${BASE}/${samiId}/reset-password`, asAdmin);
     expect(reset.status).toBe(200);

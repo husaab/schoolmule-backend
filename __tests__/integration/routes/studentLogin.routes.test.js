@@ -472,7 +472,7 @@ describe('Integration: student sign-in', () => {
     expect(res.body).toEqual({ status: 'success', data: { sent: true } });
     expect(mockSend).toHaveBeenCalledTimes(1);
     expect(mockSend.mock.calls[0][0]).toMatchObject({
-      to: 'amal.haddad@example.com', subject: 'Your Al Haadi Academy SchoolMule account',
+      to: 'amal.haddad@example.com', subject: 'Set up your Al Haadi Academy SchoolMule account',
     });
   });
 

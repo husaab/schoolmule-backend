@@ -18,12 +18,15 @@ router.param("studentId", (req, res, next, id) => {
 router.get("/", controller.listStudentAccounts);
 router.get("/unlinked", controller.listUnlinked);
 router.post("/invite", controller.inviteStudents);
+router.post("/invites/resend", controller.resendInvites);
+router.get("/invite-preview", controller.previewInvite);
 // QR sign-in cards (the QR grades): void the live cards, or print new ones
 // (printing always reissues, so each printed card voids the older one).
 router.post("/qr/void", controller.voidQrCards);
 router.post("/cards.pdf", controller.printQrCards);
 router.patch("/:studentId", controller.updateStudentAccount);
 router.post("/:studentId/resend-invite", controller.resendInvite);
+router.post("/:studentId/invite/cancel", controller.cancelInvite);
 router.post("/:studentId/reset-password", controller.resetPassword);
 router.post("/:studentId/archive", controller.archiveAccount);
 router.post("/:studentId/unarchive", controller.unarchiveAccount);

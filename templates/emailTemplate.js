@@ -135,17 +135,24 @@ const getInviteEmailHTML = ({ name, schoolName, invitedBy, role, url }) =>
 // Both speak in the school's voice. `invitedBy` / `requestedBy` is the admin
 // who clicked the button; the invite copy names the school instead.
 
-/** Sent when an admin invites a student; the link sets a first password. */
-const getStudentInviteEmailHTML = ({ firstName, schoolName, schoolInfo, url }) =>
+/**
+ * Sent when an admin invites a student (or a teacher resends it). The link
+ * opens /student-invite, where the student continues with Google or (unless
+ * the school is Google-only) chooses a password.
+ */
+const getStudentInviteEmailHTML = ({ firstName, fullName, schoolName, schoolInfo, url, email, expiresOn, googleOnly }) =>
   renderEmail({
     brand: schoolBrand(schoolInfo, schoolName),
     heading: 'Your SchoolMule student account',
     preheader: `${schoolName} set up a SchoolMule account for you.`,
     content: [
       paragraph(`Hi ${escapeHtml(firstName)},`),
-      paragraph(`${escapeHtml(schoolName)} set up a SchoolMule account for you. You'll see your classes, what's due and your grades there. Choose a password to get started.`),
-      button('Set your password', url),
-      finePrint('This link expires in 7 days. If it has expired, ask your teacher or the school office for a new one.'),
+      paragraph(`${escapeHtml(schoolName)} set up a SchoolMule account for you. You'll see your classes, what's due and your grades there.`),
+      paragraph(googleOnly
+        ? `Sign in with your school Google account, <strong>${escapeHtml(email)}</strong>.`
+        : `Use your school Google account, <strong>${escapeHtml(email)}</strong>, or choose a password.`),
+      button('Set up my account', url),
+      finePrint(`This link works once and expires on ${escapeHtml(expiresOn)}. If it has expired, ask your teacher or the school office for a new one. If you aren't ${escapeHtml(fullName)}, you can ignore this email.`),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),
   });

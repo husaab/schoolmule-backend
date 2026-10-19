@@ -20,12 +20,15 @@ const { getSchoolName } = require('../../utils/schoolUtils');
 const { getResend, sendOrThrow } = require('../../utils/emailUtils');
 const { createPDFBuffer } = require('../../utils/pdfGenerator');
 const { schoolSender } = require('../email/senderIdentity');
-const { getStudentInviteEmailHTML, getStudentPasswordResetEmailHTML } = require('../../templates/emailTemplate');
+const { getStudentPasswordResetEmailHTML } = require('../../templates/emailTemplate');
 const { renderStudentCardsHTML } = require('../../templates/studentCardsTemplate');
 const { getSettings } = require('./classroomSettings');
 const { issueQrSecret, qrPayload } = require('./studentLogin');
 const { conflictMessage, addressWarnings } = require('./emailProblems');
-const { inviteState } = require('./studentInvites');
+const {
+  inviteState, createInvite, sendInvite, endOpenInvites, linkSuccessorRows, invitesSentToday, MAX_INVITE_EMAILS_PER_DAY,
+} = require('./studentInvites');
+const inviteQueries = require('../../queries/studentInvite.queries');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -178,23 +181,6 @@ const sendSchoolEmail = ({ school, schoolInfo, to, subject, html }) =>
   sendOrThrow(getResend(), { ...schoolSender({ school, schoolInfo, role: 'messages' }), to, subject, html });
 
 /**
- * Issue a fresh 7-day invite link and email it. Throws when the email fails.
- * The caller deletes older tokens first when only the newest should work.
- */
-async function sendStudentInvite({ userId, email, firstName, school, schoolInfo, invitedBy }) {
-  const { rows } = await db.query(adminUserQueries.createInviteToken, [userId]);
-  const schoolName = schoolNameOf(schoolInfo, school);
-  const url = `${process.env.FRONTEND_URL}/reset-password?token=${rows[0].token}&invite=1&next=%2Fstudent`;
-  await sendSchoolEmail({
-    school,
-    schoolInfo,
-    to: email,
-    subject: `Your ${schoolName} SchoolMule account`,
-    html: getStudentInviteEmailHTML({ firstName, schoolName, schoolInfo, invitedBy, url }),
-  });
-}
-
-/**
  * Replace the user's links with one 7-day password link (not the 15-minute
  * self-service reset token) and email it. Throws when the email fails.
  */
@@ -227,30 +213,80 @@ function parseStudentIds(studentIds) {
 
 const refused = (status, message) => ({ sent: false, status, message });
 
-/**
- * "Resend invite" for a student row with a login (admin and the student's
- * teachers). Only the newest link works. Never throws for a refusal: returns
- * { sent: true } or { sent: false, status, message }.
- */
-async function resendInviteFor(row, { school, invitedBy }) {
-  if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
-  if (!row.invite_pending) return refused(400, 'This student has already set a password. Send a password link instead.');
-
-  await db.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+// Runs fn(client) in a transaction on one pooled connection.
+async function inTransaction(fn) {
+  const client = await db.connect();
   try {
-    await sendStudentInvite({
-      userId: row.user_id,
-      email: row.account_email,
-      firstName: splitName(row.name).firstName,
-      school,
-      schoolInfo: await loadSchoolInfo(school),
-      invitedBy,
-    });
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
   } catch (err) {
-    logger.error({ err, userId: row.user_id }, 'Failed to resend a student invite');
-    return refused(502, "The invite email couldn't be sent. Try again.");
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
+}
+
+/**
+ * "Resend invite" for a student row with a login that has never set up
+ * email sign-in (invited, or a card student): a new invite replaces the open
+ * one, so only the newest link works. Admin and the student's teachers; at
+ * most MAX_INVITE_EMAILS_PER_DAY a day per student. Never throws for a
+ * refusal: returns { sent: true } or { sent: false, status, message }.
+ */
+async function resendInviteFor(row, { school, actorId }) {
+  if (row.is_archived) return refused(409, 'This account is archived. Restore it first.');
+  if (!row.invite_pending) return refused(400, 'This student has already set up sign-in. Send a password link instead.');
+  const { firstName, lastName } = splitName(row.name);
+  if (await invitesSentToday(row.student_id) >= MAX_INVITE_EMAILS_PER_DAY) {
+    return refused(429, `Too many invites for ${firstName} today. Try again tomorrow.`);
+  }
+
+  const [settings, schoolInfo] = await Promise.all([getSettings(school), loadSchoolInfo(school)]);
+  const invite = await inTransaction(async (client) => {
+    await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+    return createInvite(client, {
+      school,
+      userId: row.user_id,
+      studentId: row.student_id,
+      schoolYearId: row.school_year_id,
+      email: row.account_email,
+      createdBy: actorId,
+    });
+  });
+  const sent = await sendInvite({
+    ...invite,
+    email: row.account_email,
+    firstName,
+    fullName: [firstName, lastName].filter(Boolean).join(' '),
+    school,
+    schoolInfo,
+    studentSignIn: settings.studentSignIn,
+  });
+  if (!sent.sent) return refused(502, "The invite email couldn't be sent. Try again.");
   return { sent: true };
+}
+
+/**
+ * "Cancel invite" (admin): the open invite's link stops working. A login that
+ * was never used (no password, no Google, never signed in, no live card) is
+ * deleted with it, so the student reads Not invited and the address is free;
+ * one that was used keeps signing in. Returns { cancelled: true, deletedLogin }
+ * or a refusal.
+ */
+async function cancelInviteFor(row, { school, actorId }) {
+  const { rows: open } = await db.query(inviteQueries.selectOpenInvite, [row.user_id]);
+  if (open.length === 0) return refused(409, "There's no open invite to cancel.");
+  const unused = row.invite_pending && !row.has_google && !row.last_login_at && !row.activated_at && !row.qr_active;
+
+  await inTransaction(async (client) => {
+    await endOpenInvites(client, { userId: row.user_id, reason: 'cancelled', endedBy: actorId });
+    await client.query(adminUserQueries.deleteTokensForUser, [row.user_id]);
+    if (unused) await client.query(q.deleteStudentUser, [row.user_id, school]);
+  });
+  return { cancelled: true, deletedLogin: unused };
 }
 
 /**
@@ -393,17 +429,24 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
   }
 
   const { firstName, lastName } = splitName(student.name);
+  const fullName = [firstName, lastName].filter(Boolean).join(' ');
   const schoolYearId = student.school_year_id || admin.schoolYearId || null;
   let userId;
+  let invite;
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     const { rows } = await client.query(adminUserQueries.insertInvitedUser, [
-      email, [firstName, lastName].filter(Boolean).join(' '), firstName, lastName, admin.school, 'STUDENT',
+      email, fullName, firstName, lastName, admin.school, 'STUDENT',
     ]);
     userId = rows[0].user_id;
     await client.query(q.insertStudentAccount, [userId, admin.school, admin.userId, noticeVersion]);
     await client.query(q.insertStudentAccountLink, [userId, studentId, schoolYearId, admin.userId]);
+    // Next year's row, when rollover already made it (R5).
+    await linkSuccessorRows(client, { userId, studentId, linkedBy: admin.userId });
+    invite = await createInvite(client, {
+      school: admin.school, userId, studentId, schoolYearId, email, createdBy: admin.userId,
+    });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -424,20 +467,15 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
     client.release();
   }
 
-  let inviteSent = true;
-  try {
-    await sendStudentInvite({
-      userId,
-      email,
-      firstName,
-      school: admin.school,
-      schoolInfo: schoolInfo === undefined ? await loadSchoolInfo(admin.school) : schoolInfo,
-      invitedBy: admin.username,
-    });
-  } catch (err) {
-    inviteSent = false;
-    logger.error({ err, userId, studentId }, 'Failed to send a student invite email');
-  }
+  const { sent: inviteSent } = await sendInvite({
+    ...invite,
+    email,
+    firstName,
+    fullName,
+    school: admin.school,
+    schoolInfo: schoolInfo === undefined ? await loadSchoolInfo(admin.school) : schoolInfo,
+    studentSignIn: settings.studentSignIn,
+  });
 
   return {
     studentId,
@@ -447,7 +485,9 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
       ? `Invite sent to ${email}`
       : 'Account created, but the invite email could not be sent. Try resending it.',
     userId,
+    inviteId: invite.inviteId,
     inviteSent,
+    sendStatus: inviteSent ? 'sent' : 'failed',
   };
 }
 
@@ -464,11 +504,11 @@ module.exports = {
   isQrEligible,
   toStudentAccountRow,
   loadSchoolInfo,
-  sendStudentInvite,
   sendStudentPasswordReset,
   inviteStudent,
   parseStudentIds,
   resendInviteFor,
+  cancelInviteFor,
   resetPasswordFor,
   issueQrCards,
   voidQr,
