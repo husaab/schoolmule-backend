@@ -12,7 +12,7 @@
 
 const { studentAvatarSql } = require('../utils/avatar');
 const {
-  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED,
+  GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED, NEEDS_PUBLISH,
 } = require('./workState');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 
@@ -436,11 +436,15 @@ const gradingQueries = {
     SELECT * FROM (
     SELECT s.student_id, s.name, i.created_at, i.item_id, i.assessment_id, sub.draft_score, sub.draft_status,
            (sub.turned_in_at IS NOT NULL AND COALESCE(sub.is_late, FALSE)) AS is_late,
+           -- A draft is what the column's "Publish N" publishes: not published
+           -- yet, or the column was unpublished by hand (NEEDS_PUBLISH), so
+           -- needs_publish counts exactly what that Publish takes.
            CASE
-             WHEN sub.published_at IS NULL AND ${HAS_DRAFT} THEN 'draft'
+             WHEN ${HAS_DRAFT} AND (sub.published_at IS NULL OR NOT COALESCE(a.is_published, FALSE)) THEN 'draft'
              WHEN ${AWAITING_GRADE} THEN 'turned_in'
              WHEN ${WORK_STATE_SQL} = 'missing' AND NOT ${GRADE_VISIBLE} AND ${ITEM_VISIBLE('i', 'a', 's')} THEN 'missing_derived'
-           END AS state
+           END AS state,
+           COALESCE(${NEEDS_PUBLISH}, FALSE) AS needs_publish
     FROM classwork_items i
     JOIN assessments a ON a.assessment_id = i.assessment_id
     JOIN class_students cs ON cs.class_id = i.class_id

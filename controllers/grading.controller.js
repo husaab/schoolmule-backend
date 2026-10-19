@@ -580,6 +580,8 @@ const getGridOverlay = async (req, res) => {
         draftScore: r.state === 'draft' ? num(r.draft_score) : null,
         draftStatus: r.state === 'draft' ? r.draft_status ?? null : null,
         isLate: Boolean(r.is_late),
+        // Counted by the column's "Publish N" (incl. drafts on a column unpublished by hand).
+        needsPublish: Boolean(r.needs_publish),
       })),
     });
   } catch (error) {

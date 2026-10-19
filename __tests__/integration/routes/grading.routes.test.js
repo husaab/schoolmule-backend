@@ -586,8 +586,10 @@ describe('Integration: grading and per-student Publish', () => {
     ]);
     const key = (c) => `${c.studentId}:${c.assessmentId}`;
     const cells = new Map(data.cells.map((c) => [key(c), c]));
-    expect(cells.get(`${amalId}:${columnId}`)).toEqual({ studentId: amalId, assessmentId: columnId, state: 'draft', draftScore: 8, draftStatus: 'graded', isLate: false });
-    expect(cells.get(`${bilalId}:${columnId}`)).toMatchObject({ state: 'turned_in', draftScore: null, isLate: false });
+    expect(cells.get(`${amalId}:${columnId}`)).toEqual({
+      studentId: amalId, assessmentId: columnId, state: 'draft', draftScore: 8, draftStatus: 'graded', isLate: false, needsPublish: true,
+    });
+    expect(cells.get(`${bilalId}:${columnId}`)).toMatchObject({ state: 'turned_in', draftScore: null, isLate: false, needsPublish: false });
     expect(cells.get(`${amalId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'turned_in', isLate: true });
     expect(cells.get(`${bilalId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'missing_derived' });
     expect(cells.get(`${daliaId}:${late.gradebook.assessmentId}`)).toMatchObject({ state: 'missing_derived' });
@@ -598,6 +600,18 @@ describe('Integration: grading and per-student Publish', () => {
     await publish([amalId]);
     const after = (await get(`/api/classroom/classes/${sciId}/grid-overlay`)).data;
     expect(after.cells.some((c) => c.studentId === amalId && c.assessmentId === columnId)).toBe(false);
+
+    // The column unpublished by hand in Grades: Amal's grade is a draft again,
+    // and the overlay's needsPublish count is exactly what "Publish N" publishes.
+    await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/unpublish`, asTeacher)
+      .send({ assessmentIds: [columnId] }), 200);
+    await patch(bilalId, { draftScore: 6 });
+    const hidden = (await get(`/api/classroom/classes/${sciId}/grid-overlay`)).data.cells.filter((c) => c.assessmentId === columnId);
+    expect(hidden.find((c) => c.studentId === amalId)).toMatchObject({ state: 'draft', draftScore: 8, needsPublish: true });
+    expect(hidden.find((c) => c.studentId === bilalId)).toMatchObject({ state: 'draft', draftScore: 6, needsPublish: true });
+    const counted = hidden.filter((c) => c.needsPublish).length;
+    expect(counted).toBe(2);
+    expect((await publish('graded')).data.publishedStudentIds).toHaveLength(counted);
   });
 
   it('class card toReviewCount and the toReview rail count turned-in, ungraded work', async () => {
