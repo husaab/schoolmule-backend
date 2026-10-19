@@ -130,6 +130,28 @@ describe('student profile endpoints', () => {
     expect(res.body.data.detail.overall.avg).toBe(80);
   });
 
+  it("GET /overview shows the student's avatar: the login's own pick over the teacher-set one", async () => {
+    const asTeacher = { role: 'TEACHER', userId: TEACHER_ID };
+    await pool.query(`UPDATE students SET avatar = '{"style":"kufi","skin":1,"bg":2}' WHERE student_id = $1`, [studentId]);
+    let res = await authenticatedRequest('get', `/api/students/${studentId}/overview`, asTeacher);
+    expect(res.body.data.student.avatar).toEqual({ style: 'kufi', skin: 1, bg: 2 });
+
+    const LOGIN_ID = '550e8400-e29b-41d4-a716-4466554400cc';
+    await pool.query(
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, avatar)
+       VALUES ($1, 'student.one@example.test', 'student1', 'x', 'Student', 'One', 'ALHAADIACADEMY', 'STUDENT', TRUE, TRUE, '{"style":"curly","skin":3,"bg":4}')`,
+      [LOGIN_ID]);
+    await pool.query(
+      `INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [LOGIN_ID, studentId, yearId]);
+    res = await authenticatedRequest('get', `/api/students/${studentId}/overview`, asTeacher);
+    expect(res.body.data.student.avatar).toEqual({ style: 'curly', skin: 3, bg: 4 });
+  });
+
+  it('refuses student tokens', async () => {
+    const res = await authenticatedRequest('get', `/api/students/${studentId}/overview`, { role: 'STUDENT' });
+    expect(res.status).toBe(403);
+  });
+
   it('refuses parent tokens', async () => {
     const res = await authenticatedRequest('get', `/api/students/${studentId}/overview`, { role: 'PARENT', userId: PARENT_ID });
     expect(res.status).toBe(403);
