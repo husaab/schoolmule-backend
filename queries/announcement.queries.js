@@ -538,6 +538,8 @@ const announcementQueries = {
     WHERE a.school = $2 AND a.deleted_at IS NULL
       AND (a.school_year_id IS NULL OR a.school_year_id = $3)
       AND ($4::uuid IS NULL OR a.class_id = $4)
+      -- An archived class's posts leave with the class (as the class list hides it; T12).
+      AND (cl.class_id IS NULL OR cl.archived_at IS NULL)
       AND EXISTS (SELECT 1 FROM students s WHERE s.student_id = $1 AND ${IN_AUDIENCE('s')})
     ORDER BY ${IS_PINNED} DESC, a.published_at DESC
     LIMIT $6

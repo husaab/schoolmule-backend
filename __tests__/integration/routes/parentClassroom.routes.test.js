@@ -148,6 +148,14 @@ describe("Integration: the parent's Classes page and lens", () => {
     expect(JSON.stringify(data)).not.toContain(ramiId);
   });
 
+  it("T12: recent posts leave out an archived class's posts, as the class list does", async () => {
+    await announce({ classId: archivedId, title: 'French club', daysAgo: 1 });
+    await announce({ classId: sciId, title: 'Lab coats', daysAgo: 2 });
+    const { data } = await get('/api/parent-portal/classroom/summary');
+    const amal = data.children.find((c) => c.studentId === amalId);
+    expect(amal.recentPosts.map((p) => p.title)).toEqual(['Lab coats']);
+  });
+
   it('needsYou has an ack item for an unacknowledged ack-requested post and drops it after POST /api/announcements/:id/ack', async () => {
     const mathAck = await announce({ classId: mathId, title: 'Sign the trip form', daysAgo: 1, ack: true });
     const schoolAck = await announce({ scope: 'school', title: 'Read the new policy', ack: true });
