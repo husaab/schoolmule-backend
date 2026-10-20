@@ -1,5 +1,5 @@
 const express = require("express");
-const requireAdmin = require("../middleware/requireAdmin");
+const { requirePermission } = require("../middleware/access");
 const controller = require("../controllers/adminApproval.controller");
 const { adminVerificationResendLimiter } = require("../middleware/spamProtection");
 
@@ -7,7 +7,8 @@ const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-router.use(requireAdmin);
+// Approvals can never make anyone an admin (services/approvalActions.js).
+router.use(requirePermission("users"));
 
 router.param("id", (req, res, next, id) => {
   if (!UUID_RE.test(id)) {

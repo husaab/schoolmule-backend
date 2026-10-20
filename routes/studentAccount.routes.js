@@ -1,5 +1,5 @@
 const express = require("express");
-const requireAdmin = require("../middleware/requireAdmin");
+const { requirePermission } = require("../middleware/access");
 const controller = require("../controllers/studentAccount.controller");
 const emailImport = require("../controllers/studentEmailImport.controller");
 
@@ -7,7 +7,7 @@ const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-router.use(requireAdmin);
+router.use(requirePermission("users")); // student accounts are part of users (D13)
 
 router.param("studentId", (req, res, next, id) => {
   if (!UUID_RE.test(id)) {

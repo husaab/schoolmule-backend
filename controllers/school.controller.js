@@ -3,6 +3,11 @@
 const db = require('../config/database');
 const schoolQueries = require('../queries/school.queries');
 const logger = require('../logger');
+const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
+
+// Staff only ever see and edit their own school; the platform owner sees all.
+const ownsSchool = (req, schoolCode) =>
+  String(schoolCode) === String(req.user.school) || (!req.user.impersonator && isPlatformOwner(req.user.email));
 const { cleanEmailArray } = require('../utils/emailUtils');
 const { schoolSender, senderAddress } = require('../services/email/senderIdentity');
 
@@ -79,6 +84,9 @@ const getSchoolByCode = async (req, res) => {
   }
 
   try {
+    if (!ownsSchool(req, code)) {
+      return res.status(404).json({ status: 'failed', message: 'School not found' });
+    }
     const { rows } = await db.query(schoolQueries.selectSchoolByCode, [code]);
     
     if (rows.length === 0) {
@@ -119,7 +127,7 @@ const getSchoolById = async (req, res) => {
   try {
     const { rows } = await db.query(schoolQueries.selectSchoolById, [id]);
     
-    if (rows.length === 0) {
+    if (rows.length === 0 || !ownsSchool(req, rows[0].school_code)) {
       return res.status(404).json({
         status: 'failed',
         message: 'School not found'
@@ -242,6 +250,10 @@ const updateSchool = async (req, res) => {
   }
 
   try {
+    const { rows: found } = await db.query(schoolQueries.selectSchoolById, [id]);
+    if (found.length === 0 || !ownsSchool(req, found[0].school_code)) {
+      return res.status(404).json({ status: 'failed', message: 'School not found' });
+    }
     const { rows } = await db.query(schoolQueries.updateSchool, [
       name,
       address || null,

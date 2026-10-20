@@ -12,6 +12,7 @@ const {
 } = require("../controllers/student.controller");
 const { getStudentOverview, getStudentGrades } = require("../controllers/studentOverview.controller");
 const requireStaff = require("../middleware/requireStaff");
+const { requirePermission } = require("../middleware/access");
 
 const router = express.Router();
 
@@ -20,17 +21,26 @@ const router = express.Router();
 // also pinned to the caller's school in the controller.
 router.use(requireStaff);
 
-router.get("/", getAllStudents);
-router.get("/archived", getArchivedStudents);
-router.get("/all", getAllStudentsWithArchived);
-router.get("/:id", getStudentById);
+// RBAC. The roster is read by every area that works with students (pickers on
+// attendance, report cards, forms, messaging, enrollment, student accounts);
+// changing it is `students`. The profile's grades are analytics.
+const readsRoster = requirePermission(
+  "students", "attendance.daily", "attendance.classes", "report_cards", "users", "forms",
+  "classes.all", "classes.manage", "messages.all", "announcements.school",
+);
+const managesStudents = requirePermission("students");
+
+router.get("/", readsRoster, getAllStudents);
+router.get("/archived", readsRoster, getArchivedStudents);
+router.get("/all", readsRoster, getAllStudentsWithArchived);
+router.get("/:id", readsRoster, getStudentById);
 // The staff student profile (/students/[id]).
-router.get("/:id/overview", getStudentOverview);
-router.get("/:id/grades", getStudentGrades);
-router.patch("/:id", updateStudent);
-router.post("/", createStudent);
-router.delete("/:id", deleteStudent);
-router.post("/:id/archive", archiveStudent);
-router.post("/:id/unarchive", unarchiveStudent);
+router.get("/:id/overview", managesStudents, getStudentOverview);
+router.get("/:id/grades", requirePermission("analytics"), getStudentGrades);
+router.patch("/:id", managesStudents, updateStudent);
+router.post("/", managesStudents, createStudent);
+router.delete("/:id", managesStudents, deleteStudent);
+router.post("/:id/archive", managesStudents, archiveStudent);
+router.post("/:id/unarchive", managesStudents, unarchiveStudent);
 
 module.exports = router;

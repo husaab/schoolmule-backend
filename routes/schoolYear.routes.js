@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const requireAdmin = require('../middleware/requireAdmin');
+const { requirePermission } = require('../middleware/access');
 const controller = require('../controllers/schoolYear.controller');
 
 router.get('/', controller.getSchoolYears);
 
-router.use(requireAdmin);
+router.use(requirePermission('school_setup'));
 router.post('/', controller.createSchoolYear);
 router.put('/:id', controller.updateSchoolYear);
 router.put('/:id/activate', controller.activateSchoolYear);

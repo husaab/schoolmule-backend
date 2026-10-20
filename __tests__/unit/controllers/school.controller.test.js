@@ -29,6 +29,12 @@ function authDelete(url) {
   return request(app).delete(url).set('Authorization', `Bearer ${token}`);
 }
 
+// Listing, creating and deleting schools is the platform owner's job; the
+// test admin is made the owner here (restored after).
+const ownerBefore = process.env.PLATFORM_OWNER_EMAILS;
+beforeAll(() => { process.env.PLATFORM_OWNER_EMAILS = 'admin@test.com'; });
+afterAll(() => { process.env.PLATFORM_OWNER_EMAILS = ownerBefore; });
+
 describe('School Controller', () => {
   // ── getAllSchools ──────────────────────────────────────────────
   describe('GET /api/schools', () => {
@@ -168,6 +174,7 @@ describe('School Controller', () => {
   describe('PUT /api/schools/:id', () => {
     it('should return 200 on successful update', async () => {
       const row = buildSchoolRow({ name: 'Updated School' });
+      mockQueryResponse([row]); // own-school lookup
       mockQueryResponse([row]);
       const res = await authPut(`/api/schools/${row.school_id}`).send({
         name: 'Updated School',
@@ -257,6 +264,7 @@ describe('school sender settings', () => {
 
   it('PUT accepts a comma-separated reply-to list, lowercased and deduped', async () => {
     const row = buildSchoolRow({ email_reply_to: ['a@x.ca', 'b@x.ca'] });
+    mockQueryResponse([row]); // own-school lookup
     mockQueryResponse([row]);
     const res = await authPut(`/api/schools/${row.school_id}`).send({ name: 'S', emailReplyTo: 'A@x.ca, b@x.ca,a@x.ca' });
     expect(res.status).toBe(200);
@@ -267,6 +275,7 @@ describe('school sender settings', () => {
 
   it('PUT leaves the reply-to list alone when it is not sent', async () => {
     const row = buildSchoolRow();
+    mockQueryResponse([row]); // own-school lookup
     mockQueryResponse([row]);
     await authPut(`/api/schools/${row.school_id}`).send({ name: 'S' });
     expect(db.query.mock.calls.at(-1)[1][7]).toBeNull();
@@ -285,5 +294,43 @@ describe('school sender settings', () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/nope@/);
     expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('RBAC on /api/schools', () => {
+  const { giveRole } = require('../../helpers/mockAccess');
+  const { TEST_ADMIN_USER_ID } = require('../../helpers/mockAuth');
+
+  it('keeps school-wide routes for the platform owner', async () => {
+    process.env.PLATFORM_OWNER_EMAILS = 'someone-else@test.com';
+    try {
+      expect((await authGet('/api/schools')).status).toBe(403);
+      expect((await authPost('/api/schools').send({ schoolCode: 'X', name: 'X' })).status).toBe(403);
+      expect((await authDelete(`/api/schools/${uuidv4()}`)).status).toBe(403);
+    } finally {
+      process.env.PLATFORM_OWNER_EMAILS = 'admin@test.com';
+    }
+  });
+
+  it("never shows staff another school's record", async () => {
+    process.env.PLATFORM_OWNER_EMAILS = '';
+    try {
+      const res = await authGet('/api/schools/PLAYGROUND');
+      expect(res.status).toBe(404);
+      mockQueryResponse([buildSchoolRow({ school_code: 'PLAYGROUND' })]);
+      expect((await authGet(`/api/schools/id/${uuidv4()}`)).status).toBe(404);
+      mockQueryResponse([buildSchoolRow({ school_code: 'PLAYGROUND' })]);
+      const put = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'Taken over' });
+      expect(put.status).toBe(404);
+      expect(db.query.mock.calls.some(([sql]) => /UPDATE schools/.test(sql))).toBe(false);
+    } finally {
+      process.env.PLATFORM_OWNER_EMAILS = 'admin@test.com';
+    }
+  });
+
+  it('needs school setup to edit the school', async () => {
+    giveRole(TEST_ADMIN_USER_ID, ['scheduling']);
+    const res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S' });
+    expect(res.status).toBe(403);
   });
 });

@@ -13,6 +13,7 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const engine = require('../services/analyticsEngine');
 const { buildStudentTermDetail } = require('../services/studentTermDetail');
 const stats = require('../utils/statsUtils');
@@ -118,8 +119,10 @@ const getStudentOverview = async (req, res) => {
         rowsOf(progressReportQueries.getStudentProgressReportFeedback, [studentId]),
       ]);
 
-    // One cached matrix per term; skipped when the student can't be in them.
-    const matrices = hasNumericGrades(student)
+    // One cached matrix per term; skipped when the student can't be in them,
+    // and without analytics (RBAC: term averages are grade data).
+    const seesGrades = can(req, 'analytics');
+    const matrices = hasNumericGrades(student) && seesGrades
       ? await Promise.all(terms.map((t) => engine.buildAnalyticsMatrix(school, t.term_id)))
       : terms.map(() => null);
 
@@ -143,7 +146,7 @@ const getStudentOverview = async (req, res) => {
         reports: {
           reportCards: reportCards.map(mapReportFile),
           progressReports: progressReports.map(mapReportFile),
-          reportCardFeedback: reportCardFb.map((r) => ({
+          reportCardFeedback: (can(req, 'report_cards') ? reportCardFb : []).map((r) => ({
             classId: r.class_id,
             subject: r.subject,
             teacherName: r.teacher_name,
@@ -152,7 +155,7 @@ const getStudentOverview = async (req, res) => {
             behavior: r.behavior,
             comment: r.comment,
           })),
-          progressFeedback: progressFb.map((r) => ({
+          progressFeedback: (can(req, 'report_cards') ? progressFb : []).map((r) => ({
             classId: r.class_id,
             subject: r.subject,
             teacherName: r.teacher_name,

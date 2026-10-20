@@ -4,6 +4,7 @@ const studentAccountQueries = require("../queries/studentAccount.queries");
 const { checkStudentEmails } = require("../services/classroom/emailProblems");
 const { getSettings } = require("../services/classroom/classroomSettings");
 const logger = require("../logger");
+const { can } = require("../services/access/access");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -18,19 +19,21 @@ const parseStudentEmail = (raw) => {
   return { value };
 };
 
-// The student's own address is where their SchoolMule invite goes, so only an
-// admin may set it, and only for a student of their own school. (Other roles
-// can still edit the rest of the student form.)
+// The student's own address is where their SchoolMule invite goes, so it is
+// part of student accounts: only someone who manages users (RBAC `users`, D13)
+// may set it, and only for a student of their own school. (Others can still
+// edit the rest of the student form.)
 const STUDENT_EMAIL_ADMIN_ONLY =
-  "Only admins can set a student's email. Use Admin Panel → Student accounts.";
+  "Only people who manage student accounts can set a student's email. Use Admin Panel → Student accounts.";
+const managesStudentAccounts = (req) => can(req, "users");
 const carriesStudentEmail = (body) =>
   Boolean(body) && Object.prototype.hasOwnProperty.call(body, "studentEmail") && body.studentEmail !== undefined;
 
-// The student's own address leaves the server for admins only (final review
-// M6): any signed-in role reads /api/students, and the address is where the
-// student's SchoolMule invite goes.
+// The student's own address leaves the server only for those who manage
+// student accounts (final review M6): many roles read /api/students, and the
+// address is where the student's SchoolMule invite goes.
 const hideStudentEmail = (req) => (student) => {
-  if (req.user?.role === "ADMIN" || !student) return student;
+  if (managesStudentAccounts(req) || !student) return student;
   const { studentEmail, ...rest } = student;
   return rest;
 };
@@ -132,7 +135,7 @@ const createStudent = async (req, res) => {
       message: "Missing required fields: name, grade, school"
     });
   }
-  if (carriesStudentEmail(req.body) && req.user.role !== "ADMIN") {
+  if (carriesStudentEmail(req.body) && !managesStudentAccounts(req)) {
     return res.status(403).json({ status: "failed", message: STUDENT_EMAIL_ADMIN_ONLY });
   }
   const email = parseStudentEmail(studentEmail);
@@ -194,7 +197,7 @@ const updateStudent = async (req, res) => {
   // studentEmail is only touched when the body carries it, so older callers
   // that never send it keep the stored address.
   const carriesEmail = carriesStudentEmail(req.body);
-  if (carriesEmail && req.user.role !== "ADMIN") {
+  if (carriesEmail && !managesStudentAccounts(req)) {
     return res.status(403).json({ status: "failed", message: STUDENT_EMAIL_ADMIN_ONLY });
   }
   const email = carriesEmail ? parseStudentEmail(req.body.studentEmail) : { value: null };

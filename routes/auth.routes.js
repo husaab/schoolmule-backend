@@ -4,7 +4,10 @@ getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserFo
 validateResetToken, resetPassword, validateSession, switchView} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
-const requireAdmin = require('../middleware/requireAdmin');
+// Approving signups is part of managing users (RBAC); verifyUser runs inline
+// here, so the guard resolves access itself.
+const { requirePermission } = require('../middleware/access');
+const requireUsers = requirePermission('users');
 const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, inviteNetworkLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter, studentRequestNetworkLimiter, studentRequestAddressLimiter } = require('../middleware/spamProtection');
 const { inspectInvite, acceptInvite } = require('../controllers/studentInvite.controller');
 const { submit: submitStudentRequest } = require('../controllers/studentRequest.controller');
@@ -33,12 +36,12 @@ router.post('/student-request', studentRequestNetworkLimiter, studentRequestAddr
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 
-router.post('/approve-school', verifyUser, requireAdmin, approveUserForSchool);
-router.get('/pending-approvals', verifyUser, requireAdmin, getPendingApprovals);
-router.post('/resend-approval-email', verifyUser, requireAdmin, verificationEmailLimiter, resendSchoolApprovalEmail);
+router.post('/approve-school', verifyUser, requireUsers, approveUserForSchool);
+router.get('/pending-approvals', verifyUser, requireUsers, getPendingApprovals);
+router.post('/resend-approval-email', verifyUser, requireUsers, verificationEmailLimiter, resendSchoolApprovalEmail);
 // Token-only: a pending signup may delete itself from the waiting page.
 router.delete('/delete-user', verifyUser.tokenOnly, deleteUserAccount);
-router.post('/decline-school', verifyUser, requireAdmin, declineUserForSchool);
+router.post('/decline-school', verifyUser, requireUsers, declineUserForSchool);
 router.post('/logout', logout);
 
 // Password reset routes
