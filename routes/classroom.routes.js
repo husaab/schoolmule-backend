@@ -5,6 +5,7 @@ const requireClassroomResource = require("../middleware/requireClassroomResource
 const controller = require("../controllers/classroom.controller");
 const classwork = require("../controllers/classwork.controller");
 const grading = require("../controllers/grading.controller");
+const gradebookStructure = require("../controllers/gradebookStructure.controller");
 const quiz = require("../controllers/quiz.controller");
 const { singleImage } = require("../utils/imageUpload");
 const { uploadFiles, uploadFile } = require("../utils/classworkUpload");
@@ -100,6 +101,11 @@ router.get("/attachments/:attachmentId/url", requireClassroomResource("attachmen
 
 router.get("/classes/:classId/copy-sources", requireClassOwnership, classwork.copySources);
 router.post("/classes/:classId/copy", requireClassOwnership, classwork.copyFromClass);
+
+// Regrouping gradebook columns (Grades → Assessments & categories): move one
+// into, between or out of categories, or turn one into a category.
+router.post("/classes/:classId/assessments/:assessmentId/move", requireClassOwnership, gradebookStructure.moveAssessment);
+router.post("/classes/:classId/assessments/:assessmentId/make-category", requireClassOwnership, gradebookStructure.makeCategory);
 
 // Grading turned-in work (spec D3, D17): scores and feedback wait as drafts
 // on the submission until Publish (one student, a few, or every graded one);

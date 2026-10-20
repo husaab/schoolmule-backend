@@ -183,7 +183,7 @@ ORDER BY i.created_at, i.item_id`,
 
   //  A category of this class, locked so two creates cannot both rescale it. $1 category id, $2 class_id
   lockCategory: `
-    SELECT assessment_id, class_id, name, weight_points
+    SELECT assessment_id, class_id, name, weight_points, sort_order
     FROM assessments
     WHERE assessment_id = $1 AND class_id = $2 AND COALESCE(is_parent, FALSE)
     FOR UPDATE`,
@@ -195,6 +195,12 @@ ORDER BY i.created_at, i.item_id`,
     WHERE parent_assessment_id = $1
     ORDER BY sort_order NULLS LAST, created_at, assessment_id
     FOR UPDATE`,
+
+  //  Any column of this class (a category or not), locked. $1 assessment_id, $2 class_id
+  lockColumnInClass: `
+    SELECT assessment_id, class_id, parent_assessment_id, COALESCE(is_parent, FALSE) AS is_parent,
+           name, weight_points, sort_order, date
+    FROM assessments WHERE assessment_id = $1 AND class_id = $2 FOR UPDATE`,
 
   //  A leaf column, locked. $1 assessment_id
   lockAssessment: `
@@ -218,7 +224,7 @@ ORDER BY i.created_at, i.item_id`,
         last_modified_at = NOW()
     WHERE assessment_id = $1`,
 
-  //  Moves a column under another category. $1 assessment_id, $2 category, $3 weight, $4 sort_order
+  //  Moves a column under another category, or out on its own. $1 assessment_id, $2 category (NULL: on its own), $3 weight, $4 sort_order
   reparentAssessment: `
     UPDATE assessments
     SET parent_assessment_id = $2, weight_points = $3, sort_order = $4, last_modified_at = NOW()
