@@ -129,6 +129,24 @@ describe('missingAlertEmail', () => {
   });
 });
 
+describe('missingAlertEmail ask links', () => {
+  it('puts an "Ask <teacher> about this" link under each item that has one', () => {
+    const askUrl = 'http://localhost:3000/parent/messages?tab=conversations&ask=s1&askClass=c1&askAbout=Number+line';
+    const { html } = t.missingAlertEmail({
+      ...school,
+      recipientFirstName: 'Mona',
+      children: [{ name: 'Lina', gradeLabel: 'Grade 3', avatarUrl: null, items: [
+        { title: 'Number line', subject: 'Math', whenLabel: 'was due Thu, Oct 15', askUrl, askLabel: 'Ask Dina Teacher about this' },
+      ] }],
+      link: 'http://localhost:3000/parent/classes',
+    });
+    const body = text(html);
+    expect(body).toContain('Ask Dina Teacher about this');
+    expect(body).toContain('Ask the teacher about it below');
+    expect(html).toContain('href="http://localhost:3000/parent/messages?tab=conversations&amp;ask=s1&amp;askClass=c1&amp;askAbout=Number+line"');
+  });
+});
+
 describe('weeklySummaryEmail', () => {
   const children = [
     {

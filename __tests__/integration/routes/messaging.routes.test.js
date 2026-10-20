@@ -273,7 +273,7 @@ describe('Integration: Messaging routes', () => {
     const parentTargets = await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asDad);
     expect(parentTargets.status).toBe(200);
     expect(parentTargets.body.data.classes).toEqual([{
-      classId, subject: 'Math', teacherName: 'Teacher One',
+      classId, subject: 'Math', teacherId: TEACHER_ID, teacherName: 'Teacher One',
       assessments: [{ assessmentId: publishedId, name: 'Unit 3 Quiz', date: null, conversationId: id }],
     }]);
     expect((await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${studentId}`, asStranger)).status).toBe(403);
@@ -345,7 +345,7 @@ describe('Integration: Messaging routes', () => {
       res = await targets(asMom);
       expect(res.body.data.currentTerm).toEqual({ termId: term2Id, name: 'Term 2' });
       expect(res.body.data.classes).toEqual([{
-        classId: scienceId, subject: 'Science', teacherName: 'Term Two',
+        classId: scienceId, subject: 'Science', teacherId: TERM2_TEACHER_ID, teacherName: 'Term Two',
         assessments: [{ assessmentId: sciencePublishedId, name: 'Lab 1', date: null, conversationId: null }],
       }]);
       // Homeroom and the principal are not term-bound; the Term 1 Math teachers are gone.

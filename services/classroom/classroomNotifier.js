@@ -34,6 +34,7 @@ const { getResend, sendOrThrow } = require('../../utils/emailUtils');
 const { schoolSender } = require('../email/senderIdentity');
 const { getSchoolName } = require('../../utils/schoolUtils');
 const { avatarPngUrl } = require('../../utils/avatar');
+const { askFields } = require('../../utils/parentLinks');
 const digest = require('./classroomDigest');
 const templates = require('../../templates/classroomEmailTemplates');
 
@@ -264,6 +265,15 @@ const childHeader = (c) => ({
   avatarUrl: avatarPngUrl(c.avatar),
 });
 const missingLine = (r) => ({ title: r.title || 'Untitled', subject: r.subject, whenLabel: digest.whenLabel(r) });
+// The alert's line also asks the class teacher about it. Missing work is
+// rarely shared with parents yet, so the portal writes a General message
+// titled after the item unless its gradebook column has been published. No
+// term gate here (the work is from the last 14 days): a class that can no
+// longer be written about opens a short note in the portal instead.
+const missingAlertLine = (r) => ({
+  ...missingLine(r),
+  ...askFields({ studentId: r.student_id, classId: r.class_id, assessmentId: r.assessment_id, about: r.title, teacherName: r.teacher_name }),
+});
 
 const prefsLinks = (recipient) => (recipient.role === 'PARENT'
   ? {
@@ -308,7 +318,7 @@ async function buildMissingAlert(job, recipient, now) {
   // One email per Missing: what a publish digest has announced is left out.
   const work = groupBy(rows.filter((r) => !r.announced), 'student_id');
   const blocks = children
-    .map((c) => ({ ...childHeader(c), items: digest.stillMissing(work.get(c.student_id) || []).map(missingLine) }))
+    .map((c) => ({ ...childHeader(c), items: digest.stillMissing(work.get(c.student_id) || []).map(missingAlertLine) }))
     .filter((c) => c.items.length);
   if (!blocks.length) return { skip: 'nothing new', group };
   return {

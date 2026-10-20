@@ -23,6 +23,7 @@ const COLORS = {
   tick: '#f59e0b',
   button: '#0e7490',
   noteBg: '#f0f9fb',
+  missing: '#be123c',
 };
 
 const FONT_BODY = "Roboto, 'Helvetica Neue', Helvetica, Arial, sans-serif";
@@ -78,16 +79,39 @@ const paragraph = (html, { muted = false, size = 15 } = {}) =>
 
 const finePrint = (html) => paragraph(html, { muted: true, size: 13 });
 
+// One button cell (bgcolor for Outlook); `outline` is the quieter second choice.
+const buttonCell = (label, url, { outline = false } = {}) => `
+      <td${outline ? '' : ` bgcolor="${COLORS.button}"`} style="border-radius:8px;${outline ? `border:2px solid ${COLORS.button};` : `background:${COLORS.button};`}">
+        <a href="${escapeHtml(url)}" target="_blank" style="display:inline-block;padding:${outline ? '11px 22px' : '13px 24px'};font-family:${FONT_BODY};font-size:15px;font-weight:600;line-height:1.2;color:${outline ? COLORS.button : '#ffffff'};text-decoration:none;border-radius:8px;">${escapeHtml(label)}</a>
+      </td>`;
+
 function button(label, url) {
   return `
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 24px;">
-    <tr>
-      <td bgcolor="${COLORS.button}" style="border-radius:8px;background:${COLORS.button};">
-        <a href="${escapeHtml(url)}" target="_blank" style="display:inline-block;padding:13px 24px;font-family:${FONT_BODY};font-size:15px;font-weight:600;line-height:1.2;color:#ffffff;text-decoration:none;border-radius:8px;">${escapeHtml(label)}</a>
-      </td>
+    <tr>${buttonCell(label, url)}
     </tr>
   </table>`;
 }
+
+/** Buttons side by side, e.g. "Got it ✓" and "Read in SchoolMule": the first filled, the rest outlined. */
+function buttonRow(buttons) {
+  const cells = buttons
+    .map(({ label, url }, i) => (i === 0
+      ? buttonCell(label, url)
+      : `<td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>${buttonCell(label, url, { outline: true })}`))
+    .join('');
+  return `
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 24px;">
+    <tr>${cells}
+    </tr>
+  </table>`;
+}
+
+// "Ask Ms. Clarke about this →" under an item with { askUrl, askLabel }
+// (utils/parentLinks.askFields): opens a new message to the teacher about it.
+const askLine = ({ askUrl, askLabel }) => (askUrl
+  ? `<div style="margin-top:6px;"><a href="${escapeHtml(askUrl)}" target="_blank" style="font-family:${FONT_BODY};font-size:13px;font-weight:600;color:${COLORS.button};text-decoration:none;">${escapeHtml(askLabel)} &rarr;</a></div>`
+  : '');
 
 // Tinted callout with a small bold title, e.g. a teacher's note. `html` is
 // trusted markup — escape user text before passing it in.
@@ -241,6 +265,8 @@ module.exports = {
   paragraph,
   finePrint,
   button,
+  buttonRow,
+  askLine,
   note,
   facts,
   signOff,

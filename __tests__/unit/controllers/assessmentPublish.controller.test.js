@@ -32,6 +32,12 @@ const scoreRow = (assessmentId, score, isExcluded = false) => ({
   is_excluded: isExcluded,
 });
 
+// One row of the parent email: a released column with its own score; a column
+// inside a category carries the category's name as `group`.
+const line = (assessmentId, name, scoreLabel, pctLabel, extra = {}) => ({
+  assessmentId, name, group: null, scoreLabel, pctLabel, isMissing: false, comment: null, ...extra,
+});
+
 describe('expandCascade', () => {
   const category = assessment({
     assessment_id: 'cat',
@@ -135,8 +141,8 @@ describe('buildEmailTasks', () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0].studentName).toBe('Alice');
     expect(tasks[0].lines).toEqual([
-      { name: 'Quiz 1', scoreLabel: '18/20', pctLabel: '(90%)', comment: null },
-      { name: 'Unit Test', scoreLabel: '40/50', pctLabel: '(80%)', comment: null },
+      line('q1', 'Quiz 1', '18/20', '90%'),
+      line('t1', 'Unit Test', '40/50', '80%'),
     ]);
   });
 
@@ -153,7 +159,13 @@ describe('buildEmailTasks', () => {
     expect(tasks[0].lines[0].comment).toBe('Great recovery.');
   });
 
-  it('reports a category as a rollup with no raw score, and skips its children', () => {
+  it('marks work flagged missing as Missing, at 0%', () => {
+    const scores = new Map([student('s1', 'Alice', [{ ...scoreRow('q1', null), status: 'missing' }])]);
+    const [task] = buildEmailTasks(['q1'], [quiz], scores);
+    expect(task.lines).toEqual([line('q1', 'Quiz 1', 'Missing', '0%', { isMissing: true })]);
+  });
+
+  describe('a category', () => {
     const category = assessment({
       assessment_id: 'cat',
       name: 'Quizzes',
@@ -161,19 +173,45 @@ describe('buildEmailTasks', () => {
       weight_points: 30,
       max_score: null,
     });
-    const kid1 = assessment({ assessment_id: 'kid1', parent_assessment_id: 'cat', max_score: 10 });
-    const kid2 = assessment({ assessment_id: 'kid2', parent_assessment_id: 'cat', max_score: 10 });
-    const scores = new Map([
-      student('s1', 'Alice', [scoreRow('kid1', 9), scoreRow('kid2', 7)]),
-    ]);
+    const kid1 = assessment({ assessment_id: 'kid1', name: 'Quiz A', parent_assessment_id: 'cat', max_score: 10 });
+    const kid2 = assessment({ assessment_id: 'kid2', name: 'Quiz B', parent_assessment_id: 'cat', max_score: 10 });
 
-    const tasks = buildEmailTasks(['cat', 'kid1', 'kid2'], [category, kid1, kid2], scores);
+    it('lists each released column with its own score, labelled with the category', () => {
+      const scores = new Map([
+        student('s1', 'Alice', [scoreRow('kid1', 9.5), scoreRow('kid2', 7)]),
+      ]);
 
-    // One line for the category only — listing the children too would
-    // double-report the same work.
-    expect(tasks[0].lines).toEqual([
-      { name: 'Quizzes', scoreLabel: '', pctLabel: '(80%)', comment: null },
-    ]);
+      const [task] = buildEmailTasks(['cat', 'kid1', 'kid2'], [category, kid1, kid2], scores);
+
+      // The scores parents asked about, not the category's running average (82.5%).
+      expect(task.lines).toEqual([
+        line('kid1', 'Quiz A', '9.5/10', '95%', { group: 'Quizzes' }),
+        line('kid2', 'Quiz B', '7/10', '70%', { group: 'Quizzes' }),
+      ]);
+      // The audit still names the category alone (the 4 pm Missing alert reads it).
+      expect(task.gradedAssessmentIds).toEqual(['cat']);
+    });
+
+    it("opens the category's first row with the category's own note", () => {
+      const scores = new Map([student('s1', 'Alice', [scoreRow('kid1', 9), scoreRow('kid2', 7)])]);
+      const all = [{ ...category, parent_comment: 'Retakes on Friday.' }, { ...kid1, parent_comment: 'Neat work.' }, kid2];
+      const [task] = buildEmailTasks(['cat', 'kid1', 'kid2'], all, scores);
+      expect(task.lines.map((l) => l.comment)).toEqual(['Retakes on Friday.\nNeat work.', null]);
+    });
+
+    it('lists only the released columns, never an older sibling', () => {
+      const published = { ...kid1, is_published: true };
+      const scores = new Map([student('s1', 'Alice', [scoreRow('kid1', 9), scoreRow('kid2', 7)])]);
+      const [task] = buildEmailTasks(['cat'], [category, published, kid2], scores, { alsoListed: new Map([['cat', ['kid2']]]) });
+      expect(task.lines).toEqual([line('kid2', 'Quiz B', '7/10', '70%', { group: 'Quizzes' })]);
+      expect(task.gradedAssessmentIds).toEqual(['cat', 'kid2']);
+    });
+
+    it('sends nothing when the released column is blank for the student, even if an older sibling is graded', () => {
+      const published = { ...kid1, is_published: true };
+      const scores = new Map([student('s1', 'Alice', [scoreRow('kid1', 9), scoreRow('kid2', null)])]);
+      expect(buildEmailTasks(['cat'], [category, published, kid2], scores, { alsoListed: new Map([['cat', ['kid2']]]) })).toEqual([]);
+    });
   });
 
   it('produces no tasks when nothing published is graded', () => {
@@ -182,13 +220,12 @@ describe('buildEmailTasks', () => {
   });
 });
 
-// S2: a Classwork publish of one column under a category emails the
-// category's line (main's digest lists top-level assessments only), built
-// from what parents can see.
+// S2: a Classwork publish of one column under a category emails that column,
+// labelled with its category, and the running grade counts what parents can see.
 describe('topLevelLines + buildEmailTasks for a column under a category', () => {
   const category = assessment({ assessment_id: 'cat', name: 'Homework', is_parent: true, weight_points: 40, max_score: null });
-  const kid1 = assessment({ assessment_id: 'kid1', parent_assessment_id: 'cat', max_score: 10, is_published: true });
-  const kid2 = assessment({ assessment_id: 'kid2', parent_assessment_id: 'cat', max_score: 10, is_published: false });
+  const kid1 = assessment({ assessment_id: 'kid1', name: 'Reading log 1', parent_assessment_id: 'cat', max_score: 10, is_published: true });
+  const kid2 = assessment({ assessment_id: 'kid2', name: 'Reading log 2', parent_assessment_id: 'cat', max_score: 10, is_published: false });
   const solo = assessment({ assessment_id: 'solo', name: 'Unit Test', max_score: 50 });
   const all = [category, kid1, kid2, solo];
 
@@ -199,20 +236,21 @@ describe('topLevelLines + buildEmailTasks for a column under a category', () => 
     expect(topLevelLines(['gone'], all)).toEqual({ lineIds: [], alsoListed: new Map() });
   });
 
-  it("lists the category from published columns only, and names the child in the audit ids", () => {
+  it('lists the released child with its own score, and names it in the audit ids', () => {
     const scores = new Map([student('s1', 'Alice', [scoreRow('kid1', 8), scoreRow('kid2', 2)])]);
     const { lineIds, alsoListed } = topLevelLines(['kid1'], all);
-    const [task] = buildEmailTasks(lineIds, all, scores, { visibleLines: true, alsoListed });
-    // kid2 has a score but isn't published: it never enters the rollup.
-    expect(task.lines).toEqual([{ name: 'Homework', scoreLabel: '', pctLabel: '(80%)', comment: null }]);
+    const [task] = buildEmailTasks(lineIds, all, scores, { alsoListed });
+    expect(task.lines).toEqual([line('kid1', 'Reading log 1', '8/10', '80%', { group: 'Homework' })]);
     expect(task.gradedAssessmentIds).toEqual(['cat', 'kid1']);
+    // kid2 has a score but isn't published: it never enters the running grade.
+    expect(task.runningGradeLabel).toMatch(/^80% /);
   });
 });
 
-// The gradebook's Publish (preview, send and the preview email): a column
-// inside a category published on its own, from the category window, is
-// emailed as its category's line, counting the columns being published now.
-// It used to produce no email at all ("notify 0 parents").
+// The gradebook's Publish (preview, send and the preview email): every column
+// it releases is a row with its own score. A column inside a category
+// published on its own, from the category window, used to produce no email at
+// all ("notify 0 parents"), then only the category's running average.
 describe('publishDigestTasks', () => {
   const category = assessment({ assessment_id: 'cat', name: 'Tests', is_parent: true, weight_points: 30, max_score: null });
   const unit1 = assessment({ assessment_id: 'u1', name: 'Unit Test 1', parent_assessment_id: 'cat', max_score: 10, is_published: true });
@@ -225,21 +263,25 @@ describe('publishDigestTasks', () => {
     student('s2', 'Bilal', [scoreRow('u1', 10), scoreRow('u2', 9)]),
   ]);
 
-  it('emails a child published on its own (not yet published) as its category line, for every graded student', () => {
+  it('emails a child published on its own with its own score, for every graded student', () => {
     const tasks = publishDigestTasks(['u2'], all, scores);
     expect(tasks.map((t) => t.studentName)).toEqual(['Alice', 'Bilal']);
-    // Unit Test 1 (published) and Unit Test 2 (being published); Unit Test 3 is graded but unpublished, so it stays out.
-    expect(tasks[0].lines).toEqual([{ name: 'Tests', scoreLabel: '', pctLabel: '(70%)', comment: null }]);
+    expect(tasks[0].lines).toEqual([line('u2', 'Unit Test 2', '6/10', '60%', { group: 'Tests' })]);
+    expect(tasks[1].lines).toEqual([line('u2', 'Unit Test 2', '9/10', '90%', { group: 'Tests' })]);
     expect(tasks[0].gradedAssessmentIds).toEqual(['cat', 'u2']);
+    // Unit Test 1 (published) and Unit Test 2 (being published) count; Unit Test 3 is graded but unpublished.
+    expect(tasks[0].runningGradeLabel).toMatch(/^70% /);
   });
 
-  it('keeps a category published with its children as one category line, and a column on its own as itself', () => {
+  it('lists the columns a category publishes with it, and a column on its own as itself', () => {
     const [alice] = publishDigestTasks(['cat', 'u2', 'u3', 'solo'], all, scores);
     // The audit names the category alone, as before (the 4 pm Missing alert reads it).
     expect(alice.gradedAssessmentIds).toEqual(['cat', 'solo']);
+    // Unit Test 1 was published before: it is not new, so it is not listed.
     expect(alice.lines).toEqual([
-      { name: 'Tests', scoreLabel: '', pctLabel: '(46.7%)', comment: null },
-      { name: 'Project', scoreLabel: '40/50', pctLabel: '(80%)', comment: null },
+      line('u2', 'Unit Test 2', '6/10', '60%', { group: 'Tests' }),
+      line('u3', 'Unit Test 3', '0/10', '0%', { group: 'Tests' }),
+      line('solo', 'Project', '40/50', '80%'),
     ]);
   });
 });
@@ -272,8 +314,8 @@ describe('planPublish (classwork drafts)', () => {
 
     const tasks = buildEmailTasks(plan.cascade.finalIds, all, plan.scoreRowsByStudent);
     expect(tasks.map((t) => [t.studentName, t.lines])).toEqual([
-      ['Alice', [{ name: 'Homework', scoreLabel: '', pctLabel: '(80%)', comment: null }]],
-      ['Bilal', [{ name: 'Homework', scoreLabel: '', pctLabel: '(0%)', comment: null }]],
+      ['Alice', [line('hw', 'Plant cell diagram', '8/10', '80%', { group: 'Homework' })]],
+      ['Bilal', [line('hw', 'Plant cell diagram', 'Missing', '0%', { group: 'Homework', isMissing: true })]],
     ]);
   });
 
@@ -286,7 +328,7 @@ describe('planPublish (classwork drafts)', () => {
     });
     expect(plan.cascade.finalIds).toEqual(['t1']);
     const [alice] = buildEmailTasks(plan.cascade.finalIds, withSolo, plan.scoreRowsByStudent);
-    expect(alice.lines).toEqual([{ name: 'Unit Test', scoreLabel: '40/50', pctLabel: '(80%)', comment: null }]);
+    expect(alice.lines).toEqual([line('t1', 'Unit Test', '40/50', '80%')]);
     expect(alice.runningGradeLabel).toMatch(/^80% /); // the 2/20 draft would pull it down
     expect(plan.scoreRowsByStudent.get('s1').rows.find((r) => r.assessment_id === 'solo').score).toBeNull();
   });

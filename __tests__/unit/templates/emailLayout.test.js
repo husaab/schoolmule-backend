@@ -87,8 +87,8 @@ describe('emailTemplate – every template uses the shared layout', () => {
     getGradesDigestEmailHTML: {
       studentName: 'Test Student', schoolName: 'Al Haadi Academy', schoolInfo: school, portalUrl: 'https://example.com/p',
       classes: [
-        { className: 'English', assessments: [{ name: 'Spelling', scoreLabel: '', pctLabel: '(90%)', comment: null }], runningGradeLabel: '88% · based on 3 of 5' },
-        { className: 'Math', assessments: [{ name: 'Workbook Quiz', scoreLabel: '', pctLabel: '(85%)', comment: null }], runningGradeLabel: null },
+        { className: 'English', assessments: [{ name: 'Spelling 4', group: 'Spelling', scoreLabel: '9/10', pctLabel: '90%', comment: null }], runningGradeLabel: '88% · based on 3 of 5' },
+        { className: 'Math', assessments: [{ name: 'Quiz 2', group: 'Workbook Quiz', scoreLabel: '8.5/10', pctLabel: '85%', comment: null }], runningGradeLabel: null },
       ],
     },
   };
@@ -112,8 +112,8 @@ describe('emailTemplate – every template uses the shared layout', () => {
     expect(html).toContain('New grades for Test Student');
     expect(html).toContain('2 assessments in 2 classes were graded and shared with you.');
     expect(html).toContain('English');
-    expect(html).toContain('Spelling');
-    expect(html).toContain('(90%)');
+    expect(html).toContain('Spelling 4');
+    expect(html).toContain('90%');
     expect(html).toContain('Workbook Quiz');
     expect(html).toContain('Current grade in English: <strong>88% · based on 3 of 5</strong>');
     expect(html).not.toContain('Current grade in Math');
@@ -124,11 +124,38 @@ describe('emailTemplate – every template uses the shared layout', () => {
   it('escapes class and assessment names in the grades email', () => {
     const html = templates.getGradesDigestEmailHTML({
       ...cases.getGradesDigestEmailHTML,
-      classes: [{ className: '<b>Art</b>', assessments: [{ name: '<i>Sketch</i>', scoreLabel: '', pctLabel: '(70%)', comment: null }], runningGradeLabel: null }],
+      classes: [{ className: '<b>Art</b>', assessments: [{ name: '<i>Sketch</i>', group: '<u>Studio</u>', scoreLabel: '7/10', pctLabel: '70%', comment: null }], runningGradeLabel: null }],
     });
     expect(html).toContain('&lt;b&gt;Art&lt;/b&gt;');
     expect(html).toContain('&lt;i&gt;Sketch&lt;/i&gt;');
+    expect(html).toContain('&lt;u&gt;Studio&lt;/u&gt;');
     expect(html).toContain('One assessment in <strong>&lt;b&gt;Art&lt;/b&gt;</strong> was graded and shared with you.');
+  });
+
+  describe('the new-grades rows', () => {
+    const render = (assessments) => templates.getAssessmentPublishedEmailHTML({ ...cases.getAssessmentPublishedEmailHTML, assessments });
+
+    it("show each item's own score under its category label", () => {
+      const html = render([{ name: 'Spelling 4', group: 'Spelling', scoreLabel: '9.5/10', pctLabel: '95%', comment: null }]);
+      expect(html).toContain('>Spelling</div>');
+      expect(html).toContain('>Spelling 4</div>');
+      expect(html).toContain('9.5/10');
+      expect(html).toContain('>95%</div>');
+    });
+
+    it('link a row to a message to the teacher when the sender gives one', () => {
+      const askUrl = 'https://example.com/parent/messages?tab=conversations&ask=s1&askClass=c1&askAssessment=a1';
+      const html = render([{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%', askUrl, askLabel: 'Ask <Ms. Clarke> about this' }]);
+      expect(html).toContain('href="https://example.com/parent/messages?tab=conversations&amp;ask=s1&amp;askClass=c1&amp;askAssessment=a1"');
+      expect(html).toContain('Ask &lt;Ms. Clarke&gt; about this &rarr;');
+      expect(render([{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%' }])).not.toContain('about this');
+    });
+
+    it('colour missing work rose', () => {
+      const html = render([{ name: 'Reading Log', scoreLabel: 'Missing', pctLabel: '0%', isMissing: true }]);
+      expect(html).toMatch(/color:#be123c;">Missing</);
+      expect(html).toMatch(/color:#be123c;">0%</);
+    });
   });
 
   it('account emails resolve a school code to its display name', () => {

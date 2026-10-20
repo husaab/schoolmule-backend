@@ -49,14 +49,19 @@ const pairs = [
 describe('planCatchUp', () => {
   const plan = planCatchUp({ pairs, classes });
 
-  it('gives a student one email with a section per class, each listed through its category line', () => {
+  it('gives a student one email with a section per class, each item with its own score', () => {
     const amal = plan.find((p) => p.studentId === 'amal');
     expect(amal.studentName).toBe('Amal Test');
     expect(amal.classes.map((c) => c.className)).toEqual(['English', 'Math']);
-    // Two separate publishes in English become one Spelling line (both items count).
-    expect(amal.classes[0].lines).toEqual([{ name: 'Spelling', scoreLabel: '', pctLabel: '(85%)', comment: null }]);
-    // Quiz 2 was unpublished since: only Quiz 1 counts, and only it is recorded as emailed.
-    expect(amal.classes[1].lines).toEqual([{ name: 'Workbook Quiz', scoreLabel: '', pctLabel: '(60%)', comment: null }]);
+    // Two separate publishes in English: both Spelling items, each with its score.
+    expect(amal.classes[0].lines.map((l) => [l.group, l.name, l.scoreLabel, l.pctLabel])).toEqual([
+      ['Spelling', 'Spelling 1', '9/10', '90%'],
+      ['Spelling', 'Spelling 2', '8/10', '80%'],
+    ]);
+    // Quiz 2 was unpublished since: only Quiz 1 is listed, and only it is recorded as emailed.
+    expect(amal.classes[1].lines.map((l) => [l.group, l.name, l.scoreLabel, l.pctLabel])).toEqual([
+      ['Workbook Quiz', 'Quiz 1', '6/10', '60%'],
+    ]);
     expect(amal.classes[1].audit).toEqual([{ batchId: 'b3', triggeredBy: 't2', assessmentIds: ['q1'] }]);
     expect(amal.classes[0].audit.map((a) => a.batchId)).toEqual(['b1', 'b2']);
   });

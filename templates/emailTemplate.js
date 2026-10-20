@@ -12,6 +12,8 @@ const {
   paragraph,
   finePrint,
   button,
+  buttonRow,
+  askLine,
   note,
   facts,
   signOff,
@@ -187,7 +189,7 @@ const getStudentAccountReadyEmailHTML = ({ firstName, schoolName, schoolInfo, ac
     heading: `${firstName}'s SchoolMule account is ready`,
     preheader: `${firstName} set up a SchoolMule student account.`,
     content: [
-      paragraph('Hi,'),
+      paragraph('Hi there,'),
       paragraph(`${name} set up a SchoolMule student account on ${escapeHtml(activatedOn)} (${how}). ${name} can now see classes, work and grades there.`),
       finePrint(`If you don't think ${name} did this, contact the school office.`),
     ].join(''),
@@ -468,8 +470,9 @@ function getAnnouncementEmailHTML({
   const replyHint = `Have a question? Reply to this email or open SchoolMule and choose “Reply privately” to write to ${escapeHtml(authorName)}.`;
   const cta = kind === 'account'
     ? [
-        ackRequested && ackLink ? button('Got it ✓', ackLink) : '',
-        button('Read in SchoolMule', link),
+        ackRequested && ackLink
+          ? buttonRow([{ label: 'Got it ✓', url: ackLink }, { label: 'Read in SchoolMule', url: link }])
+          : button('Read in SchoolMule', link),
         finePrint(`${ackRequested ? '“Got it” opens SchoolMule and records that you have read this. ' : ''}${replyHint}`),
       ]
     : kind === 'invite'
@@ -546,7 +549,7 @@ function resolveEmailBody({ customMessage, reportType, studentName, term }) {
 function reportEmailHTML({ reportType, label, studentName, term, customMessage, schoolName, customHeader, schoolInfo }) {
   return renderEmail({
     brand: schoolBrand(schoolInfo, schoolName),
-    heading: customHeader || `${studentName} - ${label} (${term})`,
+    heading: customHeader || `${studentName} — ${label} (${term})`,
     preheader: `${label} for ${studentName} is attached.`,
     content: [
       facts([
@@ -587,30 +590,28 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
   });
 }
 
-/**
- * "New grades posted" digest — one per guardian per child per publish batch.
- *
- * assessments: [{ name, scoreLabel, pctLabel, comment }] — already formatted
- * by the caller, which owns the grade math (a category has no raw score, only
- * a rollup percentage, so scoreLabel may be empty).
- */
-// The graded assessments table: name (and the teacher's note) left, score and percentage right.
+// The graded assessments table: category, name, the teacher's note and the ask
+// link on the left; score and percentage on the right (rose when missing).
 function gradeRowsTable(assessments) {
   const cell = `font-family:${FONT_BODY};padding:12px 0;border-top:1px solid ${COLORS.divider};vertical-align:top;`;
   const rows = assessments
-    .map(
-      (a, i) => `
+    .map((a, i) => {
+      const last = i === assessments.length - 1 ? `border-bottom:1px solid ${COLORS.divider};` : '';
+      const ink = a.isMissing ? COLORS.missing : COLORS.heading;
+      return `
     <tr>
-      <td style="${cell}${i === assessments.length - 1 ? `border-bottom:1px solid ${COLORS.divider};` : ''}">
+      <td style="${cell}${last}">
+        ${a.group ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;line-height:1.4;color:${COLORS.muted};margin:0 0 2px;">${escapeHtml(a.group)}</div>` : ''}
         <div style="font-size:15px;font-weight:500;line-height:1.4;color:${COLORS.heading};">${escapeHtml(a.name)}</div>
         ${a.comment ? `<div style="font-size:13px;line-height:1.5;color:${COLORS.muted};margin-top:2px;">${multiline(a.comment)}</div>` : ''}
+        ${askLine(a)}
       </td>
-      <td align="right" style="${cell}${i === assessments.length - 1 ? `border-bottom:1px solid ${COLORS.divider};` : ''}padding-left:16px;text-align:right;white-space:nowrap;">
-        ${a.scoreLabel ? `<div style="font-size:15px;font-weight:500;color:${COLORS.heading};">${escapeHtml(a.scoreLabel)}</div>` : ''}
-        <div style="font-size:13px;font-weight:700;color:${COLORS.button};">${escapeHtml(a.pctLabel)}</div>
+      <td align="right" style="${cell}${last}padding-left:16px;text-align:right;white-space:nowrap;">
+        ${a.scoreLabel ? `<div style="font-size:15px;font-weight:600;color:${ink};">${escapeHtml(a.scoreLabel)}</div>` : ''}
+        <div style="font-size:13px;font-weight:700;color:${a.isMissing ? COLORS.missing : COLORS.button};">${escapeHtml(a.pctLabel)}</div>
       </td>
-    </tr>`,
-    )
+    </tr>`;
+    })
     .join('');
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`;
 }
@@ -620,6 +621,14 @@ const currentGrade = (className, runningGradeLabel) =>
     ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>. Work that has not been graded yet is not included.`)
     : '';
 
+/**
+ * "New grades posted" digest — one per guardian per child per publish batch.
+ *
+ * assessments: [{ name, group?, scoreLabel, pctLabel, isMissing?, comment?, askUrl?, askLabel? }],
+ * one row per released item, already formatted by the caller, which owns the
+ * grade math. `group` is the category the item sits in; `askUrl` opens a new
+ * message to the teacher about it ("Ask Ms. Clarke about this").
+ */
 function getAssessmentPublishedEmailHTML({
   studentName,
   className,

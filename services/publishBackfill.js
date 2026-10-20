@@ -4,8 +4,8 @@
 // grades published from inside a category went live, but no parent email
 // was sent. planCatchUp turns the missed (publish, student) pairs into one
 // email per student with a section per class, from the grades as they are
-// now: only columns still published, each class listed through its category
-// lines exactly as a normal publish email is (publishDigestTasks). Pure; the
+// now: only columns still published, each listed with its own score exactly
+// as a normal publish email is (publishDigestTasks). Pure; the
 // script (scripts/backfillPublishDigests.js) loads the data and sends.
 
 const { publishDigestTasks } = require('../controllers/assessmentPublish.controller');

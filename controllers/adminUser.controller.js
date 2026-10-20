@@ -108,7 +108,7 @@ const sendInvite = async (user, invitedBy) => {
   await sendOrThrow(getResend(), {
     ...platformSender("verify"),
     to: user.email,
-    subject: "You're invited to School Mule",
+    subject: "You're invited to SchoolMule",
     html,
   });
 };

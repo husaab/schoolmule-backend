@@ -267,7 +267,7 @@ const resendVerification = async ({ school, userId, adminId }) => {
     {
       ...platformSender("verify"),
       to: user.email,
-      subject: "Verify your email at School Mule",
+      subject: "Verify your email at SchoolMule",
       html: getVerificationEmailHTML({
         name: user.first_name,
         url: `${process.env.FRONTEND_URL}/verify-email-token?token=${user.email_token}`,

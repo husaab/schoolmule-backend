@@ -8,7 +8,7 @@
 // escaped here) and ready-made labels (dates are Toronto time).
 
 const {
-  schoolBrand, escapeHtml, multiline, paragraph, finePrint, button, note, facts, signOff, schoolContact, renderEmail, COLORS, FONT_BODY,
+  schoolBrand, escapeHtml, multiline, paragraph, finePrint, button, askLine, note, facts, signOff, schoolContact, renderEmail, COLORS, FONT_BODY,
 } = require('./emailLayout');
 const { summarySubject, missingSubject, possessiveNames } = require('../services/classroom/classroomDigest');
 
@@ -223,15 +223,19 @@ function gradedEmail({ recipientFirstName, grades, link: url, schoolName, school
 
 // ── Parents ────────────────────────────────────────────────────────────────
 
-/** One email per family: "Missing work: Yusuf (1), Maryam (2)". */
+/**
+ * One email per family: "Missing work: Yusuf (1), Maryam (2)". An item with
+ * `askUrl` gets an "Ask <teacher> about this" link (`askLabel`).
+ */
 function missingAlertEmail({ recipientFirstName, children, link: url, prefsLink = null, schoolName, schoolInfo }) {
   const blocks = children.filter((c) => c.items.length).map((c) => [
     childHeading(c),
     box([
       sectionLabel('Missing', ROSE.ink),
-      ...c.items.map((i) => `<div style="margin:0 0 4px;">${workLine(i.title, i.subject, i.whenLabel)}</div>`),
+      ...c.items.map((i) => `<div style="margin:0 0 ${i.askUrl ? 10 : 4}px;">${workLine(i.title, i.subject, i.whenLabel)}${askLine(i)}</div>`),
     ].join(''), { bg: ROSE.bg, border: ROSE.border, margin: '0 0 18px' }),
   ].join('')).join('');
+  const asks = children.some((c) => c.items.some((i) => i.askUrl));
   return {
     subject: missingSubject(children.map((c) => ({ name: c.name, count: c.items.length }))),
     html: renderEmail({
@@ -240,7 +244,9 @@ function missingAlertEmail({ recipientFirstName, children, link: url, prefsLink 
       preheader: missingSubject(children.map((c) => ({ name: c.name, count: c.items.length }))),
       content: [
         hi(recipientFirstName),
-        paragraph('This work became missing in the last day. Open SchoolMule to see the details or to message the teacher.'),
+        paragraph(asks
+          ? 'This work became missing in the last day. Ask the teacher about it below, or open SchoolMule to see the details.'
+          : 'This work became missing in the last day. Open SchoolMule to see the details or to message the teacher.'),
         blocks,
         button('Open SchoolMule', url),
         signOff(schoolName),

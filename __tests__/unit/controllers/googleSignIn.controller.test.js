@@ -229,7 +229,7 @@ describe('POST /api/auth/google: sign in', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({ isVerified: true, isVerifiedSchool: false });
     const subjects = mockSend.mock.calls.map(([msg]) => msg.subject);
-    expect(subjects).toEqual(['Your Email Has Been Verified at School Mule', 'New User Awaiting School Approval']);
+    expect(subjects).toEqual(['Your Email Has Been Verified at SchoolMule', 'New User Awaiting School Approval']);
   });
 
   it('replaces a password set before the email was verified (someone else may have signed up with it)', async () => {
@@ -343,7 +343,7 @@ describe('POST /api/auth/google: sign up', () => {
     const claims = jwt.verify(res.body.data.token, JWT_SECRET);
     expect(claims).toMatchObject({ isVerified: true, isVerifiedSchool: false });
     const subjects = mockSend.mock.calls.map(([msg]) => msg.subject);
-    expect(subjects).toEqual(['Your Email Has Been Verified at School Mule', 'New User Awaiting School Approval']);
+    expect(subjects).toEqual(['Your Email Has Been Verified at SchoolMule', 'New User Awaiting School Approval']);
   });
 
   it('splits a single-field Google name', async () => {

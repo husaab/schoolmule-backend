@@ -210,7 +210,7 @@ const notifyAccountVerified = async (user) => {
   await sendSafely(getResend(), {
     ...platformSender('verify'),
     to: user.email,
-    subject: 'Your Email Has Been Verified at School Mule',
+    subject: 'Your Email Has Been Verified at SchoolMule',
     html: getConfirmedEmailHTML({ name: user.username }),
   }, "Email-verified confirmation failed to send", { userId: user.user_id });
 
@@ -310,7 +310,7 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
       const emailSent = await sendSafely(getResend(), {
         ...platformSender('verify'),
         to: user.email,
-        subject: 'Verify your email at School Mule',
+        subject: 'Verify your email at SchoolMule',
         html
       }, "Signup verification email failed to send", { userId: user.user_id });
 
@@ -677,7 +677,7 @@ const googleSignIn = async (req) => {
       await sendOrThrow(getResend(), {
         ...platformSender('verify'),
         to: email,
-        subject: 'Verify your email at School Mule',
+        subject: 'Verify your email at SchoolMule',
         html
       });
 
@@ -809,7 +809,7 @@ const resendSchoolApprovalEmail = async (req, res) => {
     await sendOrThrow(getResend(), {
       ...platformSender('verify'),
       to: user.email,
-      subject: 'Reminder: Your School Mule Account Was Approved',
+      subject: 'Reminder: Your SchoolMule Account Was Approved',
       html,
     });
 

@@ -74,10 +74,10 @@ const MISSING_SINCE = `(CASE WHEN ${GRADE_VISIBLE} THEN sub.published_at ELSE i.
 // Missing came to be). assessment_publication_emails rows are one per child
 // and send; assessment_ids are the lines it listed (a Classwork publish adds
 // the column under a category line). A Grades publish lists only top-level
-// lines, so a `confirmed` Missing it published under a category is matched
-// through the publish batch, which names every column it published (the
-// Missing is in that category line's rollup). A derived Missing never is: it
-// has no cell, so the category line said nothing about it (post-Fable I-new).
+// lines in assessment_ids (its email lists each column as its own row), so a
+// `confirmed` Missing it published under a category is matched through the
+// publish batch, which names every column it published. A derived Missing
+// never is: it has no cell, so the email had no row for it (post-Fable I-new).
 const IN_SENT_DIGEST = (student, assessment, email, after, confirmed) => `EXISTS (
     SELECT 1 FROM assessment_publication_emails ape
     JOIN assessment_publication_batches apb ON apb.batch_id = ape.batch_id
@@ -541,7 +541,8 @@ const classroomEmailQueries = {
   //  alert leaves it out. A Missing confirmed live with no digest stays in.
   //  $1 student ids, $2 item ids (pairwise), $3 now, $4 recipient email
   selectAlertItems: `
-    SELECT ro.student_id, i.item_id, i.kind, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
+    SELECT ro.student_id, i.item_id, i.kind, i.class_id, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
+           NULLIF(TRIM(CONCAT(tu.first_name, ' ', tu.last_name)), '') AS teacher_name,
            i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
            ${WORK_STATE_AT('$3::timestamptz')} AS state,
            ${IN_SENT_DIGEST('ro.student_id', 'i.assessment_id', '$4::text', MISSING_SINCE, GRADE_VISIBLE)} AS announced
@@ -549,6 +550,7 @@ const classroomEmailQueries = {
     JOIN classwork_items i ON i.item_id = p.item_id
     JOIN class_students ro ON ro.class_id = i.class_id AND ro.student_id = p.student_id
     JOIN classes c ON c.class_id = i.class_id AND c.archived_at IS NULL
+    LEFT JOIN users tu ON tu.user_id = c.teacher_id
     LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
     ${WORK_JOINS('ro.student_id')}
     WHERE ${ITEM_VISIBLE('i', 'a', 'ro', '$3::timestamptz')}`,

@@ -498,7 +498,7 @@ const messagingQueries = {
   // Parent picker: the child's current-term classes. $1 student_id, $2 school_year_id|null,
   // $3 current term_id|null, $4 current term name|null
   selectParentTargets: `
-    SELECT cl.class_id, cl.subject, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name,
+    SELECT cl.class_id, cl.subject, cl.teacher_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name,
            a.assessment_id, a.name AS assessment_name, a.date, a.is_published,
            cv.conversation_id
     FROM class_students cs

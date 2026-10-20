@@ -88,7 +88,7 @@ describe('POST /api/admin/approvals/:id/resend-verification', () => {
     expect(mockSend).toHaveBeenCalledTimes(1);
     const sent = mockSend.mock.calls[0][0];
     expect(sent.to).toBe('parent@family.com');
-    expect(sent.subject).toBe('Verify your email at School Mule');
+    expect(sent.subject).toBe('Verify your email at SchoolMule');
     expect(sent.html).toContain(`${process.env.FRONTEND_URL}/verify-email-token?token=tok-123`);
   });
 

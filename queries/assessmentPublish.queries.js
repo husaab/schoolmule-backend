@@ -6,6 +6,8 @@
 // also writes one `assessment_publication_batches` row, and each attempted
 // guardian email writes one `assessment_publication_emails` row.
 
+const { inCurrentTerm } = require('./termScope');
+
 const assessmentPublishQueries = {
   // ────────────────────────────────────────────────────────────
   // Validation & cascade
@@ -115,6 +117,34 @@ const assessmentPublishQueries = {
     LEFT JOIN users AS u            ON u.user_id     = ps.parent_id
     WHERE s.student_id = ANY($1::uuid[])
     GROUP BY s.student_id, s.name
+  `,
+
+  /**
+   * The email's class line and its "Ask <teacher> about this" links: the
+   * subject, the lead teacher's account name (classes.teacher_name can be
+   * stale), and whether parents can start a conversation about the class:
+   * it sits in the active school year (what the parent portal shows) and in
+   * that year's current term, the same rule as messaging
+   * (termScope.inCurrentTerm; no active term filters nothing).
+   * Params: $1 class_id
+   */
+  selectEmailClassContext: `
+    SELECT
+      cl.subject,
+      NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS teacher_name,
+      (cl.school_year_id IS NULL OR COALESCE(sy.is_active, FALSE))
+        AND ${inCurrentTerm('cl', 't.term_id', 't.name')} AS askable
+    FROM classes AS cl
+    LEFT JOIN users AS u ON u.user_id = cl.teacher_id
+    LEFT JOIN school_years AS sy ON sy.school_year_id = cl.school_year_id
+    -- termScope.selectCurrentTerm, for the class's own school and year
+    LEFT JOIN LATERAL (
+      SELECT term_id, name FROM terms
+      WHERE school = cl.school AND is_active = TRUE
+        AND (cl.school_year_id IS NULL OR school_year_id = cl.school_year_id)
+      ORDER BY start_date DESC LIMIT 1
+    ) AS t ON TRUE
+    WHERE cl.class_id = $1
   `,
 
   // ────────────────────────────────────────────────────────────

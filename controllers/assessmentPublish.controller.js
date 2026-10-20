@@ -28,9 +28,9 @@ const db = require('../config/database');
 const logger = require('../logger');
 const engine = require('../services/analyticsEngine');
 const publishQueries = require('../queries/assessmentPublish.queries');
-const classQueries = require('../queries/class.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
+const { askFields } = require('../utils/parentLinks');
 const { cleanEmailArray, getResend, sendOrThrow } = require('../utils/emailUtils');
 const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
@@ -162,18 +162,21 @@ function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
   return warnings;
 }
 
-/** Format one assessment's result for the email table. */
-function formatAssessmentLine(assessment, result) {
-  const pct = Math.round(result.pct * 10) / 10;
+/**
+ * One released column's row in the email: its own score, labelled with its
+ * category (`group`) when it sits inside one. `assessmentId` lets the sender
+ * link the row to a conversation about it.
+ */
+function formatAssessmentLine(assessment, result, { group = null, comment = assessment.parent_comment || null } = {}) {
   const isMissing = result.state === 'missing';
   return {
+    assessmentId: assessment.assessment_id,
     name: assessment.name,
-    // A category has no raw score — only a weighted rollup of its children.
-    scoreLabel: isMissing
-      ? 'Missing'
-      : result.earned != null && result.max != null ? `${result.earned}/${result.max}` : '',
-    pctLabel: `(${pct}%)`,
-    comment: assessment.parent_comment || null,
+    group,
+    scoreLabel: isMissing ? 'Missing' : `${result.earned}/${result.max}`,
+    pctLabel: `${Math.round(result.pct * 10) / 10}%`,
+    isMissing,
+    comment,
   };
 }
 
@@ -318,35 +321,37 @@ function planPublish({ requested, allAssessments, scoreRowsByStudent, pendingDra
 }
 
 /**
- * One email task per student who has at least one graded assessment among
- * the published set. A student with nothing graded gets no email at all —
- * an empty digest tells a parent nothing.
+ * One email task per student who has at least one graded (or missing) column
+ * among those this publish releases. A student with nothing graded gets no
+ * email at all — an empty digest tells a parent nothing.
  *
- * Only top-level assessments appear in the email body: a cascaded child is
- * already represented by its category's rollup, and listing both would
- * double-report the same work.
+ * `publishedIds` are top-level lines: a standalone column, or a category.
+ * Each column released under a line is its own row with its own score: the
+ * line itself when standalone; for a category, its children released now
+ * (published with it, in `publishing`, or on their own, in `alsoListed`), never
+ * an older sibling. A category's running average is not shown — parents asked
+ * what the new work scored. The audit ids stay per line, as before.
  */
-function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { visibleLines = false, alsoListed = null, publishing = [] } = {}) {
+function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { alsoListed = new Map(), publishing = [] } = {}) {
   const publishedSet = new Set(publishedIds);
   const topLevelPublished = allAssessments.filter(
     (a) => publishedSet.has(a.assessment_id) && !a.parent_assessment_id,
   );
+  const listedUnder = (line) => alsoListed.get(line.assessment_id) || [];
 
   // Every assessment the parent can see after this publish, including
   // earlier batches, so the running grade in the email matches the portal.
-  // `publishing` names columns this publish releases that aren't lines
-  // themselves (a child listed through its category's line, before commit).
-  const releasing = new Set([...publishedSet, ...publishing]);
+  // `publishing` and `alsoListed` name columns this publish releases that
+  // aren't lines themselves (children, before commit).
+  const releasing = new Set([...publishedSet, ...publishing, ...[...alsoListed.values()].flat()]);
   const allPublishedIds = new Set(
     allAssessments.filter((a) => a.is_published || releasing.has(a.assessment_id)).map((a) => a.assessment_id),
   );
   const parentVisible = visibleAssessments(allPublishedIds, allAssessments);
-  // A Classwork publish of one column under a category (sendGradeDigest)
-  // lists the category's line from what parents can see: a sibling column
-  // that isn't published never enters it. (The gradebook's own Publish
-  // publishes the category's graded children with it, so there the two
-  // lists agree.)
-  const lineAssessments = visibleLines ? parentVisible : allAssessments;
+
+  const columnsOf = (line) => (line.is_parent
+    ? allAssessments.filter((c) => c.parent_assessment_id === line.assessment_id && !c.is_parent && releasing.has(c.assessment_id))
+    : [line]);
 
   const tasks = [];
   for (const student of scoreRowsByStudent.values()) {
@@ -354,13 +359,23 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { vis
     const lines = [];
     const gradedIds = [];
 
-    for (const assessment of topLevelPublished) {
-      const result = computeAssessmentForStudent(assessment, lineAssessments, lookup);
-      if (!result.isCounted) continue;
-      lines.push(formatAssessmentLine(assessment, result));
-      gradedIds.push(assessment.assessment_id);
+    for (const line of topLevelPublished) {
+      // A category published itself has no alsoListed entry (publishDigestTasks);
+      // the note the teacher left on it opens its first row.
+      let categoryNote = line.is_parent && !listedUnder(line).length ? line.parent_comment || null : null;
+      let listed = false;
+      for (const column of columnsOf(line)) {
+        const result = computeAssessmentForStudent(column, allAssessments, lookup);
+        if (!result.isCounted) continue;
+        const comment = [categoryNote, column.parent_comment].filter(Boolean).join('\n') || null;
+        lines.push(formatAssessmentLine(column, result, { group: line.is_parent ? line.name : null, comment }));
+        categoryNote = null;
+        listed = true;
+      }
+      if (!listed) continue;
+      gradedIds.push(line.assessment_id);
       // The audit row also names the columns under that line this publish released.
-      for (const extra of (alsoListed && alsoListed.get(assessment.assessment_id)) || []) gradedIds.push(extra);
+      for (const extra of listedUnder(line)) gradedIds.push(extra);
     }
 
     if (lines.length === 0) continue;
@@ -607,12 +622,12 @@ function topLevelLines(assessmentIds, allAssessments) {
 
 /**
  * The parent digest for the gradebook's Publish (its preview, the send and
- * the preview email) of `finalIds`, the cascade's result. Each column is
- * listed through its top-level line, so a column inside a category published
- * on its own (the category window's "Publish 1 selected") is emailed as its
- * category's line, built from what parents will see: published columns plus
- * the ones being published now. A category published with its children, or
- * a column on its own, reads exactly as before.
+ * the preview email) of `finalIds`, the cascade's result. Every column it
+ * releases is a row with its own score, grouped through its top-level line:
+ * a column inside a category published on its own (the category window's
+ * "Publish 1 selected") is listed under that category's name, and the
+ * running grade counts what parents will see (published columns plus the
+ * ones being published now).
  */
 function publishDigestTasks(finalIds, allAssessments, scoreRowsByStudent) {
   const { lineIds, alsoListed } = topLevelLines(finalIds, allAssessments);
@@ -621,16 +636,16 @@ function publishDigestTasks(finalIds, allAssessments, scoreRowsByStudent) {
   // category is named under the category's line, as Classwork's digest does.
   const selected = new Set(finalIds);
   for (const lineId of [...alsoListed.keys()]) if (selected.has(lineId)) alsoListed.delete(lineId);
-  return buildEmailTasks(lineIds, allAssessments, scoreRowsByStudent, { visibleLines: true, alsoListed, publishing: finalIds });
+  return buildEmailTasks(lineIds, allAssessments, scoreRowsByStudent, { alsoListed, publishing: finalIds });
 }
 
 /**
  * Today's publish digest for a publish made from Classwork (the grading
  * view's Publish, Mark missing, Excuse, a quiz released on submit): the same
  * email the gradebook's Publish sends, for `assessmentIds` (a column under a
- * category is listed as its category's line, as main's digest does), to the
- * guardians of `studentIds` only. Built from the committed gradebook, so
- * another student's draft never enters it. After COMMIT; never throws.
+ * category is listed under the category's name), to the guardians of
+ * `studentIds` only. Built from the committed gradebook, so another student's
+ * draft never enters it. After COMMIT; never throws.
  */
 async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds, studentIds }) {
   const none = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
@@ -642,11 +657,10 @@ async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds
       db.query(publishQueries.selectClassScoreRows, [classId]),
     ]);
     const byStudent = groupScoreRowsByStudent(scoreRows.filter((r) => wanted.has(r.student_id)));
-    // The email lists top-level assessments only (main's digest): a column
-    // under a category is reported through its category's line (S2).
+    // A column under a category is listed under the category's name (S2).
     const { lineIds, alsoListed } = topLevelLines(assessmentIds, freshAssessments);
     const tasks = await resolveRecipients(
-      buildEmailTasks(lineIds, freshAssessments, byStudent, { visibleLines: true, alsoListed }),
+      buildEmailTasks(lineIds, freshAssessments, byStudent, { alsoListed }),
     );
     return await sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment: null });
   } catch (error) {
@@ -656,31 +670,39 @@ async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds
 }
 
 /**
- * Send one digest per (guardian set, child), sequentially, respecting
- * Resend's rate limit. Every send is wrapped individually and logged to
- * assessment_publication_emails; nothing in here can throw out to the
- * request handler, because the publish is already committed.
- *
- * A guardian with two children in this class receives two emails, one per
- * child — no cross-child data ever shares a template render.
+ * Class subject, school letterhead and the "Ask <teacher> about this" label
+ * for the email; soft-fails to generic copy and no ask links. `askable` is
+ * false for a class parents may not start a conversation about (past term).
  */
-/** Class subject and school letterhead for the email; soft-fails to generic copy. */
 async function loadEmailContext(classId, school) {
   let className = 'your child\'s class';
   let schoolInfo = null;
+  let teacherName = null;
+  let askable = false;
   try {
     const [{ rows: classRows }, { rows: schoolRows }] = await Promise.all([
-      db.query(classQueries.selectClassById, [classId]),
+      db.query(publishQueries.selectEmailClassContext, [classId]),
       db.query(schoolQueries.selectSchoolByCode, [school]),
     ]);
     if (classRows.length > 0) {
       className = classRows[0].subject || className;
+      teacherName = classRows[0].teacher_name;
+      askable = Boolean(classRows[0].askable);
     }
     if (schoolRows.length > 0) schoolInfo = schoolRows[0];
   } catch (lookupError) {
     logger.warn('Could not resolve class/school info for publish email:', lookupError);
   }
-  return { className, schoolInfo };
+  return { className, schoolInfo, teacherName, askable };
+}
+
+/** A task's rows, each with its "Ask <teacher> about this" link when the class allows it. */
+function linesWithAsk(task, classId, { teacherName, askable }) {
+  if (!askable) return task.lines;
+  return task.lines.map((line) => ({
+    ...line,
+    ...askFields({ studentId: task.studentId, classId, assessmentId: line.assessmentId, about: line.name, teacherName }),
+  }));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -719,10 +741,11 @@ const previewPublishEmail = async (req, res) => {
       return res.status(400).json({ status: 'failed', message: 'Nobody has a score for this selection yet, so there is no email to preview' });
     }
 
-    const [recipients, { className, schoolInfo }] = await Promise.all([
+    const [recipients, emailContext] = await Promise.all([
       resolveRecipients(tasks),
       loadEmailContext(classId, school),
     ]);
+    const { className, schoolInfo } = emailContext;
     const sample = tasks[0];
     const trimmedBatchComment = typeof batchComment === 'string' && batchComment.trim() ? batchComment.trim() : null;
 
@@ -733,7 +756,7 @@ const previewPublishEmail = async (req, res) => {
       html: getAssessmentPublishedEmailHTML({
         studentName: sample.studentName,
         className,
-        assessments: sample.lines,
+        assessments: linesWithAsk(sample, classId, emailContext),
         runningGradeLabel: sample.runningGradeLabel,
         batchComment: trimmedBatchComment,
         schoolName: getSchoolName(school),
@@ -756,11 +779,21 @@ const previewPublishEmail = async (req, res) => {
   }
 };
 
+/**
+ * Send one digest per (guardian set, child), sequentially, respecting
+ * Resend's rate limit. Every send is wrapped individually and logged to
+ * assessment_publication_emails; nothing in here can throw out to the
+ * request handler, because the publish is already committed.
+ *
+ * A guardian with two children in this class receives two emails, one per
+ * child — no cross-child data ever shares a template render.
+ */
 async function sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment }) {
   const summary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
   if (!tasks || tasks.length === 0) return summary;
 
-  const { className, schoolInfo } = await loadEmailContext(classId, school);
+  const emailContext = await loadEmailContext(classId, school);
+  const { className, schoolInfo } = emailContext;
   const schoolName = getSchoolName(school);
   const sender = schoolSender({ school, schoolInfo, role: 'academics' });
   const resend = getResend();
@@ -806,7 +839,7 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
         html: getAssessmentPublishedEmailHTML({
           studentName: task.studentName,
           className,
-          assessments: task.lines,
+          assessments: linesWithAsk(task, classId, emailContext),
           runningGradeLabel: task.runningGradeLabel,
           batchComment: batchComment || null,
           schoolName,

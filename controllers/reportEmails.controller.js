@@ -156,7 +156,7 @@ const sendReportEmail = async (req, res) => {
       ? getProgressReportEmailHTML(emailData)
       : getReportCardEmailHTML(emailData);
 
-    const subject = customHeader || `${student.name} - ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
+    const subject = customHeader || `${student.name} — ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
 
     const resend = getResend();
 
@@ -422,7 +422,7 @@ const sendBulkReportEmails = async (req, res) => {
           ? getProgressReportEmailHTML(emailData)
           : getReportCardEmailHTML(emailData);
 
-        const subject = task.customHeader || `${task.student.name} - ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
+        const subject = task.customHeader || `${task.student.name} — ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
 
         // Prepare email payload
         const emailPayload = {

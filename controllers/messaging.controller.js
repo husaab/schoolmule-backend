@@ -527,7 +527,7 @@ const getTargets = async (req, res) => {
       const byClass = new Map();
       for (const r of rows) {
         if (!byClass.has(r.class_id)) {
-          byClass.set(r.class_id, { classId: r.class_id, subject: r.subject, teacherName: r.teacher_name || null, assessments: [] });
+          byClass.set(r.class_id, { classId: r.class_id, subject: r.subject, teacherId: r.teacher_id || null, teacherName: r.teacher_name || null, assessments: [] });
         }
         if (r.assessment_id) {
           byClass.get(r.class_id).assessments.push({
