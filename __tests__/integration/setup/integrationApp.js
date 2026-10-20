@@ -38,12 +38,15 @@ async function ensureTokenUser(payload) {
   const role = payload.baseRole || payload.role;
   if (!STAFF_ROLES.has(role) || !payload.userId) return;
   const db = require('../../../config/database');
-  await db.query(
+  const insert = (email) => db.query(
     `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
      VALUES ($1, $2, $3, '!', 'Test', 'User', $4, $5, true, true)
      ON CONFLICT DO NOTHING`,
-    [payload.userId, payload.email || `${payload.userId}@test.com`, payload.username || 'Test User', payload.school, role],
+    [payload.userId, email, payload.username || 'Test User', payload.school, role],
   );
+  // The token's email may belong to another test user: fall back to a unique one.
+  const { rowCount } = await insert(payload.email || `${payload.userId}@rbac.test`);
+  if (rowCount === 0) await insert(`${payload.userId}@rbac.test`);
 }
 
 /** Create an authenticated supertest request with a real JWT */

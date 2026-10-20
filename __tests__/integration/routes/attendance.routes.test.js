@@ -127,10 +127,11 @@ describe('Integration: Attendance Routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 400 when school is missing', async () => {
+    // The school is always the caller's own (RBAC): no ?school= needed.
+    it("uses the caller's school when no school is given", async () => {
       const res = await authenticatedRequest('get', '/api/attendance/general?date=2025-10-15');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
     });
 
     it('returns empty array for a date with no attendance', async () => {
@@ -169,9 +170,16 @@ describe('Integration: Attendance Routes', () => {
       expect(dbResult.rows).toHaveLength(2);
     });
 
-    it('returns 400 when required fields are missing', async () => {
+    // The class is looked up first (class access): an unknown class is a 404.
+    it('returns 404 for a class that does not exist', async () => {
       const res = await authenticatedRequest('post', '/api/attendance/class')
         .send({ classId: '00000000-0000-0000-0000-000000000000' });
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 without a classId', async () => {
+      const res = await authenticatedRequest('post', '/api/attendance/class').send({ attendanceDate: '2025-10-15', entries: [] });
 
       expect(res.status).toBe(400);
     });

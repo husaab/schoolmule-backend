@@ -202,7 +202,8 @@ describe('Integration: Import student emails', () => {
 
   it("another school's admin can't match or save onto this school's students", async () => {
     await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
-    const asOther = { ...asAdmin, school: 'PLAYGROUND' };
+    // Another school's admin: their own account (RBAC reads it from the database).
+    const asOther = { ...asAdmin, userId: '550e8400-e29b-41d4-a716-446655440099', school: 'PLAYGROUND' };
     const [line] = (await authenticatedRequest('post', `${BASE}/preview`, asOther)
       .send({ lines: [{ name: 'Amal Haddad', email: 'amal.haddad@example.com', grade: '5' }] })).body.data.lines;
     expect(line.match).toEqual({ kind: 'not_found', candidates: [] });

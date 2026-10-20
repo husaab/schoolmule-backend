@@ -314,24 +314,24 @@ describe('Integration: classroom teacher read API', () => {
           userId: CO_TEACHER_ID, name: 'Omar Coteacher', role: 'co', avatar: null, photoUrl: null, homeroomGrade: null,
         },
       ]);
-      expect(permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: false });
+      expect(permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: false, canRetryEmails: false });
       expect(settings).toEqual({ parentsReadPrivateComments: true, studentPhotos: false, enabled: false });
     });
 
     it('an admin and a co-teacher may edit and delete a current-year class', async () => {
       const admin = await get(`${BASE}/classes/${sciId}`, asAdmin);
-      expect(admin.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: true });
+      expect(admin.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: true, canRetryEmails: true });
       const co = await get(`${BASE}/classes/${sciId}`, asCoTeacher);
       expect(co.status).toBe(200);
-      expect(co.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: false });
+      expect(co.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: false, canRetryEmails: false });
     });
 
     it('a past school year is read-only for teachers but not admins', async () => {
       const teacher = await get(`${BASE}/classes/${pastSciId}`);
       expect(teacher.status).toBe(200);
-      expect(teacher.body.data.permissions).toEqual({ canEdit: false, canDelete: false, isAdmin: false });
+      expect(teacher.body.data.permissions).toEqual({ canEdit: false, canDelete: false, isAdmin: false, canRetryEmails: false });
       const admin = await get(`${BASE}/classes/${pastSciId}`, asAdmin);
-      expect(admin.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: true });
+      expect(admin.body.data.permissions).toEqual({ canEdit: true, canDelete: true, isAdmin: true, canRetryEmails: true });
     });
 
     it('opens an archived class by its id, showing archivedAt, so it can be unarchived', async () => {

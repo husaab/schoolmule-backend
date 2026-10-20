@@ -160,10 +160,11 @@ describe('Integration: Class Routes', () => {
       expect(res.status).toBe(404);
     });
 
-    it('returns 400 for invalid UUID format', async () => {
+    // The class guard runs first and reads a malformed id as a probe (403).
+    it('refuses an invalid UUID format', async () => {
       const res = await authenticatedRequest('get', '/api/classes/not-a-uuid');
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
     });
   });
 

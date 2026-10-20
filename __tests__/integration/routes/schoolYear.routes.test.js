@@ -139,7 +139,8 @@ describe('/api/school-years', () => {
   });
 
   it('blocks non-admin mutations', async () => {
-    const res = await authenticatedRequest('post', '/api/school-years', { role: 'TEACHER' })
+    // A teacher's own account (RBAC reads the role from the database).
+    const res = await authenticatedRequest('post', '/api/school-years', { userId: '550e8400-e29b-41d4-a716-446655440098', role: 'TEACHER', email: 'teacher.years@test.com' })
       .send({ label: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30' });
     expect(res.status).toBe(403);
   });

@@ -12,11 +12,17 @@ const TEST_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 
 describe('Integration: School Routes', () => {
   let app, pool;
+  // Listing, creating and deleting schools is the platform owner's (RBAC):
+  // the test admin is made the owner here.
+  const ownerBefore = process.env.PLATFORM_OWNER_EMAILS;
 
   beforeAll(() => {
     app = getApp();
     pool = getTestPool();
+    process.env.PLATFORM_OWNER_EMAILS = 'admin@test.com';
   });
+
+  afterAll(() => { process.env.PLATFORM_OWNER_EMAILS = ownerBefore; });
 
   beforeEach(async () => {
     await pool.query(

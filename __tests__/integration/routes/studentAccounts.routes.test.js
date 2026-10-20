@@ -325,7 +325,7 @@ describe('Integration: Student accounts', () => {
 
     // Another school's admin cannot see this student.
     await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
-    const foreign = await authenticatedRequest('patch', `${BASE}/${amalId}`, { ...asAdmin, school: 'PLAYGROUND' })
+    const foreign = await authenticatedRequest('patch', `${BASE}/${amalId}`, { ...asAdmin, userId: '550e8400-e29b-41d4-a716-446655440099', school: 'PLAYGROUND' })
       .send({ studentEmail: 'x@example.com' });
     expect(foreign.status).toBe(404);
   });
@@ -634,7 +634,7 @@ describe('Integration: Student accounts', () => {
 
     const refused = await authenticatedRequest('patch', `/api/students/${ramiId}`, asTeacher).send({ studentEmail: 'taken.over@example.com' });
     expect(refused.status).toBe(403);
-    expect(refused.body.message).toBe("Only admins can set a student's email. Use Admin Panel → Student accounts.");
+    expect(refused.body.message).toBe("Only people who manage student accounts can set a student's email. Use Admin Panel → Student accounts.");
     // Clearing it is a change too.
     expect((await authenticatedRequest('patch', `/api/students/${amalId}`, asTeacher).send({ studentEmail: null })).status).toBe(403);
     // A parent is refused before any of that (R1: staff only).
@@ -655,7 +655,7 @@ describe('Integration: Student accounts', () => {
 
     // Another school's admin cannot reach this school's student.
     await pool.query(`INSERT INTO schools (school_code, name) VALUES ('PLAYGROUND', 'Playground') ON CONFLICT DO NOTHING`);
-    const foreign = await authenticatedRequest('patch', `/api/students/${ramiId}`, { ...asAdmin, school: 'PLAYGROUND' })
+    const foreign = await authenticatedRequest('patch', `/api/students/${ramiId}`, { ...asAdmin, userId: '550e8400-e29b-41d4-a716-446655440099', school: 'PLAYGROUND' })
       .send({ studentEmail: 'taken.over@example.com' });
     expect(foreign.status).toBe(404);
     expect(await studentEmailOf(ramiId)).toBeNull();
