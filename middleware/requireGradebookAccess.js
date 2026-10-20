@@ -9,6 +9,7 @@
 //   requireGradebookAccess({
 //     classIds: (req) => [...],       // class ids named in the request
 //     assessmentIds: (req) => [...],  // assessment ids named in the request
+//     keys: ['report_cards'],         // also let holders of these keys in
 //   })
 //
 // With no ids at all it passes, so the controller's own 400 still answers.
@@ -17,6 +18,7 @@
 const db = require('../config/database');
 const logger = require('../logger');
 const { withAccess, classAccessGranted } = require('./access');
+const { assertKey } = require('../services/access/access');
 
 const NOT_AUTHORIZED = { status: 'failed', message: 'Not authorized for this class' };
 
@@ -36,8 +38,9 @@ const SQL = `/* access:gradebook */
 
 const distinctIds = (list) => [...new Set((Array.isArray(list) ? list : []).filter((id) => typeof id === 'string' && id))];
 
-const requireGradebookAccess = ({ classIds = () => [], assessmentIds = () => [] } = {}) =>
-  withAccess(async (req, res, next) => {
+const requireGradebookAccess = ({ classIds = () => [], assessmentIds = () => [], keys = [] } = {}) => {
+  keys.forEach(assertKey);
+  return withAccess(async (req, res, next) => {
     const cIds = distinctIds(classIds(req));
     const aIds = distinctIds(assessmentIds(req));
     if (cIds.length === 0 && aIds.length === 0) return next();
@@ -48,7 +51,7 @@ const requireGradebookAccess = ({ classIds = () => [], assessmentIds = () => [] 
       if (!found || found.classes_found < cIds.length || found.assessments_found < aIds.length) {
         return res.status(404).json({ status: 'failed', message: 'Not found' });
       }
-      if (!rows.every((cls) => classAccessGranted(req, cls))) return res.status(403).json(NOT_AUTHORIZED);
+      if (!rows.every((cls) => classAccessGranted(req, cls, keys))) return res.status(403).json(NOT_AUTHORIZED);
 
       if (rows.length === 1) {
         req.class = { classId: found.class_id, school: found.school, teacherId: found.teacher_id };
@@ -60,6 +63,7 @@ const requireGradebookAccess = ({ classIds = () => [], assessmentIds = () => [] 
       return res.status(403).json(NOT_AUTHORIZED);
     }
   });
+};
 
 module.exports = requireGradebookAccess;
 module.exports.SQL = SQL;

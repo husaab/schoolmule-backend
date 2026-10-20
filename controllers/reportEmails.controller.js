@@ -48,7 +48,7 @@ const sendReportEmail = async (req, res) => {
     const emailAddresses = cleanEmailArray(rawEmailAddresses);
     const ccAddresses = cleanEmailArray(rawCcAddresses);
 
-    const userId = req.user?.user_id;
+    const userId = req.user?.userId;
     
     logger.info(`Payload received: ${reportType}, student: ${studentId}, term: ${term}, emails: ${emailAddresses?.length}`);
 
@@ -70,7 +70,8 @@ const sendReportEmail = async (req, res) => {
     // Get student information
     logger.info(`Fetching student data for ID: ${studentId}`);
     const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
-    if (studentRows.length === 0) {
+    // Only the caller's own school's students (another school's reads as missing).
+    if (studentRows.length === 0 || String(studentRows[0].school) !== String(req.user.school)) {
       logger.error(`Student not found: ${studentId}`);
       return res.status(404).json({
         status: 'error',
@@ -259,7 +260,7 @@ const sendBulkReportEmails = async (req, res) => {
       bulkConfig // { customHeader, customMessage, ccAddresses }
     } = req.body;
 
-    const userId = req.user?.user_id;
+    const userId = req.user?.userId;
 
     // Validation
     if (!reportType || !studentIds?.length || !term) {
@@ -283,9 +284,9 @@ const sendBulkReportEmails = async (req, res) => {
     const studentQuery = `
       SELECT student_id, name, school, grade, mother_email, father_email
       FROM students 
-      WHERE student_id = ANY($1) AND is_archived = false
+      WHERE student_id = ANY($1) AND is_archived = false AND school = $2
     `;
-    const { rows: students } = await db.query(studentQuery, [studentIds]);
+    const { rows: students } = await db.query(studentQuery, [studentIds, req.user.school]);
     
     if (students.length === 0) {
       return res.status(404).json({
@@ -550,7 +551,7 @@ const getStudentEmailHistory = async (req, res) => {
       });
     }
 
-    const { rows } = await db.query(reportEmailsQueries.getReportEmailsByStudent, [studentId]);
+    const { rows } = await db.query(reportEmailsQueries.getReportEmailsByStudent, [studentId, req.user.school]);
 
     res.json({
       status: 'success',
@@ -569,7 +570,9 @@ const getStudentEmailHistory = async (req, res) => {
 // Get email history by term and school
 const getEmailHistoryByTermAndSchool = async (req, res) => {
   try {
-    const { term, school } = req.params;
+    // The :school segment is legacy: the caller's own school always applies.
+    const { term } = req.params;
+    const { school } = req.user;
 
     if (!term || !school) {
       return res.status(400).json({

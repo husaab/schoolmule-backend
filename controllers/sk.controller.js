@@ -86,9 +86,11 @@ async function fetchSchoolData(schoolCode) {
 // ============================================================
 const getSubjects = async (req, res) => {
   try {
-    const { documentType, school } = req.query;
-    if (!documentType || !school) {
-      return res.status(400).json({ status: 'error', message: 'documentType and school are required' });
+    // The caller's own school (a ?school= is ignored).
+    const { documentType } = req.query;
+    const { school } = req.user;
+    if (!documentType) {
+      return res.status(400).json({ status: 'error', message: 'documentType is required' });
     }
 
     const { rows } = await db.query(skQueries.getSubjectsByDocumentType, [documentType, school]);
@@ -107,9 +109,10 @@ const getSubjects = async (req, res) => {
 // ============================================================
 const createSubject = async (req, res) => {
   try {
-    const { documentType, name, sortOrder, school } = req.body;
-    if (!documentType || !name || !school) {
-      return res.status(400).json({ status: 'error', message: 'documentType, name, and school are required' });
+    const { documentType, name, sortOrder } = req.body;
+    const { school } = req.user;
+    if (!documentType || !name) {
+      return res.status(400).json({ status: 'error', message: 'documentType and name are required' });
     }
 
     const { rows } = await db.query(skQueries.createSubject, [
@@ -135,7 +138,7 @@ const updateSubject = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'name is required' });
     }
 
-    const { rows } = await db.query(skQueries.updateSubject, [subjectId, name, sortOrder ?? 0]);
+    const { rows } = await db.query(skQueries.updateSubject, [subjectId, name, sortOrder ?? 0, req.user.school]);
 
     res.json({ status: 'success', data: rows[0] });
   } catch (error) {
@@ -150,7 +153,7 @@ const updateSubject = async (req, res) => {
 const deleteSubjectHandler = async (req, res) => {
   try {
     const { subjectId } = req.params;
-    await db.query(skQueries.deleteSubject, [subjectId]);
+    await db.query(skQueries.deleteSubject, [subjectId, req.user.school]);
     res.json({ status: 'success', message: 'Subject deleted' });
   } catch (error) {
     logger.error('Error deleting SK subject:', error);
@@ -170,8 +173,11 @@ const createStandard = async (req, res) => {
     }
 
     const { rows } = await db.query(skQueries.createStandard, [
-      subjectId, name, description || null, sortOrder ?? 0
+      subjectId, name, description || null, sortOrder ?? 0, req.user.school
     ]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Subject not found' });
+    }
 
     res.json({ status: 'success', data: rows[0] });
   } catch (error) {
@@ -193,7 +199,7 @@ const updateStandardHandler = async (req, res) => {
     }
 
     const { rows } = await db.query(skQueries.updateStandard, [
-      standardId, name, description || null, sortOrder ?? 0
+      standardId, name, description || null, sortOrder ?? 0, req.user.school
     ]);
 
     res.json({ status: 'success', data: rows[0] });
@@ -209,7 +215,7 @@ const updateStandardHandler = async (req, res) => {
 const deleteStandardHandler = async (req, res) => {
   try {
     const { standardId } = req.params;
-    await db.query(skQueries.deleteStandard, [standardId]);
+    await db.query(skQueries.deleteStandard, [standardId, req.user.school]);
     res.json({ status: 'success', message: 'Standard deleted' });
   } catch (error) {
     logger.error('Error deleting SK standard:', error);
@@ -373,9 +379,10 @@ const getTeacherAssistant = async (req, res) => {
 // ============================================================
 const upsertTeacherAssistant = async (req, res) => {
   try {
-    const { studentId, teacherAssistantName, term, school } = req.body;
-    if (!studentId || !term || !school) {
-      return res.status(400).json({ status: 'error', message: 'studentId, term, and school are required' });
+    const { studentId, teacherAssistantName, term } = req.body;
+    const { school } = req.user;
+    if (!studentId || !term) {
+      return res.status(400).json({ status: 'error', message: 'studentId and term are required' });
     }
 
     const { rows } = await db.query(skQueries.upsertTeacherAssistant, [

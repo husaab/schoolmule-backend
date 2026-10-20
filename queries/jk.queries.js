@@ -28,34 +28,38 @@ const createDomain = `
   RETURNING *
 `;
 
+// $4 = the caller's school: another school's rows are never touched.
 const updateDomain = `
   UPDATE jk_skill_domains
   SET name = $2, sort_order = $3
-  WHERE domain_id = $1
+  WHERE domain_id = $1 AND school = $4
   RETURNING *
 `;
 
 const deleteDomain = `
-  DELETE FROM jk_skill_domains WHERE domain_id = $1
+  DELETE FROM jk_skill_domains WHERE domain_id = $1 AND school = $2
 `;
 
 // -- Skill CRUD --
 
+// Only under a parent row of the caller's school ($5).
 const createSkill = `
   INSERT INTO jk_skills (domain_id, name, description, sort_order)
-  VALUES ($1, $2, $3, $4)
+  SELECT p.domain_id, $2::text, $3::text, $4::int
+    FROM jk_skill_domains p
+   WHERE p.domain_id = $1 AND p.school = $5
   RETURNING *
 `;
 
 const updateSkill = `
   UPDATE jk_skills
   SET name = $2, description = $3, sort_order = $4
-  WHERE skill_id = $1
+  WHERE skill_id = $1 AND domain_id IN (SELECT domain_id FROM jk_skill_domains WHERE school = $5)
   RETURNING *
 `;
 
 const deleteSkill = `
-  DELETE FROM jk_skills WHERE skill_id = $1
+  DELETE FROM jk_skills WHERE skill_id = $1 AND domain_id IN (SELECT domain_id FROM jk_skill_domains WHERE school = $2)
 `;
 
 // -- Skill Assessments (D/B/I/N or BG/DV/NI ratings) --

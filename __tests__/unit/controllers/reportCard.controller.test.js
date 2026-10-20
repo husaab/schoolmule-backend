@@ -13,6 +13,14 @@ const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, mockTeacherUser, TEST_SCHOOL } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+
+// RBAC: class feedback routes look the class up first (requireGradebookAccess);
+// the counts cover every id a test names.
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
 const {
   buildReportCardFeedbackRow,
   buildReportCardRow,
@@ -27,6 +35,7 @@ describe('Report Card Controller', () => {
     const url = '/api/report-cards/feedback';
 
     it('should upsert feedback successfully (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([{ term: 'Term 1 2025-2026' }]); // resolveClassTerm
       mockQueryResponse([]);                              // upsert
@@ -48,6 +57,7 @@ describe('Report Card Controller', () => {
     });
 
     it('ignores a client-sent term and stores under the class term', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
       mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm → class is Term 1
@@ -61,13 +71,15 @@ describe('Report Card Controller', () => {
       expect(res.status).toBe(200);
       // the upsert (2nd controller db.query call) must have been called with the CLASS
       // term, not 'Term 2'. Filter out the resolveSchoolYear middleware's own
-      // (globally-mounted) lookup so this stays robust to that extra call.
-      const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years'));
+      // (globally-mounted) lookup and the class guard's, so this stays robust
+      // to those extra calls.
+      const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years') && !sql.includes('access:gradebook'));
       const upsertCall = controllerCalls[1];
       expect(upsertCall[1]).toEqual(['sid', 'cid', 'Term 1', 'G', null, null]);
     });
 
     it('should return 400 when studentId is missing', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -80,6 +92,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when classId is missing', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -91,6 +104,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when the class has no resolvable term', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]); // resolveClassTerm → no row
 
@@ -104,6 +118,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -117,6 +132,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 401 without auth token', async () => {
+      mockGradebookGuard();
       const res = await request(app).post(url).send({
         studentId: 'sid',
         classId: 'cid',
@@ -131,6 +147,7 @@ describe('Report Card Controller', () => {
     const url = '/api/report-cards/feedback';
 
     it('should return feedback data', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildReportCardFeedbackRow();
       mockQueryResponse([{ term: row.term }]); // resolveClassTerm
@@ -148,6 +165,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 404 when feedback not found', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm
       mockQueryResponse([]);                    // selectFeedback → none
@@ -162,6 +180,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when query params missing', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -173,6 +192,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -188,6 +208,7 @@ describe('Report Card Controller', () => {
   // ─── GET /api/report-cards/feedback/class/:classId ─────────────
   describe('GET /api/report-cards/feedback/class/:classId', () => {
     it('should return class feedback (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const row = {
         ...buildReportCardFeedbackRow(),
@@ -207,6 +228,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when the class has no resolvable term', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]); // resolveClassTerm → no row
 
@@ -218,6 +240,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -234,6 +257,7 @@ describe('Report Card Controller', () => {
     const url = '/api/report-cards/feedback/bulk';
 
     it('should save bulk feedback in a transaction (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
@@ -269,6 +293,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when a class has no resolvable term', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
       db.query.mockResolvedValueOnce({ rows: [] }); // resolveClassTerm → none
@@ -283,6 +308,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when feedbackEntries is empty', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -294,6 +320,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when feedbackEntries is missing', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -305,6 +332,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should return 400 when entries have validation errors', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -321,6 +349,7 @@ describe('Report Card Controller', () => {
     });
 
     it('should rollback transaction on failure', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
@@ -474,7 +503,7 @@ describe('Report Card Controller', () => {
       const res = await request(app)
         .delete(url)
         .set('Authorization', `Bearer ${token}`)
-        .query({ filePath: 'some/path.pdf' });
+        .query({ filePath: 'ALHAADIACADEMY/path.pdf' });
 
       expect(res.status).toBe(500);
     });

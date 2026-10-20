@@ -32,7 +32,7 @@ const getReportEmailsByStudent = `
     cc_addresses,
     school
   FROM report_emails
-  WHERE student_id = $1
+  WHERE student_id = $1 AND school = $2
   ORDER BY sent_at DESC
 `;
 

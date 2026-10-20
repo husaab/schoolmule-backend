@@ -13,6 +13,13 @@ const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, mockTeacherUser, TEST_SCHOOL } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+
+// RBAC: the route looks the class up first (requireGradebookAccess).
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
 const {
   buildStudentRow,
   buildClassRow,
@@ -31,6 +38,7 @@ describe('Reports Controller', () => {
       `/api/reports/student-summary/${studentId}/${classId}`;
 
     it('should generate a student summary PDF', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow({ school: TEST_SCHOOL });
       const classInfo = buildClassRow({ term_id: 'term-1' });
@@ -70,6 +78,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 404 when student not found', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]); // student not found
 
@@ -82,6 +91,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 404 when class not found', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow();
       mockQueryResponse([student]); // student found
@@ -96,6 +106,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 400 when student is not enrolled in class', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow();
       const classInfo = buildClassRow();
@@ -113,6 +124,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 404 when school not found', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow();
       const classInfo = buildClassRow();
@@ -131,6 +143,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 404 when term not found', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow({ school: TEST_SCHOOL });
       const classInfo = buildClassRow();
@@ -151,6 +164,7 @@ describe('Reports Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -163,11 +177,13 @@ describe('Reports Controller', () => {
     });
 
     it('should return 401 without auth token', async () => {
+    mockGradebookGuard();
       const res = await request(app).post(buildUrl('sid', 'cid'));
       expect(res.status).toBe(401);
     });
 
     it('should work with teacher role', async () => {
+    mockGradebookGuard();
       const token = mockTeacherUser();
       const student = buildStudentRow({ school: TEST_SCHOOL });
       const classInfo = buildClassRow();
@@ -194,6 +210,7 @@ describe('Reports Controller', () => {
     });
 
     it('should gracefully handle attendance query failure', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const student = buildStudentRow({ school: TEST_SCHOOL });
       const classInfo = buildClassRow();

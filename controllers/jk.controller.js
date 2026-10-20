@@ -86,9 +86,11 @@ async function fetchSchoolData(schoolCode) {
 // ============================================================
 const getDomains = async (req, res) => {
   try {
-    const { documentType, school } = req.query;
-    if (!documentType || !school) {
-      return res.status(400).json({ status: 'error', message: 'documentType and school are required' });
+    // The caller's own school (a ?school= is ignored).
+    const { documentType } = req.query;
+    const { school } = req.user;
+    if (!documentType) {
+      return res.status(400).json({ status: 'error', message: 'documentType is required' });
     }
 
     const { rows } = await db.query(jkskQueries.getSkillDomainsByDocumentType, [documentType, school]);
@@ -107,9 +109,10 @@ const getDomains = async (req, res) => {
 // ============================================================
 const createDomain = async (req, res) => {
   try {
-    const { documentType, name, sortOrder, school } = req.body;
-    if (!documentType || !name || !school) {
-      return res.status(400).json({ status: 'error', message: 'documentType, name, and school are required' });
+    const { documentType, name, sortOrder } = req.body;
+    const { school } = req.user;
+    if (!documentType || !name) {
+      return res.status(400).json({ status: 'error', message: 'documentType and name are required' });
     }
 
     const { rows } = await db.query(jkskQueries.createDomain, [
@@ -135,7 +138,7 @@ const updateDomain = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'name is required' });
     }
 
-    const { rows } = await db.query(jkskQueries.updateDomain, [domainId, name, sortOrder ?? 0]);
+    const { rows } = await db.query(jkskQueries.updateDomain, [domainId, name, sortOrder ?? 0, req.user.school]);
 
     res.json({ status: 'success', data: rows[0] });
   } catch (error) {
@@ -150,7 +153,7 @@ const updateDomain = async (req, res) => {
 const deleteDomainHandler = async (req, res) => {
   try {
     const { domainId } = req.params;
-    await db.query(jkskQueries.deleteDomain, [domainId]);
+    await db.query(jkskQueries.deleteDomain, [domainId, req.user.school]);
     res.json({ status: 'success', message: 'Domain deleted' });
   } catch (error) {
     logger.error('Error deleting JK domain:', error);
@@ -170,8 +173,11 @@ const createSkill = async (req, res) => {
     }
 
     const { rows } = await db.query(jkskQueries.createSkill, [
-      domainId, name, description || null, sortOrder ?? 0
+      domainId, name, description || null, sortOrder ?? 0, req.user.school
     ]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Domain not found' });
+    }
 
     res.json({ status: 'success', data: rows[0] });
   } catch (error) {
@@ -193,7 +199,7 @@ const updateSkillHandler = async (req, res) => {
     }
 
     const { rows } = await db.query(jkskQueries.updateSkill, [
-      skillId, name, description || null, sortOrder ?? 0
+      skillId, name, description || null, sortOrder ?? 0, req.user.school
     ]);
 
     res.json({ status: 'success', data: rows[0] });
@@ -209,7 +215,7 @@ const updateSkillHandler = async (req, res) => {
 const deleteSkillHandler = async (req, res) => {
   try {
     const { skillId } = req.params;
-    await db.query(jkskQueries.deleteSkill, [skillId]);
+    await db.query(jkskQueries.deleteSkill, [skillId, req.user.school]);
     res.json({ status: 'success', message: 'Skill deleted' });
   } catch (error) {
     logger.error('Error deleting JK skill:', error);
@@ -431,9 +437,10 @@ const getTeacherAssistant = async (req, res) => {
 // ============================================================
 const upsertTeacherAssistant = async (req, res) => {
   try {
-    const { studentId, teacherAssistantName, term, school } = req.body;
-    if (!studentId || !term || !school) {
-      return res.status(400).json({ status: 'error', message: 'studentId, term, and school are required' });
+    const { studentId, teacherAssistantName, term } = req.body;
+    const { school } = req.user;
+    if (!studentId || !term) {
+      return res.status(400).json({ status: 'error', message: 'studentId and term are required' });
     }
 
     const { rows } = await db.query(jkskQueries.upsertTeacherAssistant, [

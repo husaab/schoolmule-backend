@@ -28,34 +28,38 @@ const createSubject = `
   RETURNING *
 `;
 
+// $4 = the caller's school: another school's rows are never touched.
 const updateSubject = `
   UPDATE sk_subjects
   SET name = $2, sort_order = $3
-  WHERE subject_id = $1
+  WHERE subject_id = $1 AND school = $4
   RETURNING *
 `;
 
 const deleteSubject = `
-  DELETE FROM sk_subjects WHERE subject_id = $1
+  DELETE FROM sk_subjects WHERE subject_id = $1 AND school = $2
 `;
 
 // -- Standard CRUD --
 
+// Only under a parent row of the caller's school ($5).
 const createStandard = `
   INSERT INTO sk_standards (subject_id, name, description, sort_order)
-  VALUES ($1, $2, $3, $4)
+  SELECT p.subject_id, $2::text, $3::text, $4::int
+    FROM sk_subjects p
+   WHERE p.subject_id = $1 AND p.school = $5
   RETURNING *
 `;
 
 const updateStandard = `
   UPDATE sk_standards
   SET name = $2, description = $3, sort_order = $4
-  WHERE standard_id = $1
+  WHERE standard_id = $1 AND subject_id IN (SELECT subject_id FROM sk_subjects WHERE school = $5)
   RETURNING *
 `;
 
 const deleteStandard = `
-  DELETE FROM sk_standards WHERE standard_id = $1
+  DELETE FROM sk_standards WHERE standard_id = $1 AND subject_id IN (SELECT subject_id FROM sk_subjects WHERE school = $2)
 `;
 
 // -- Standard Assessments (E/P/DV/EM/NI/N/A or E/G/S/NI/NA ratings) --

@@ -3,6 +3,7 @@
 const db = require('../config/database');
 const dashboardQueries = require('../queries/dashboard.queries');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const { computeClassGrade } = require('../services/gradeEngine');
 
 // Simple in-memory cache with TTL for school average grades
@@ -129,7 +130,8 @@ const getSummary = async (req, res) => {
       db.query(dashboardQueries.selectMonthlyAttendanceRate, [school, date, schoolYearId]),
       db.query(dashboardQueries.selectReportCardsCount, [school, term, schoolYearId]),
       db.query(dashboardQueries.selectAverageClassSize, [school, schoolYearId]),
-      getSchoolAverageGrade(school, schoolYearId)
+      // Grade averages are analytics (RBAC): skipped without it.
+      can(req, 'analytics') ? getSchoolAverageGrade(school, schoolYearId) : null
     ]);
 
     const totalStudents       = totalStudentsRes.rows[0].count;

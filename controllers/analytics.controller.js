@@ -8,6 +8,7 @@
 const db = require('../config/database');
 const q = require('../queries/analytics.queries');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const engine = require('../services/analyticsEngine');
 const { buildStudentTermDetail } = require('../services/studentTermDetail');
 const { computeAssessmentForStudent, buildScoreLookup, cellState } = require('../services/gradeEngine');
@@ -452,17 +453,17 @@ const getAiSnapshot = async (req, res) => {
 // ────────────────────────────────────────────────────────────────────
 // GET /api/analytics/classes-health?termId=&engine=
 // Per-class grading health for the dashboard: average, missing work,
-// ungraded and unpublished assessments. Admins see every class; teachers
-// only the classes they own or co-teach (server-enforced, mirroring
-// requireClassOwnership), so the same route serves both dashboards.
+// ungraded and unpublished assessments. Holders of classes.all see every
+// class; anyone else only the classes they own or co-teach (server-enforced,
+// mirroring requireClassOwnership), so the same route serves both dashboards.
 // ────────────────────────────────────────────────────────────────────
 const getClassesHealth = async (req, res) => {
-  const { school, role, userId } = req.user;
+  const { school, userId } = req.user;
   const { termId } = req.query;
   if (!termId) {
     return res.status(400).json({ status: 'failed', message: 'Missing required query parameter: termId' });
   }
-  if (role !== 'ADMIN' && role !== 'TEACHER') {
+  if (!req.access || !req.access.isStaffView) {
     return res.status(403).json({ status: 'failed', message: 'Staff access required' });
   }
 
@@ -471,7 +472,7 @@ const getClassesHealth = async (req, res) => {
     const matrix = await engine.buildAnalyticsMatrix(school, termId, eng);
 
     let allowed = null; // null = every class in the school
-    if (role === 'TEACHER') {
+    if (!can(req, 'classes.all')) {
       const { rows } = await db.query(q.selectClassIdsForTeacher, [userId]);
       allowed = new Set(rows.map((r) => r.class_id));
     }

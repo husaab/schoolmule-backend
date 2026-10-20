@@ -74,4 +74,25 @@ const requireReportFileAccess = (table) => {
   };
 };
 
-module.exports = { requireStudentReportAccess, requireReportFileAccess };
+/**
+ * Report PDFs live under a folder named for the school (e.g. ALHAADIACADEMY/,
+ * see the generate handlers). Routes that take storage paths from the client
+ * (delete, record a generated report) may only name paths in the caller's
+ * own folder. pick(req) -> string | string[] | undefined (missing is left to
+ * the handler's 400).
+ */
+const schoolFolderOf = (school) => String(school || '').replace(/\s+/g, '').toUpperCase();
+const isOwnReportPath = (req, path) =>
+  typeof path === 'string' && !path.includes('..') && path.startsWith(`${schoolFolderOf(req.user.school)}/`);
+
+const requireOwnReportPaths = (pick) => (req, res, next) => {
+  const picked = pick(req);
+  if (picked === undefined || picked === null || picked === '') return next();
+  const paths = Array.isArray(picked) ? picked : [picked];
+  if (!paths.every((p) => isOwnReportPath(req, p))) {
+    return res.status(403).json({ status: 'failed', message: 'Not authorized for this file' });
+  }
+  return next();
+};
+
+module.exports = { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths, isOwnReportPath };

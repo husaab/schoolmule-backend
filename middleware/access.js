@@ -48,6 +48,16 @@ const requireStaffAccess = withAccess((req, res, next) => (
     : res.status(403).json({ success: false, status: 'failed', message: 'Staff access required' })
 ));
 
+/**
+ * For routes a parent also reads behind its own link check (report cards):
+ * a staff view must hold one of the keys; any other view passes on to the
+ * parent guard that follows.
+ */
+const requirePermissionForStaff = (...keys) => {
+  const gate = requirePermission(...keys);
+  return withAccess((req, res, next) => (req.access.isStaffView ? gate(req, res, next) : next()));
+};
+
 /** Pickers and dropdowns read for every staff member; changes need a key. */
 const requireStaffRead = (...keys) => {
   const gate = requirePermission(...keys);
@@ -83,6 +93,7 @@ module.exports = {
   requirePermission,
   requireStaffAccess,
   requireStaffRead,
+  requirePermissionForStaff,
   requireFullAdmin,
   classAccessGranted,
   withAccess,

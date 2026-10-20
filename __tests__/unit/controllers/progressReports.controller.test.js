@@ -13,6 +13,14 @@ const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, TEST_SCHOOL } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+
+// RBAC: class feedback routes look the class up first (requireGradebookAccess);
+// the counts cover every id a test names.
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
 const {
   buildProgressReportFeedbackRow,
   buildProgressReportRow,
@@ -25,6 +33,7 @@ describe('Progress Reports Controller', () => {
   // ─── GET /api/progress-reports/feedback/student/:studentId/class/:classId ──
   describe('GET /feedback/student/:studentId/class/:classId', () => {
     it('should return feedback for a student in a class', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildProgressReportFeedbackRow();
       mockQueryResponse([{ term: row.term }]); // resolveClassTerm
@@ -42,6 +51,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return null data when feedback not found', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm
       mockQueryResponse([]);                    // no feedback
@@ -55,6 +65,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('derives the term from the class (no term param needed)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildProgressReportFeedbackRow();
       mockQueryResponse([{ term: row.term }]); // resolveClassTerm
@@ -68,6 +79,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -84,6 +96,7 @@ describe('Progress Reports Controller', () => {
   // ─── POST /api/progress-reports/feedback/student/:studentId/class/:classId ─
   describe('POST /feedback/student/:studentId/class/:classId', () => {
     it('should upsert feedback successfully (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildProgressReportFeedbackRow();
       mockQueryResponse([{ term: row.term }]); // resolveClassTerm
@@ -106,6 +119,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -152,6 +166,7 @@ describe('Progress Reports Controller', () => {
   // ─── GET /api/progress-reports/feedback/class/:classId ─────────
   describe('GET /feedback/class/:classId', () => {
     it('should return all feedback for a class (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const rows = [buildProgressReportFeedbackRow()];
       mockQueryResponse([{ term: 'Term 1' }]); // resolveClassTerm
@@ -167,6 +182,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -182,6 +198,7 @@ describe('Progress Reports Controller', () => {
   // ─── DELETE /api/progress-reports/feedback/student/:studentId/class/:classId
   describe('DELETE /feedback/student/:studentId/class/:classId', () => {
     it('should delete feedback successfully', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([], 1); // rowCount=1
 
@@ -195,6 +212,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 404 when feedback not found', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([], 0); // rowCount=0
 
@@ -208,6 +226,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -225,6 +244,7 @@ describe('Progress Reports Controller', () => {
     const url = '/api/progress-reports/feedback/bulk';
 
     it('should bulk upsert feedback in a transaction (term derived from class)', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
@@ -254,6 +274,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 400 when feedbackEntries is empty', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -265,6 +286,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 400 when entries have validation errors', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -279,6 +301,7 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should rollback transaction on failure', async () => {
+      mockGradebookGuard();
       const token = mockAdminUser();
       const db = require('../../__mocks__/config/database');
 
@@ -474,7 +497,7 @@ describe('Progress Reports Controller', () => {
       const res = await request(app)
         .delete(url)
         .set('Authorization', `Bearer ${token}`)
-        .query({ filePath: 'some/path.pdf' });
+        .query({ filePath: 'ALHAADIACADEMY/path.pdf' });
 
       expect(res.status).toBe(500);
     });

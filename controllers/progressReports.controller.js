@@ -217,7 +217,10 @@ const deleteProgressReportFeedback = async (req, res) => {
 // Create progress report record (for tracking generated reports)
 const createProgressReport = async (req, res) => {
   try {
-    const { studentId, term, studentName, grade, filePath, school } = req.body;
+    // The school is always the caller's (a body `school` is ignored); the
+    // route keeps filePath inside the school's own folder.
+    const { studentId, term, studentName, grade, filePath } = req.body;
+    const { school } = req.user;
 
     if (!studentId || !term) {
       return res.status(400).json({

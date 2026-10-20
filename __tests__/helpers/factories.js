@@ -215,7 +215,7 @@ function buildProgressReportRow(overrides = {}) {
     term: 'Term 1 2025-2026',
     student_name: 'John Smith',
     grade: 5,
-    file_path: 'progress-reports/test.pdf',
+    file_path: 'ALHAADIACADEMY/test_progress_report.pdf',
     school: TEST_SCHOOL,
     generated_at: new Date().toISOString(),
     email_sent: false,
