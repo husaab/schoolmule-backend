@@ -577,16 +577,8 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
  * by the caller, which owns the grade math (a category has no raw score, only
  * a rollup percentage, so scoreLabel may be empty).
  */
-function getAssessmentPublishedEmailHTML({
-  studentName,
-  className,
-  assessments,
-  batchComment,
-  runningGradeLabel,
-  schoolName,
-  schoolInfo,
-  portalUrl,
-}) {
+// The graded assessments table: name (and the teacher's note) left, score and percentage right.
+function gradeRowsTable(assessments) {
   const cell = `font-family:${FONT_BODY};padding:12px 0;border-top:1px solid ${COLORS.divider};vertical-align:top;`;
   const rows = assessments
     .map(
@@ -603,7 +595,24 @@ function getAssessmentPublishedEmailHTML({
     </tr>`,
     )
     .join('');
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`;
+}
 
+const currentGrade = (className, runningGradeLabel) =>
+  runningGradeLabel
+    ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>. Work that has not been graded yet is not included.`)
+    : '';
+
+function getAssessmentPublishedEmailHTML({
+  studentName,
+  className,
+  assessments,
+  batchComment,
+  runningGradeLabel,
+  schoolName,
+  schoolInfo,
+  portalUrl,
+}) {
   const count = assessments.length === 1 ? 'One assessment' : `${assessments.length} assessments`;
 
   return renderEmail({
@@ -613,11 +622,41 @@ function getAssessmentPublishedEmailHTML({
     content: [
       paragraph('Dear Parent/Guardian,'),
       paragraph(`${count} in <strong>${escapeHtml(className)}</strong> ${assessments.length === 1 ? 'was' : 'were'} graded and shared with you.`),
-      `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`,
-      runningGradeLabel
-        ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>. Work that has not been graded yet is not included.`)
-        : '',
+      gradeRowsTable(assessments),
+      currentGrade(className, runningGradeLabel),
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
+      button('View in Parent Portal', portalUrl),
+      signOff(schoolName),
+    ].join(''),
+    footer: schoolContact(schoolInfo, schoolName),
+  });
+}
+
+/**
+ * The publish email for several classes at once (one per student): a section
+ * per class with its graded lines and current grade. Used by
+ * scripts/backfillPublishDigests.js. classes: [{ className, assessments, runningGradeLabel }]
+ */
+function getGradesDigestEmailHTML({ studentName, classes, schoolName, schoolInfo, portalUrl }) {
+  const total = classes.reduce((n, c) => n + c.assessments.length, 0);
+  const count = total === 1 ? 'One assessment' : `${total} assessments`;
+  const where = classes.length === 1 ? `<strong>${escapeHtml(classes[0].className)}</strong>` : `${classes.length} classes`;
+  const sections = classes
+    .map((c) => [
+      `<p style="margin:24px 0 4px;font-family:${FONT_BODY};font-size:17px;font-weight:600;line-height:1.3;color:${COLORS.heading};">${escapeHtml(c.className)}</p>`,
+      gradeRowsTable(c.assessments),
+      currentGrade(c.className, c.runningGradeLabel),
+    ].join(''))
+    .join('');
+
+  return renderEmail({
+    brand: schoolBrand(schoolInfo, schoolName),
+    heading: `New grades for ${studentName}`,
+    preheader: `${count} in ${classes.length === 1 ? classes[0].className : `${classes.length} classes`} graded and shared with you.`,
+    content: [
+      paragraph('Dear Parent/Guardian,'),
+      paragraph(`${count} in ${where} ${total === 1 ? 'was' : 'were'} graded and shared with you.`),
+      sections,
       button('View in Parent Portal', portalUrl),
       signOff(schoolName),
     ].join(''),
@@ -646,6 +685,7 @@ module.exports = {
   getReportCardEmailHTML,
   getCertificateEmailHTML,
   getAssessmentPublishedEmailHTML,
+  getGradesDigestEmailHTML,
   getDefaultEmailBody,
   resolveEmailBody
 };

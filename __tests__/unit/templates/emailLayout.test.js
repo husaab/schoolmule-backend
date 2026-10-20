@@ -84,6 +84,13 @@ describe('emailTemplate – every template uses the shared layout', () => {
       portalUrl: 'https://example.com/p', batchComment: null,
       assessments: [{ name: 'Quiz 1', scoreLabel: '18 / 20', pctLabel: '90%', comment: '' }],
     },
+    getGradesDigestEmailHTML: {
+      studentName: 'Test Student', schoolName: 'Al Haadi Academy', schoolInfo: school, portalUrl: 'https://example.com/p',
+      classes: [
+        { className: 'English', assessments: [{ name: 'Spelling', scoreLabel: '', pctLabel: '(90%)', comment: null }], runningGradeLabel: '88% · based on 3 of 5' },
+        { className: 'Math', assessments: [{ name: 'Workbook Quiz', scoreLabel: '', pctLabel: '(85%)', comment: null }], runningGradeLabel: null },
+      ],
+    },
   };
 
   it.each(Object.keys(cases))('%s renders a letterhead document without the old styling', (fn) => {
@@ -98,6 +105,30 @@ describe('emailTemplate – every template uses the shared layout', () => {
     expect(html).toContain('/email/schools/alhaadiacademy.png');
     expect(html).toContain('1 Test Rd');
     expect(html).toContain('One assessment in <strong>Grade 5 Math</strong> was graded');
+  });
+
+  it('one grades email can hold several classes, each with its own lines and current grade', () => {
+    const html = templates.getGradesDigestEmailHTML(cases.getGradesDigestEmailHTML);
+    expect(html).toContain('New grades for Test Student');
+    expect(html).toContain('2 assessments in 2 classes were graded and shared with you.');
+    expect(html).toContain('English');
+    expect(html).toContain('Spelling');
+    expect(html).toContain('(90%)');
+    expect(html).toContain('Workbook Quiz');
+    expect(html).toContain('Current grade in English: <strong>88% · based on 3 of 5</strong>');
+    expect(html).not.toContain('Current grade in Math');
+    expect(html).toContain('https://example.com/p');
+    expect(html).toContain('/email/schools/alhaadiacademy.png');
+  });
+
+  it('escapes class and assessment names in the grades email', () => {
+    const html = templates.getGradesDigestEmailHTML({
+      ...cases.getGradesDigestEmailHTML,
+      classes: [{ className: '<b>Art</b>', assessments: [{ name: '<i>Sketch</i>', scoreLabel: '', pctLabel: '(70%)', comment: null }], runningGradeLabel: null }],
+    });
+    expect(html).toContain('&lt;b&gt;Art&lt;/b&gt;');
+    expect(html).toContain('&lt;i&gt;Sketch&lt;/i&gt;');
+    expect(html).toContain('One assessment in <strong>&lt;b&gt;Art&lt;/b&gt;</strong> was graded and shared with you.');
   });
 
   it('account emails resolve a school code to its display name', () => {

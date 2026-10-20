@@ -1014,4 +1014,9 @@ module.exports = {
   topLevelLines,
   overlayDrafts,
   planPublish,
+  // also used by scripts/backfillPublishDigests.js
+  groupScoreRowsByStudent,
+  resolveRecipients,
+  loadEmailContext,
+  EMAIL_RATE_LIMIT_MS,
 };
