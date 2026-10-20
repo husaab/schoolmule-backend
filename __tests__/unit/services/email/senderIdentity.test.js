@@ -16,12 +16,16 @@ describe('senderIdentity', () => {
   beforeEach(() => {
     saved.MAIL_DOMAIN = process.env.MAIL_DOMAIN;
     saved.SUPPORT_EMAIL = process.env.SUPPORT_EMAIL;
+    saved.PLATFORM_REPLY_TO = process.env.PLATFORM_REPLY_TO;
+    delete process.env.PLATFORM_REPLY_TO;
     process.env.MAIL_DOMAIN = 'schoolmule.ca';
     process.env.SUPPORT_EMAIL = 'support@schoolmule.ca';
   });
   afterEach(() => {
     process.env.MAIL_DOMAIN = saved.MAIL_DOMAIN;
     process.env.SUPPORT_EMAIL = saved.SUPPORT_EMAIL;
+    if (saved.PLATFORM_REPLY_TO === undefined) delete process.env.PLATFORM_REPLY_TO;
+    else process.env.PLATFORM_REPLY_TO = saved.PLATFORM_REPLY_TO;
   });
 
   describe('schoolSender', () => {
@@ -110,6 +114,13 @@ describe('senderIdentity', () => {
 
     it('defaults to no-reply and lets a caller override the reply address', () => {
       expect(senderAddress(platformSender().from)).toBe('no-reply@schoolmule.ca');
+      expect(platformSender('contact', { replyTo: 'visitor@example.org' }).replyTo).toEqual(['visitor@example.org']);
+    });
+
+    it('replies to PLATFORM_REPLY_TO when it is set, so the support inbox (contact form) can stay elsewhere', () => {
+      process.env.PLATFORM_REPLY_TO = 'hussein@schoolmule.ca';
+      expect(platformSender('notification').replyTo).toEqual(['hussein@schoolmule.ca']);
+      // A caller's own reply address still wins (the contact-form visitor).
       expect(platformSender('contact', { replyTo: 'visitor@example.org' }).replyTo).toEqual(['visitor@example.org']);
     });
 

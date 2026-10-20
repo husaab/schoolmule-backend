@@ -5,7 +5,8 @@
 // functions, so the rule lives in one place and is driven by the schools
 // table instead of a hard-coded switch.
 //
-//   platformSender('verify')  -> SchoolMule <verify@schoolmule.ca>, replies to support
+//   platformSender('verify')  -> SchoolMule <verify@schoolmule.ca>, replies to
+//                                PLATFORM_REPLY_TO (else SUPPORT_EMAIL, the support inbox)
 //   schoolSender(...)         -> "Al Haadi Academy" <academics@alhaadiacademy.ca>
 //                                when the school has a verified sending domain,
 //                                otherwise "Al Haadi Academy" <alhaadiacademy@schoolmule.ca>;
@@ -73,11 +74,16 @@ function schoolSender({ school, schoolInfo, role = 'academics', extraReplyTo = [
  * ops alerts, the contact form).
  *
  * @param {string} [role='no-reply'] local part on the platform domain
+ * Replies go to PLATFORM_REPLY_TO, or to SUPPORT_EMAIL when it isn't set.
+ * SUPPORT_EMAIL is also the inbox the contact form sends to, so the two can
+ * differ.
+ *
  * @param {{ replyTo?: string|string[] }} [opts] override the reply address (e.g. the contact-form visitor)
  */
 function platformSender(role = 'no-reply', opts = {}) {
   const address = `${role}@${platformDomain()}`;
-  const replyTo = validAddresses([].concat(opts.replyTo ?? process.env.SUPPORT_EMAIL ?? []));
+  const fallback = process.env.PLATFORM_REPLY_TO || process.env.SUPPORT_EMAIL;
+  const replyTo = validAddresses([].concat(opts.replyTo ?? fallback ?? []));
   return { from: formatAddress(PLATFORM_NAME, address), replyTo: replyTo.length ? replyTo : undefined };
 }
 
