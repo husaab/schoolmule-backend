@@ -147,12 +147,12 @@ const childParts = (c) => [
 ].filter(Boolean).slice(0, SUBJECT_PARTS);
 
 /**
- * "Your week: Yusuf has 1 missing, 2 new grades · Maryam: 2 posts". Children
+ * "Weekly Summary: Yusuf has 1 missing, 2 new grades · Maryam: 2 posts". Children
  * with nothing are left out; when no one has anything, the period's label.
  * @param {{ name, missing?, newGrades?, posts? }[]} children
  */
 function summarySubject(children, { period = 'week', label = '' } = {}) {
-  const prefix = period === 'day' ? 'Your day' : 'Your week';
+  const prefix = period === 'day' ? 'Daily Summary' : 'Weekly Summary';
   const shown = children.map((c) => ({ name: c.name, parts: childParts(c) })).filter((c) => c.parts.length);
   if (!shown.length) return label ? `${prefix}: ${label}` : prefix;
   return `${prefix}: ${shown.map((c, i) => `${c.name}${i === 0 ? ' has' : ':'} ${c.parts.join(', ')}`).join(' · ')}`;

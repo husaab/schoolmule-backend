@@ -105,21 +105,21 @@ describe('summarySubject', () => {
       { name: 'Omar', missing: 0, newGrades: 0, posts: 0 },
       { name: 'Lina', missing: 0, newGrades: 0, posts: 2 },
     ];
-    expect(d.summarySubject(children)).toBe('Your week: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
+    expect(d.summarySubject(children)).toBe('Weekly Summary: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
   });
 
   it('counts in the singular and the plural, at most two counts per child', () => {
     expect(d.summarySubject([{ name: 'Yasmin', missing: 2, newGrades: 1, posts: 1 }]))
-      .toBe('Your week: Yasmin has 2 missing, 1 new grade');
+      .toBe('Weekly Summary: Yasmin has 2 missing, 1 new grade');
     expect(d.summarySubject([{ name: 'Yasmin', newGrades: 1, posts: 1 }]))
-      .toBe('Your week: Yasmin has 1 new grade, 1 post');
+      .toBe('Weekly Summary: Yasmin has 1 new grade, 1 post');
     expect(d.summarySubject([{ name: 'Omar', missing: 0, newGrades: 0, posts: 0 }, { name: 'Lina', newGrades: 3 }]))
-      .toBe('Your week: Lina has 3 new grades');
+      .toBe('Weekly Summary: Lina has 3 new grades');
   });
 
   it("names the day for a daily summary and falls back to the period's label", () => {
-    expect(d.summarySubject([{ name: 'Lina', posts: 1 }], { period: 'day' })).toBe('Your day: Lina has 1 post');
-    expect(d.summarySubject([{ name: 'Lina' }], { label: 'Oct 12–16' })).toBe('Your week: Oct 12–16');
+    expect(d.summarySubject([{ name: 'Lina', posts: 1 }], { period: 'day' })).toBe('Daily Summary: Lina has 1 post');
+    expect(d.summarySubject([{ name: 'Lina' }], { label: 'Oct 12–16' })).toBe('Weekly Summary: Oct 12–16');
   });
 });
 

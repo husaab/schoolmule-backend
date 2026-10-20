@@ -164,15 +164,15 @@ describe('weeklySummaryEmail', () => {
 
   it("is the P3 board: subject, heading, intro, every section and the footer's two links", () => {
     const { subject, html } = t.weeklySummaryEmail(base);
-    expect(subject).toBe('Your week: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
+    expect(subject).toBe('Weekly Summary: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
     const body = text(html);
-    expect(body).toContain('Your week: Oct 12–16');
+    expect(body).toContain('Weekly Summary: Oct 12–16');
     expect(body).toContain("Here's what happened in Yasmin's and Lina's classes this week.");
     expect(body).toContain('Yasmin · Grade 5');
     expect(body).toContain('Lina · SK');
     for (const heading of ['Missing', 'New grades & feedback', 'Due next week', 'From the teachers']) expect(body).toContain(heading);
     expect(body).toContain('Spelling list 4 · English · was due Tue, Oct 13');
-    expect(body).toContain('Plant cell diagram · Science 8/10');
+    expect(body).toContain('Science 1 new grade Plant cell diagram "Great labels and a clear drawing." Ziad Teacher 8/10');
     expect(body).toContain('"Great labels and a clear drawing." Ziad Teacher');
     expect(body).toContain('Decimals worksheet · Math Mon');
     expect(body).toContain('Science Centre trip Ziad Teacher · please sign by Monday');
@@ -191,9 +191,9 @@ describe('weeklySummaryEmail', () => {
 
   it('a daily summary says so and offers the weekly one instead', () => {
     const { subject, html } = t.weeklySummaryEmail({ ...base, frequency: 'daily', rangeLabel: 'Fri, Oct 16' });
-    expect(subject).toBe('Your day: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
+    expect(subject).toBe('Daily Summary: Yasmin has 1 missing, 2 new grades · Lina: 2 posts');
     const body = text(html);
-    expect(body).toContain('Your day: Fri, Oct 16');
+    expect(body).toContain('Daily Summary: Fri, Oct 16');
     expect(body).toContain("Here's what happened in Yasmin's and Lina's classes today.");
     expect(body).toContain('Due soon');
     expect(body).toContain('You get this summary every day. Get it weekly · Turn it off. Announcements always arrive right away.');
@@ -205,6 +205,26 @@ describe('weeklySummaryEmail', () => {
     expect(text(html)).toContain('You get this summary on Fridays. Announcements always arrive right away.');
     expect(html).not.toContain('set=off');
   });
+  it('files the new grades under one card per subject, in name order, with the count and no repeated subject', () => {
+    const { html } = t.weeklySummaryEmail({
+      ...base,
+      children: [{
+        ...children[0],
+        grades: [
+          { title: 'Reading 1', subject: 'Arabic', scoreLabel: '4/5', feedback: null, teacherName: null },
+          { title: 'Plant cell diagram', subject: 'Science', scoreLabel: '8/10', feedback: 'Great labels.', teacherName: 'Ziad Teacher' },
+          { title: 'Hadith 1', subject: 'Arabic', scoreLabel: '5/5', feedback: null, teacherName: null },
+        ],
+      }],
+    });
+    const body = text(html);
+    expect(body).toContain('Arabic 2 new grades Reading 1 4/5 Hadith 1 5/5');
+    expect(body).toContain('Science 1 new grade Plant cell diagram "Great labels." Ziad Teacher 8/10');
+    expect(body.indexOf('Arabic 2 new grades')).toBeLessThan(body.indexOf('Science 1 new grade'));
+    expect(body).not.toContain('· Arabic');
+    expect(body.match(/Arabic/g)).toHaveLength(1);
+  });
+
   it('to a parent with no account: a link to set one up instead of the portal, and no way to turn it off', () => {
     const { html } = t.weeklySummaryEmail({
       ...base, recipientFirstName: null, dailyLink: null, offLink: null, prefsLink: null,

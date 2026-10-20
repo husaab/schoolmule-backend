@@ -677,7 +677,7 @@ describe('Integration: classroom emails', () => {
     expect((await processJob(summaries[0], FRIDAY)).outcome).toBe('sent');
     const [email] = sent();
     expect(email.to).toEqual(['mona.haddad@example.com']);
-    expect(email.subject).toBe('Your day: Amal has 1 missing');
+    expect(email.subject).toBe('Daily Summary: Amal has 1 missing');
     expect(text(email.html)).toContain('Plant cell diagram · Science · was due Fri, Oct 18');
 
     // An alert queued before Mona switched to the daily summary is skipped when it would go out.
@@ -728,14 +728,13 @@ describe('Integration: classroom emails', () => {
     expect(email.to).toEqual(['mona.haddad@example.com']);
     // Sami has nothing this week, so Sami is left out of the subject and the body;
     // a child's subject part keeps the two most pressing counts.
-    expect(email.subject).toBe('Your week: Amal has 1 missing, 1 new grade');
+    expect(email.subject).toBe('Weekly Summary: Amal has 1 missing, 1 new grade');
     const body = text(email.html);
-    expect(body).toContain('Your week: Oct 14–18');
+    expect(body).toContain('Weekly Summary: Oct 14–18');
     expect(body).toContain("Here's what happened in Amal's classes this week.");
     expect(body).toContain('Amal · Grade 5');
     expect(body).toContain('Plant cell diagram · Science · was due Thu, Oct 17');
-    expect(body).toContain('Seed journal · Science 8/10');
-    expect(body).toContain('"Great labels." Ziad Teacher');
+    expect(body).toContain('Science 1 new grade Seed journal "Great labels." Ziad Teacher 8/10');
     expect(body).toContain('Cell model · Science Mon');
     expect(body).toContain('Science Centre trip Ziad Teacher · Please sign the permission form by Monday.');
     expect(email.html).toContain(`/parent/messages?tab=announcements&amp;announcement=${post}&amp;ack=1`);
@@ -773,7 +772,7 @@ describe('Integration: classroom emails', () => {
     const rows = await jobs('weekly_summary');
     expect(rows.map((r) => r.recipient_email)).toEqual(['mona.haddad@example.com', 'rania.karim@example.com']);
     expect((await processJob(rows.find((r) => r.recipient_email === 'mona.haddad@example.com'), FRIDAY)).outcome).toBe('sent');
-    expect(text(sent()[0].html)).toContain('Seed journal · Science 8/10');
+    expect(text(sent()[0].html)).toContain('Seed journal 8/10');
 
     await pool.query(`DELETE FROM classroom_email_jobs`);
     classroom.resetScheduleState();
@@ -823,8 +822,8 @@ describe('Integration: classroom emails', () => {
     expect(body).toContain('Hi there,');
     expect(body).toContain('Dalia · Grade 5');
     expect(body).toContain('Yusuf · Grade 5');
-    expect(body).toContain('Leaf rubbing · Science 7/10');
-    expect(body).toContain('Bark rubbing · Science 7/10');
+    expect(body).toContain('Leaf rubbing 7/10');
+    expect(body).toContain('Bark rubbing 7/10');
     expect(body).not.toContain('Amal');
     expect(body).toContain('Science Centre trip');
     // No account: nothing to sign in to for "Got it" or settings, and no way to switch it off; a link to set one up.
@@ -834,9 +833,9 @@ describe('Integration: classroom emails', () => {
     expect(body).toContain('You get this summary on Fridays.');
 
     expect((await processJob(rows.find((r) => r.recipient_email === 'noor.saleh@example.com'), FRIDAY)).outcome).toBe('sent');
-    expect(text(sent()[1].html)).toContain('Seed chart · Science 7/10');
+    expect(text(sent()[1].html)).toContain('Seed chart 7/10');
     expect((await processJob(rows.find((r) => r.recipient_email === 'reem.ali@example.com'), FRIDAY)).outcome).toBe('sent');
-    expect(text(sent()[2].html)).toContain('Root sketch · Science 7/10');
+    expect(text(sent()[2].html)).toContain('Root sketch 7/10');
   });
 
   it("previewSummary renders an address's or an account's summary as it would go out now, sending and recording nothing", async () => {
@@ -844,10 +843,10 @@ describe('Integration: classroom emails', () => {
     await guardian(null, daliaId, 'Lina Nassar', 'lina.nassar@example.com');
     const lina = await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'lina.nassar@example.com', now: FRIDAY });
     expect(lina.subject).toContain('Dalia');
-    expect(text(lina.html)).toContain('Leaf rubbing · Science 7/10');
+    expect(text(lina.html)).toContain('Leaf rubbing 7/10');
     expect(lina.html).toContain('/signup/alhaadiacademy/parent');
     const mona = await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'mona.haddad@example.com', userId: MONA_ID, now: FRIDAY });
-    expect(mona.subject).toBe('Your week: Amal has 1 missing');
+    expect(mona.subject).toBe('Weekly Summary: Amal has 1 missing');
     expect(mona.html).toContain('/parent/notifications');
     // Huda has no child linked: nothing to send.
     expect(await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'huda.saleh@example.com', userId: HUDA_ID, now: FRIDAY }))

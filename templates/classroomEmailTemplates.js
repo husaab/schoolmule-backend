@@ -67,6 +67,55 @@ function gradeBox(g) {
   return box(`${head}${feedback}`);
 }
 
+/**
+ * A summary's new grades, one card per subject (in name order): the subject
+ * and how many are new on top, then a compact row per grade (title, score,
+ * and the teacher's quoted feedback under it).
+ */
+function gradesBySubject(grades) {
+  const bySubject = new Map();
+  for (const g of grades) {
+    const subject = g.subject || 'Other';
+    bySubject.set(subject, [...(bySubject.get(subject) || []), g]);
+  }
+  const cell = `font-family:${FONT_BODY};font-size:15px;line-height:1.45;`;
+  return [...bySubject.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([subject, list]) => {
+      const rows = list.map((g, i) => {
+        const rule = i === list.length - 1 ? '' : `border-bottom:1px solid ${COLORS.divider};`;
+        const feedback = g.feedback
+          ? `<div style="margin-top:3px;font-size:14px;line-height:1.5;color:#44403c;font-style:italic;">&quot;${multiline(g.feedback)}&quot; ${escapeHtml(g.teacherName || '')}</div>`
+          : '';
+        return `
+        <tr>
+          <td style="padding:9px 0;${rule}${cell}color:${COLORS.text};vertical-align:top;">${escapeHtml(g.title)}${feedback}</td>
+          <td align="right" style="padding:9px 0 9px 12px;${rule}${cell}white-space:nowrap;vertical-align:top;font-weight:600;color:${COLORS.heading};">${escapeHtml(g.scoreLabel || '')}</td>
+        </tr>`;
+      }).join('');
+      const count = `${list.length} new grade${list.length === 1 ? '' : 's'}`;
+      return `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;border:1px solid ${COLORS.border};border-radius:10px;border-collapse:separate;">
+    <tr>
+      <td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid ${COLORS.divider};border-radius:10px 10px 0 0;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="font-family:${FONT_BODY};font-size:15px;font-weight:600;color:${COLORS.heading};">${escapeHtml(subject)}</td>
+            <td align="right" style="font-family:${FONT_BODY};font-size:13px;color:${COLORS.muted};white-space:nowrap;">${count}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 14px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>
+      </td>
+    </tr>
+  </table>`;
+    })
+    .join('');
+}
+
 /** A child's heading: avatar, then "Yusuf · Grade 5". */
 function childHeading(child) {
   const avatar = child.avatarUrl
@@ -213,7 +262,7 @@ function childSummary(child, { dueHeading }) {
     ].join(''), { bg: ROSE.bg, border: ROSE.border, margin: '0 0 14px' }));
   }
   if (child.grades.length) {
-    parts.push(sectionLabel('New grades & feedback'), child.grades.map(gradeBox).join(''), '<div style="height:4px;"></div>');
+    parts.push(sectionLabel('New grades & feedback'), gradesBySubject(child.grades), '<div style="height:4px;"></div>');
   }
   if (child.due.length) {
     parts.push(
@@ -255,7 +304,7 @@ function weeklySummaryEmail({
   const period = daily ? 'day' : 'week';
   const counts = children.map((c) => ({ name: c.name, missing: c.missing.length, newGrades: c.grades.length, posts: c.posts.length }));
   const subject = summarySubject(counts, { period, label: rangeLabel });
-  const heading = `${daily ? 'Your day' : 'Your week'}: ${rangeLabel}`;
+  const heading = `${daily ? 'Daily Summary' : 'Weekly Summary'}: ${rangeLabel}`;
   const intro = `Here's what happened in ${possessiveNames(children.map((c) => c.name))} classes ${daily ? 'today' : 'this week'}.`;
   const sections = children
     .map((c) => childSummary(c, { dueHeading: daily ? 'Due soon' : 'Due next week' }))
