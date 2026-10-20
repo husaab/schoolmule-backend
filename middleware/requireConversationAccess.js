@@ -21,6 +21,8 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
+const { withAccess } = require('./access');
 const queries = require('../queries/messaging.queries');
 
 const NOT_FOUND = { status: 'failed', message: 'Conversation not found' };
@@ -52,13 +54,23 @@ const accessRowToConversation = (c) => ({
   guardiansHidden: Boolean(c.guardians_hidden),
 });
 
-const isMember = (conv, user) =>
-  user.role === 'ADMIN' ||
-  (user.role === 'TEACHER' && conv.teacherIds.includes(user.userId)) ||
-  (user.role === 'PARENT' && conv.guardianIds.includes(user.userId)) ||
-  (user.role === 'STUDENT' && conv.includesStudent && conv.studentUserIds.includes(user.userId));
+// Staff: every thread with messages.all (RBAC; pass req), otherwise the
+// threads they teach, are addressed to, or have joined. Without req (student
+// callers) an ADMIN view counts as messages.all, as before.
+const isMember = (conv, user, req = null) => {
+  if (user.role === 'ADMIN' || user.role === 'TEACHER') {
+    const seesAll = req ? can(req, 'messages.all') : user.role === 'ADMIN';
+    return seesAll
+      || conv.teacherIds.includes(user.userId)
+      || conv.teacherId === user.userId
+      || conv.adminParticipantIds.includes(user.userId);
+  }
+  if (user.role === 'PARENT') return conv.guardianIds.includes(user.userId);
+  if (user.role === 'STUDENT') return conv.includesStudent && conv.studentUserIds.includes(user.userId);
+  return false;
+};
 
-const requireConversationAccess = async (req, res, next) => {
+const requireConversationAccess = withAccess(async (req, res, next) => {
   const { id } = req.params;
   try {
     const { rows } = await db.query(queries.selectConversationAccess, [id]);
@@ -66,7 +78,7 @@ const requireConversationAccess = async (req, res, next) => {
     if (rows[0].school !== req.user.school) return res.status(404).json(NOT_FOUND);
 
     const conv = accessRowToConversation(rows[0]);
-    if (!isMember(conv, req.user)) return res.status(403).json(NOT_AUTHORIZED);
+    if (!isMember(conv, req.user, req)) return res.status(403).json(NOT_AUTHORIZED);
 
     req.conversation = conv;
     return next();
@@ -74,7 +86,7 @@ const requireConversationAccess = async (req, res, next) => {
     logger.error('Error verifying conversation access:', error);
     return res.status(403).json(NOT_AUTHORIZED);
   }
-};
+});
 
 module.exports = requireConversationAccess;
 module.exports.accessRowToConversation = accessRowToConversation;

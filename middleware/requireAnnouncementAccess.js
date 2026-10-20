@@ -9,6 +9,8 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { withAccess } = require('./access');
+const { effectiveRole } = require('../services/access/access');
 const q = require('../queries/announcement.queries');
 
 const NOT_FOUND = { status: 'failed', message: 'Announcement not found' };
@@ -61,12 +63,14 @@ const canMutate = (ann, user) => user.role === 'ADMIN' || ann.isAuthor;
  * teacher-parent can acknowledge their child's post without being handed the
  * staff view (receipts of every family) on GET.
  */
-const makeGuard = ({ asGuardian = false } = {}) => async (req, res, next) => {
+// RBAC: seeing every announcement is announcements.school (effective role).
+const makeGuard = ({ asGuardian = false } = {}) => withAccess(async (req, res, next) => {
   try {
     const { rows } = await db.query(q.selectAnnouncementAccess, [req.params.id, req.user.userId]);
     const row = rows[0];
     if (!row || row.school !== req.user.school) return res.status(404).json(NOT_FOUND);
-    if (!isVisible(row, req.user) && !(asGuardian && row.is_guardian)) return res.status(403).json(NOT_AUTHORIZED);
+    const viewer = { ...req.user, role: effectiveRole(req, 'announcements.school') };
+    if (!isVisible(row, viewer) && !(asGuardian && row.is_guardian)) return res.status(403).json(NOT_AUTHORIZED);
     if (row.deleted_at) return req.method === 'GET' ? res.status(410).json(REMOVED) : res.status(404).json(NOT_FOUND);
     req.announcement = accessRowToAnnouncement(row);
     return next();
@@ -74,7 +78,7 @@ const makeGuard = ({ asGuardian = false } = {}) => async (req, res, next) => {
     logger.error('Error verifying announcement access:', error);
     return res.status(403).json(NOT_AUTHORIZED);
   }
-};
+});
 
 const requireAnnouncementAccess = makeGuard();
 

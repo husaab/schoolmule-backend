@@ -11,6 +11,14 @@ const crypto = require('crypto');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const { can, effectiveRole } = require('../services/access/access');
+
+// RBAC: posting to the whole school, a grade, any class or a custom audience,
+// seeing every announcement and retrying failed emails is the
+// announcements.school permission, not the ADMIN role. Decisions read the
+// effective role (actorOf); what is stored (author_role) stays the real one.
+const annRole = (req) => effectiveRole(req, 'announcements.school');
+const actorOf = (req) => ({ ...req.user, role: annRole(req) });
 const q = require('../queries/announcement.queries');
 const { selectCurrentTerm } = require('../queries/termScope');
 const schoolQueries = require('../queries/school.queries');
@@ -233,7 +241,8 @@ async function signedAttachments(announcementId) {
 
 // GET /api/announcements
 const list = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
+  const role = annRole(req);
   const { classId, scope, grade, authorId, q: search, studentId } = req.query;
   if (badId(classId, authorId, studentId)) return failed(res, 400, 'Invalid id');
   if (scope && !SCOPES.includes(scope)) return failed(res, 400, 'Invalid scope');
@@ -250,7 +259,7 @@ const list = async (req, res) => {
     }
     const photos = await authorPhotoUrls(rows);
     const items = rows.map((r) => ({
-      ...toListItem({ ...r, author_photo_url: photos.get(r.author_id) }, req.user),
+      ...toListItem({ ...r, author_photo_url: photos.get(r.author_id) }, actorOf(req)),
       ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.announcement_id) } : {}),
     }));
     return res.status(200).json({ status: 'success', data: items });
@@ -263,7 +272,7 @@ const list = async (req, res) => {
 // GET /api/announcements/unread-count
 const unreadCount = async (req, res) => {
   try {
-    const { rows: [r] } = await db.query(q.countUnreadAnnouncements, [req.user.userId, req.user.school, req.user.role, yearOf(req)]);
+    const { rows: [r] } = await db.query(q.countUnreadAnnouncements, [req.user.userId, req.user.school, annRole(req), yearOf(req)]);
     return res.status(200).json({ status: 'success', data: { unreadAnnouncements: r?.unread_announcements ?? 0 } });
   } catch (error) {
     logger.error('Error counting unread announcements:', error);
@@ -273,7 +282,8 @@ const unreadCount = async (req, res) => {
 
 // GET /api/announcements/targets
 const targets = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
+  const role = annRole(req);
   if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
     const term = await currentTermParams(req);
@@ -299,7 +309,8 @@ const targets = async (req, res) => {
         sender: {
           from: senderAddress(sender.from),
           replyTo: replyTo.map((email) => ({ email, name: nameOf.get(email) ?? null })),
-          includesAuthor: role === 'TEACHER',
+          // Identity, not access: a teacher author is added to Reply-To.
+          includesAuthor: req.user.role === 'TEACHER',
           canEdit: role === 'ADMIN',
         },
       },
@@ -312,7 +323,8 @@ const targets = async (req, res) => {
 
 // GET /api/announcements/students — the roster a custom audience is picked from.
 const students = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
+  const role = annRole(req);
   if (!isStaff(req.user)) return failed(res, 403, 'Staff access required');
   try {
     const term = await currentTermParams(req);
@@ -334,7 +346,7 @@ const preview = async (req, res) => {
   if (a.error) return failed(res, 400, a.error);
   const { scope, classId, grade, studentIds } = a;
   try {
-    const check = await checkScope(req.user, scope, classId, grade, yearOf(req), studentIds);
+    const check = await checkScope(actorOf(req), scope, classId, grade, yearOf(req), studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
     const { rows: [r] } = await db.query(q.selectAudiencePreview, [req.user.school, scope, classId, grade, yearOf(req), studentIds]);
     return res.status(200).json({
@@ -377,7 +389,7 @@ const previewEmail = async (req, res) => {
   const attachmentCount = Math.max(0, Math.min(20, Number.parseInt(req.body.attachmentCount, 10) || 0));
 
   try {
-    const check = await checkScope(req.user, scope, classId, grade, yearOf(req), studentIds);
+    const check = await checkScope(actorOf(req), scope, classId, grade, yearOf(req), studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
     const label = scopeLabel({ scope, grade, class_subject: check.classSubject, class_grade: check.classGrade });
     const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [req.user.school]);
@@ -429,7 +441,7 @@ const create = async (req, res) => {
 
   try {
     const yearId = yearOf(req);
-    const check = await checkScope(user, scope, classId, grade, yearId, studentIds);
+    const check = await checkScope(actorOf(req), scope, classId, grade, yearId, studentIds);
     if (check.error) return failed(res, check.error[0], check.error[1]);
 
     const client = await db.connect();
@@ -468,7 +480,7 @@ const create = async (req, res) => {
       published_at: row.published_at, pinned_until: v.pinnedUntil, is_pinned: Boolean(v.pinnedUntil), edited_at: null,
       attachment_count: files.length, read: true, seen_count: 0, audience_count: 0, ack_requested: ackRequested,
       student_count: studentIds ? studentIds.length : 0, send_email: sendEmail,
-    }, user);
+    }, actorOf(req));
     return res.status(201).json({ status: 'success', data: { ...item, attachments: await signedAttachments(row.announcement_id) } });
   } catch (error) {
     logger.error('Error creating announcement:', error);
@@ -487,7 +499,7 @@ const get = async (req, res) => {
       db.query('SELECT read_at FROM announcement_reads WHERE announcement_id = $1 AND user_id = $2', [ann.announcementId, user.userId]),
       authorPhotoUrls([row]),
     ]);
-    const item = toListItem({ ...row, author_photo_url: photos.get(row.author_id), read: readRes.rows.length > 0 }, user);
+    const item = toListItem({ ...row, author_photo_url: photos.get(row.author_id), read: readRes.rows.length > 0 }, actorOf(req));
     if (!isStaff(user)) return res.status(200).json({ status: 'success', data: { ...item, attachments } });
 
     const [{ rows: receipts }, { rows: [stats] }, { rows: picked }, { rows: [studentCounts] }] = await Promise.all([
@@ -524,7 +536,7 @@ const get = async (req, res) => {
 // PATCH /api/announcements/:id  (multipart: title?, body?, pinnedUntil?, ackRequested?, studentIds[]? (custom only), removeAttachmentIds?, files[])
 const update = async (req, res) => {
   const ann = req.announcement;
-  if (!canMutate(ann, req.user)) return failed(res, 403, 'Only the author or an admin can edit this announcement');
+  if (!canMutate(ann, actorOf(req))) return failed(res, 403, 'Only the author or an admin can edit this announcement');
   // An unchanged pin (even one that has expired) is not a new date in the past.
   const pinUnchanged = req.body.pinnedUntil !== undefined && String(req.body.pinnedUntil) === String(ann.pinnedUntil ?? '');
   const v = validateFields(pinUnchanged ? { ...req.body, pinnedUntil: undefined } : req.body, { partial: true });
@@ -545,7 +557,7 @@ const update = async (req, res) => {
     if (studentIds) {
       // Checked against the post's own year: an old custom post is edited against its own cohort.
       // A post composed in a class keeps to that class's roster.
-      const check = await checkScope(req.user, 'custom', ann.classId ?? null, null, ann.schoolYearId ?? yearOf(req), studentIds);
+      const check = await checkScope(actorOf(req), 'custom', ann.classId ?? null, null, ann.schoolYearId ?? yearOf(req), studentIds);
       if (check.error) return failed(res, check.error[0], check.error[1]);
     }
     const client = await db.connect();
@@ -602,7 +614,7 @@ const update = async (req, res) => {
     const item = toListItem({
       ...row, author_photo_url: photos.get(row.author_id), title, body, pinned_until: pinnedUntil, edited_at: editedAt, read: true,
       ack_requested: ackRequested, student_count: studentIds ? studentIds.length : ann.studentCount,
-    }, req.user);
+    }, actorOf(req));
     return res.status(200).json({ status: 'success', data: { ...item, attachments: await signedAttachments(ann.announcementId) } });
   } catch (error) {
     logger.error('Error editing announcement:', error);
@@ -613,7 +625,7 @@ const update = async (req, res) => {
 // DELETE /api/announcements/:id
 const remove = async (req, res) => {
   const ann = req.announcement;
-  if (!canMutate(ann, req.user)) return failed(res, 403, 'Only the author or an admin can remove this announcement');
+  if (!canMutate(ann, actorOf(req))) return failed(res, 403, 'Only the author or an admin can remove this announcement');
   try {
     const { rows: paths } = await db.query(q.selectAttachmentPaths, [ann.announcementId]);
     await removeObjects(paths.map((p) => p.file_path));
@@ -670,7 +682,7 @@ const unacknowledge = async (req, res) => {
 
 // POST /api/announcements/:id/emails/retry  (admin)
 const retryEmails = async (req, res) => {
-  if (req.user.role !== 'ADMIN') return failed(res, 403, 'Admin access required');
+  if (!can(req, 'announcements.school')) return failed(res, 403, 'Admin access required');
   try {
     const { rows } = await db.query(q.retryFailedAnnouncementJobs, [req.announcement.announcementId]);
     return res.status(200).json({ status: 'success', data: { requeued: rows.length } });

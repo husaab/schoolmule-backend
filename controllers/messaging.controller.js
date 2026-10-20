@@ -14,6 +14,14 @@ const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
+const { can, effectiveRole } = require('../services/access/access');
+
+// RBAC: in messaging, "the office" (every thread, the admin inbox, cross-term
+// follow-ups, removing others' messages) is the messages.all permission, not
+// the ADMIN role. The SQL still branches on a role, so it is handed the
+// effective one (threadRole); stored sender roles stay the real ones.
+const seesAllThreads = (req) => can(req, 'messages.all');
+const threadRole = (req) => effectiveRole(req, 'messages.all');
 const q = require('../queries/messaging.queries');
 const announcementQueries = require('../queries/announcement.queries');
 const adminUserQueries = require('../queries/adminUser.queries');
@@ -145,9 +153,10 @@ async function queueEmails(conv, senderId) {
   }
 }
 
-/** The first time an admin who does not teach the class writes, say so in the thread. */
-async function noteAdminJoin(conv, user) {
-  if (user.role !== 'ADMIN') return;
+/** The first time someone from the office (messages.all) who does not teach the class writes, say so in the thread. */
+async function noteAdminJoin(conv, req) {
+  const user = req.user;
+  if (!seesAllThreads(req)) return;
   if (conv.teacherIds.includes(user.userId) || conv.adminParticipantIds.includes(user.userId)) return;
   await db.query(q.ensureParticipant, [conv.conversationId, user.userId]);
   await persistMessage({
@@ -155,7 +164,7 @@ async function noteAdminJoin(conv, user) {
     school: conv.school,
     sender: user,
     kind: 'system',
-    body: `${user.username} (Admin) joined the conversation`,
+    body: `${user.username} (${user.role === 'ADMIN' ? 'Admin' : 'Staff'}) joined the conversation`,
   });
   conv.adminParticipantIds.push(user.userId);
 }
@@ -271,7 +280,7 @@ const termParams = (term) => [term?.termId ?? null, term?.name ?? null];
 // Teachers and parents may only start threads about current-term classes;
 // admins are exempt (they handle the office's cross-term follow-ups). With no
 // current term there is nothing to hold anyone to.
-const outOfTerm = (user, term, row) => Boolean(term) && user.role !== 'ADMIN' && !row.in_current_term;
+const outOfTerm = (req, term, row) => Boolean(term) && !seesAllThreads(req) && !row.in_current_term;
 
 async function loadConversation(conversationId) {
   const { rows } = await db.query(q.selectConversationAccess, [conversationId]);
@@ -384,13 +393,14 @@ async function buildThread(conv, user) {
 }
 
 /** Staff-side class check shared by targets and stubs. Returns { error: [status, message] } or { cls: row }. */
-async function checkClassForStaff(classId, user) {
+async function checkClassForStaff(classId, req) {
+  const { user } = req;
   const { rows } = await db.query(
     'SELECT school, teacher_id, term_id, term_name, subject, grade::text AS grade, EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = $1 AND ct.teacher_id = $2) AS co FROM classes WHERE class_id = $1',
     [classId, user.userId],
   );
   if (!rows.length || rows[0].school !== user.school) return { error: [404, 'Class not found'] };
-  if (user.role === 'TEACHER' && rows[0].teacher_id !== user.userId && !rows[0].co) return { error: [403, 'Not authorized for this class'] };
+  if (!seesAllThreads(req) && rows[0].teacher_id !== user.userId && !rows[0].co) return { error: [403, 'Not authorized for this class'] };
   return { cls: rows[0] };
 }
 
@@ -407,7 +417,8 @@ async function parentLinked(studentId, userId) {
 // GET /api/messaging/conversations
 // ────────────────────────────────────────────────────────────────────
 const listConversations = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
+  const role = threadRole(req);
   const status = req.query.status === 'all' ? null : req.query.status === 'resolved' ? 'resolved' : 'open';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const sql = role === 'PARENT' ? q.listForParent : role === 'ADMIN' ? q.listForAdmin : q.listForTeacher;
@@ -449,11 +460,11 @@ const listConversations = async (req, res) => {
 
 // GET /api/messaging/conversations/unread-count
 const getUnreadSummary = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
   try {
     const [{ rows: [r] }, { rows: [a] }] = await Promise.all([
-      db.query(q.selectUnreadSummary, [userId, school, role]),
-      db.query(announcementQueries.countUnreadAnnouncements, [userId, school, role, req.schoolYear?.schoolYearId ?? null]),
+      db.query(q.selectUnreadSummary, [userId, school, threadRole(req)]),
+      db.query(announcementQueries.countUnreadAnnouncements, [userId, school, effectiveRole(req, 'announcements.school'), req.schoolYear?.schoolYearId ?? null]),
     ]);
     return res.status(200).json({
       status: 'success',
@@ -514,7 +525,7 @@ const getTargets = async (req, res) => {
       const { rows: srows } = await db.query(q.selectStudentForStaff, [studentId]);
       if (!srows.length || srows[0].school !== user.school) return failed(res, 404, 'Student not found');
       const term = await resolveCurrentTerm(req);
-      if (user.role !== 'ADMIN') {
+      if (!seesAllThreads(req)) {
         const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]);
         if (!ctxRows.length || !ctxRows[0].caller_teaches) return failed(res, 403, 'Not authorized for this student');
       }
@@ -523,7 +534,7 @@ const getTargets = async (req, res) => {
         db.query(q.selectStudentClassesForStaff, [studentId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]),
       ]);
       // A teacher only sees the classes they teach the student in; an admin sees them all.
-      const classes = classRows.filter((c) => user.role === 'ADMIN' || c.caller_teaches);
+      const classes = classRows.filter((c) => seesAllThreads(req) || c.caller_teaches);
       const { rows: assessmentRows } = classes.length
         ? await db.query(q.selectAssessmentsForClasses, [classes.map((c) => c.class_id)])
         : { rows: [] };
@@ -550,7 +561,7 @@ const getTargets = async (req, res) => {
       // the student and treats the class as optional (General) or required
       // (assessment). Past-term classes are never offered here.
       const term = await resolveCurrentTerm(req);
-      const params = [user.userId, user.school, user.role, req.schoolYear?.schoolYearId ?? null, ...termParams(term)];
+      const params = [user.userId, user.school, threadRole(req), req.schoolYear?.schoolYearId ?? null, ...termParams(term)];
       const [{ rows: classRows }, { rows: studentRows }] = await Promise.all([
         db.query(q.selectStaffRosterClasses, params),
         db.query(q.selectStaffRosterStudents, params),
@@ -564,7 +575,7 @@ const getTargets = async (req, res) => {
         },
       });
     }
-    const { error: err, cls } = await checkClassForStaff(classId, user);
+    const { error: err, cls } = await checkClassForStaff(classId, req);
     if (err) return failed(res, err[0], err[1]);
     const term = await resolveCurrentTerm(req);
     const [{ rows: students }, { rows: assessments }] = await Promise.all([
@@ -600,9 +611,9 @@ const getStubs = async (req, res) => {
       if (!studentId) return failed(res, 400, 'studentId is required');
       if (!(await parentLinked(studentId, user.userId))) return failed(res, 403, 'Not authorized for this student');
     } else if (classId) {
-      const { error: err } = await checkClassForStaff(classId, user);
+      const { error: err } = await checkClassForStaff(classId, req);
       if (err) return failed(res, err[0], err[1]);
-    } else if (user.role !== 'ADMIN') {
+    } else if (!seesAllThreads(req)) {
       return failed(res, 403, 'classId is required');
     }
     const { rows } = await db.query(q.selectStubs, [user.userId, classId || null, studentId || null, user.school, user.role]);
@@ -644,7 +655,7 @@ const createConversation = async (req, res) => {
       // A teacher in their parent view asking about a class they teach would
       // be writing to themself.
       if (a.lead_teacher_id === user.userId || a.is_co_teacher) return failed(res, 403, SELF_THREAD_MESSAGE);
-    } else if (user.role === 'TEACHER' && a.lead_teacher_id !== user.userId && !a.is_co_teacher) {
+    } else if (!seesAllThreads(req) && a.lead_teacher_id !== user.userId && !a.is_co_teacher) {
       return failed(res, 403, 'Not authorized for this class');
     }
 
@@ -655,13 +666,13 @@ const createConversation = async (req, res) => {
       // Posting into an existing thread is a reply, so the term gate does not apply.
       conversationId = existing[0].conversation_id;
     } else {
-      if (outOfTerm(user, term, a)) return failed(res, 400, PAST_TERM_MESSAGE);
+      if (outOfTerm(req, term, a)) return failed(res, 400, PAST_TERM_MESSAGE);
       const { rows: [c] } = await db.query(q.insertConversation, [user.school, studentId, classId, assessmentId, a.assessment_name, user.userId]);
       conversationId = c.conversation_id;
     }
 
     const conv = await loadConversation(conversationId);
-    await noteAdminJoin(conv, user);
+    await noteAdminJoin(conv, req);
     await persistMessage({ conversationId, school: user.school, sender: user, body: v.text, files });
     const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, user.userId);
@@ -715,7 +726,7 @@ const createGeneralConversation = async (req, res) => {
       } else if (!teaches && !leadership) {
         return failed(res, 403, 'That teacher does not teach this student this term');
       }
-    } else if (user.role === 'TEACHER') {
+    } else if (!seesAllThreads(req)) {
       // Writing as yourself is no exemption: the caller must teach the student
       // this term (or be their homeroom teacher), same as the parent-side rule.
       if (!a.caller_teaches) return failed(res, 403, 'You do not teach this student this term');
@@ -731,12 +742,12 @@ const createGeneralConversation = async (req, res) => {
       if (!cl || cl.school !== user.school) return failed(res, 404, 'Class not found');
       if (!cl.has_student) return failed(res, 400, 'Student is not in this class');
       if (!cl.teacher_teaches) return failed(res, 400, 'That teacher does not teach this class');
-      if (outOfTerm(user, term, cl)) return failed(res, 400, PAST_TERM_MESSAGE);
+      if (outOfTerm(req, term, cl)) return failed(res, 400, PAST_TERM_MESSAGE);
       classId = cl.class_id;
     }
     const { rows: [c] } = await db.query(q.insertGeneralConversation, [user.school, studentId, classId, teacherId, title, user.userId]);
     const conv = await loadConversation(c.conversation_id);
-    await noteAdminJoin(conv, user);
+    await noteAdminJoin(conv, req);
     await persistMessage({ conversationId: conv.conversationId, school: user.school, sender: user, body: v.text, files });
     const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, user.userId);
@@ -799,7 +810,7 @@ const postMessage = async (req, res) => {
   if (v.error) return failed(res, 400, v.error);
   try {
     const conv = req.conversation;
-    await noteAdminJoin(conv, req.user);
+    await noteAdminJoin(conv, req);
     await persistMessage({ conversationId: conv.conversationId, school: conv.school, sender: req.user, body: v.text, files });
     const invites = await inviteUnlinkedGuardians(conv, req.user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, req.user.userId);
@@ -838,7 +849,7 @@ const deleteMessage = async (req, res) => {
     const { rows } = await db.query(q.selectMessageForMutation, [req.params.messageId, req.conversation.conversationId]);
     const m = rows[0];
     if (!m || m.kind !== 'message') return failed(res, 404, 'Message not found');
-    if (m.sender_id !== req.user.userId && req.user.role !== 'ADMIN') return failed(res, 403, 'You can only remove your own messages');
+    if (m.sender_id !== req.user.userId && !seesAllThreads(req)) return failed(res, 403, 'You can only remove your own messages');
     if (m.deleted_at) return res.status(200).json({ status: 'success', data: { messageId: m.message_id, deletedAt: m.deleted_at } });
 
     const { rows: paths } = await db.query(q.selectAttachmentPathsByMessage, [m.message_id]);

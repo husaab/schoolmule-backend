@@ -159,4 +159,35 @@ describe('requireConversationAccess', () => {
     await requireConversationAccess(makeReq({ userId: PARENT, role: 'PARENT' }), res, jest.fn());
     expect(res.statusCode).toBe(403);
   });
+
+  describe('with RBAC roles', () => {
+    const { giveRole } = require('../../helpers/mockAccess');
+    const OFFICE = '66666666-6666-4666-8666-666666666666';
+
+    it('keeps an admin without messages.all out of threads they are not in', async () => {
+      giveRole(OFFICE, ['forms']);
+      db.query.mockResolvedValueOnce({ rows: [row()] });
+      const res = makeRes();
+      const next = jest.fn();
+      await requireConversationAccess(makeReq({ userId: OFFICE, role: 'ADMIN' }), res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('lets them into a thread they joined', async () => {
+      giveRole(OFFICE, ['forms']);
+      db.query.mockResolvedValueOnce({ rows: [row({ admin_participant_ids: [OFFICE] })] });
+      const next = jest.fn();
+      await requireConversationAccess(makeReq({ userId: OFFICE, role: 'ADMIN' }), makeRes(), next);
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('opens every thread of the school to messages.all, even for a teacher', async () => {
+      giveRole(OFFICE, ['messages.all']);
+      db.query.mockResolvedValueOnce({ rows: [row()] });
+      const next = jest.fn();
+      await requireConversationAccess(makeReq({ userId: OFFICE, role: 'TEACHER' }), makeRes(), next);
+      expect(next).toHaveBeenCalled();
+    });
+  });
 });
