@@ -273,7 +273,7 @@ describe('messaging controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.context).toBeNull();
       expect(res.body.data.student).toEqual({
-        studentId: STUDENT, name: 'Amina Test', studentAvatar: null, grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96,
+        studentId: STUDENT, name: 'Amina Test', studentAvatar: null, studentPhotoUrl: null, grade: '6', homeroomTeacherName: 'Sana Rahman', attendancePct: 96,
       });
     });
   });

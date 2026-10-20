@@ -21,7 +21,7 @@ const ROW_SELECT = `
 SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_year_id,
        ${studentAvatarSql('s', 'student_avatar')},
        NULLIF(TRIM(CONCAT(h.first_name, ' ', h.last_name)), '') AS homeroom_teacher_name,
-       u.user_id, u.email AS account_email, u.is_archived, (u.password = '!') AS invite_pending,
+       u.user_id, u.email AS account_email, u.photo_path, u.is_archived, (u.password = '!') AS invite_pending,
        (u.google_sub IS NOT NULL) AS has_google,
        u.created_at AS account_created_at, u.last_login_at, u.last_seen_at,
        sa.consent_at, sa.consent_notice_version, NULLIF(TRIM(CONCAT(cb.first_name, ' ', cb.last_name)), '') AS consent_by_name,

@@ -1,4 +1,4 @@
-const { studentAvatarSql } = require("../utils/avatar");
+const { studentAvatarSql, studentPhotoSql } = require("../utils/avatar");
 
 const parentStudentQueries = {
   // GET /parent-students?school=X - Get all parent-student relations by school
@@ -87,6 +87,7 @@ const parentStudentQueries = {
       s.grade as student_grade,
       s.oen as student_oen,
       ${studentAvatarSql('s', 'student_avatar')},
+      ${studentPhotoSql('s', 'photo_path')},
       s.homeroom_teacher_id,
       ht.first_name as homeroom_teacher_first_name,
       ht.last_name as homeroom_teacher_last_name

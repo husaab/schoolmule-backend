@@ -19,6 +19,7 @@ const { buildStudentTermDetail } = require('../services/studentTermDetail');
 const stats = require('../utils/statsUtils');
 const { pickDefaultTerm } = require('../utils/defaultTerm');
 const { toCamel } = require('./student.controller');
+const { withPhotoUrls } = require('../services/profile/photos');
 const q = require('../queries/studentOverview.queries');
 const parentPortalQueries = require('../queries/parentPortal.queries');
 const progressReportQueries = require('../queries/progressReports.queries');
@@ -126,10 +127,11 @@ const getStudentOverview = async (req, res) => {
       ? await Promise.all(terms.map((t) => engine.buildAnalyticsMatrix(school, t.term_id)))
       : terms.map(() => null);
 
+    const [photoed] = await withPhotoUrls([student], school, { role: 'STUDENT' });
     return res.status(200).json({
       status: 'success',
       data: {
-        student: { ...toCamel(student), homeroomTeacherName: student.homeroom_teacher_name ?? null },
+        student: { ...toCamel(photoed), homeroomTeacherName: student.homeroom_teacher_name ?? null },
         gradingMode: isCompetency(student) ? 'competency' : 'numeric',
         defaultTermId: pickDefaultTerm(terms)?.term_id ?? null,
         terms: terms.map((t, i) => summarizeTerm(t, matrices[i], studentId, days)),

@@ -8,7 +8,7 @@
 // students.grade and classes.grade are the "GRADE" enum in production: always
 // compare them as ::text.
 
-const { studentAvatarSql } = require('../utils/avatar');
+const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { inCurrentTerm } = require('./termScope');
 const { IN_AUDIENCE } = require('./announcement.queries');
@@ -19,7 +19,7 @@ const { SIGNS_IN } = require('./studentSignsIn');
 // the classes alias.
 const TEACHERS_JSON = (c) => `COALESCE((
     SELECT json_agg(json_build_object('userId', u.user_id, 'name', TRIM(CONCAT(u.first_name, ' ', u.last_name)),
-                                      'avatar', u.avatar, 'role', t.role)
+                                      'avatar', u.avatar, 'photoPath', u.photo_path, 'role', t.role)
                     ORDER BY t.ord, u.last_name, u.first_name)
     FROM (SELECT ${c}.teacher_id AS user_id, 'lead' AS role, 0 AS ord
           UNION
@@ -111,7 +111,7 @@ const childClassroomQueries = {
   // grade first. $1 parent_id, $2 school, $3 school_year_id|null
   selectParentChildren: `
     SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id,
-           ${studentAvatarSql('s')},
+           ${studentAvatarSql('s')}, ${studentPhotoSql('s')},
            NULLIF(TRIM(CONCAT(ht.first_name, ' ', ht.last_name)), '') AS homeroom_teacher_name,
            ${SIGNS_IN('s')} AS signs_in
     FROM students s

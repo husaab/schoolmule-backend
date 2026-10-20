@@ -6,9 +6,10 @@
 const db = require("../config/database");
 const staffQueries = require("../queries/staff.queries");
 const logger = require("../logger");
+const { signedPhotoUrls } = require("../services/profile/photos");
 
-// Convert database row to camelCase
-const toCamel = row => ({
+// Convert database row to camelCase. `photos` maps a photo path to its signed URL.
+const toCamel = (row, photos = new Map()) => ({
   staffId: row.staff_id,
   school: row.school,
   fullName: row.full_name,
@@ -20,7 +21,10 @@ const toCamel = row => ({
   preferredContact: row.preferred_contact,
   phoneContactHours: row.phone_contact_hours,
   emailContactHours: row.email_contact_hours,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  /** The matching account's avatar and photo (null without an account). */
+  avatar: row.avatar ?? null,
+  photoUrl: photos.get(row.photo_path) ?? null,
 });
 
 // GET /api/staff?school=<school>
@@ -31,7 +35,8 @@ const getStaffBySchool = async (req, res) => {
 
   try {
     const { rows } = await db.query(staffQueries.selectStaffBySchool, [school]);
-    const data = rows.map(toCamel);
+    const photos = await signedPhotoUrls(rows.map((r) => r.photo_path));
+    const data = rows.map((r) => toCamel(r, photos));
     return res.status(200).json({ status: "success", data });
   } catch (error) {
     logger.error(error);
@@ -60,7 +65,8 @@ const getStaffById = async (req, res) => {
         message: "Staff member not found" 
       });
     }
-    return res.status(200).json({ status: "success", data: toCamel(rows[0]) });
+    const photos = await signedPhotoUrls([rows[0].photo_path]);
+    return res.status(200).json({ status: "success", data: toCamel(rows[0], photos) });
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ 

@@ -127,8 +127,11 @@ describe('Integration: student messaging', () => {
       ['Omar Coteacher', ['Science']],
       ['Ziad Teacher', ['Science']],
     ]);
-    expect(targets.teachers[2]).toEqual({ userId: TEACHER_ID, name: 'Ziad Teacher', avatar: null, classes: [{ classId: sciId, subject: 'Science' }] });
-    expect(targets.guardians).toEqual([{ name: 'Mona Haddad', relation: 'Mother' }, { name: 'Sami Haddad', relation: 'Father' }]);
+    expect(targets.teachers[2]).toEqual({ userId: TEACHER_ID, name: 'Ziad Teacher', avatar: null, photoUrl: null, classes: [{ classId: sciId, subject: 'Science' }] });
+    expect(targets.guardians).toEqual([
+      { name: 'Mona Haddad', relation: 'Mother', avatar: null, photoUrl: null },
+      { name: 'Sami Haddad', relation: 'Father', avatar: null, photoUrl: null },
+    ]);
 
     const thread = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Lab partner', body: 'Can I switch lab partners?' })).data;
     expect(thread.conversation).toMatchObject({
@@ -519,7 +522,7 @@ describe('Integration: student messaging', () => {
       await pool.query(`UPDATE students SET homeroom_teacher_id = $2 WHERE student_id = $1`, [bilalId, ADMIN_LEAD_ID]);
 
       const targets = (await get('/api/student/conversations/targets', asBilal)).data.teachers;
-      expect(targets.find((t) => t.userId === ADMIN_LEAD_ID)).toEqual({ userId: ADMIN_LEAD_ID, name: 'Rami Principal', avatar: null, classes: [] });
+      expect(targets.find((t) => t.userId === ADMIN_LEAD_ID)).toEqual({ userId: ADMIN_LEAD_ID, name: 'Rami Principal', avatar: null, photoUrl: null, classes: [] });
       const thread = (await startThread({ teacherId: ADMIN_LEAD_ID, subject: 'Bus', body: 'My bus was late.' }, asBilal)).data;
       expect(thread.conversation).toMatchObject({ classId: null, teacherId: ADMIN_LEAD_ID, includesStudent: true });
       expect(sorted(thread.participants.map((p) => p.userId))).toEqual(sorted([RANIA_ID, BILAL_USER_ID, ADMIN_LEAD_ID]));
@@ -556,7 +559,7 @@ describe('Integration: student messaging', () => {
 
       // An archived guardian is not named in the student's compose note.
       await pool.query(`UPDATE users SET is_archived = TRUE WHERE user_id = $1`, [DAD_ID]);
-      expect((await get('/api/student/conversations/targets', asAmal)).data.guardians).toEqual([{ name: 'Mona Haddad', relation: 'Mother' }]);
+      expect((await get('/api/student/conversations/targets', asAmal)).data.guardians).toEqual([{ name: 'Mona Haddad', relation: 'Mother', avatar: null, photoUrl: null }]);
     });
 
     it('an item with messages stays an assignment or quiz (409), so the thread keeps its anchor', async () => {
@@ -633,6 +636,36 @@ describe('Integration: student messaging', () => {
     await pool.query(`UPDATE users SET avatar = $2::jsonb WHERE user_id = $1`, [AMAL_USER_ID, JSON.stringify(ownPick)]);
     expect((await row(asTeacher)).studentAvatar).toEqual(ownPick);
     expect((await get(`/api/messaging/conversations/${id}`, asTeacher)).data.student.studentAvatar).toEqual(ownPick);
+  });
+
+  it("a teacher's uploaded photo shows to the student: on the targets, the thread list and in the thread", async () => {
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/ziad/p.png' WHERE user_id = $1`, [TEACHER_ID]);
+    const url = 'https://mock-signed-url.com/ALHAADIACADEMY/ziad/p.png';
+    const targets = (await get('/api/student/conversations/targets', asAmal)).data;
+    expect(targets.teachers.find((t) => t.userId === TEACHER_ID).photoUrl).toBe(url);
+    expect(targets.teachers.find((t) => t.userId === HOMEROOM_ID).photoUrl).toBeNull();
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/mona/p.png' WHERE user_id = $1`, [MOM_ID]);
+    const withMom = (await get('/api/student/conversations/targets', asAmal)).data;
+    expect(withMom.guardians.find((g) => g.name === 'Mona Haddad').photoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/mona/p.png');
+
+    const id = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Lab', body: 'Can I stay late?' })).data.conversation.conversationId;
+    await staffPost(id, asTeacher, 'Yes, until 4.');
+    const items = (await get('/api/student/conversations', asAmal)).data.items;
+    expect(items.find((r) => r.conversationId === id).leadTeacherPhotoUrl).toBe(url);
+    const thread = (await get(`/api/student/conversations/${id}`, asAmal)).data;
+    expect(thread.messages.find((m) => m.senderId === TEACHER_ID).senderPhotoUrl).toBe(url);
+    expect(thread.participants.find((p) => p.userId === TEACHER_ID).photoUrl).toBe(url);
+  });
+
+  it("the student's own photo shows to staff only while the school has student photos on", async () => {
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/amal/p.png' WHERE user_id = $1`, [AMAL_USER_ID]);
+    const url = 'https://mock-signed-url.com/ALHAADIACADEMY/amal/p.png';
+    const id = (await startThread({ teacherId: TEACHER_ID, classId: sciId, subject: 'Lab', body: 'Can I stay late?' })).data.conversation.conversationId;
+    const sender = async () => (await get(`/api/messaging/conversations/${id}`, asTeacher)).data.messages.find((m) => m.senderId === AMAL_USER_ID);
+    expect((await sender()).senderPhotoUrl).toBeNull();
+    await pool.query(`UPDATE school_classroom_settings SET student_photos = TRUE WHERE school = 'ALHAADIACADEMY'`);
+    expect((await sender()).senderPhotoUrl).toBe(url);
+    expect((await get(`/api/messaging/conversations/${id}`, asTeacher)).data.participants.find((p) => p.userId === AMAL_USER_ID).photoUrl).toBe(url);
   });
 
   it("the admin inbox names each thread's addressee: a co-teacher or homeroom teacher, not only the class lead", async () => {

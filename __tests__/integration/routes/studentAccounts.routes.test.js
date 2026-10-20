@@ -215,6 +215,7 @@ describe('Integration: Student accounts', () => {
       studentId: amalId,
       name: 'Amal Haddad',
       studentAvatar: null,
+      studentPhotoUrl: null,
       grade: '2',
       homeroomTeacherName: 'Ziad Teacher',
       studentEmail: 'Amal.Haddad@Example.com',

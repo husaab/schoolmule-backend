@@ -127,8 +127,11 @@ const isQrEligible = (status, grade, settings) => {
   return (status === 'invited' || status === 'active') && rank !== null && rank <= gradeRank(settings.qrUntilGrade);
 };
 
-/** selectStudentAccountRow(s) row → StudentAccountRow. */
-const toStudentAccountRow = (row, settings) => {
+/**
+ * selectStudentAccountRow(s) row → StudentAccountRow. `photos` maps the
+ * login's photo path to its signed URL (used only while student photos are on).
+ */
+const toStudentAccountRow = (row, settings, photos = new Map()) => {
   const status = deriveStatus(row, settings);
   const signInMethod = signInMethodOf(row);
   const invite = row.user_id ? latestInvite(row) : null;
@@ -137,6 +140,7 @@ const toStudentAccountRow = (row, settings) => {
     name: row.name,
     // The displayed avatar: the login's own pick over the teacher-set one.
     studentAvatar: row.student_avatar ?? null,
+    studentPhotoUrl: (settings.studentPhotos && photos.get(row.photo_path)) || null,
     grade: row.grade,
     homeroomTeacherName: row.homeroom_teacher_name ?? null,
     studentEmail: row.student_email ?? null,

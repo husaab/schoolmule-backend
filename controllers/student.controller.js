@@ -5,6 +5,10 @@ const { checkStudentEmails } = require("../services/classroom/emailProblems");
 const { getSettings } = require("../services/classroom/classroomSettings");
 const logger = require("../logger");
 const { can } = require("../services/access/access");
+const { withPhotoUrls } = require("../services/profile/photos");
+
+// Student rows with photo_url: the photo on the student's login, while the school has student photos on.
+const withStudentPhotos = (rows, school) => withPhotoUrls(rows, school, { role: "STUDENT" });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -49,6 +53,8 @@ const toCamel = (s) => ({
   studentEmail: s.student_email ?? null,
   // The student's own pick, else the one a teacher set ({style, skin, bg}; null = neutral)
   avatar: s.avatar ?? null,
+  // Signed URL of the photo on the student's login (null while the school has student photos off)
+  photoUrl: s.photo_url ?? null,
   mother: {
     name: s.mother_name,
     email: s.mother_email,
@@ -83,7 +89,7 @@ const getAllStudents = async (req, res) => {
     logger.info("All students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);
@@ -100,9 +106,10 @@ const getStudentById = async (req, res) => {
       return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
     }
 
+    const [student] = await withStudentPhotos(rows, req.user.school);
     return res.status(200).json({
       status: "success",
-      data: hideStudentEmail(req)(toCamel(rows[0]))
+      data: hideStudentEmail(req)(toCamel(student))
     });
   } catch (error) {
     logger.error(error);
@@ -299,7 +306,7 @@ const getArchivedStudents = async (req, res) => {
     logger.info("Archived students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);
@@ -391,7 +398,7 @@ const getAllStudentsWithArchived = async (req, res) => {
     logger.info("All students (including archived) fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: rows.map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
     });
   } catch (error) {
     logger.error(error);

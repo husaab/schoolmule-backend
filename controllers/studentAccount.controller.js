@@ -17,6 +17,7 @@ const inviteQueries = require('../queries/studentInvite.queries');
 const { checkStudentEmails } = require('../services/classroom/emailProblems');
 const { GRADE_CODES } = require('../utils/gradeRank');
 const { getSettings, MAX_NOTICE_VERSION } = require('../services/classroom/classroomSettings');
+const { signedPhotoUrls } = require('../services/profile/photos');
 const {
   EMAIL_RE,
   STATUS_FILTERS,
@@ -49,6 +50,10 @@ const NOT_FOUND = 'Student not found';
 const NOT_ACTIVE_YEAR = "Invites go to this school year's students. Switch to the current school year to invite.";
 const NO_ACCOUNT = "This student doesn't have an account yet";
 
+/** Signed URLs for these rows' login photos; none while the school has student photos off. */
+const photosOf = (rows, settings) =>
+  (settings.studentPhotos ? signedPhotoUrls(rows.map((r) => r.photo_path)) : Promise.resolve(new Map()));
+
 /** One StudentAccountRow for a student of the school, or null. */
 async function loadRow(school, studentId) {
   const { rows } = await db.query(q.selectStudentAccountRow, [school, studentId]);
@@ -58,7 +63,7 @@ async function loadRow(school, studentId) {
 async function respondWithRow(res, school, studentId) {
   const [row, settings] = await Promise.all([loadRow(school, studentId), getSettings(school)]);
   if (!row) return failed(res, 404, NOT_FOUND);
-  return ok(res, toStudentAccountRow(row, settings));
+  return ok(res, toStudentAccountRow(row, settings, await photosOf([row], settings)));
 }
 
 // GET /api/admin/student-accounts?grade=&status=&q=&classId=
@@ -84,8 +89,9 @@ const listStudentAccounts = async (req, res) => {
       ? new Set((await db.query(q.selectClassRosterIds, [classId, school])).rows.map((r) => r.student_id))
       : null;
 
+    const photos = await photosOf(rows, settings);
     const students = rows
-      .map((row) => toStudentAccountRow(row, settings))
+      .map((row) => toStudentAccountRow(row, settings, photos))
       .filter((s) => !roster || roster.has(s.studentId))
       .filter((s) => !grade || s.grade === grade)
       .filter((s) => !status || (status === 'needs_attention' ? s.needsAttention : s.status === status))

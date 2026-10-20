@@ -1,4 +1,4 @@
-const { studentAvatarSql } = require("../utils/avatar");
+const { studentAvatarSql, studentPhotoSql } = require("../utils/avatar");
 
 const studentQueries = {
   // GET    /students
@@ -60,7 +60,8 @@ const studentQueries = {
       archived_by,
       school_year_id,
       previous_student_id,
-      ${studentAvatarSql('students')}
+      ${studentAvatarSql('students')},
+      ${studentPhotoSql('students')}
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
   `,
@@ -92,7 +93,8 @@ const studentQueries = {
       is_archived,
       archived_at,
       archived_by,
-      ${studentAvatarSql('students')}
+      ${studentAvatarSql('students')},
+      ${studentPhotoSql('students')}
     FROM students
     WHERE student_id = $1
   `,
@@ -125,7 +127,8 @@ const studentQueries = {
       is_archived,
       archived_at,
       archived_by,
-      ${studentAvatarSql('students')}
+      ${studentAvatarSql('students')},
+      ${studentPhotoSql('students')}
     FROM students
     WHERE student_id = $1 AND school = $2
   `,
@@ -227,7 +230,9 @@ const studentQueries = {
       archived_at,
       archived_by,
       school_year_id,
-      previous_student_id
+      previous_student_id,
+      ${studentAvatarSql('students')},
+      ${studentPhotoSql('students')}
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = true
     ORDER BY archived_at DESC
@@ -283,7 +288,9 @@ const studentQueries = {
       archived_at,
       archived_by,
       school_year_id,
-      previous_student_id
+      previous_student_id,
+      ${studentAvatarSql('students')},
+      ${studentPhotoSql('students')}
     FROM students
     WHERE school = $1 AND school_year_id = $2
     ORDER BY is_archived ASC, name ASC

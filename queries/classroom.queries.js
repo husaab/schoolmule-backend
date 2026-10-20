@@ -130,6 +130,7 @@ SELECT c.class_id, c.subject, c.grade::text AS grade, c.term_id, c.term_name, c.
          WHERE cs.class_id = c.class_id AND s.is_archived IS NOT TRUE)::int AS student_count,
        COALESCE((SELECT json_agg(json_build_object(
                    'userId', u.user_id, 'name', TRIM(CONCAT(u.first_name, ' ', u.last_name)), 'avatar', u.avatar,
+                   'photoPath', u.photo_path,
                    'role', CASE WHEN u.user_id = c.teacher_id THEN 'lead' ELSE 'co' END)
                  ORDER BY (u.user_id = c.teacher_id) DESC, u.last_name)
                  FROM users u
@@ -199,7 +200,7 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
   //  keeping the account holder's copy. $1 class_id
   selectPeopleStudents: `
     SELECT s.student_id, s.name, s.grade::text AS grade, ${studentAvatarSql('s')},
-           u.user_id, u.is_archived, (u.password = '!') AS invite_pending, u.last_seen_at,
+           u.user_id, u.photo_path, u.is_archived, (u.password = '!') AS invite_pending, u.last_seen_at,
            (u.google_sub IS NOT NULL) AS has_google, sa.activated_at, sa.activated_via,${INVITE_COLUMNS},
            COALESCE((SELECT json_agg(json_build_object(
                        'name', g.name, 'relation', g.relation, 'hasAccount', g.has_account, 'emailKey', g.email_key)

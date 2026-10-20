@@ -46,4 +46,13 @@ function studentAvatarSql(alias = 'students', as = 'avatar') {
   return `COALESCE((SELECT su.avatar FROM student_account_links sal JOIN users su ON su.user_id = sal.user_id WHERE sal.student_id = ${alias}.student_id), ${alias}.avatar) AS ${as}`;
 }
 
-module.exports = { STYLES, SKIN_COUNT, BG_COUNT, AVATAR_ERROR, validateAvatar, avatarPngUrl, studentAvatarSql };
+/**
+ * SQL select item for a student's stored photo path: the one on their linked
+ * student login (students have no photo of their own). Sign it with
+ * photoUrlsFor, which hides it while the school has student photos off.
+ */
+function studentPhotoSql(alias = 'students', as = 'photo_path') {
+  return `(SELECT su.photo_path FROM student_account_links sal JOIN users su ON su.user_id = sal.user_id WHERE sal.student_id = ${alias}.student_id) AS ${as}`;
+}
+
+module.exports = { STYLES, SKIN_COUNT, BG_COUNT, AVATAR_ERROR, validateAvatar, avatarPngUrl, studentAvatarSql, studentPhotoSql };

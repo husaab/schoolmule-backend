@@ -3,13 +3,24 @@
   Database queries for staff management
 */
 
+// The staff member's own account in the school (matched by email), for their
+// avatar and photo. Directory rows without an account get neither.
+const ACCOUNT_PICTURE = `
+  LEFT JOIN LATERAL (
+    SELECT u.avatar, u.photo_path FROM users u
+    WHERE lower(u.email) = lower(staff.email) AND u.school = staff.school
+      AND u.role::text IN ('TEACHER', 'ADMIN') AND u.is_archived IS NOT TRUE
+    LIMIT 1
+  ) acct ON TRUE`;
+
 // Get all staff for a specific school
 const selectStaffBySchool = `
   SELECT 
     staff_id, school, full_name, staff_role, teaching_assignments,
     homeroom_grade, email, phone, preferred_contact, 
-    phone_contact_hours, email_contact_hours, created_at
-  FROM staff 
+    phone_contact_hours, email_contact_hours, created_at,
+    acct.avatar, acct.photo_path
+  FROM staff ${ACCOUNT_PICTURE}
   WHERE school = $1 
   ORDER BY full_name ASC;
 `;
@@ -19,8 +30,9 @@ const selectStaffById = `
   SELECT 
     staff_id, school, full_name, staff_role, teaching_assignments,
     homeroom_grade, email, phone, preferred_contact, 
-    phone_contact_hours, email_contact_hours, created_at
-  FROM staff 
+    phone_contact_hours, email_contact_hours, created_at,
+    acct.avatar, acct.photo_path
+  FROM staff ${ACCOUNT_PICTURE}
   WHERE staff_id = $1;
 `;
 

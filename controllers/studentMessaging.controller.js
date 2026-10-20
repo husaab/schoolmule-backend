@@ -23,6 +23,7 @@ const q = require('../queries/messaging.queries');
 const work = require('../services/classroom/studentWork');
 const { isMember } = require('../middleware/requireConversationAccess');
 const m = require('./messaging.controller');
+const { signedPhotoUrls } = require('../services/profile/photos');
 
 const ok = (res, data, status = 200) => res.status(status).json({ status: 'success', data });
 const failed = (res, status, message, code) => res.status(status).json({ status: 'failed', message, ...(code ? { code } : {}) });
@@ -57,9 +58,14 @@ async function loadTargets(req) {
     db.query(q.selectStudentTeacherTargets, [studentId, yearOf(req), ...m.termParams(term)]),
     db.query(q.selectStudentGuardians, [studentId]),
   ]);
+  const photos = await signedPhotoUrls([...teachers, ...guardians].map((p) => p.photo_path));
   return {
-    teachers: teachers.map((t) => ({ userId: t.user_id, name: t.name, avatar: t.avatar ?? null, classes: t.classes || [] })),
-    guardians: guardians.map((g) => ({ name: g.name, relation: g.relation ?? null })),
+    teachers: teachers.map((t) => ({
+      userId: t.user_id, name: t.name, avatar: t.avatar ?? null, photoUrl: photos.get(t.photo_path) ?? null, classes: t.classes || [],
+    })),
+    guardians: guardians.map((g) => ({
+      name: g.name, relation: g.relation ?? null, avatar: g.avatar ?? null, photoUrl: photos.get(g.photo_path) ?? null,
+    })),
   };
 }
 
@@ -75,7 +81,13 @@ const listConversations = async (req, res) => {
       userId, school, yearOf(req), status, req.query.classId || null, null,
       req.query.q ? String(req.query.q).trim() || null : null, limit, req.query.unread === '1',
     ]);
-    return ok(res, { items: rows.map((r) => ({ ...m.toItem(r), needsReply: m.needsReplyFor('STUDENT', r) })) });
+    const photos = await signedPhotoUrls(rows.map((r) => r.lead_teacher_photo_path));
+    return ok(res, {
+      items: rows.map((r) => ({
+        ...m.toItem({ ...r, lead_teacher_photo_url: photos.get(r.lead_teacher_photo_path) }),
+        needsReply: m.needsReplyFor('STUDENT', r),
+      })),
+    });
   } catch (error) {
     logger.error({ err: error, userId }, 'Error listing student conversations');
     return failed(res, 500, 'Error loading your messages');

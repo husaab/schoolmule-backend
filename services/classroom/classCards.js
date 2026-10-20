@@ -20,8 +20,8 @@ function classLabel(grade, subject) {
   return `Grade ${g} ${name}`.trim();
 }
 
-/** selectClassCards / selectClassCard row → ClassCard. */
-function toClassCard(row) {
+/** selectClassCards / selectClassCard row → ClassCard. `photos` maps a teacher's photo path to its signed URL. */
+function toClassCard(row, photos = new Map()) {
   return {
     classId: row.class_id,
     subject: row.subject,
@@ -31,7 +31,7 @@ function toClassCard(row) {
     teacherId: row.teacher_id ?? null,
     teacherName: row.teacher_name ?? null,
     teachers: (row.teachers || []).map((t) => ({
-      userId: t.userId, name: t.name, role: t.role, avatar: t.avatar ?? null,
+      userId: t.userId, name: t.name, role: t.role, avatar: t.avatar ?? null, photoUrl: photos.get(t.photoPath) ?? null,
     })),
     studentCount: Number(row.student_count) || 0,
     identity: identityOf(row),
@@ -41,8 +41,11 @@ function toClassCard(row) {
   };
 }
 
+/** The photo paths of the teachers on these card rows, to sign in one go. */
+const cardPhotoPaths = (rows) => rows.flatMap((r) => (r.teachers || []).map((t) => t.photoPath));
+
 /** The header's card: the ClassCard plus the class options. */
-const toHeaderClass = (row) => ({ ...toClassCard(row), options: optionsOf(row) });
+const toHeaderClass = (row, photos) => ({ ...toClassCard(row, photos), options: optionsOf(row) });
 
 /**
  * Done in class, nothing turned in online: a plain assessment, or an
@@ -130,14 +133,18 @@ function dedupeParents(parents) {
   return out;
 }
 
-/** selectPeopleStudents row → a People student. `settings` are the school's classroom settings. */
-function toPeopleStudent(row, settings) {
+/**
+ * selectPeopleStudents row → a People student. `settings` are the school's
+ * classroom settings; `photos` maps a login's photo path to its signed URL
+ * (signed only while the school has student photos on).
+ */
+function toPeopleStudent(row, settings, photos = new Map()) {
   const status = deriveStatus(row, settings);
   return {
     studentId: row.student_id,
     name: row.name,
     avatar: row.avatar ?? null,
-    photoUrl: null,
+    photoUrl: (settings.studentPhotos && photos.get(row.photo_path)) || null,
     account: {
       status,
       userId: row.user_id ?? null,
@@ -160,5 +167,5 @@ const peopleCounts = (students) => ({
 });
 
 module.exports = {
-  classLabel, isInClass, toClassCard, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, dedupeParents, toPeopleStudent, peopleCounts,
+  classLabel, isInClass, toClassCard, cardPhotoPaths, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, dedupeParents, toPeopleStudent, peopleCounts,
 };

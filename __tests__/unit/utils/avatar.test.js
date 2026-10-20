@@ -1,5 +1,5 @@
 const {
-  STYLES, SKIN_COUNT, BG_COUNT, validateAvatar, avatarPngUrl, studentAvatarSql,
+  STYLES, SKIN_COUNT, BG_COUNT, validateAvatar, avatarPngUrl, studentAvatarSql, studentPhotoSql,
 } = require('../../../utils/avatar');
 
 describe('avatar: validateAvatar', () => {
@@ -99,5 +99,19 @@ describe('avatar: studentAvatarSql', () => {
     expect(sql).toContain('s.student_id');
     expect(sql).toContain('s.avatar');
     expect(sql).not.toContain('students.');
+  });
+});
+
+describe('avatar: studentPhotoSql', () => {
+  it("reads the photo off the student's linked login", () => {
+    const sql = studentPhotoSql('s');
+    expect(sql).toContain('student_account_links');
+    expect(sql).toContain('su.photo_path');
+    expect(sql).toContain('s.student_id');
+    expect(sql.trim().endsWith('AS photo_path')).toBe(true);
+  });
+
+  it('takes a column name', () => {
+    expect(studentPhotoSql('st', 'student_photo_path').trim().endsWith('AS student_photo_path')).toBe(true);
   });
 });

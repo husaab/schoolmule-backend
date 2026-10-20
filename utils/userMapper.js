@@ -26,6 +26,8 @@ const toUser = (row) => ({
   isFullAdmin: row.role === 'ADMIN' && !row.staff_role_id,
   /** {style, skin, bg}; null = the neutral avatar (and for rows from queries that do not select it). */
   avatar: row.avatar ?? null,
+  /** Signed photo URL, when the caller signed one (withPhotoUrls sets photo_url); never the stored path. */
+  photoUrl: row.photo_url ?? null,
   createdAt: row.created_at,
   lastModifiedAt: row.last_modified_at,
 });

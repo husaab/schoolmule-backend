@@ -31,6 +31,7 @@ const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
+const { photoUrlsFor } = require('../services/profile/photos');
 
 const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -65,6 +66,7 @@ const toItem = (r) => ({
   createdAt: r.created_at,
   leadTeacherName: r.lead_teacher_name ?? null,
   leadTeacherAvatar: r.lead_teacher_avatar ?? null,
+  leadTeacherPhotoUrl: r.lead_teacher_photo_url ?? null,
   termName: r.term_name ?? null,
   guardianNames: r.guardian_names ?? [],
   unreadCount: r.unread_count ?? 0,
@@ -341,11 +343,20 @@ async function buildThread(conv, user, req = null) {
   }
 
   const st = studentRes.rows[0];
+  // Everyone pictured in the thread, signed in one go (a student's photo only
+  // while the school has student photos on).
+  const photos = await photoUrlsFor([
+    ...msgRows.map((m) => ({ photo_path: m.sender_photo_path, role: m.sender_role })),
+    ...parts.map((p) => ({ photo_path: p.photo_path, role: p.role })),
+    { photo_path: st?.student_photo_path, role: 'STUDENT' },
+  ], user.school);
+  const photoOf = (path) => (path && photos.get(path)) || null;
   const student = st
     ? {
         studentId: st.student_id,
         name: st.name,
         studentAvatar: st.student_avatar ?? null,
+        studentPhotoUrl: photoOf(st.student_photo_path),
         grade: st.grade,
         homeroomTeacherName: st.homeroom_teacher_name || null,
         attendancePct: st.attendance_pct == null ? null : Number(st.attendance_pct),
@@ -370,6 +381,7 @@ async function buildThread(conv, user, req = null) {
       created_at: conv.createdAt,
       lead_teacher_name: leadTeacher?.name ?? null,
       lead_teacher_avatar: leadTeacher?.avatar ?? null,
+      lead_teacher_photo_url: photoOf(leadTeacher?.photo_path),
       includes_student: conv.includesStudent,
       classwork_item_id: conv.classworkItemId,
     }),
@@ -379,12 +391,16 @@ async function buildThread(conv, user, req = null) {
     conversation,
     context,
     student,
-    participants: parts.map((p) => ({ userId: p.user_id, name: p.name, role: p.role, relation: p.relation, invitePending: Boolean(p.invite_pending), avatar: p.avatar ?? null })),
+    participants: parts.map((p) => ({
+      userId: p.user_id, name: p.name, role: p.role, relation: p.relation, invitePending: Boolean(p.invite_pending),
+      avatar: p.avatar ?? null, photoUrl: photoOf(p.photo_path),
+    })),
     messages: msgRows.map((m) => ({
       messageId: m.message_id,
       senderId: m.sender_id,
       senderName: m.sender_name,
       senderAvatar: m.sender_avatar ?? null,
+      senderPhotoUrl: photoOf(m.sender_photo_path),
       senderRole: m.sender_role,
       senderRelation: m.sender_relation,
       kind: m.kind,
@@ -450,10 +466,15 @@ const listConversations = async (req, res) => {
     }
 
     const staff = role !== 'PARENT';
+    const photos = await photoUrlsFor(rows.flatMap((r) => [
+      { photo_path: r.lead_teacher_photo_path, role: 'TEACHER' },
+      ...(staff ? [{ photo_path: r.student_photo_path, role: 'STUDENT' }] : []),
+    ]), school);
+    const photoOf = (path) => (path && photos.get(path)) || null;
     const items = rows.map((r) => ({
-      ...toItem(r),
+      ...toItem({ ...r, lead_teacher_photo_url: photoOf(r.lead_teacher_photo_path) }),
       // Staff rows show the student's displayed avatar (the login's pick over the teacher-set one).
-      ...(staff ? { studentAvatar: r.student_avatar ?? null } : {}),
+      ...(staff ? { studentAvatar: r.student_avatar ?? null, studentPhotoUrl: photoOf(r.student_photo_path) } : {}),
       needsReply: needsReplyFor(role, r),
       // The admin inbox names whom each thread is addressed to (a student may write to a co-teacher or homeroom teacher).
       ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id), addresseeName: r.addressee_name ?? null } : {}),

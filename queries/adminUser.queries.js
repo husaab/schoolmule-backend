@@ -13,7 +13,7 @@ const adminUserQueries = {
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
-      avatar, created_at, last_modified_at,
+      avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
       ${ACCESS_ROLE_COLS}
     FROM users
@@ -27,7 +27,7 @@ const adminUserQueries = {
     SELECT
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
-      avatar, created_at, last_modified_at,
+      avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
       ${ACCESS_ROLE_COLS}
     FROM users

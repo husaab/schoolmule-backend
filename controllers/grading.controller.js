@@ -29,6 +29,10 @@ const { STATUSES } = require('../services/gradeEngine');
 const messagingQueries = require('../queries/messaging.queries');
 const { loadQuizDetail, quizTotalFor, useQuizScore: useQuizScoreFlow } = require('../services/classroom/quizzes');
 const { resolveCurrentTerm, termParams, PAST_TERM_MESSAGE } = require('./messaging.controller');
+const { withPhotoUrls } = require('../services/profile/photos');
+
+// Grading rows with photo_url: the student's photo, while the school has student photos on.
+const withStudentPhotos = (rows, item) => withPhotoUrls(rows, item.school, { role: 'STUDENT' });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FEEDBACK_MAX = 5000;
@@ -98,6 +102,7 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
     studentId: r.student_id,
     name: r.name,
     avatar: r.avatar ?? null,
+    photoUrl: r.photo_url ?? null,
     status: r.work_status,
     isLate: Boolean(turnedInAt && r.sub_is_late),
     turnedInAt,
@@ -159,7 +164,9 @@ const shapeOptions = (item) => ({
 /** One student's GradingRow, or null when the item is not for them. */
 async function loadRow(item, studentId, runner = db) {
   const { rows } = await runner.query(q.selectGradingRows, [item.item_id, studentId]);
-  return rows[0] ? { raw: rows[0], ...toGradingRow(rows[0], shapeOptions(item)) } : null;
+  if (!rows[0]) return null;
+  const [row] = await withStudentPhotos(rows, item);
+  return { raw: row, ...toGradingRow(row, shapeOptions(item)) };
 }
 
 /** `studentIds` from a body: a non-empty list of student ids (deduped, lower-cased), or an httpError. */
@@ -235,7 +242,7 @@ const listSubmissions = async (req, res) => {
       db.query(q.selectGradingRows, [itemId, null]),
     ]);
     const summary = toItemSummary(itemRow);
-    const shaped = rows.map((r) => toGradingRow(r, shapeOptions(item)));
+    const shaped = (await withStudentPhotos(rows, item)).map((r) => toGradingRow(r, shapeOptions(item)));
     return ok(res, {
       item: { ...summary, maxScore: summary.gradebook?.maxScore ?? null, categoryName: summary.gradebook?.categoryName ?? null },
       isAssessmentPublished: Boolean(item.assessment_id && item.is_published),

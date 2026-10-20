@@ -6,7 +6,7 @@
 // scoped to the student's own school_year_id. Dates come back as
 // 'YYYY-MM-DD' text so they never shift through a JS Date.
 
-const { studentAvatarSql } = require('../utils/avatar');
+const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 
 const studentOverviewQueries = {
   // $1 student_id
@@ -15,6 +15,7 @@ const studentOverviewQueries = {
       s.*,
       -- After s.* so it wins: the student login's own pick over the teacher-set avatar.
       ${studentAvatarSql('s')},
+      ${studentPhotoSql('s')},
       NULLIF(TRIM(CONCAT(hr.first_name, ' ', hr.last_name)), '') AS homeroom_teacher_name
     FROM students s
     LEFT JOIN users hr ON hr.user_id = s.homeroom_teacher_id

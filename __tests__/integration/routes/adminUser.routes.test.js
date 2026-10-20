@@ -62,6 +62,19 @@ describe('Integration: Admin Users Routes', () => {
       expect(res.body.data[0]).not.toHaveProperty('photoPath');
     });
 
+    it("carries each person's uploaded photo as a signed URL, never the stored path", async () => {
+      await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/tina/p.png' WHERE user_id = $1`, [TEACHER_ID]);
+
+      const list = await authenticatedRequest('get', '/api/admin/users');
+      const byEmail = Object.fromEntries(list.body.data.map((u) => [u.email, u.photoUrl]));
+      expect(byEmail['teacher@test.com']).toBe('https://mock-signed-url.com/ALHAADIACADEMY/tina/p.png');
+      expect(byEmail['parent@test.com']).toBeNull();
+
+      const one = await authenticatedRequest('get', `/api/admin/users/${TEACHER_ID}`);
+      expect(one.body.data.photoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/tina/p.png');
+      expect(JSON.stringify(list.body)).not.toContain('"photoPath"');
+    });
+
     it('leaves student logins out (they are managed on Student accounts)', async () => {
       await insertUser(pool, ['550e8400-e29b-41d4-a716-446655440010', 'amal.haddad@example.com', 'Amal', 'Haddad', 'ALHAADIACADEMY', 'STUDENT']);
 

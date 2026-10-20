@@ -125,6 +125,19 @@ describe('Integration: Announcements', () => {
     expect(detail.authorPhotoUrl).toBeNull();
   });
 
+  it("the author's uploaded photo shows on the new post, the list, the detail and the class Stream", async () => {
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/t1/p.png', avatar = '{"style":"beard","skin":2,"bg":5}' WHERE user_id = $1`, [TEACHER_ID]);
+    const created = (await postClass(asTeacher)).body.data;
+    expect(created).toMatchObject({ authorAvatar: { style: 'beard', skin: 2, bg: 5 }, authorPhotoUrl: expect.stringMatching(/^https:\/\/mock-signed-url\.com/) });
+    // One signed link per photo, so every view shows the same picture.
+    const url = created.authorPhotoUrl;
+
+    expect((await authenticatedRequest('get', '/api/announcements', asMom)).body.data[0].authorPhotoUrl).toBe(url);
+    expect((await authenticatedRequest('get', `/api/announcements/${created.announcementId}`, asMom)).body.data.authorPhotoUrl).toBe(url);
+    const stream = (await authenticatedRequest('get', `/api/classroom/classes/${classId}/stream`, asTeacher)).body.data;
+    expect(stream.announcements.find((a) => a.announcementId === created.announcementId).authorPhotoUrl).toBe(url);
+  });
+
   it('read marks, unread counts and the badge', async () => {
     const id = (await postClass(asTeacher)).body.data.announcementId;
     let badge = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', asMom);

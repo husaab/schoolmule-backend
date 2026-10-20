@@ -78,6 +78,7 @@ const getClassroomSummary = async (req, res) => {
         name: c.name,
         grade: c.grade,
         avatar: c.avatar ?? null,
+        photoUrl: c.photo_url ?? null,
         signsIn: Boolean(c.signs_in),
         classCount: classes.length,
         dueThisWeek: work.dueWithin(items, now).length,

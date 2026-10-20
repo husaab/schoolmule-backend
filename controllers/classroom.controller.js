@@ -20,10 +20,10 @@ const { toListItem } = require('./announcement.controller');
 const { parseStudentIds, resendInviteFor, resetPasswordFor } = require('../services/classroom/studentAccounts');
 const { BANNER_BUCKET, identityOf, optionsOf, removeBannerObject } = require('../services/classroom/classView');
 const {
-  toClassCard, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, toPeopleStudent, peopleCounts,
+  toClassCard, cardPhotoPaths, toHeaderClass, toComingUpRow, toReviewRow, toDraftRow, toNotice, toTeacher, toPeopleStudent, peopleCounts,
 } = require('../services/classroom/classCards');
 const { getSettings } = require('../services/classroom/classroomSettings');
-const { signedPhotoUrl } = require('../services/profile/photos');
+const { signedPhotoUrl, signedPhotoUrls, authorPhotoUrls } = require('../services/profile/photos');
 const { isFamily, isColor } = require('../utils/classIdentity');
 const { AVATAR_ERROR, validateAvatar } = require('../utils/avatar');
 const { sendQrCards } = require('./studentAccount.controller');
@@ -63,9 +63,10 @@ const listClasses = async (req, res) => {
       db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, null]),
       db.query(classroomQueries.DRAFTS_AND_SCHEDULED, [userId, school, yearId]),
     ]);
+    const photos = await signedPhotoUrls(cardPhotoPaths(cardRows.rows));
     return ok(res, {
       ...empty,
-      classes: cardRows.rows.map(toClassCard),
+      classes: cardRows.rows.map((row) => toClassCard(row, photos)),
       toReview: reviewRows.rows.map(toReviewRow),
       comingUp: comingRows.rows.map(toComingUpRow),
       draftsAndScheduled: draftRows.rows.map(toDraftRow),
@@ -89,6 +90,7 @@ const getClass = async (req, res) => {
     ]);
     const row = cardRes.rows[0];
     if (!row) return failed(res, 404, 'Class not found');
+    const photos = await signedPhotoUrls(cardPhotoPaths([row]));
     const isAdmin = seesAllClasses(req);
     // Advisory, for hiding controls: a past school year is read-only for teachers. The server enforces
     // that only for requests made in a past year (resolveSchoolYear), not for a past-year class by id.
@@ -96,7 +98,7 @@ const getClass = async (req, res) => {
     // Deleting follows editing: every teacher of a current-year class may delete it, as on /classes.
     const canEdit = editsPastYears(req) || row.year_is_active !== false;
     return ok(res, {
-      class: toHeaderClass(row),
+      class: toHeaderClass(row, photos),
       teachers,
       // isAdmin: school-level class power (classes.all); canRetryEmails: the
       // Stream's "retry failed emails" (announcements.school).
@@ -124,7 +126,8 @@ const getPeople = async (req, res) => {
       db.query(classroomQueries.selectPeopleStudents, [classId]),
       getSettings(school),
     ]);
-    const students = studentRes.rows.map((row) => toPeopleStudent(row, settings));
+    const photos = settings.studentPhotos ? await signedPhotoUrls(studentRes.rows.map((r) => r.photo_path)) : new Map();
+    const students = studentRes.rows.map((row) => toPeopleStudent(row, settings, photos));
     return ok(res, {
       teachers,
       students,
@@ -162,8 +165,9 @@ const getStream = async (req, res) => {
       db.query(classroomQueries.STREAM_NOTICES, [classId]),
     ]);
     const p = previewRes.rows[0] || {};
+    const photos = await authorPhotoUrls(postRes.rows);
     return ok(res, {
-      announcements: postRes.rows.map((r) => toListItem(r, req.user)),
+      announcements: postRes.rows.map((r) => toListItem({ ...r, author_photo_url: photos.get(r.author_id) }, req.user)),
       notices: noticeRes.rows.map(toNotice),
       upcoming: comingRes.rows.map(toComingUpRow),
       audience: {

@@ -10,6 +10,7 @@ const { identityOf, optionsOf } = require("../services/classroom/classView");
 const { copyAttachments, copyQuizContent } = require("../services/classroom/classworkItems");
 const { removeObjects } = require("../utils/attachmentUpload");
 const { canAny } = require("../services/access/access");
+const { withPhotoUrls } = require("../services/profile/photos");
 
 // RBAC. Class lists (names, grades, teachers) show the whole school to every
 // area that works across classes; anyone else sees the classes they teach.
@@ -413,11 +414,15 @@ const getStudentsInClass = async (req, res) => {
   try {
     const { rows } = await db.query(classQueries.selectStudentsInClass, [classId]);
     logger.info(`Fetched ${rows.length} students for class ${classId}`);
+    const students = await withPhotoUrls(rows, req.user.school, { role: "STUDENT" });
     return res.status(200).json({
       status: "success",
-      data: rows.map((s) => ({
+      data: students.map((s) => ({
         studentId:         s.student_id,
         name:              s.name,
+        // The student's displayed avatar and, while the school allows it, their photo.
+        avatar:            s.avatar ?? null,
+        photoUrl:          s.photo_url,
         school:            s.school,
         grade:             s.grade,
         oen:               s.oen,

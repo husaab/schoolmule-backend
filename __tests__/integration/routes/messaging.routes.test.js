@@ -120,6 +120,50 @@ describe('Integration: Messaging routes', () => {
     expect(list.body.data[0]).toMatchObject({ leadTeacherName: 'Teacher One', leadTeacherAvatar: teacherAvatar });
   });
 
+  it("uploaded photos ride along too: each sender's, each participant's and the lead teacher's", async () => {
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/t1/p.png' WHERE user_id = $1`, [TEACHER_ID]);
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/mom/p.png' WHERE user_id = $1`, [MOM_ID]);
+    const url = (path) => `https://mock-signed-url.com/${path}`;
+
+    const created = await start(asMom, publishedId, 'Can we talk about the quiz?');
+    const id = created.body.data.conversation.conversationId;
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'Sure');
+
+    const thread = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asDad);
+    expect(thread.status).toBe(200);
+    const byId = Object.fromEntries(thread.body.data.participants.map((p) => [p.userId, p.photoUrl]));
+    expect(byId).toEqual({
+      [MOM_ID]: url('ALHAADIACADEMY/mom/p.png'), [DAD_ID]: null, [TEACHER_ID]: url('ALHAADIACADEMY/t1/p.png'), [CO_TEACHER_ID]: null,
+    });
+    const senders = thread.body.data.messages.filter((m) => m.kind === 'message').map((m) => [m.senderName, m.senderPhotoUrl]);
+    expect(senders).toEqual([['Mom Test', url('ALHAADIACADEMY/mom/p.png')], ['Teacher One', url('ALHAADIACADEMY/t1/p.png')]]);
+    expect(thread.body.data.conversation.leadTeacherPhotoUrl).toBe(url('ALHAADIACADEMY/t1/p.png'));
+
+    const list = await authenticatedRequest('get', '/api/messaging/conversations', asDad);
+    expect(list.body.data[0]).toMatchObject({ leadTeacherName: 'Teacher One', leadTeacherPhotoUrl: url('ALHAADIACADEMY/t1/p.png') });
+  });
+
+  it("a student's photo shows to staff only while the school has student photos on", async () => {
+    const LOGIN_ID = '550e8400-e29b-41d4-a716-446655440099';
+    await user(LOGIN_ID, 'amina.student@example.com', 'Amina Test', 'STUDENT');
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/amina/p.png' WHERE user_id = $1`, [LOGIN_ID]);
+    await pool.query(`INSERT INTO student_account_links (user_id, student_id, school_year_id) VALUES ($1, $2, $3)`, [LOGIN_ID, studentId, yearId]);
+    const general = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+      .field('studentId', studentId).field('teacherId', TEACHER_ID).field('title', 'Checking in').field('body', 'Hello');
+    expect(general.status).toBe(201);
+    const id = general.body.data.conversation.conversationId;
+
+    const off = await authenticatedRequest('get', '/api/messaging/conversations', asTeacher);
+    expect(off.body.data.find((c) => c.conversationId === id).studentPhotoUrl).toBeNull();
+    expect((await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asTeacher)).body.data.student.studentPhotoUrl).toBeNull();
+
+    await pool.query(`INSERT INTO school_classroom_settings (school, enabled, student_photos) VALUES ('ALHAADIACADEMY', TRUE, TRUE)`);
+    const on = await authenticatedRequest('get', '/api/messaging/conversations', asTeacher);
+    expect(on.body.data.find((c) => c.conversationId === id).studentPhotoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/amina/p.png');
+    const thread = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asTeacher);
+    expect(thread.body.data.student.studentPhotoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/amina/p.png');
+  });
+
   it('queues one email job per other participant and reading cancels your own', async () => {
     const created = await start(asMom, publishedId);
     const id = created.body.data.conversation.conversationId;

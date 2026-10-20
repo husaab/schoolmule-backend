@@ -29,7 +29,8 @@ const { getSchoolName } = require('../utils/schoolUtils');
 const { BUCKET, SIGNED_URL_TTL, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 const { scopeLabel } = require('../utils/announcementScope');
 const { canMutate } = require('../middleware/requireAnnouncementAccess');
-const { authorPhotoUrls } = require('../services/profile/photos');
+const { authorPhotoUrls, photoUrlFor } = require('../services/profile/photos');
+const profileQueries = require('../queries/profile.queries');
 
 const MAX_TITLE = 120;
 const MAX_BODY = 5000;
@@ -473,10 +474,13 @@ const create = async (req, res) => {
       }
     }
 
+    // The new post shows its author (the caller) straight away, picture included.
+    const { rows: [me] } = await db.query(profileQueries.selectProfile, [user.userId]);
     const item = toListItem({
       announcement_id: row.announcement_id, scope, class_id: classId,
       class_subject: check.classSubject ?? null, class_grade: check.classGrade ?? null, grade,
       title: v.title, body: v.body, author_id: user.userId, author_name: user.username, author_role: user.role,
+      author_avatar: me?.avatar ?? null, author_photo_url: await photoUrlFor(me),
       published_at: row.published_at, pinned_until: v.pinnedUntil, is_pinned: Boolean(v.pinnedUntil), edited_at: null,
       attachment_count: files.length, read: true, seen_count: 0, audience_count: 0, ack_requested: ackRequested,
       student_count: studentIds ? studentIds.length : 0, send_email: sendEmail,

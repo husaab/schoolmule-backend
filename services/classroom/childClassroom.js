@@ -14,7 +14,7 @@ const q = require('../../queries/childClassroom.queries');
 const { selectCurrentTerm } = require('../../queries/termScope');
 const { identityOf } = require('./classView');
 const { listStudentStream } = require('./studentStream');
-const { signedPhotoUrl } = require('../profile/photos');
+const { signedPhotoUrl, signedPhotoUrls, withPhotoUrls } = require('../profile/photos');
 const { listWork, classSummaries, noticesOf } = require('./studentWork');
 
 const firstNameOf = (name) => String(name || '').trim().split(/\s+/)[0] || '';
@@ -45,14 +45,17 @@ async function currentTerm(school, schoolYearId) {
   return rows[0] || null;
 }
 
-const toTeacherLite = (t) => ({ userId: t.userId, name: t.name, avatar: t.avatar ?? null, role: t.role });
+const toTeacherLite = (t, photos) => ({
+  userId: t.userId, name: t.name, avatar: t.avatar ?? null, photoUrl: photos.get(t.photoPath) ?? null, role: t.role,
+});
 
 /**
  * selectChildClasses row → StudentClassCard. `work` is the class's
- * classSummaries entry: its next item for this student and missing count.
+ * classSummaries entry: its next item for this student and missing count;
+ * `photos` maps a teacher's photo path to its signed URL.
  */
-function toStudentClassCard(row, work = null) {
-  const teachers = (row.teachers || []).map(toTeacherLite);
+function toStudentClassCard(row, work = null, photos = new Map()) {
+  const teachers = (row.teachers || []).map((t) => toTeacherLite(t, photos));
   return {
     classId: row.class_id,
     subject: row.subject,
@@ -83,7 +86,8 @@ async function loadChildClassroom({ studentId, school, schoolYearId, readerId })
     listWork({ studentId, school, schoolYearId, term }),
   ]);
   const summaries = classSummaries(work);
-  return { classes: rows.map((row) => toStudentClassCard(row, summaries.get(row.class_id))), work };
+  const photos = await signedPhotoUrls(rows.flatMap((r) => (r.teachers || []).map((t) => t.photoPath)));
+  return { classes: rows.map((row) => toStudentClassCard(row, summaries.get(row.class_id), photos)), work };
 }
 
 /**
@@ -149,10 +153,13 @@ async function getChildPeople({ studentId, classId }) {
   return { teachers: await loadClassTeachers(classId, studentId) };
 }
 
-/** The parent's children for the year (selectParentChildren rows), youngest grade first. */
+/**
+ * The parent's children for the year (selectParentChildren rows), youngest
+ * grade first, each with photo_url (while the school allows student photos).
+ */
 async function listParentChildren({ parentId, school, schoolYearId }) {
   const { rows } = await db.query(q.selectParentChildren, [parentId, school, schoolYearId ?? null]);
-  return rows;
+  return withPhotoUrls(rows, school, { role: 'STUDENT' });
 }
 
 /** "Needs you" acknowledgement items for the parent (NeedsYouItem kind 'ack'). */

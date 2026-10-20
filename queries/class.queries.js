@@ -1,5 +1,7 @@
 // queries/class.queries.js
 
+const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
+
 const classQueries = {
   //
   // 1) GET /classes?school={school}
@@ -219,7 +221,9 @@ const classQueries = {
       s.last_modified_at,
       s.is_archived,
       s.archived_at,
-      s.archived_by
+      s.archived_by,
+      ${studentAvatarSql('s')},
+      ${studentPhotoSql('s')}
     FROM students AS s
     INNER JOIN class_students AS cs
       ON s.student_id = cs.student_id

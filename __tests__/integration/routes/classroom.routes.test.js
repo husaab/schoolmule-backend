@@ -186,12 +186,19 @@ describe('Integration: classroom teacher read API', () => {
         isDefault: { banner: true, icon: true, color: true },
       });
       expect(card.teachers).toEqual([
-        { userId: TEACHER_ID, name: 'Ziad Teacher', role: 'lead', avatar: { style: 'hijab', skin: 2, bg: 3 } },
-        { userId: CO_TEACHER_ID, name: 'Omar Coteacher', role: 'co', avatar: null },
+        { userId: TEACHER_ID, name: 'Ziad Teacher', role: 'lead', avatar: { style: 'hijab', skin: 2, bg: 3 }, photoUrl: null },
+        { userId: CO_TEACHER_ID, name: 'Omar Coteacher', role: 'co', avatar: null, photoUrl: null },
       ]);
       expect(card.next).toEqual({
         itemId: await itemOf(chapter1), assessmentId: chapter1, title: 'Chapter 1 test', kind: 'assessment', dueAt: null, date: nextDate,
       });
+    });
+
+    it("a teacher's uploaded photo rides on the card", async () => {
+      await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/ziad/p.png' WHERE user_id = $1`, [TEACHER_ID]);
+      const card = (await cards()).classes.find((c) => c.classId === sciId);
+      expect(card.teachers.find((t) => t.userId === TEACHER_ID).photoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/ziad/p.png');
+      expect(card.teachers.find((t) => t.userId === CO_TEACHER_ID).photoUrl).toBeNull();
     });
 
     it('a class with nothing coming up has next null, and cards sort by grade then subject', async () => {
@@ -397,6 +404,15 @@ describe('Integration: classroom teacher read API', () => {
       expect(data.students.map((s) => s.name)).toEqual(['Amal Haddad', 'Lina Haddad', 'Rami Haddad', 'Sami Haddad']);
       expect(data.students[0]).toMatchObject({ photoUrl: null, avatar: null, missingCount: 0 });
       expect(data.counts).toEqual({ students: 4, notSignedIn: 2, missingWork: 0 });
+    });
+
+    it("a student's photo (on their login) shows only while the school has student photos on", async () => {
+      await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/amal/p.png' WHERE user_id = $1`, [AMAL_USER_ID]);
+      const photoOf = async () => (await people(sciId)).students.find((s) => s.studentId === amalId).photoUrl;
+      expect(await photoOf()).toBeNull();
+      await pool.query(`INSERT INTO school_classroom_settings (school, enabled, student_photos) VALUES ('ALHAADIACADEMY', TRUE, TRUE)`);
+      expect(await photoOf()).toBe('https://mock-signed-url.com/ALHAADIACADEMY/amal/p.png');
+      expect((await people(sciId)).students.find((s) => s.studentId === samiId).photoUrl).toBeNull();
     });
 
     it("rows carry the login's latest invite and how it signs in (a first card scan makes it active)", async () => {

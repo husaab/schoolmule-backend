@@ -10,7 +10,7 @@
 // Aliases: `i` item, `a` its assessment, `s` the student, `sub` the
 // submission, `sa` the gradebook cell.
 
-const { studentAvatarSql } = require('../utils/avatar');
+const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 const {
   GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_JOINS, HAS_DRAFT, AWAITING_GRADE, UNLINKED_PUBLISHABLE, QUIZ_GRADED, NEEDS_PUBLISH,
   DRAFT_PREDATES_WORK,
@@ -31,7 +31,7 @@ const SA_HAS_GRADE = `(sa.score IS NOT NULL OR sa.status IN ('missing', 'excused
 
 // One grading row per student of item $1 ($2 = one student, NULL = all).
 const GRADING_ROWS = `
-SELECT s.student_id, s.name, ${studentAvatarSql('s')},
+SELECT s.student_id, s.name, ${studentAvatarSql('s')}, ${studentPhotoSql('s')},
        sub.submission_id, sub.turned_in_at, COALESCE(sub.is_late, FALSE) AS sub_is_late, sub.text_answer,
        sub.draft_score, sub.draft_status, sub.feedback, sub.published_at AS sub_published_at,
        COALESCE(sub.score_set_by_teacher AND sub.draft_score IS NOT NULL, FALSE) AS score_set_by_teacher,
@@ -62,7 +62,8 @@ const gradingQueries = {
   //  The item and its gradebook column. $1 item_id
   selectGradingItem: `
     SELECT i.item_id, i.class_id, i.kind, i.submission_mode, i.assessment_id,
-           a.max_score, COALESCE(a.is_published, FALSE) AS is_published
+           a.max_score, COALESCE(a.is_published, FALSE) AS is_published,
+           (SELECT cl.school FROM classes cl WHERE cl.class_id = i.class_id) AS school
     FROM classwork_items i
     LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
     WHERE i.item_id = $1 AND i.deleted_at IS NULL`,

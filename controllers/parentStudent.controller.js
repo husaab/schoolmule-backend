@@ -1,6 +1,7 @@
 const db = require("../config/database");
 const parentStudentQueries = require("../queries/parentStudent.queries");
 const logger = require("../logger");
+const { withPhotoUrls } = require("../services/profile/photos");
 
 // Link rows belong to a school; a staff member may only touch their own.
 // Answer 404 (not 403) so ids cannot be probed across tenants.
@@ -142,8 +143,10 @@ const getStudentsByParentId = async (req, res) => {
       parentId,
       req.schoolYear?.schoolYearId ?? null,
     ]);
-    // Only the caller's school's links.
-    const rows = all.filter((ps) => String(ps.school) === String(req.user.school));
+    // Only the caller's school's links, each child's photo signed (while the school allows student photos).
+    const rows = await withPhotoUrls(
+      all.filter((ps) => String(ps.school) === String(req.user.school)), req.user.school, { role: "STUDENT" },
+    );
 
     logger.info(`Student relations fetched successfully for parent: ${parentId}`);
     return res.status(200).json({
@@ -163,6 +166,7 @@ const getStudentsByParentId = async (req, res) => {
           grade: ps.student_grade,
           oen: ps.student_oen,
           avatar: ps.student_avatar ?? null,
+          photoUrl: ps.photo_url,
           homeroomTeacherId: ps.homeroom_teacher_id,
           homeroomTeacher: ps.homeroom_teacher_first_name && ps.homeroom_teacher_last_name ? {
             firstName: ps.homeroom_teacher_first_name,

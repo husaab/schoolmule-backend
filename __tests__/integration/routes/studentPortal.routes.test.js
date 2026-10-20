@@ -119,7 +119,7 @@ describe('Integration: the student portal read API', () => {
     const [math] = data.classes;
     expect(math).toMatchObject({
       classId: mathId, subject: 'Math', grade: '5', termName: 'Term 2',
-      teacher: { userId: TEACHER_ID, name: 'Ziad Teacher', role: 'lead', avatar: null },
+      teacher: { userId: TEACHER_ID, name: 'Ziad Teacher', role: 'lead', avatar: null, photoUrl: null },
       next: null, missingCount: 0, hasNewPost: false,
     });
     expect(math.teachers.map((t) => [t.name, t.role])).toEqual([['Ziad Teacher', 'lead'], ['Lina Coteacher', 'co']]);
@@ -129,6 +129,17 @@ describe('Integration: the student portal read API', () => {
 
     const listed = await get('/api/student/classes');
     expect(listed.data.classes).toEqual(data.classes);
+  });
+
+  it("each class card carries its teachers' uploaded photos", async () => {
+    await pool.query(`UPDATE users SET photo_path = 'ALHAADIACADEMY/ziad/p.png' WHERE user_id = $1`, [TEACHER_ID]);
+    const { data } = await get('/api/student/home');
+    const math = data.classes.find((c) => c.classId === mathId);
+    expect(math.teacher.photoUrl).toBe('https://mock-signed-url.com/ALHAADIACADEMY/ziad/p.png');
+    expect(math.teachers.map((t) => [t.name, t.photoUrl])).toEqual([
+      ['Ziad Teacher', 'https://mock-signed-url.com/ALHAADIACADEMY/ziad/p.png'], ['Lina Coteacher', null],
+    ]);
+    expect(JSON.stringify(data)).not.toContain('photoPath');
   });
 
   it('past-term classes are not listed', async () => {

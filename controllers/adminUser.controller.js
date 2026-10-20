@@ -18,6 +18,7 @@ const schoolYearQueries = require("../queries/schoolYear.queries");
 const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = require("../utils/sessionContext");
 const { getInviteEmailHTML } = require("../templates/emailTemplate");
 const { toUser } = require("../utils/userMapper");
+const { withPhotoUrls, photoUrlFor } = require("../services/profile/photos");
 const { getResend, sendOrThrow } = require("../utils/emailUtils");
 const { platformSender } = require("../services/email/senderIdentity");
 const { assertStudentCanSignIn } = require("../services/classroom/studentLogin");
@@ -116,7 +117,8 @@ const sendInvite = async (user, invitedBy) => {
 const listUsers = async (req, res) => {
   try {
     const { rows } = await db.query(adminUserQueries.selectUsersBySchool, [req.user.school]);
-    return res.status(200).json({ status: "success", data: rows.map(toUser) });
+    const users = await withPhotoUrls(rows, req.user.school);
+    return res.status(200).json({ status: "success", data: users.map(toUser) });
   } catch (error) {
     logger.error({ err: error }, "Failed to list school users");
     return res.status(500).json({ status: "failed", message: "Error fetching users" });
@@ -134,7 +136,7 @@ const getUserDetails = async (req, res) => {
     if (rows.length === 0 || isStudentLogin(rows[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
-    const user = rows[0];
+    const [user] = await withPhotoUrls(rows, school);
 
     const [classes, homeroom, staff, children, blockers] = await Promise.all([
       schoolYearId && user.role !== "PARENT"
@@ -532,6 +534,8 @@ const impersonateUser = async (req, res) => {
     const access = await sessionAccess({ userId: user.user_id, school: user.school, baseRole: user.role }, view);
 
     const target = toUser(user);
+    // After the queries above: a student's photo reads the school's settings.
+    const photoUrl = await photoUrlFor(user);
     const adminRow = adminRows[0];
     const impersonator = {
       userId: admin.userId,
@@ -577,6 +581,7 @@ const impersonateUser = async (req, res) => {
         isVerified: target.isVerified,
         isVerifiedSchool: target.isVerifiedSchool,
         avatar: user.avatar ?? null,
+        photoUrl,
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,

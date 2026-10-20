@@ -76,6 +76,18 @@ describe('POST /api/admin/users/:id/impersonate', () => {
     expect(decoded.exp - decoded.iat).toBe(2 * 60 * 60);
   });
 
+  it("carries the previewed person's uploaded photo, so the preview shows their picture", async () => {
+    mockHappyPath(teacherRow({ photo_path: 'ALHAADIACADEMY/tariq/p.png' }));
+    const res = await post(TEST_TEACHER_USER_ID);
+    expect(res.status).toBe(200);
+    expect(res.body.data.photoUrl).toBe('https://mock-signed-url.com');
+  });
+
+  it('a preview of someone without a photo has photoUrl null', async () => {
+    mockHappyPath(teacherRow({ photo_path: null }));
+    expect((await post(TEST_TEACHER_USER_ID)).body.data.photoUrl).toBeNull();
+  });
+
   it('issues a preview token for a parent', async () => {
     const parent = teacherRow({ role: 'PARENT', first_name: 'Pia', last_name: 'Parent' });
     mockHappyPath(parent);
