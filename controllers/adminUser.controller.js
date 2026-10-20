@@ -292,15 +292,16 @@ const updateUser = async (req, res) => {
   if (staffTitle && staffTitle.length > MAX_STAFF_TITLE) {
     return res.status(400).json({ status: "failed", message: `Title must be ${MAX_STAFF_TITLE} characters or fewer` });
   }
-  if (id === selfId && (role !== "ADMIN" || !isVerifiedSchool)) {
-    return res.status(400).json({ status: "failed", message: "You can't remove your own admin role or access" });
-  }
-
   try {
     const { rows: found } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
     const target = found[0];
     if (!target || isStudentLogin(target)) {
       return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    // Your own role and school access stay as they are, whatever your role
+    // (a teacher who manages users can still edit their own name).
+    if (id === selfId && (role !== target.role || !isVerifiedSchool)) {
+      return res.status(400).json({ status: "failed", message: "You can't remove your own admin role or access" });
     }
     if (target.is_archived) {
       return res.status(409).json({ status: "failed", message: "This account is archived. Restore it before editing." });

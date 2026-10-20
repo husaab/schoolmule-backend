@@ -101,7 +101,9 @@ const getParentStudentById = async (req, res) => {
 const getParentsByStudentId = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const { rows } = await db.query(parentStudentQueries.selectParentsByStudentId, [studentId]);
+    const { rows: all } = await db.query(parentStudentQueries.selectParentsByStudentId, [studentId]);
+    // Only the caller's school's links (another school's student reads as none).
+    const rows = all.filter((ps) => String(ps.school) === String(req.user.school));
 
     logger.info(`Parent relations fetched successfully for student: ${studentId}`);
     return res.status(200).json({
@@ -136,10 +138,12 @@ const getParentsByStudentId = async (req, res) => {
 const getStudentsByParentId = async (req, res) => {
   try {
     const { parentId } = req.params;
-    const { rows } = await db.query(parentStudentQueries.selectStudentsByParentId, [
+    const { rows: all } = await db.query(parentStudentQueries.selectStudentsByParentId, [
       parentId,
       req.schoolYear?.schoolYearId ?? null,
     ]);
+    // Only the caller's school's links.
+    const rows = all.filter((ps) => String(ps.school) === String(req.user.school));
 
     logger.info(`Student relations fetched successfully for parent: ${parentId}`);
     return res.status(200).json({
@@ -203,6 +207,16 @@ const createParentStudent = async (req, res) => {
         status: "failed",
         message: "Missing required fields: studentId and relation are required",
       });
+    }
+
+    // The student, and the parent account if any, must be the caller's school's.
+    const { rows: [owners] } = await db.query(
+      `SELECT (SELECT school::text FROM students WHERE student_id = $1) AS student_school,
+              (SELECT school::text FROM users WHERE user_id = $2) AS parent_school`,
+      [studentId, parentId || null],
+    );
+    if (!owners || owners.student_school !== String(school) || (parentId && owners.parent_school !== String(school))) {
+      return res.status(404).json({ status: "failed", message: "Student or parent not found" });
     }
 
     // Check if relation already exists (if parentId is provided)

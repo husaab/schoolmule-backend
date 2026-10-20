@@ -5,10 +5,16 @@ const requireStaff = require('../middleware/requireStaff');
 const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths } = require('../middleware/requireReportAccess');
 const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
+const requireStudentAccess = require('../middleware/requireStudentAccess');
 
 // RBAC: progress reports are `report_cards` (school-wide); a class's teacher
 // feedback is open to that class's teachers too.
 const reportCards = requirePermission('report_cards');
+// Generating writes the report under the student's school: only the caller's own students.
+const ownStudents = requireStudentAccess({
+  keys: ['report_cards'],
+  studentIds: (req) => [req.body && req.body.studentId, ...(Array.isArray(req.body && req.body.studentIds) ? req.body.studentIds : [])],
+});
 const classFeedback = (classIdsOf) => requireGradebookAccess({ keys: ['report_cards'], classIds: classIdsOf });
 const paramClass = classFeedback((req) => [req.params.classId]);
 const entriesClasses = (req) => ((req.body && req.body.feedbackEntries) || []).map((e) => e && e.classId);
@@ -56,8 +62,8 @@ router.post('/reports', reportCards, requireOwnReportPaths((req) => req.body && 
 router.get('/reports/term/:term/school/:school', reportCards, progressReportsController.getProgressReportsByTermAndSchool);
 
 // Progress Report Generation Routes
-router.post('/generate', reportCards, progressReportsController.generateProgressReport);
-router.post('/generate/bulk', reportCards, progressReportsController.generateProgressReportsBulk);
+router.post('/generate', reportCards, ownStudents, progressReportsController.generateProgressReport);
+router.post('/generate/bulk', reportCards, ownStudents, progressReportsController.generateProgressReportsBulk);
 router.delete('/delete', reportCards, requireOwnReportPaths((req) => req.query.filePath), progressReportsController.deleteProgressReport);
 router.post('/delete/bulk', reportCards, requireOwnReportPaths((req) => req.body && req.body.filePaths), progressReportsController.deleteProgressReportsBulk);
 

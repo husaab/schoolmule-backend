@@ -320,15 +320,24 @@ const childCandidates = async ({ school, userId }) => {
   return { students: all, suggested };
 };
 
+// RBAC caches each account's access row for a few seconds; a decision taken
+// here (approved, declined, re-roled) must apply on the person's next request.
+const { invalidateUser } = require('./access/accessStore');
+const thenInvalidate = (fn) => async (args) => {
+  const out = await fn(args);
+  invalidateUser(args.userId);
+  return out;
+};
+
 module.exports = {
   ApprovalError,
   SIGNUP_ROLES,
-  approveSignup,
-  changePendingRole,
+  approveSignup: thenInvalidate(approveSignup),
+  changePendingRole: thenInvalidate(changePendingRole),
   renamePendingSignup,
-  declineSignup,
-  restoreSignup,
+  declineSignup: thenInvalidate(declineSignup),
+  restoreSignup: thenInvalidate(restoreSignup),
   resendVerification,
-  markEmailVerified,
+  markEmailVerified: thenInvalidate(markEmailVerified),
   childCandidates,
 };

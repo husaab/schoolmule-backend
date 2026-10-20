@@ -49,4 +49,13 @@ describe('legacy /api/users escalation', () => {
     const res = await authenticatedRequest('put', `/api/users/${TEST_TEACHER_USER_ID}`).send(body('ADMIN'));
     expect(res.status).toBe(200);
   });
+
+  it("refuses a users holder changing someone else's email (account takeover)", async () => {
+    giveRole(TEST_ADMIN_USER_ID, ['users']);
+    mockQueryResponse([teacher]);
+    const res = await authenticatedRequest('put', `/api/users/${TEST_TEACHER_USER_ID}`, mockAdminUser())
+      .send({ ...body('TEACHER'), email: 'attacker@test.com' });
+    expect(res.status).toBe(403);
+    expect(updates()).toHaveLength(0);
+  });
 });

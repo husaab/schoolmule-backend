@@ -19,7 +19,7 @@ const reportStudents = [
   requirePermission('report_cards'),
   requireStudentAccess({
     keys: ['report_cards'],
-    studentIds: (req) => [req.body && req.body.studentId, ...((req.body && req.body.studentIds) || [])],
+    studentIds: (req) => [req.body && req.body.studentId, ...(Array.isArray(req.body && req.body.studentIds) ? req.body.studentIds : [])],
   }),
 ];
 

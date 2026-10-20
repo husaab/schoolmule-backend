@@ -4,6 +4,7 @@ const requireStaff = require('../middleware/requireStaff');
 const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths } = require('../middleware/requireReportAccess');
 const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
+const requireStudentAccess = require('../middleware/requireStudentAccess');
 const { generateReportCard, upsertFeedback, getFeedback, getClassFeedback, upsertBulkFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, deleteReportCardsBulk, getGeneratedReportCardsByStudentId} = require('../controllers/reportCard.controller');
 
 const router = express.Router();
@@ -11,6 +12,11 @@ const router = express.Router();
 // RBAC: report cards are `report_cards` (school-wide). A class's teacher
 // feedback is open to that class's teachers too.
 const reportCards = requirePermission('report_cards');
+// Generating writes the report under the student's school: only the caller's own students.
+const ownStudents = requireStudentAccess({
+  keys: ['report_cards'],
+  studentIds: (req) => [req.body && req.body.studentId, ...(Array.isArray(req.body && req.body.studentIds) ? req.body.studentIds : [])],
+});
 const classFeedback = (classIdsOf) => requireGradebookAccess({ keys: ['report_cards'], classIds: classIdsOf });
 const entriesClasses = (req) => ((req.body && req.body.feedbackEntries) || []).map((e) => e && e.classId);
 
@@ -36,12 +42,12 @@ router.get('/signed-url', requirePermissionForStaff('report_cards'), requireRepo
 // Everything below is staff-only.
 router.use(requireStaff);
 
-router.post('/generate', reportCards, generateReportCard);
+router.post('/generate', reportCards, ownStudents, generateReportCard);
 router.post('/feedback', classFeedback((req) => [req.body && req.body.classId]), upsertFeedback);
 router.get('/feedback', classFeedback((req) => [req.query.classId]), getFeedback);
 router.get('/feedback/class/:classId', classFeedback((req) => [req.params.classId]), getClassFeedback);
 router.post('/feedback/bulk', classFeedback(entriesClasses), upsertBulkFeedback);
-router.post('/generate/bulk', reportCards, generateReportCardsBulk);
+router.post('/generate/bulk', reportCards, ownStudents, generateReportCardsBulk);
 router.get('/view', reportCards, getGeneratedReportCards);
 router.delete('/delete', reportCards, requireOwnReportPaths((req) => req.query.filePath), deleteReportCard);
 router.post('/delete/bulk', reportCards, requireOwnReportPaths((req) => req.body && req.body.filePaths), deleteReportCardsBulk);

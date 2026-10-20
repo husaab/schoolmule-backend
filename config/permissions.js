@@ -65,7 +65,7 @@ const PERMISSIONS = [
   },
   {
     key: 'announcements.school', group: 'communication', label: 'School announcements',
-    description: 'Announce to the whole school, a grade, any class or a custom audience.',
+    description: 'Announce to the whole school, a grade, any class or a custom audience, and edit or remove any announcement.',
   },
   {
     key: 'forms', group: 'operations', label: 'Forms',

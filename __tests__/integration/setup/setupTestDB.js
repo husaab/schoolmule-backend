@@ -145,6 +145,9 @@ beforeEach(async () => {
   // Brief pause to let terminated connections clean up
   await new Promise(resolve => setTimeout(resolve, 200));
   await p.query(`TRUNCATE TABLE ${ALL_TABLES.join(', ')} CASCADE`);
+  // RBAC: the access resolver caches users rows in-process for a few
+  // seconds; a truncated table must not keep answering from that cache.
+  require('../../../services/access/accessStore').invalidateAll();
 
   // Baseline schools for both enum values, present before any individual
   // test's own setup runs. The resolveSchoolYear middleware (mounted

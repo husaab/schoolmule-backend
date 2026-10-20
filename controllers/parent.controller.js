@@ -33,7 +33,8 @@ async function getParentById(req, res) {
   const { id } = req.params;
   try {
     const { rows } = await db.query(parentQueries.selectParentById, [id]);
-    if (rows.length === 0) {
+    // Another school's account reads as missing.
+    if (rows.length === 0 || String(rows[0].school) !== String(req.user.school)) {
       return res.status(404).json({ status: 'failed', message: `Parent with id ${id} not found` });
     }
     const u = rows[0];

@@ -151,6 +151,10 @@ const updateUser = async (req, res) => {
       return res.status(404).json({ status: "failed", message: "User not found or not updated" });
     }
     if (!canAccess(req, target)) return forbidden(res);
+    // Here you edit your own record; someone else's (email, name, role) only
+    // as a full admin. A users holder edits others on the Users page, whose
+    // escalation rules never let an address change hand over an account.
+    if (target.user_id !== req.user.userId && !isFullAdmin(req)) return forbidden(res);
 
     // Nobody moves an account to another school, and only full admins change
     // roles here (the Users page applies the finer escalation rules).

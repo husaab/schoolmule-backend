@@ -431,7 +431,7 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
   try {
     ({ userId, invite } = await inTransaction(async (client) => {
       const { rows } = await client.query(adminUserQueries.insertInvitedUser, [
-        email, fullName, firstName, lastName, admin.school, 'STUDENT',
+        email, fullName, firstName, lastName, admin.school, 'STUDENT', null, // no access role
       ]);
       const newUserId = rows[0].user_id;
       await client.query(q.insertStudentAccount, [newUserId, admin.school, admin.userId, noticeVersion]);

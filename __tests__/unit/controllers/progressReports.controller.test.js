@@ -359,6 +359,8 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 400 when term is missing', async () => {
+      // The route first checks the student is in the caller's school.
+      require('../../helpers/mockDb').mockQueryResponse([{ student_id: 'sid', school: 'ALHAADIACADEMY', taught: true }]);
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -420,6 +422,8 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 400 when term is missing', async () => {
+      // The route first checks the student is in the caller's school.
+      require('../../helpers/mockDb').mockQueryResponse([{ student_id: 'sid', school: 'ALHAADIACADEMY', taught: true }]);
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -447,6 +451,8 @@ describe('Progress Reports Controller', () => {
     });
 
     it('should return 400 when term is missing', async () => {
+      // The route first checks the student is in the caller's school.
+      require('../../helpers/mockDb').mockQueryResponse([{ student_id: 's1', school: 'ALHAADIACADEMY', taught: true }]);
       const token = mockAdminUser();
 
       const res = await request(app)

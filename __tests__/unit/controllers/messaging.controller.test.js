@@ -448,7 +448,7 @@ describe('messaging controller', () => {
       });
       const res = await replyAsTeacher();
       expect(res.status).toBe(201);
-      expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT']);
+      expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT', null]);
       expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'new-user', TEACHER, CONVO, true]);
       expect(r.ran('INSERT INTO password_reset_tokens')[0].params).toEqual(['new-user']);
       expect(global.__mockInviteSend).toHaveBeenCalledTimes(1);
@@ -626,7 +626,7 @@ describe('messaging controller', () => {
       makeRouter();
       const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockAdminUser());
       expect(res.status).toBe(200);
-      expect(res.body.data.context).toMatchObject({ name: 'Unit 3 Quiz', score: null, pct: null, classAvgPct: null, parentComment: null });
+      expect(res.body.data.context).toMatchObject({ name: 'Unit 3 Quiz', score: null, pct: null, classAvgPct: null, parentComment: null, marksHidden: true });
     });
   });
 

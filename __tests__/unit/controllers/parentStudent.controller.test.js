@@ -248,6 +248,7 @@ describe('POST /api/parent-students', () => {
   };
 
   it('creates a parent-student relation', async () => {
+    mockQueryResponse([{ student_school: 'ALHAADIACADEMY', parent_school: 'ALHAADIACADEMY' }]); // student and parent are this school's
     mockQueryResponse([{ role: 'PARENT' }]); // the linked account is not a student login (M1)
     // checkExistingRelation returns no existing
     mockQueryResponse([]);
@@ -282,6 +283,7 @@ describe('POST /api/parent-students', () => {
   });
 
   it('returns 409 when relation already exists', async () => {
+    mockQueryResponse([{ student_school: 'ALHAADIACADEMY', parent_school: 'ALHAADIACADEMY' }]); // student and parent are this school's
     mockQueryResponse([{ role: 'PARENT' }]);
     // checkExistingRelation returns existing
     mockQueryResponse([buildParentStudentRow()]);
@@ -297,6 +299,7 @@ describe('POST /api/parent-students', () => {
   });
 
   it('creates without parentId (no duplicate check)', async () => {
+    mockQueryResponse([{ student_school: 'ALHAADIACADEMY', parent_school: 'ALHAADIACADEMY' }]); // student and parent are this school's
     const bodyNoParentId = { ...validBody, parentId: undefined };
     const created = buildParentStudentRow({
       student_id: bodyNoParentId.studentId,
@@ -314,6 +317,7 @@ describe('POST /api/parent-students', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockQueryResponse([{ student_school: 'ALHAADIACADEMY', parent_school: 'ALHAADIACADEMY' }]); // student and parent are this school's
     mockQueryResponse([{ role: 'PARENT' }]);
     // checkExistingRelation succeeds
     mockQueryResponse([]);
@@ -333,6 +337,7 @@ describe('POST /api/parent-students', () => {
 // Final review M1: a student login is never anyone's parent or guardian.
 describe('a STUDENT account as the parent', () => {
   it('is refused on create and on update (400), and nothing is written', async () => {
+    mockQueryResponse([{ student_school: 'ALHAADIACADEMY', parent_school: 'ALHAADIACADEMY' }]); // same school
     mockQueryResponse([{ role: 'STUDENT' }]);
     const created = await request(app).post('/api/parent-students').set(authHeader())
       .send({ studentId: 'student-123', parentId: 'student-login-1', relation: 'Sibling' });
@@ -476,5 +481,14 @@ describe('DELETE /api/parent-students/:id', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.status).toBe('failed');
+  });
+});
+
+describe('parent links stay in the caller\'s school', () => {
+  it("refuses linking a student of another school", async () => {
+    mockQueryResponse([{ student_school: 'PLAYGROUND', parent_school: 'ALHAADIACADEMY' }]);
+    const res = await request(app).post('/api/parent-students').set('Authorization', `Bearer ${mockAdminUser()}`)
+      .send({ studentId: 'other-school-student', parentId: TEST_PARENT_USER_ID, relation: 'Mother' });
+    expect(res.status).toBe(404);
   });
 });

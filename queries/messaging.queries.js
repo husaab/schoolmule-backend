@@ -39,9 +39,15 @@ const CONVERSATION_ACCESS_SELECT = `
     COALESCE((SELECT ARRAY_AGG(ct.teacher_id) FROM class_teachers ct WHERE ct.class_id = c.class_id), '{}')::uuid[] AS co_teacher_ids,
     COALESCE((SELECT ARRAY_AGG(ps.parent_id) FROM parent_students ps
               WHERE ps.student_id = c.student_id AND ps.parent_id IS NOT NULL), '{}')::uuid[] AS guardian_ids,
+    -- Office staff who joined (messages.all, RBAC): staff participants who
+    -- are not the thread's own teachers. A teacher holding messages.all counts too.
     COALESCE((SELECT ARRAY_AGG(cp.user_id) FROM conversation_participants cp
               JOIN users u ON u.user_id = cp.user_id
-              WHERE cp.conversation_id = c.conversation_id AND u.role = 'ADMIN'), '{}')::uuid[] AS admin_participant_ids,
+              WHERE cp.conversation_id = c.conversation_id
+                AND u.role::text IN ('ADMIN', 'TEACHER')
+                AND u.user_id IS DISTINCT FROM COALESCE(cl.teacher_id, c.teacher_id)
+                AND NOT EXISTS (SELECT 1 FROM class_teachers ct2 WHERE ct2.class_id = c.class_id AND ct2.teacher_id = u.user_id)
+             ), '{}')::uuid[] AS admin_participant_ids,
     c.includes_student, c.classwork_item_id,
     CASE WHEN c.includes_student THEN COALESCE((SELECT ARRAY_AGG(sal.user_id) FROM student_account_links sal
            JOIN users su ON su.user_id = sal.user_id AND su.is_archived = FALSE
@@ -331,7 +337,7 @@ const messagingQueries = {
     UNION
     SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar
     FROM conversation_participants cp JOIN users u ON u.user_id = cp.user_id
-    WHERE cp.conversation_id = $1 AND u.role = 'ADMIN'
+    WHERE cp.conversation_id = $1 AND u.role::text IN ('ADMIN', 'TEACHER')
   `,
 
   // Score context. $1 assessment_id, $2 student_id

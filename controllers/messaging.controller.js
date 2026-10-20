@@ -233,7 +233,7 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
         }
         const [firstName, ...rest] = name.split(/\s+/);
         const lastName = rest.join(' ') || '';
-        const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT']);
+        const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT', null]);
         const newUser = created[0];
         await db.query(q.linkGuardianToUser, [link.parent_student_link_id, newUser.user_id, user.userId, conv.conversationId, true]);
         const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [newUser.user_id]);
@@ -335,6 +335,8 @@ async function buildThread(conv, user, req = null) {
       isPublished: Boolean(c.is_published),
       parentComment: hideScore ? null : c.parent_comment,
       classAvgPct: family || staffWithoutGrades || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
+      // The marks exist but this viewer doesn't see them (RBAC), as opposed to "not graded".
+      marksHidden: staffWithoutGrades,
     };
   }
 
