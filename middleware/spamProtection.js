@@ -134,6 +134,29 @@ const inviteNetworkLimiter = failedSignInLimiter({ max: 300, key: () => 'invites
 // Per network, failed uses of password links (unknown, expired or refused).
 const resetTokenLimiter = failedSignInLimiter({ max: 20, key: () => 'reset' });
 
+// A student's account request (public, POST /api/auth/student-request). A
+// request is usually a success, so every one counts: 60 per 15 minutes per
+// network fits a class asking together from one school IP, and 5 an hour per
+// network for one address stops the same request being sent over and over.
+const TOO_MANY_REQUESTS = {
+  status: 'failed', code: 'TOO_MANY_REQUESTS', message: 'Too many requests from this network. Please try again later.',
+};
+const studentRequestNetworkLimiter = rateLimit({
+  windowMs: SIGN_IN_WINDOW_MS,
+  max: 60,
+  message: TOO_MANY_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const studentRequestAddressLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: TOO_MANY_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.ip}|${typedEmail(req)}`,
+});
+
 // Honeypot validation middleware (for contact form)
 // Expects a hidden field named 'website' that should be empty
 const honeypotValidation = (req, res, next) => {
@@ -209,6 +232,8 @@ module.exports = {
   inviteTokenLimiter,
   inviteNetworkLimiter,
   resetTokenLimiter,
+  studentRequestNetworkLimiter,
+  studentRequestAddressLimiter,
   honeypotValidation,
   validateInput
 };

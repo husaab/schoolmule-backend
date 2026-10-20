@@ -22,7 +22,7 @@ const { GRADE_CODES } = require('../utils/gradeRank');
 const { getSettings } = require('../services/classroom/classroomSettings');
 const { checkStudentEmails } = require('../services/classroom/emailProblems');
 const { normalizeEmail } = require('../services/classroom/studentAccounts');
-const { buildCandidateIndex, resolveMatch, normalizeName } = require('../services/import/matching');
+const { buildRosterIndex, matchRow } = require('../services/classroom/studentSuggestions');
 const { MAX_IMPORT_BYTES, MAX_IMPORT_ROWS, parseSpreadsheet } = require('../services/classroom/emailImport');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -63,22 +63,6 @@ function duplicateProblems({ studentId, name, email }, { students, emails }) {
   return out;
 }
 
-/**
- * Which roster rows a file row may be for: 'matched' (one student with that
- * exact name, and the same grade when the file gives one), 'check' (a close
- * name, a name shared by several students, or the right name in another
- * grade) or 'not_found'. Never by email.
- */
-function matchRow(index, { name, grade }) {
-  if (grade === null) {
-    const sameName = index.byName.get(normalizeName(name)) || [];
-    if (sameName.length === 1) return { kind: 'matched', matches: sameName };
-    if (sameName.length > 1) return { kind: 'check', matches: sameName };
-  }
-  const { tier, matches } = resolveMatch(index, { name, grade }, (r) => r.name, (r) => r.grade);
-  return { kind: tier === 'exact' ? 'matched' : tier === 'near' ? 'check' : 'not_found', matches };
-}
-
 /** A list body of 1..MAX_IMPORT_ROWS objects, or an error message. */
 function listOf(body, key) {
   const list = body?.[key];
@@ -111,7 +95,7 @@ const previewImport = async (req, res) => {
     const roster = await activeRoster(req, res);
     if (!roster) return undefined;
     const settings = await getSettings(req.user.school);
-    const index = buildCandidateIndex(roster, (r) => r.name);
+    const index = buildRosterIndex(roster);
 
     const parsed = lines.map((line, i) => {
       const email = normalizeEmail(line.email) || '';

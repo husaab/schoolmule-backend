@@ -32,6 +32,7 @@ const UNFENCED_ROUTES = [
   'POST /api/auth/student-qr',                                    // public QR-card sign-in, rate limited
   'POST /api/auth/student-invite',                                // public invite check, rate limited
   'POST /api/auth/student-invite/accept',                         // public invite acceptance, rate limited
+  'POST /api/auth/student-request',                               // public student account request, rate limited
   'POST /api/auth/verify-email',                                  // public, rate limited
   'GET /api/auth/confirm-email',                                  // email link
   'POST /api/auth/logout',                                        // no data

@@ -92,6 +92,23 @@ const getAdminNotifyEmailHTML = ({ new_user, school }) =>
     ].join(''),
   });
 
+// To a school's admins when students ask for accounts (at most one an hour).
+// No names or addresses: the request was typed by someone not yet trusted,
+// and the queue on the Approvals page is the place to read it.
+const getStudentRequestNotifyEmailHTML = ({ schoolName, pendingCount }) => {
+  const waiting = pendingCount === 1 ? '1 student account request is' : `${pendingCount} student account requests are`;
+  return renderEmail({
+    brand: SCHOOLMULE_BRAND,
+    heading: 'Students asked for accounts',
+    preheader: `${waiting} waiting at ${schoolName}.`,
+    content: [
+      paragraph(`Hello ${escapeHtml(schoolName)} admins,`),
+      paragraph(`${escapeHtml(waiting)} waiting for you to review. Match each one to the student's record to send their invite, or decline it.`),
+      button('Review requests', appUrl('/admin-panel/approvals?role=STUDENT')),
+    ].join(''),
+  });
+};
+
 const getDeclineEmailHTML = ({ name, school }) =>
   renderEmail({
     brand: SCHOOLMULE_BRAND,
@@ -669,6 +686,7 @@ module.exports = {
   getConfirmedEmailHTML,
   getApprovalEmailHTML,
   getAdminNotifyEmailHTML,
+  getStudentRequestNotifyEmailHTML,
   getDeclineEmailHTML,
   getResetEmailHTML,
   getInviteEmailHTML,

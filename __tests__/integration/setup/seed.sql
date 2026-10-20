@@ -26,6 +26,7 @@ CREATE TABLE schools (
   academic_year_end_date DATE,
   email_sending_domain   TEXT,
   email_sender_local     TEXT,
+  student_requests_notified_at TIMESTAMPTZ,
   email_reply_to         TEXT[] NOT NULL DEFAULT '{}',
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_updated_at        TIMESTAMPTZ DEFAULT NOW()
@@ -2012,3 +2013,26 @@ ALTER TABLE student_accounts ADD COLUMN IF NOT EXISTS guardians_notified_at TIME
 ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS student_email_domains TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS student_sign_in TEXT NOT NULL DEFAULT 'google_or_password'
   CHECK (student_sign_in IN ('google_or_password','google_only'));
+
+-- ============================================================
+-- Student account requests (database/migrations/student_account_requests_01.sql)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS student_account_requests (
+  request_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school       school NOT NULL,
+  first_name   TEXT NOT NULL CHECK (char_length(first_name) BETWEEN 1 AND 60),
+  last_name    TEXT NOT NULL CHECK (char_length(last_name) BETWEEN 1 AND 60),
+  grade        TEXT NOT NULL CHECK (grade IN ('JK','SK','1','2','3','4','5','6','7','8')),
+  email        TEXT NOT NULL CHECK (email = lower(email) AND char_length(email) <= 254),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','declined')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at   TIMESTAMPTZ,
+  decided_by   UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  student_id   UUID REFERENCES students(student_id) ON DELETE SET NULL,
+  user_id      UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT student_account_requests_decided_ck CHECK ((status = 'pending') = (decided_at IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_student_account_requests_pending
+  ON student_account_requests (school, lower(email)) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_student_account_requests_school
+  ON student_account_requests (school, status, created_at DESC);

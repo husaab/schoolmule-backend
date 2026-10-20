@@ -3,6 +3,7 @@
 const FEATURES = [
   ['/api/admin/users', 'Admin: users'],
   ['/api/admin/approvals', 'Admin: approvals'],
+  ['/api/admin/student-requests', 'Admin: student requests'],
   ['/api/assessment-publications', 'Assessment publishing'],
   ['/api/assessments', 'Gradebook'],
   ['/api/studentAssessments', 'Gradebook'],

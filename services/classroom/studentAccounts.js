@@ -406,8 +406,11 @@ const skipped = (studentId, reason, message) => ({ studentId, outcome: 'skipped'
  * @param {{ userId: string, username?: string, school: string, schoolYearId?: string|null }} p.admin
  * @param {string} p.noticeVersion consent notice version the admin confirmed
  * @param {object|null} [p.schoolInfo] schools row (loaded when omitted)
+ * @param {(client: object, created: { userId: string }) => Promise<void>} [p.withinTx]
+ *   more writes that must commit with the login or not at all (an approved
+ *   account request); a throw rolls the whole invite back and is rethrown.
  */
-async function inviteStudent({ student, settings, admin, noticeVersion, schoolInfo }) {
+async function inviteStudent({ student, settings, admin, noticeVersion, schoolInfo, withinTx }) {
   const studentId = student.student_id;
   const email = normalizeEmail(student.student_email);
 
@@ -438,6 +441,7 @@ async function inviteStudent({ student, settings, admin, noticeVersion, schoolIn
       const created = await createInvite(client, {
         school: admin.school, userId: newUserId, studentId, schoolYearId, email, createdBy: admin.userId,
       });
+      if (withinTx) await withinTx(client, { userId: newUserId });
       return { userId: newUserId, invite: created };
     }));
   } catch (err) {
@@ -488,6 +492,7 @@ module.exports = {
   normalizeEmail,
   splitName,
   isBelowLoginGrade,
+  gradeLabel,
   conflictMessage,
   deriveStatus,
   signInMethodOf,

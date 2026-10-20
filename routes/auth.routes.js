@@ -5,8 +5,9 @@ validateResetToken, resetPassword, validateSession, switchView} = require("../co
 const responseParser = require("../utils/responseParser");
 const verifyUser = require('../middleware/verifyUserMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
-const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, inviteNetworkLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter } = require('../middleware/spamProtection');
+const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, inviteNetworkLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter, studentRequestNetworkLimiter, studentRequestAddressLimiter } = require('../middleware/spamProtection');
 const { inspectInvite, acceptInvite } = require('../controllers/studentInvite.controller');
+const { submit: submitStudentRequest } = require('../controllers/studentRequest.controller');
 
 const router = express.Router();
 
@@ -26,6 +27,9 @@ router.post('/student-qr', qrCardLimiter, loginLimiter, responseParser(studentQr
 // accepting it with a password or Google (controllers/studentInvite.controller.js).
 router.post('/student-invite', inviteTokenLimiter, inviteNetworkLimiter, responseParser(inspectInvite));
 router.post('/student-invite/accept', inviteTokenLimiter, inviteNetworkLimiter, responseParser(acceptInvite));
+// A student asks for an account from /signup/<school>/student; the office
+// approves it on the Approvals page (controllers/studentRequest.controller.js).
+router.post('/student-request', studentRequestNetworkLimiter, studentRequestAddressLimiter, submitStudentRequest);
 router.post( "/verify-email", verificationEmailLimiter, sendVerificationEmail);
 router.get( "/confirm-email", verifyEmail);
 
