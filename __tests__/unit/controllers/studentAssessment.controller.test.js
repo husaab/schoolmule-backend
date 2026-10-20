@@ -4,6 +4,15 @@ const { mockAdminUser, mockTeacherUser } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
 const { buildStudentAssessmentRow } = require('../../helpers/factories');
 
+// RBAC: the class guard (requireClassOwnership / requireGradebookAccess) looks
+// the class up first. Its lead is the test teacher (a full admin passes any
+// class of the school anyway); the counts cover every id a test names.
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
+
 let app;
 beforeAll(() => {
   app = getApp();
@@ -17,6 +26,7 @@ const authHeader = () => {
 // ─── GET /api/studentAssessments/classes/:classId/scores ────────
 describe('GET /api/studentAssessments/classes/:classId/scores', () => {
   it('returns scores matrix for a class', async () => {
+    mockGradebookGuard();
     const rows = [
       {
         student_id: 's1', student_name: 'Alice',
@@ -49,6 +59,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns empty array when no scores found', async () => {
+    mockGradebookGuard();
     mockQueryResponse([]);
 
     const res = await request(app)
@@ -61,6 +72,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockGradebookGuard();
     mockQueryError('DB error');
 
     const res = await request(app)
@@ -73,6 +85,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 401 without auth token', async () => {
+    mockGradebookGuard();
     const res = await request(app)
       .get('/api/studentAssessments/classes/class-123/scores');
 
@@ -90,6 +103,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   const mockNoTurnInColumns = () => mockQueryResponse([]);
 
   it('upserts scores successfully', async () => {
+    mockGradebookGuard();
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
     mockNoTurnInColumns();
     const upsertedRows = [
@@ -114,6 +128,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('allows null scores for deletion', async () => {
+    mockGradebookGuard();
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
     mockNoTurnInColumns();
     const upsertedRows = [
@@ -136,6 +151,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 400 when a score exceeds the assessment max score', async () => {
+    mockGradebookGuard();
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '33.5' }]);
 
     const res = await request(app)
@@ -154,6 +170,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 400 when a score is negative', async () => {
+    mockGradebookGuard();
     mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
 
     const res = await request(app)
@@ -171,6 +188,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 400 when an assessment does not belong to the class', async () => {
+    mockGradebookGuard();
     mockAssessmentLookup([]); // lookup finds nothing for this class
 
     const res = await request(app)
@@ -188,6 +206,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 400 when scores array is empty', async () => {
+    mockGradebookGuard();
     const res = await request(app)
       .post('/api/studentAssessments/classes/class-123/scores')
       .set(authHeader())
@@ -199,6 +218,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 400 when scores is not an array', async () => {
+    mockGradebookGuard();
     const res = await request(app)
       .post('/api/studentAssessments/classes/class-123/scores')
       .set(authHeader())
@@ -209,6 +229,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockGradebookGuard();
     mockQueryError('DB error');
 
     const res = await request(app)
@@ -228,6 +249,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
 // ─── GET /api/studentAssessments/classes/:classId/scores/csv ────
 describe('GET /api/studentAssessments/classes/:classId/scores/csv (Excel export)', () => {
   it('returns 404 when no data found for the class', async () => {
+    mockGradebookGuard();
     mockQueryResponse([]);
 
     const res = await request(app)
@@ -240,6 +262,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores/csv (Excel export)
   });
 
   it('returns 500 on database error', async () => {
+    mockGradebookGuard();
     mockQueryError('DB error');
 
     const res = await request(app)
@@ -251,6 +274,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores/csv (Excel export)
   });
 
   it('returns an Excel file when data exists', async () => {
+    mockGradebookGuard();
     const rows = [
       {
         student_id: 's1', student_name: 'Alice',
@@ -282,6 +306,7 @@ describe('GET /api/studentAssessments/classes/:classId/scores/csv (Excel export)
 // ─── GET /api/studentAssessments/:studentId/:assessmentId ───────
 describe('GET /api/studentAssessments/:studentId/:assessmentId', () => {
   it('returns a student assessment record', async () => {
+    mockGradebookGuard();
     const row = buildStudentAssessmentRow({
       student_id: 'student-1',
       assessment_id: 'assess-1',
@@ -300,6 +325,7 @@ describe('GET /api/studentAssessments/:studentId/:assessmentId', () => {
   });
 
   it('returns null data when record not found', async () => {
+    mockGradebookGuard();
     mockQueryResponse([]);
 
     const res = await request(app)
@@ -312,6 +338,7 @@ describe('GET /api/studentAssessments/:studentId/:assessmentId', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockGradebookGuard();
     mockQueryError('DB error');
 
     const res = await request(app)

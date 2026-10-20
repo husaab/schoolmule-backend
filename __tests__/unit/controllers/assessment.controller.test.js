@@ -9,6 +9,15 @@ const { mockQueryResponse, mockQueryError, mockTransactionSequence, mockTransact
 const { buildAssessmentRow, buildCreateAssessmentBody } = require('../../helpers/factories');
 const { v4: uuidv4 } = require('uuid');
 
+// RBAC: the class guard (requireClassOwnership / requireGradebookAccess) looks
+// the class up first. Its lead is the test teacher (a full admin passes any
+// class of the school anyway); the counts cover every id a test names.
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
+
 const app = getApp();
 
 function authGet(url) {
@@ -32,6 +41,7 @@ describe('Assessment Controller', () => {
   // ── getAssessmentById ──────────────────────────────────────────────
   describe('GET /api/assessments/:id', () => {
     it('should return 200 with the assessment', async () => {
+    mockGradebookGuard();
       const row = buildAssessmentRow();
       mockQueryResponse([row]);
       const res = await authGet(`/api/assessments/${row.assessment_id}`);
@@ -42,6 +52,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 404 when assessment not found', async () => {
+    mockGradebookGuard();
       mockQueryResponse([]);
       const res = await authGet(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(404);
@@ -49,6 +60,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should apply deletes, creates and updates in one transaction', async () => {
+    mockGradebookGuard();
       const updated = buildAssessmentRow({ name: 'Parent' });
       const created = buildAssessmentRow({ name: 'New child' });
       // DELETE, INSERT, then the batch UPDATE.
@@ -71,6 +83,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should roll back and not commit when a later step fails', async () => {
+    mockGradebookGuard();
       // BEGIN succeeds, the DELETE succeeds, then the INSERT blows up.
       mockTransactionError(1, 'insert failed', [{ rows: [] }]);
 
@@ -87,6 +100,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should accept a delete-only request with no updates', async () => {
+    mockGradebookGuard();
       mockTransactionSequence([{ rows: [] }]);
       const res = await authPatch('/api/assessments/batch').send({
         deleteIds: [uuidv4()],
@@ -96,6 +110,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 400 when every list is empty', async () => {
+    mockGradebookGuard();
       const res = await authPatch('/api/assessments/batch').send({
         updates: [], deleteIds: [], creates: [],
       });
@@ -103,6 +118,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockQueryError('DB error');
       const res = await authGet(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(500);
@@ -113,6 +129,7 @@ describe('Assessment Controller', () => {
   // ── getAssessmentsByClass ──────────────────────────────────────────────
   describe('GET /api/assessments/class/:classId', () => {
     it('should return 200 with assessments for the class', async () => {
+    mockGradebookGuard();
       const classId = uuidv4();
       const row1 = buildAssessmentRow({ class_id: classId });
       const row2 = buildAssessmentRow({ class_id: classId, name: 'Final Exam' });
@@ -124,6 +141,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 200 with empty array when no assessments', async () => {
+    mockGradebookGuard();
       mockQueryResponse([]);
       const res = await authGet(`/api/assessments/class/${uuidv4()}`);
       expect(res.status).toBe(200);
@@ -131,6 +149,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockQueryError('DB error');
       const res = await authGet(`/api/assessments/class/${uuidv4()}`);
       expect(res.status).toBe(500);
@@ -141,6 +160,7 @@ describe('Assessment Controller', () => {
   // ── createAssessment ──────────────────────────────────────────────
   describe('POST /api/assessments', () => {
     it('should return 201 on successful creation (standalone)', async () => {
+    mockGradebookGuard();
       const row = buildAssessmentRow();
       mockQueryResponse([row]);
       const body = buildCreateAssessmentBody();
@@ -151,6 +171,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 400 when classId is missing', async () => {
+    mockGradebookGuard();
       const res = await authPost('/api/assessments').send({ name: 'Test' });
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
@@ -158,12 +179,14 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 400 when name is missing', async () => {
+    mockGradebookGuard();
       const res = await authPost('/api/assessments').send({ classId: uuidv4() });
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockQueryError('insert failed');
       const body = buildCreateAssessmentBody();
       const res = await authPost('/api/assessments').send(body);
@@ -175,6 +198,7 @@ describe('Assessment Controller', () => {
   // ── updateAssessment ──────────────────────────────────────────────
   describe('PATCH /api/assessments/:id', () => {
     it('should return 200 on successful update', async () => {
+    mockGradebookGuard();
       const row = buildAssessmentRow({ name: 'Updated Assessment' });
       mockQueryResponse([row], 1);
       const res = await authPatch(`/api/assessments/${row.assessment_id}`).send({
@@ -186,6 +210,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 404 when assessment not found', async () => {
+    mockGradebookGuard();
       mockQueryResponse([], 0);
       const res = await authPatch(`/api/assessments/${uuidv4()}`).send({ name: 'Test' });
       expect(res.status).toBe(404);
@@ -193,6 +218,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockQueryError('update failed');
       const res = await authPatch(`/api/assessments/${uuidv4()}`).send({ name: 'Test' });
       expect(res.status).toBe(500);
@@ -203,6 +229,7 @@ describe('Assessment Controller', () => {
   // ── deleteAssessment ──────────────────────────────────────────────
   describe('DELETE /api/assessments/:id', () => {
     it('should return 200 on successful deletion', async () => {
+    mockGradebookGuard();
       mockQueryResponse([], 1);
       const res = await authDelete(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(200);
@@ -211,6 +238,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 404 when assessment not found', async () => {
+    mockGradebookGuard();
       mockQueryResponse([], 0);
       const res = await authDelete(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(404);
@@ -218,6 +246,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockQueryError('delete failed');
       const res = await authDelete(`/api/assessments/${uuidv4()}`);
       expect(res.status).toBe(500);
@@ -228,6 +257,7 @@ describe('Assessment Controller', () => {
   // ── batchUpdateAssessments ──────────────────────────────────────────────
   describe('PATCH /api/assessments/batch', () => {
     it('should return 200 on successful batch update', async () => {
+    mockGradebookGuard();
       const row1 = buildAssessmentRow({ name: 'A1' });
       const row2 = buildAssessmentRow({ name: 'A2' });
       // The endpoint is transactional now: BEGIN -> batch update -> COMMIT.
@@ -244,18 +274,21 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 400 when updates array is empty', async () => {
+    mockGradebookGuard();
       const res = await authPatch('/api/assessments/batch').send({ updates: [] });
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
     });
 
     it('should return 400 when updates is not an array', async () => {
+    mockGradebookGuard();
       const res = await authPatch('/api/assessments/batch').send({ updates: 'invalid' });
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
     });
 
     it('should return 400 when an update is missing assessmentId', async () => {
+    mockGradebookGuard();
       const res = await authPatch('/api/assessments/batch').send({
         updates: [{ name: 'No ID' }],
       });
@@ -264,6 +297,7 @@ describe('Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       mockTransactionError(0, 'batch failed');
       const res = await authPatch('/api/assessments/batch').send({
         updates: [{ assessmentId: uuidv4(), name: 'Test' }],

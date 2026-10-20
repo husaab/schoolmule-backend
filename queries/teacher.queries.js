@@ -27,6 +27,7 @@ const teacherQueries = {
     FROM users
     WHERE user_id = $1
       AND role = 'TEACHER'
+      AND school = $2
   `
 };
 

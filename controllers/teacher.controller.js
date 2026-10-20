@@ -41,7 +41,7 @@ const getTeacherById = async (req, res) => {
   }
 
   try {
-    const { rows } = await db.query(teacherQueries.selectTeacherById, [id]);
+    const { rows } = await db.query(teacherQueries.selectTeacherById, [id, req.user.school]);
 
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: `Teacher not found for id=${id}` });

@@ -4,6 +4,15 @@ const { mockAdminUser, mockTeacherUser } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
 const { buildExcludedAssessmentRow } = require('../../helpers/factories');
 
+// RBAC: the class guard (requireClassOwnership / requireGradebookAccess) looks
+// the class up first. Its lead is the test teacher (a full admin passes any
+// class of the school anyway); the counts cover every id a test names.
+const mockGradebookGuard = () => require('../../helpers/mockDb').mockQueryResponse([{
+  class_id: '11111111-1111-4111-8111-111111111111', school: 'ALHAADIACADEMY', teacher_id: require('../../helpers/mockAuth').TEST_TEACHER_USER_ID,
+  is_co_teacher: false, classes_found: 99, assessments_found: 99,
+}]);
+
+
 const app = getApp();
 
 describe('Excluded Assessment Controller', () => {
@@ -12,6 +21,7 @@ describe('Excluded Assessment Controller', () => {
     const url = '/api/excluded-assessments';
 
     it('should create an exclusion successfully', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]); // target leaf lookup
@@ -35,6 +45,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 404 when the assessment is not in the class', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]); // no matching leaf assessments
 
@@ -52,6 +63,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 400 when studentId is missing', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -64,6 +76,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 400 when classId is missing', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -75,6 +88,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 400 when assessmentId is missing', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -86,6 +100,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -99,6 +114,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 401 without auth token', async () => {
+    mockGradebookGuard();
       const res = await request(app)
         .post(url)
         .send({ studentId: 'sid', classId: 'cid', assessmentId: 'aid' });
@@ -107,6 +123,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should work with teacher role', async () => {
+    mockGradebookGuard();
       const token = mockTeacherUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]);
@@ -129,6 +146,7 @@ describe('Excluded Assessment Controller', () => {
   // ─── DELETE /api/excluded-assessments/:studentId/:classId/:assessmentId ────
   describe('DELETE /api/excluded-assessments/:studentId/:classId/:assessmentId', () => {
     it('should delete an exclusion successfully', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([{ assessment_id: 'aid' }]); // target leaf lookup
       mockQueryResponse([]); // no turn-in columns
@@ -144,6 +162,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 404 when exclusion not found', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]); // no matching leaf assessments
 
@@ -157,6 +176,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -171,6 +191,7 @@ describe('Excluded Assessment Controller', () => {
   // ─── GET /api/excluded-assessments/:studentId/:classId ─────────
   describe('GET /api/excluded-assessments/:studentId/:classId', () => {
     it('should return exclusions for a student in a class', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const rows = [
         buildExcludedAssessmentRow(),
@@ -191,6 +212,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return empty array when no exclusions exist', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]);
 
@@ -203,6 +225,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -217,6 +240,7 @@ describe('Excluded Assessment Controller', () => {
   // ─── GET /api/excluded-assessments/:studentId/:classId/:assessmentId/check ─
   describe('GET /api/excluded-assessments/:studentId/:classId/:assessmentId/check', () => {
     it('should return isExcluded true when exclusion exists', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([row]);
@@ -231,6 +255,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return isExcluded false when no exclusion exists', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]);
 
@@ -243,6 +268,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -257,6 +283,7 @@ describe('Excluded Assessment Controller', () => {
   // ─── GET /api/excluded-assessments/class/:classId ──────────────
   describe('GET /api/excluded-assessments/class/:classId', () => {
     it('should return all exclusions for a class', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       const rows = [
         buildExcludedAssessmentRow(),
@@ -275,6 +302,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return empty array when class has no exclusions', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryResponse([]);
 
@@ -287,6 +315,7 @@ describe('Excluded Assessment Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+    mockGradebookGuard();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
