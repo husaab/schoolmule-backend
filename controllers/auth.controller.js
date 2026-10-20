@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
 const logger = require("../logger");
+const { sessionAccess } = require('../services/access/access');
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML,
   getResetEmailHTML } = require('../templates/emailTemplate');
 const approvalActions = require('../services/approvalActions');
@@ -57,6 +58,11 @@ const signSessionToken = ({ user, role, roles, activeTerm, qrCard = null }) =>
     process.env.JWT_SECRET,
     { expiresIn: user.role === 'STUDENT' ? STUDENT_SESSION_TTL : SESSION_TTL }
   );
+
+// RBAC: what the active view may do (permissions, isFullAdmin, accessRole,
+// teachesClasses). UI hints for the frontend; every API checks for itself.
+const sessionAccessFor = (user, view) =>
+  sessionAccess({ userId: user.user_id, school: user.school, baseRole: user.role }, view);
 
 // The identity half of a session response, shared by login, /me and /view so
 // the client hydrates its stores the same way whichever one it called.
@@ -186,6 +192,7 @@ const openSession = async (req, user, { email, message, via = 'password', qrCard
     message,
     data: {
       ...sessionIdentity(user, user.role, roles, photoUrl),
+      ...(await sessionAccessFor(user, user.role)),
       activeTerm: activeTerm ? activeTerm.name : false,
       activeSchoolYear: yearContext.activeSchoolYear,
       schoolYears: yearContext.schoolYears,
@@ -1089,6 +1096,7 @@ const validateSession = async (req, res) => {
         // Present only when the claims drifted; the client stores it.
         ...(refreshedToken && { token: refreshedToken }),
         ...sessionIdentity(user, role, roles, photoUrl),
+        ...(await sessionAccessFor(user, role)),
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,
@@ -1157,6 +1165,7 @@ const switchView = async (req, res) => {
       message: view === 'PARENT' ? "You're now in Parent view" : `You're back in ${view === 'ADMIN' ? 'Administrator' : 'Teacher'} view`,
       data: {
         ...sessionIdentity(user, view, roles, photoUrl),
+        ...(await sessionAccessFor(user, view)),
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,

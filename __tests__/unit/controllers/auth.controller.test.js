@@ -822,6 +822,51 @@ describe('GET /api/auth/me', () => {
 // A staff member linked to a student through parent_students may hold a
 // second "view". The token's `role` is the active view; `baseRole` is the
 // database role and `roles` lists every view the user may switch to.
+describe('RBAC access in the session payload', () => {
+  const { giveRole, ROLE_ID } = require('../../helpers/mockAccess');
+  const { KEYS, TEACHER_DEFAULT } = require('../../../config/permissions');
+  const teacherRow = (over = {}) =>
+    buildUserRow({ user_id: TEST_TEACHER_USER_ID, role: 'TEACHER', email: 'teacher@test.com', is_verified: true, is_verified_school: true, ...over });
+
+  it('gives a teacher signing in the teacher default and teachesClasses', async () => {
+    mockQueryResponse([teacherRow()]);
+    mockQueryResponse([]);
+    mockQueryResponse([buildTermRow()]);
+    mockQueryResponse([]); // no parent links
+    const res = await request(app).post('/api/auth/login').send(buildLoginBody({ email: 'teacher@test.com' }));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ permissions: [...TEACHER_DEFAULT], isFullAdmin: false, accessRole: null, teachesClasses: true });
+  });
+
+  it('reports a custom access role on /me', async () => {
+    giveRole(TEST_TEACHER_USER_ID, ['finance'], 'Bursar');
+    mockQueryResponse([teacherRow()]);
+    mockQueryResponse([buildTermRow()]);
+    mockQueryResponse([]);
+    const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${mockTeacherUser()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ permissions: ['finance'], isFullAdmin: false, accessRole: { id: ROLE_ID, name: 'Bursar' } });
+  });
+
+  it('gives nothing in the parent view', async () => {
+    mockQueryResponse([teacherRow()]);
+    mockQueryResponse([buildTermRow()]);
+    mockQueryResponse([{ '?column?': 1 }]);
+    const res = await request(app).post('/api/auth/view').set('Authorization', `Bearer ${mockTeacherUser()}`).send({ view: 'PARENT' });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ role: 'PARENT', permissions: [], isFullAdmin: false, accessRole: null, teachesClasses: false });
+  });
+
+  it('marks a built-in admin as a full admin with every key', async () => {
+    mockQueryResponse([buildUserRow({ user_id: TEST_ADMIN_USER_ID, role: 'ADMIN', email: 'admin@test.com', is_verified: true, is_verified_school: true })]);
+    mockQueryResponse([buildTermRow()]);
+    mockQueryResponse([]);
+    const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${mockAdminUser()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ permissions: KEYS, isFullAdmin: true, accessRole: null });
+  });
+});
+
 describe('dual-role views', () => {
   const linked = () => mockQueryResponse([{ '?column?': 1 }]);
   const unlinked = () => mockQueryResponse([]);
