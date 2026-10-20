@@ -287,8 +287,13 @@ async function loadConversation(conversationId) {
   return rows[0] ? accessRowToConversation(rows[0]) : null;
 }
 
-async function buildThread(conv, user) {
+// req (optional): staff who neither teach the class nor hold classes.all
+// (e.g. office staff answering through messages.all) see the assessment, not
+// its marks (RBAC: grades follow the gradebook).
+async function buildThread(conv, user, req = null) {
   const isStaff = user.role === 'ADMIN' || user.role === 'TEACHER';
+  const staffWithoutGrades = Boolean(req) && isStaff
+    && !conv.teacherIds.includes(user.userId) && !can(req, 'classes.all');
   const [{ rows: msgRows }, { rows: parts }, { rows: stateRows }, ctxRes, studentRes] = await Promise.all([
     db.query(q.selectMessages, [conv.conversationId]),
     db.query(q.selectParticipants, [conv.conversationId]),
@@ -316,7 +321,7 @@ async function buildThread(conv, user) {
   let context = null;
   const c = ctxRes.rows[0];
   if (c) {
-    const hideScore = family && !c.is_published;
+    const hideScore = (family && !c.is_published) || staffWithoutGrades;
     context = {
       assessmentId: c.assessment_id,
       name: c.name,
@@ -329,7 +334,7 @@ async function buildThread(conv, user) {
       status: hideScore ? null : c.status === 'missing' || c.status === 'excused' ? c.status : c.score == null ? 'blank' : 'graded',
       isPublished: Boolean(c.is_published),
       parentComment: hideScore ? null : c.parent_comment,
-      classAvgPct: family || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
+      classAvgPct: family || staffWithoutGrades || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
     };
   }
 
@@ -677,7 +682,7 @@ const createConversation = async (req, res) => {
     const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, user.userId);
 
-    const thread = await buildThread(await loadConversation(conversationId), user);
+    const thread = await buildThread(await loadConversation(conversationId), user, req);
     return res.status(existing.length ? 200 : 201).json({ status: 'success', data: { ...thread, invites } });
   } catch (error) {
     logger.error('Error creating conversation:', error);
@@ -751,7 +756,7 @@ const createGeneralConversation = async (req, res) => {
     await persistMessage({ conversationId: conv.conversationId, school: user.school, sender: user, body: v.text, files });
     const invites = await inviteUnlinkedGuardians(conv, user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, user.userId);
-    const thread = await buildThread(await loadConversation(conv.conversationId), user);
+    const thread = await buildThread(await loadConversation(conv.conversationId), user, req);
     return res.status(201).json({ status: 'success', data: { ...thread, invites } });
   } catch (error) {
     logger.error('Error creating general conversation:', error);
@@ -795,7 +800,7 @@ const resendInvite = async (req, res) => {
 // GET /api/messaging/conversations/:id
 const getConversation = async (req, res) => {
   try {
-    const thread = await buildThread(req.conversation, req.user);
+    const thread = await buildThread(req.conversation, req.user, req);
     return res.status(200).json({ status: 'success', data: thread });
   } catch (error) {
     logger.error('Error loading conversation:', error);
@@ -814,7 +819,7 @@ const postMessage = async (req, res) => {
     await persistMessage({ conversationId: conv.conversationId, school: conv.school, sender: req.user, body: v.text, files });
     const invites = await inviteUnlinkedGuardians(conv, req.user, { invite: flag(req.body.invite, true), includePreview: flag(req.body.includePreview, true), body: v.text });
     await queueEmails(conv, req.user.userId);
-    const thread = await buildThread(await loadConversation(conv.conversationId), req.user);
+    const thread = await buildThread(await loadConversation(conv.conversationId), req.user, req);
     return res.status(201).json({ status: 'success', data: { ...thread, invites } });
   } catch (error) {
     logger.error('Error posting message:', error);

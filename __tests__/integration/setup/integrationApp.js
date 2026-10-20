@@ -29,6 +29,23 @@ function getApp() {
   return app;
 }
 
+// RBAC: every staff request resolves its access from the users row, so a
+// token for an account that doesn't exist is a 401 (SESSION_REVOKED). Tests
+// that only mint a token get their staff account created first (verified,
+// no access role); a test that inserts the user itself is left alone.
+const STAFF_ROLES = new Set(['ADMIN', 'TEACHER']);
+async function ensureTokenUser(payload) {
+  const role = payload.baseRole || payload.role;
+  if (!STAFF_ROLES.has(role) || !payload.userId) return;
+  const db = require('../../../config/database');
+  await db.query(
+    `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+     VALUES ($1, $2, $3, '!', 'Test', 'User', $4, $5, true, true)
+     ON CONFLICT DO NOTHING`,
+    [payload.userId, payload.email || `${payload.userId}@test.com`, payload.username || 'Test User', payload.school, role],
+  );
+}
+
 /** Create an authenticated supertest request with a real JWT */
 function authenticatedRequest(method, url, tokenPayload = {}) {
   const secret = process.env.JWT_SECRET || 'test-jwt-secret-key-for-integration-tests';
@@ -45,8 +62,15 @@ function authenticatedRequest(method, url, tokenPayload = {}) {
   };
   const token = jwt.sign(payload, secret, { expiresIn: '1h' });
 
-  return request(getApp())[method](url)
+  const req = request(getApp())[method](url)
     .set('Authorization', `Bearer ${token}`);
+  // Awaiting the request calls end(): create the token's account first.
+  const end = req.end.bind(req);
+  req.end = (callback) => {
+    ensureTokenUser(payload).then(() => end(callback), (err) => callback(err));
+    return req;
+  };
+  return req;
 }
 
 module.exports = { getApp, authenticatedRequest };

@@ -59,6 +59,22 @@ CREATE TABLE users (
 -- google_sign_in_migration.sql
 CREATE UNIQUE INDEX users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;
 
+-- staff_roles_migration.sql (RBAC)
+CREATE TABLE staff_roles (
+  role_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school       school NOT NULL,
+  name         VARCHAR(60) NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 60),
+  description  TEXT NOT NULL DEFAULT '' CHECK (char_length(description) <= 300),
+  permissions  TEXT[] NOT NULL DEFAULT '{}',
+  created_by   UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX staff_roles_school_name_key ON staff_roles (school, lower(name));
+ALTER TABLE users ADD COLUMN staff_role_id UUID
+  CONSTRAINT users_staff_role_id_fkey REFERENCES staff_roles(role_id) ON DELETE RESTRICT;
+CREATE INDEX users_staff_role_idx ON users (staff_role_id) WHERE staff_role_id IS NOT NULL;
+
 -- School years (school-year scoping; from school_years_migration.sql)
 CREATE TABLE school_years (
   school_year_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),

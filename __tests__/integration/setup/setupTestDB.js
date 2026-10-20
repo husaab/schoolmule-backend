@@ -105,6 +105,7 @@ const ALL_TABLES = [
   'password_reset_tokens',
   'terms',
   'schools',
+  'staff_roles',
   'users',
 ];
 

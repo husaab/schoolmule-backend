@@ -620,6 +620,14 @@ describe('messaging controller', () => {
       expect(res.body.data.context.classAvgPct).toBe(76);
       expect(res.body.data.context.pct).toBe(70);
     });
+
+    it("shows office staff (messages.all, no classes.all) the assessment but not its marks", async () => {
+      require('../../helpers/mockAccess').giveRole(require('../../helpers/mockAuth').TEST_ADMIN_USER_ID, ['messages.all']);
+      makeRouter();
+      const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockAdminUser());
+      expect(res.status).toBe(200);
+      expect(res.body.data.context).toMatchObject({ name: 'Unit 3 Quiz', score: null, pct: null, classAvgPct: null, parentComment: null });
+    });
   });
 
   describe('POST /api/messaging/conversations/:id/messages', () => {
