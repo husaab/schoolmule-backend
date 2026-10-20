@@ -6,6 +6,10 @@ const { buildSchoolAssetRow, buildSchoolRow } = require('../../helpers/factories
 
 const app = getApp();
 
+// Routes naming a school by id check it is the caller's school first.
+const mockOwnSchool = () => mockQueryResponse([{ '?column?': 1 }]);
+const ownerBefore = process.env.PLATFORM_OWNER_EMAILS;
+
 describe('School Assets Controller', () => {
   // ─── GET /api/school-assets/school-code/:schoolCode ────────────
   describe('GET /api/school-assets/school-code/:schoolCode', () => {
@@ -58,6 +62,7 @@ describe('School Assets Controller', () => {
   // ─── GET /api/school-assets/school-id/:schoolId ────────────────
   describe('GET /api/school-assets/school-id/:schoolId', () => {
     it('should return school assets by school ID', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       const row = buildSchoolAssetRow();
       mockQueryResponse([row]);
@@ -72,6 +77,7 @@ describe('School Assets Controller', () => {
     });
 
     it('should return null when no assets found', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       mockQueryResponse([]);
 
@@ -84,6 +90,7 @@ describe('School Assets Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -126,7 +133,8 @@ describe('School Assets Controller', () => {
       expect(res.body.data.uploadedAsset).toBe('logo');
     });
 
-    it('should return 400 when schoolCode is missing', async () => {
+    // No school code (or another school's) is refused before anything runs.
+    it('should return 404 when schoolCode is missing', async () => {
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -138,7 +146,7 @@ describe('School Assets Controller', () => {
           contentType: 'image/png',
         });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(404);
     });
 
     it('should return 400 when assetType is missing', async () => {
@@ -206,6 +214,7 @@ describe('School Assets Controller', () => {
   // ─── DELETE /api/school-assets/:schoolId/:assetType ────────────
   describe('DELETE /api/school-assets/:schoolId/:assetType', () => {
     it('should delete a logo asset', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       const assetRow = buildSchoolAssetRow();
       const updatedRow = { ...assetRow, logo_path: null };
@@ -225,6 +234,7 @@ describe('School Assets Controller', () => {
     });
 
     it('should return 400 for invalid asset type', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
 
       const res = await request(app)
@@ -236,6 +246,7 @@ describe('School Assets Controller', () => {
     });
 
     it('should return 404 when school assets not found', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       mockQueryResponse([]); // no existing assets
 
@@ -247,6 +258,7 @@ describe('School Assets Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockOwnSchool();
       const token = mockAdminUser();
       mockQueryError('DB failure');
 
@@ -260,6 +272,9 @@ describe('School Assets Controller', () => {
 
   // ─── GET /api/school-assets/all ────────────────────────────────
   describe('GET /api/school-assets/all', () => {
+    beforeAll(() => { process.env.PLATFORM_OWNER_EMAILS = 'admin@test.com'; });
+    afterAll(() => { process.env.PLATFORM_OWNER_EMAILS = ownerBefore; });
+
     const url = '/api/school-assets/all';
 
     it('should return all schools with assets', async () => {
@@ -345,9 +360,28 @@ describe('School Assets Controller', () => {
       const res = await request(app)
         .get(url)
         .set('Authorization', `Bearer ${token}`)
-        .query({ filePath: 'some/path.png' });
+        .query({ filePath: 'ALHAADIACADEMY/path.png' });
 
       expect(res.status).toBe(500);
     });
+  });
+});
+
+describe('school assets stay in the caller\'s school', () => {
+  it("reads another school's code as missing", async () => {
+    const res = await request(app).get('/api/school-assets/school-code/PLAYGROUND').set('Authorization', `Bearer ${mockAdminUser()}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("refuses a signed URL outside the school's folder", async () => {
+    const res = await request(app).get('/api/school-assets/signed-url').query({ filePath: 'PLAYGROUND/logo.png' }).set('Authorization', `Bearer ${mockAdminUser()}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('keeps the all-schools list for the platform owner', async () => {
+    process.env.PLATFORM_OWNER_EMAILS = '';
+    const res = await request(app).get('/api/school-assets/all').set('Authorization', `Bearer ${mockAdminUser()}`);
+    process.env.PLATFORM_OWNER_EMAILS = ownerBefore;
+    expect(res.status).toBe(403);
   });
 });

@@ -435,13 +435,14 @@ describe('Teacher Attendance Controller', () => {
       expect(res.status).toBe(403);
     });
 
-    it('should return 400 when school is missing', async () => {
+    // The school is always the caller's; only the month is required.
+    it('should return 400 when month is missing, whatever ?school= says', async () => {
       const token = mockAdminUser();
 
       const res = await request(app)
         .get(url)
         .set('Authorization', `Bearer ${token}`)
-        .query({ month: '2025-10' });
+        .query({ school: 'PLAYGROUND' });
 
       expect(res.status).toBe(400);
     });
@@ -526,13 +527,14 @@ describe('Teacher Attendance Controller', () => {
       expect(res.status).toBe(403);
     });
 
-    it('should return 400 when school is missing', async () => {
+    // The school is always the caller's; only the month is required.
+    it('should return 400 when month is missing, whatever ?school= says', async () => {
       const token = mockAdminUser();
 
       const res = await request(app)
         .get(url)
         .set('Authorization', `Bearer ${token}`)
-        .query({ month: '2025-10' });
+        .query({ school: 'PLAYGROUND' });
 
       expect(res.status).toBe(400);
     });

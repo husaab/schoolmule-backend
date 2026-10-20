@@ -2,6 +2,9 @@ const db = require("../config/database");
 const patchNoteQueries = require("../queries/patchNote.queries");
 const supabase = require("../config/supabaseClient");
 const logger = require("../logger");
+// Patch notes are platform-wide, so publishing them is full-admin only (RBAC
+// D5): a restricted admin never can.
+const { isFullAdmin } = require("../services/access/access");
 
 const toCamel = (row) => ({
   patchNoteId: row.patch_note_id,
@@ -61,7 +64,7 @@ const dismissPatchNotes = async (req, res) => {
 
 const createPatchNote = async (req, res) => {
   try {
-    if (req.user.role !== "ADMIN") {
+    if (!isFullAdmin(req)) {
       return res.status(403).json({ status: "failed", message: "Admin access required" });
     }
     const { title, body, version, category, targetRoles, publishedAt, imageUrl } = req.body;
@@ -81,7 +84,7 @@ const createPatchNote = async (req, res) => {
 
 const updatePatchNote = async (req, res) => {
   try {
-    if (req.user.role !== "ADMIN") {
+    if (!isFullAdmin(req)) {
       return res.status(403).json({ status: "failed", message: "Admin access required" });
     }
     const { id } = req.params;
@@ -103,7 +106,7 @@ const updatePatchNote = async (req, res) => {
 
 const deletePatchNote = async (req, res) => {
   try {
-    if (req.user.role !== "ADMIN") {
+    if (!isFullAdmin(req)) {
       return res.status(403).json({ status: "failed", message: "Admin access required" });
     }
     await db.query(patchNoteQueries.delete, [req.params.id]);
@@ -116,7 +119,7 @@ const deletePatchNote = async (req, res) => {
 
 const uploadPatchNoteImage = async (req, res) => {
   try {
-    if (req.user.role !== "ADMIN") {
+    if (!isFullAdmin(req)) {
       return res.status(403).json({ status: "failed", message: "Admin access required" });
     }
     if (!req.file) {
@@ -145,7 +148,7 @@ const uploadPatchNoteImage = async (req, res) => {
 
 const getAllPatchNotes = async (req, res) => {
   try {
-    if (req.user.role !== "ADMIN") {
+    if (!isFullAdmin(req)) {
       return res.status(403).json({ status: "failed", message: "Admin access required" });
     }
     const { rows } = await db.query(patchNoteQueries.selectAll);

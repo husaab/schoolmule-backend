@@ -20,8 +20,14 @@ const {
   downloadPDF,
 } = require("../controllers/teacherAttendance.controller");
 const sheet = require("../controllers/staffHoursSheet.controller");
+const { requireStaffAccess } = require("../middleware/access");
 
 const router = express.Router();
+
+// Staff only. Your own check-in and history are everyone's; everyone else's
+// (and the pay schedule, sheet and PDF) is staff_attendance, checked in the
+// controllers.
+router.use(requireStaffAccess);
 
 // Specific routes MUST come before parameterized routes
 router.get("/today", getTodayStatus);

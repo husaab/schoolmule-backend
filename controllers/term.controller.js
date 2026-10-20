@@ -64,7 +64,7 @@ const getTermsBySchoolId = async (req, res) => {
   }
 
   try {
-    const { rows } = await db.query(termQueries.selectTermsBySchoolId, [schoolId]);
+    const { rows } = await db.query(termQueries.selectTermsBySchoolId, [schoolId, req.user.school]);
     return res.status(200).json({
       status: 'success',
       data: rows.map(mapTermToResponse)
@@ -196,7 +196,8 @@ const getTermById = async (req, res) => {
   try {
     const { rows } = await db.query(termQueries.selectTermById, [id]);
     
-    if (rows.length === 0) {
+    // Another school's term reads as missing.
+    if (rows.length === 0 || String(rows[0].school) !== String(req.user.school)) {
       return res.status(404).json({
         status: 'failed',
         message: 'Term not found'
@@ -331,7 +332,7 @@ const updateTerm = async (req, res) => {
     // If setting this term as active, first get the school and deactivate other terms
     if (isActive) {
       const { rows: currentTerm } = await db.query(termQueries.selectTermById, [id]);
-      if (currentTerm.length > 0) {
+      if (currentTerm.length > 0 && String(currentTerm[0].school) === String(req.user.school)) {
         await db.query(termQueries.deactivateAllTermsForSchool, [currentTerm[0].school]);
       }
     }
@@ -342,7 +343,8 @@ const updateTerm = async (req, res) => {
       endDate,
       academicYear,
       isActive || false,
-      id
+      id,
+      req.user.school
     ]);
 
     if (rows.length === 0) {
@@ -390,7 +392,8 @@ const activateTerm = async (req, res) => {
     // First get the term to find its school
     const { rows: termRows } = await db.query(termQueries.selectTermById, [id]);
     
-    if (termRows.length === 0) {
+    // Another school's term reads as missing.
+    if (termRows.length === 0 || String(termRows[0].school) !== String(req.user.school)) {
       return res.status(404).json({
         status: 'failed',
         message: 'Term not found'
@@ -403,7 +406,7 @@ const activateTerm = async (req, res) => {
     await db.query(termQueries.deactivateAllTermsForSchool, [school]);
 
     // Activate this term
-    const { rows } = await db.query(termQueries.setTermActive, [id]);
+    const { rows } = await db.query(termQueries.setTermActive, [id, school]);
 
     return res.status(200).json({
       status: 'success',
@@ -444,7 +447,8 @@ const updateTermStatus = async (req, res) => {
     // First get the term to find its school
     const { rows: termRows } = await db.query(termQueries.selectTermById, [id]);
     
-    if (termRows.length === 0) {
+    // Another school's term reads as missing.
+    if (termRows.length === 0 || String(termRows[0].school) !== String(req.user.school)) {
       return res.status(404).json({
         status: 'failed',
         message: 'Term not found'
@@ -457,14 +461,14 @@ const updateTermStatus = async (req, res) => {
       // If activating, deactivate all other terms for this school first
       await db.query(termQueries.deactivateAllTermsForSchool, [school]);
       // Then activate this term
-      const { rows } = await db.query(termQueries.setTermActive, [id]);
+      const { rows } = await db.query(termQueries.setTermActive, [id, school]);
       return res.status(200).json({
         status: 'success',
         data: mapTermToResponse(rows[0])
       });
     } else {
       // If deactivating, just set this term to inactive
-      const { rows } = await db.query(termQueries.setTermInactive, [id]);
+      const { rows } = await db.query(termQueries.setTermInactive, [id, school]);
       return res.status(200).json({
         status: 'success',
         data: mapTermToResponse(rows[0])
@@ -494,7 +498,7 @@ const deleteTerm = async (req, res) => {
   }
 
   try {
-    const { rows } = await db.query(termQueries.deleteTerm, [id]);
+    const { rows } = await db.query(termQueries.deleteTerm, [id, req.user.school]);
     
     if (rows.length === 0) {
       return res.status(404).json({

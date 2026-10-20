@@ -1,5 +1,6 @@
 const express = require("express");
-const requireStaff = require("../middleware/requireStaff");
+const { requirePermission, withAccess } = require("../middleware/access");
+const { can } = require("../services/access/access");
 const {
   getAllParentStudents,
   getParentStudentById,
@@ -12,18 +13,19 @@ const {
 
 const router = express.Router();
 
-// A parent may only read their own children; staff may read anyone's.
-const requireSelfOrStaff = (req, res, next) => {
-  if (req.user.role !== 'PARENT' || req.params.parentId === req.user.userId) return next();
+// Anyone may read their own children (a parent, or staff who are also
+// parents); anyone else's links are part of managing users (RBAC).
+const requireSelfOrStaff = withAccess((req, res, next) => {
+  if (req.params.parentId === req.user.userId || can(req, 'users')) return next();
   return res.status(403).json({ status: 'failed', message: 'Not authorized' });
-};
+});
 
 // GET /parent-students/parent/:parentId - Get all student relations for a parent
 // (the parent portal's ChildSwitcher calls this with the parent's own id)
 router.get("/parent/:parentId", requireSelfOrStaff, getStudentsByParentId);
 
-// Everything else is link administration: staff only.
-router.use(requireStaff);
+// Everything else is link administration: managing users.
+router.use(requirePermission("users"));
 
 // GET /parent-students - Get all parent-student relations for the caller's school
 router.get("/", getAllParentStudents);

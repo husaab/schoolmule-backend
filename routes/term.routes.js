@@ -3,6 +3,11 @@
 const express = require('express');
 const router = express.Router();
 const termController = require('../controllers/term.controller');
+const { requirePermission } = require('../middleware/access');
+
+// Terms are read by every role (parents too) and are always the caller's own
+// school's; creating and changing them is school setup (RBAC).
+const schoolSetup = requirePermission('school_setup');
 
 // GET /api/terms?school=SCHOOL_ENUM - Get all terms for a school
 router.get('/', termController.getTermsBySchool);
@@ -26,18 +31,18 @@ router.get('/academic-year', termController.getTermsByAcademicYear);
 router.get('/:id', termController.getTermById);
 
 // POST /api/terms - Create new term
-router.post('/', termController.createTerm);
+router.post('/', schoolSetup, termController.createTerm);
 
 // PUT /api/terms/:id - Update term
-router.put('/:id', termController.updateTerm);
+router.put('/:id', schoolSetup, termController.updateTerm);
 
 // PUT /api/terms/:id/activate - Set term as active
-router.put('/:id/activate', termController.activateTerm);
+router.put('/:id/activate', schoolSetup, termController.activateTerm);
 
 // PUT /api/terms/:id/status - Update term status (active/inactive)
-router.put('/:id/status', termController.updateTermStatus);
+router.put('/:id/status', schoolSetup, termController.updateTermStatus);
 
 // DELETE /api/terms/:id - Delete term
-router.delete('/:id', termController.deleteTerm);
+router.delete('/:id', schoolSetup, termController.deleteTerm);
 
 module.exports = router;

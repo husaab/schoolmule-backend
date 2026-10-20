@@ -10,6 +10,7 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const queries = require('../queries/googleSheets.queries');
 const googleAuth = require('../services/google/googleAuth');
 const sheetsClient = require('../services/google/sheetsClient');
@@ -17,7 +18,8 @@ const { sheetStatusPayload } = require('./googleSheets.controller');
 const { makeShareHandlers, connectedEmail } = require('./sheetSharing.controller');
 const { OVERVIEW_TAB } = require('../services/google/staffHoursSheetLayout');
 
-const isAdmin = (req) => req.user.role === 'ADMIN';
+// The hours sheet is part of staff attendance (RBAC).
+const isAdmin = (req) => can(req, 'staff_attendance');
 const forbid = (res) => res.status(403).json({ status: 'failed', message: 'Admin access required' });
 
 // Same shape as a form's link (minus the tab fields, which the frontend

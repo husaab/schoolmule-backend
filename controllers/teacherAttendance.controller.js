@@ -1,6 +1,7 @@
 const db = require("../config/database");
 const teacherAttendanceQueries = require("../queries/teacherAttendance.queries");
 const logger = require("../logger");
+const { can } = require("../services/access/access");
 const { createPDFBuffer } = require("../utils/pdfGenerator");
 const { getStaffAttendanceHTML } = require("../templates/staffAttendanceTemplate");
 const payPeriods = require("../services/payPeriods");
@@ -26,7 +27,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const isAdmin = (req) => req.user.role === "ADMIN";
+// Everyone's attendance, hours and pay schedule: the staff_attendance permission.
+const isAdmin = (req) => can(req, "staff_attendance");
 const forbid = (res) => res.status(403).json({ status: "failed", message: "Admin access required" });
 const fail = (res, code, message) => res.status(code).json({ status: "failed", message });
 const OUTSIDE_YEAR = "That date is outside the school year";
@@ -216,9 +218,11 @@ const getAllForSchoolMonth = async (req, res) => {
   try {
     if (!isAdmin(req)) return forbid(res);
 
-    const { school, month } = req.query;
-    if (!school || !month || !MONTH_RE.test(month)) {
-      return fail(res, 400, "school and month (YYYY-MM) query params required");
+    // Always the caller's own school (a ?school= is ignored).
+    const { month } = req.query;
+    const { school } = req.user;
+    if (!month || !MONTH_RE.test(month)) {
+      return fail(res, 400, "month (YYYY-MM) query param required");
     }
 
     const { teachers, workingDays, schedule, schoolHoursPerDay } = await buildSchoolMonth(month, school);
@@ -508,9 +512,11 @@ const downloadPDF = async (req, res) => {
   try {
     if (!isAdmin(req)) return forbid(res);
 
-    const { school, month, teacherId } = req.query;
-    if (!school || !month || !MONTH_RE.test(month)) {
-      return fail(res, 400, "school and month (YYYY-MM) query params required");
+    // Always the caller's own school (a ?school= is ignored).
+    const { month, teacherId } = req.query;
+    const { school } = req.user;
+    if (!month || !MONTH_RE.test(month)) {
+      return fail(res, 400, "month (YYYY-MM) query param required");
     }
 
     const built = await buildSchoolMonth(month, school);

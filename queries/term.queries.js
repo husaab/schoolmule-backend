@@ -67,7 +67,7 @@ const termQueries = {
       s.name as school_name
     FROM terms t
     LEFT JOIN schools s ON t.school_id = s.school_id
-    WHERE t.school_id = $1
+    WHERE t.school_id = $1 AND t.school = $2
     ORDER BY t.start_date ASC
   `,
 
@@ -173,7 +173,7 @@ const termQueries = {
       academic_year = $4,
       is_active = $5,
       updated_at = NOW()
-    WHERE term_id = $6
+    WHERE term_id = $6 AND school = $7
     RETURNING *
   `,
 
@@ -183,7 +183,7 @@ const termQueries = {
    */
   deleteTerm: `
     DELETE FROM terms 
-    WHERE term_id = $1
+    WHERE term_id = $1 AND school = $2
     RETURNING *
   `,
 
@@ -209,7 +209,7 @@ const termQueries = {
     SET 
       is_active = TRUE,
       updated_at = NOW()
-    WHERE term_id = $1
+    WHERE term_id = $1 AND school = $2
     RETURNING *
   `,
 
@@ -222,7 +222,7 @@ const termQueries = {
     SET 
       is_active = FALSE,
       updated_at = NOW()
-    WHERE term_id = $1
+    WHERE term_id = $1 AND school = $2
     RETURNING *
   `,
 

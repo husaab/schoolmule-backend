@@ -24,14 +24,10 @@ const toCamel = row => ({
 });
 
 // GET /api/staff?school=<school>
+// The school is always the caller's own: a ?school= or body school is ignored
+// (staff, parents and their pickers only ever see their own directory).
 const getStaffBySchool = async (req, res) => {
-  const { school } = req.query;
-  if (!school) {
-    return res.status(400).json({ 
-      status: "failed", 
-      message: "Missing query parameter: school" 
-    });
-  }
+  const { school } = req.user;
 
   try {
     const { rows } = await db.query(staffQueries.selectStaffBySchool, [school]);
@@ -58,7 +54,7 @@ const getStaffById = async (req, res) => {
 
   try {
     const { rows } = await db.query(staffQueries.selectStaffById, [staffId]);
-    if (rows.length === 0) {
+    if (rows.length === 0 || String(rows[0].school) !== String(req.user.school)) {
       return res.status(404).json({ 
         status: "failed", 
         message: "Staff member not found" 
@@ -77,12 +73,13 @@ const getStaffById = async (req, res) => {
 // POST /api/staff
 const createStaff = async (req, res) => {
   const {
-    school, fullName, staffRole, teachingAssignments,
+    fullName, staffRole, teachingAssignments,
     homeroomGrade, email, phone, preferredContact,
     phoneContactHours, emailContactHours
   } = req.body;
+  const { school } = req.user;
 
-  if (!school || !fullName || !staffRole) {
+  if (!fullName || !staffRole) {
     return res.status(400).json({ 
       status: "failed", 
       message: "Missing required fields: school, fullName, staffRole" 
@@ -120,12 +117,13 @@ const createStaff = async (req, res) => {
 const updateStaff = async (req, res) => {
   const { staffId } = req.params;
   const {
-    school, fullName, staffRole, teachingAssignments,
+    fullName, staffRole, teachingAssignments,
     homeroomGrade, email, phone, preferredContact,
     phoneContactHours, emailContactHours
   } = req.body;
+  const { school } = req.user;
 
-  if (!staffId || !school) {
+  if (!staffId) {
     return res.status(400).json({ 
       status: "failed", 
       message: "Missing staffId or school" 
@@ -168,9 +166,9 @@ const updateStaff = async (req, res) => {
 // DELETE /api/staff/:staffId
 const deleteStaff = async (req, res) => {
   const { staffId } = req.params;
-  const { school } = req.body;
+  const { school } = req.user;
 
-  if (!staffId || !school) {
+  if (!staffId) {
     return res.status(400).json({ 
       status: "failed", 
       message: "Missing staffId or school" 

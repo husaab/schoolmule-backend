@@ -27,6 +27,7 @@ const PARENT_ALLOWED = [
   '/api/school-years',
   '/api/schools',
   '/api/school-assets',
+  '/api/staff',
   '/api/schedule-planner',
   '/api/users',
   '/api/profile',

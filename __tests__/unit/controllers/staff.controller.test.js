@@ -49,11 +49,12 @@ describe('Staff Controller', () => {
       expect(res.body.data).toEqual([]);
     });
 
-    it('should return 400 when school is missing', async () => {
-      const res = await authGet('/api/staff');
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
-      expect(res.body.message).toMatch(/school/i);
+    it("reads the caller's school, never the query's", async () => {
+      mockQueryResponse([]);
+      const res = await authGet('/api/staff?school=PLAYGROUND');
+      expect(res.status).toBe(200);
+      const db = require('../../__mocks__/config/database');
+      expect(db.query.mock.calls.find(([sql]) => /FROM staff/i.test(sql))[1]).toEqual([TEST_SCHOOL]);
     });
 
     it('should return 500 on database error', async () => {
@@ -120,13 +121,12 @@ describe('Staff Controller', () => {
       expect(res.body.message).toMatch(/fullName/);
     });
 
-    it('should return 400 when school is missing', async () => {
-      const res = await authPost('/api/staff').send({
-        fullName: 'Jane',
-        staffRole: 'Teacher',
-      });
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+    it("creates in the caller's school whatever the body says", async () => {
+      mockQueryResponse([{ staff_id: 's1', school: TEST_SCHOOL, full_name: 'Jane', staff_role: 'Teacher' }]);
+      const res = await authPost('/api/staff').send({ fullName: 'Jane', staffRole: 'Teacher', school: 'PLAYGROUND' });
+      expect(res.status).toBe(201);
+      const db = require('../../__mocks__/config/database');
+      expect(db.query.mock.calls.find(([sql]) => /INSERT INTO staff/i.test(sql))[1][0]).toBe(TEST_SCHOOL);
     });
 
     it('should return 500 on database error', async () => {
@@ -156,12 +156,12 @@ describe('Staff Controller', () => {
       expect(res.body.data.fullName).toBe('Updated Name');
     });
 
-    it('should return 400 when school is missing', async () => {
-      const res = await authPatch(`/api/staff/${uuidv4()}`).send({
-        fullName: 'Updated',
-      });
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+    it("only ever updates a row of the caller's school", async () => {
+      mockQueryResponse([]);
+      const res = await authPatch(`/api/staff/${uuidv4()}`).send({ fullName: 'Updated', school: 'PLAYGROUND' });
+      expect(res.status).toBe(404);
+      const db = require('../../__mocks__/config/database');
+      expect(db.query.mock.calls.find(([sql]) => /UPDATE staff/i.test(sql))[1].at(-1)).toBe(TEST_SCHOOL);
     });
 
     it('should return 404 when staff not found', async () => {
@@ -198,10 +198,12 @@ describe('Staff Controller', () => {
       expect(res.body.message).toMatch(/deleted/i);
     });
 
-    it('should return 400 when school is missing', async () => {
-      const res = await authDelete(`/api/staff/${uuidv4()}`).send({});
-      expect(res.status).toBe(400);
-      expect(res.body.status).toBe('failed');
+    it("only ever deletes a row of the caller's school", async () => {
+      mockQueryResponse([]);
+      const res = await authDelete(`/api/staff/${uuidv4()}`).send({ school: 'PLAYGROUND' });
+      expect(res.status).toBe(404);
+      const db = require('../../__mocks__/config/database');
+      expect(db.query.mock.calls.find(([sql]) => /DELETE FROM staff/i.test(sql))[1][1]).toBe(TEST_SCHOOL);
     });
 
     it('should return 404 when staff not found', async () => {
