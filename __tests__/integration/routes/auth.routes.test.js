@@ -55,11 +55,19 @@ describe('Integration: Auth Routes', () => {
         .post('/api/auth/register')
         .send({ email: 'john@test.com', password: 'password123' });
 
-      // Controller catches the error and RETURNS { status: 500, message: "Missing required fields" };
-      // responseParser reports success by the status it returns.
-      expect(res.status).toBe(500);
+      // A bad request is a 400, answered before a connection is taken.
+      expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
       expect(res.body.message).toContain('Missing required fields');
+    });
+
+    it('refuses a password shorter than 6 characters, as the form does', async () => {
+      const res = await request(app).post('/api/auth/register').set('X-Forwarded-For', '10.7.0.2').send({
+        username: 'Sara Mansour', email: 'short.pass@example.com', password: '12345', school: 'ALHAADIACADEMY', role: 'PARENT',
+      });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ success: false, code: 'PASSWORD_TOO_SHORT', message: 'Password must be at least 6 characters.' });
+      expect((await pool.query(`SELECT 1 FROM users WHERE email = 'short.pass@example.com'`)).rows).toHaveLength(0);
     });
 
     it('returns 400 when email already exists', async () => {
@@ -103,6 +111,46 @@ describe('Integration: Auth Routes', () => {
       expect(again.body).toMatchObject({ success: false, code: 'EMAIL_TAKEN' });
       const { rows } = await pool.query(`SELECT email FROM users WHERE LOWER(email) = 'sara.mansour@example.com'`);
       expect(rows).toEqual([{ email: 'sara.mansour@example.com' }]);
+    });
+
+    describe('an address that already has an account names the way in', () => {
+      const EXISTING_ID = '550e8400-e29b-41d4-a716-446655440041';
+      const existing = ({ password = 'some-hash', archived = false, role = 'PARENT' } = {}) => pool.query(
+        `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, is_archived)
+         VALUES ($1, 'omar.haddad@example.com', 'Omar Haddad', $2, 'Omar', 'Haddad', 'ALHAADIACADEMY', $3, true, true, $4)`,
+        [EXISTING_ID, password, role, archived],
+      );
+      let ip = 10;
+      const signUp = () => request(app).post('/api/auth/register').set('X-Forwarded-For', `10.7.1.${ip++}`).send({
+        username: 'Omar Haddad', email: 'Omar.Haddad@example.com', password: 'password123', school: 'ALHAADIACADEMY', role: 'PARENT',
+      });
+
+      it('an invite not yet accepted: use the invite, or reset for a new link', async () => {
+        await existing({ password: '!' });
+        const res = await signUp();
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('ACCOUNT_INVITED');
+        expect(res.body.message).toMatch(/invite email/);
+      });
+
+      it('an archived account: contact the school', async () => {
+        await existing({ archived: true, password: '!' });
+        const res = await signUp();
+        expect(res.status).toBe(400);
+        expect(res.body).toMatchObject({ code: 'ACCOUNT_ARCHIVED', message: 'This account has been archived. Contact your school admin.' });
+      });
+
+      it("a student's pending invite is not offered a reset", async () => {
+        await existing({ password: '!', role: 'STUDENT' });
+        expect((await signUp()).body.code).toBe('EMAIL_TAKEN');
+      });
+
+      it('a live account: sign in, and no second account is created', async () => {
+        await existing();
+        expect((await signUp()).body.code).toBe('EMAIL_TAKEN');
+        expect((await pool.query(`SELECT user_id FROM users WHERE LOWER(email) = 'omar.haddad@example.com'`)).rows)
+          .toEqual([{ user_id: EXISTING_ID }]);
+      });
     });
   });
 

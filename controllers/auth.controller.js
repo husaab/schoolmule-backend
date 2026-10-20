@@ -92,12 +92,29 @@ const AMBIGUOUS_EMAIL = Object.freeze({
 });
 // Signup refuses an address that already has an account, in any spelling:
 // a second spelling would be one more pair the rule above can't tell apart.
+// The refusal names the way in that works for that account.
+const ARCHIVED_MESSAGE = 'This account has been archived. Contact your school admin.';
 const EMAIL_TAKEN = Object.freeze({
   status: 400,
   code: 'EMAIL_TAKEN',
   message: 'An account with this email already exists. Sign in instead, or reset your password if you forgot it.',
 });
-const ARCHIVED_MESSAGE = 'This account has been archived. Contact your school admin.';
+const SIGNUP_INVITED = Object.freeze({
+  status: 400,
+  code: 'ACCOUNT_INVITED',
+  message: "You've already been invited with this email. Use the link in your invite email to set your password, or reset your password to get a new link.",
+});
+const SIGNUP_ARCHIVED = Object.freeze({ status: 400, code: 'ACCOUNT_ARCHIVED', message: ARCHIVED_MESSAGE });
+/** selectByEmailIgnoringCase rows (at least one) → the signup refusal for them. */
+const signupRefusalFor = (rows, typed) => {
+  const { user } = matchAccountByEmail(rows, typed);
+  if (user?.is_archived) return SIGNUP_ARCHIVED;
+  // A student's invite is accepted on /student-invite, never by a reset.
+  if (user?.invite_pending && user.role !== 'STUDENT') return SIGNUP_INVITED;
+  return EMAIL_TAKEN;
+};
+// Same minimum as the signup form and Forgot password.
+const SIGNUP_PASSWORD_MIN = 6;
 /** loginUser-style rows → { user } (null when none) or { ambiguous: true }. */
 const matchAccountByEmail = (rows, typed) => {
   if (rows.length <= 1) return { user: rows[0] || null };
@@ -216,30 +233,34 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
 
   const registerUser = async (req, res) => {
     const saltRounds = 10;
+    const { username, email, password, school, role } = req.body ?? {};
+
+    // A bad request is answered before a connection is taken.
+    if ([username, email, password, school, role].some((v) => typeof v !== 'string' || v.trim() === '')) {
+      return { status: 400, message: "Missing required fields" };
+    }
+    // The form checks this too; the API must not take a shorter one.
+    if (password.length < SIGNUP_PASSWORD_MIN) {
+      return { status: 400, code: 'PASSWORD_TOO_SHORT', message: `Password must be at least ${SIGNUP_PASSWORD_MIN} characters.` };
+    }
+    // Public signup can only ask for a teacher or parent account. Admins
+    // skip the approval queue at login, so letting a request pick ADMIN
+    // would hand out full access to anyone who finds this endpoint.
+    if (!SIGNUP_ROLES.includes(role)) {
+      return { status: 400, message: "Please sign up as a teacher or a parent." };
+    }
+
     const client = await db.connect();
 
     try {
       await client.query('BEGIN');
 
-      const { username, email, password, school, role } = req.body;
-
-      if (!username || !email || !password || !school || !role) {
-        throw { status: 400, message: "Missing required fields" };
-      }
-
-      // Public signup can only ask for a teacher or parent account. Admins
-      // skip the approval queue at login, so letting a request pick ADMIN
-      // would hand out full access to anyone who finds this endpoint.
-      if (!SIGNUP_ROLES.includes(role)) {
-        await client.query('ROLLBACK');
-        return { status: 400, message: "Please sign up as a teacher or a parent." };
-      }
-
       // users.email is unique only as typed, so look for every spelling.
-      const existing = await client.query(userQueries.selectByEmailIgnoringCase, [typedEmail(email)]);
+      const typed = typedEmail(email);
+      const existing = await client.query(userQueries.selectByEmailIgnoringCase, [typed]);
       if (existing.rowCount > 0) {
         await client.query('ROLLBACK');
-        return { ...EMAIL_TAKEN };
+        return { ...signupRefusalFor(existing.rows, typed) };
       }
 
       const hashedPassword = await bcrypt.hash(password, saltRounds);

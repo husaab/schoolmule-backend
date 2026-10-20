@@ -102,24 +102,14 @@ describe('POST /api/auth/register', () => {
     expect(res.body.data.isVerified).toBe(false);
   });
 
-  it('returns 400 when required fields are missing', async () => {
-    // Transaction: BEGIN succeeds, then controller throws {status:400},
-    // which triggers ROLLBACK
-    const db = require('../../__mocks__/config/database');
-    const client = db._mockClient;
-    // BEGIN
-    client.query.mockResolvedValueOnce({});
-    // ROLLBACK (from catch block after throw)
-    client.query.mockResolvedValueOnce({});
-
+  it('returns 400 when required fields are missing, without opening a transaction', async () => {
     const res = await request(app)
       .post(url)
-      .send({ email: 'test@test.com' }); // missing fields
+      .send({ email: 'test@test.com', username: 42 }); // missing, and not a string
 
-    // Controller catches the error and RETURNS it (not throws);
-    // responseParser keeps the status and reports success by it.
-    expect(res.status).toBe(500);
-    expect(res.body.success).toBe(false);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, message: 'Missing required fields' });
+    expect(db._mockClient.query).not.toHaveBeenCalled();
   });
 
   it('returns 400 when email already exists (23505)', async () => {
