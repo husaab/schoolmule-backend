@@ -15,6 +15,38 @@ process.env.MAIL_DOMAIN = process.env.MAIL_DOMAIN || 'test.com';
 // would otherwise consume a response another test queued for its controller.
 process.env.OBSERVE_DISABLED = 'true';
 
+// RBAC: the real access resolver reads users + staff_roles. Unit tests derive
+// the row from the token claims instead, so it never consumes a response a
+// test queued on the db mock. ADMIN tokens are full admins, TEACHER (and the
+// legacy 'STAFF' fixture) get the teacher default. Override per user with
+// helpers/mockAccess.js.
+jest.mock('../../services/access/accessStore', () => {
+  const actual = jest.requireActual('../../services/access/accessStore');
+  const rows = new Map();
+  const STAFF_BASES = ['ADMIN', 'TEACHER', 'PARENT', 'STUDENT'];
+  return {
+    ...actual,
+    __rows: rows,
+    invalidateUser: jest.fn(),
+    invalidateAll: jest.fn(),
+    fetchAccessRow: jest.fn(async (who) => {
+      const claimRole = who.baseRole ?? who.role;
+      return {
+        user_id: who.userId,
+        school: who.school,
+        base_role: STAFF_BASES.includes(claimRole) ? claimRole : 'TEACHER',
+        is_archived: false,
+        is_verified_school: true,
+        staff_role_id: null,
+        role_found: false,
+        role_name: null,
+        permissions: null,
+        ...(rows.get(who.userId) || {}),
+      };
+    }),
+  };
+});
+
 // Global afterEach for unit tests - resets all mocks between tests
 const db = require('../__mocks__/config/database');
 const supabase = require('../__mocks__/config/supabaseClient');
@@ -22,5 +54,6 @@ const supabase = require('../__mocks__/config/supabaseClient');
 afterEach(() => {
   db._reset();
   supabase._reset();
+  require('../../services/access/accessStore').__rows.clear();
   jest.clearAllMocks();
 });

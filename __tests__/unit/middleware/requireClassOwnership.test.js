@@ -1,6 +1,7 @@
 const requireClassOwnership = require('../../../middleware/requireClassOwnership');
 const db = require('../../__mocks__/config/database');
 const { mockQueryResponse } = require('../../helpers/mockDb');
+const { giveRole } = require('../../helpers/mockAccess');
 
 const makeRes = () => {
   const res = { statusCode: null, body: null };
@@ -101,5 +102,47 @@ describe('requireClassOwnership', () => {
     await requireClassOwnership(makeReq(TEACHER), res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(403);
+  });
+
+  describe('with RBAC roles', () => {
+    const OFFICE = { userId: 'office-1', role: 'ADMIN', school: 'ALHAADIACADEMY' };
+
+    it('refuses an admin whose role lacks classes.all', async () => {
+      giveRole('office-1', ['attendance.classes', 'students']);
+      mockQueryResponse([classRow()]);
+      const res = makeRes();
+      const next = jest.fn();
+      await requireClassOwnership(makeReq(OFFICE), res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('lets the same admin into class attendance through .or()', async () => {
+      giveRole('office-1', ['attendance.classes']);
+      mockQueryResponse([classRow()]);
+      const next = jest.fn();
+      await requireClassOwnership.or('attendance.classes')(makeReq(OFFICE), makeRes(), next);
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('lets a teacher holding classes.all into any class', async () => {
+      giveRole('teacher-2', ['classes.all']);
+      mockQueryResponse([classRow()]);
+      const next = jest.fn();
+      await requireClassOwnership(makeReq(OTHER_TEACHER), makeRes(), next);
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('still lets a restricted admin into a class they co-teach', async () => {
+      giveRole('office-1', []);
+      mockQueryResponse([classRow({ is_co_teacher: true })]);
+      const next = jest.fn();
+      await requireClassOwnership(makeReq(OFFICE), makeRes(), next);
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it('throws at mount on a mistyped key', () => {
+      expect(() => requireClassOwnership.or('attendance')).toThrow('Unknown permission key');
+    });
   });
 });

@@ -3,8 +3,8 @@
 // requireClassroomResource('item' | 'topic' | 'attachment' | 'quizAnswer') guards the
 // classroom routes addressed by a resource id instead of a class id. It loads
 // the row, then its class, and applies requireClassOwnership's rule: the class
-// is in the caller's school and the caller is an admin or teaches it (lead or
-// co-teacher). A missing (or soft-deleted) row is a 404.
+// is in the caller's school and the caller teaches it (lead or co-teacher) or
+// holds classes.all (RBAC). A missing (or soft-deleted) row is a 404.
 //
 // On success req.class = { classId, school, teacherId } plus one of
 // req.item = { itemId, classId }, req.topic = { topicId, classId },
@@ -14,6 +14,7 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { withAccess, classAccessGranted } = require('./access');
 const q = require('../queries/classwork.queries');
 const quizQueries = require('../queries/quiz.queries');
 
@@ -54,18 +55,13 @@ function requireClassroomResource(kind) {
   const spec = RESOURCES[kind];
   if (!spec) throw new Error(`Unknown classroom resource: ${kind}`);
 
-  return async (req, res, next) => {
+  return withAccess(async (req, res, next) => {
     try {
       const { rows } = await db.query(spec.sql, [req.params[spec.param], req.user.userId]);
       const row = rows[0];
       if (!row) return res.status(404).json({ status: 'failed', message: spec.notFound });
 
-      if (row.school !== req.user.school) return res.status(403).json(NOT_AUTHORIZED);
-      if (req.user.role === 'TEACHER') {
-        if (row.teacher_id !== req.user.userId && !row.is_co_teacher) return res.status(403).json(NOT_AUTHORIZED);
-      } else if (req.user.role !== 'ADMIN') {
-        return res.status(403).json(NOT_AUTHORIZED);
-      }
+      if (!classAccessGranted(req, row)) return res.status(403).json(NOT_AUTHORIZED);
 
       req.class = { classId: row.class_id, school: row.school, teacherId: row.teacher_id };
       spec.attach(req, row);
@@ -74,7 +70,7 @@ function requireClassroomResource(kind) {
       logger.error({ err: error, kind }, 'Error verifying classroom resource ownership');
       return res.status(500).json({ status: 'failed', message: 'Error checking access' });
     }
-  };
+  });
 }
 
 module.exports = requireClassroomResource;
