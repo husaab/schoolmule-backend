@@ -3,6 +3,11 @@
   Admin Users page: list, inspect, invite, edit and remove the accounts in the
   admin's own school. The school always comes from the verified token, never
   from the request, so an admin cannot reach into another tenant.
+
+  RBAC: the routes need the `users` permission. Someone holding it who is not
+  a full admin is held back by services/access/escalation.js: they can't touch
+  a full admin, make anyone an admin, give or change access roles, or preview
+  anyone but a student.
 */
 
 const db = require("../config/database");
@@ -16,12 +21,18 @@ const { toUser } = require("../utils/userMapper");
 const { getResend, sendOrThrow } = require("../utils/emailUtils");
 const { platformSender } = require("../services/email/senderIdentity");
 const { assertStudentCanSignIn } = require("../services/classroom/studentLogin");
+const escalation = require("../services/access/escalation");
+const { sessionAccess } = require("../services/access/access");
+const { invalidateUser } = require("../services/access/accessStore");
+const staffRoleQueries = require("../queries/staffRole.queries");
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
-// Roles an admin may preview. Previewing another admin shows the same UI the
-// admin already has, so it is not offered. A STUDENT preview keeps role
-// STUDENT, so the student fence and the read-only rule both apply to it.
-const IMPERSONATABLE_ROLES = ["TEACHER", "PARENT", "STUDENT"];
+// Roles an admin may preview. A full admin is never previewed (it shows the
+// same UI the admin already has); an admin on a restricted access role is, so
+// a full admin can check what that role sees (escalation.checkImpersonate). A
+// STUDENT preview keeps role STUDENT, so the student fence and the read-only
+// rule both apply to it.
+const IMPERSONATABLE_ROLES = ["ADMIN", "TEACHER", "PARENT", "STUDENT"];
 // Why a student can't be previewed: the student sign-in gate's verdicts, in
 // the admin's words. The preview would otherwise end at its first /auth/me.
 const STUDENT_PREVIEW_REFUSALS = {
@@ -32,7 +43,7 @@ const STUDENT_PREVIEW_REFUSALS = {
 };
 // The portals a preview can open in. A dual-role teacher (also a parent) may
 // be previewed in either; the view is one the target actually holds.
-const PREVIEW_VIEWS = ["TEACHER", "PARENT"];
+const PREVIEW_VIEWS = ["ADMIN", "TEACHER", "PARENT"];
 // Preview sessions are short: long enough to click through every page, short
 // enough that a forgotten tab does not stay signed in as someone else.
 const IMPERSONATION_TTL = "2h";
@@ -42,6 +53,24 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // page routes they do not exist: every :id that is a STUDENT answers 404, so
 // a student can never be re-roled into staff or archived from here.
 const isStudentLogin = (user) => String(user?.role ?? "") === "STUDENT";
+
+const refuse = (res, verdict) => res.status(verdict.status).json({ status: "failed", message: verdict.message });
+
+// The access role an invite or edit asks for. undefined = not sent (keep);
+// null = built-in. -> { error } | { provided, id }
+const STAFF_ROLES = ["ADMIN", "TEACHER"];
+const readAccessRole = async (body, role, school) => {
+  const provided = Object.prototype.hasOwnProperty.call(body ?? {}, "accessRoleId");
+  if (!provided) return { provided: false, id: undefined };
+  const id = body.accessRoleId || null;
+  if (id === null) return { provided: true, id: null };
+  if (typeof id !== "string" || !STAFF_ROLES.includes(role)) {
+    return { error: "Only admins and teachers can have an access role" };
+  }
+  const { rows } = await db.query(staffRoleQueries.byId, [id, school]).catch(() => ({ rows: [] }));
+  if (rows.length === 0) return { error: "Unknown access role" };
+  return { provided: true, id, name: rows[0].name };
+};
 
 const toBlockers = (row) => ({
   classes: row?.classes ?? [],
@@ -162,7 +191,7 @@ const getUserDetails = async (req, res) => {
   }
 };
 
-// POST /api/admin/users  { firstName, lastName, email, role }
+// POST /api/admin/users  { firstName, lastName, email, role, accessRoleId? }
 const inviteUser = async (req, res) => {
   const firstName = req.body?.firstName?.trim();
   const lastName = req.body?.lastName?.trim();
@@ -178,11 +207,15 @@ const inviteUser = async (req, res) => {
   if (!ROLES.includes(role)) {
     return res.status(400).json({ status: "failed", message: "Invalid role" });
   }
+  const verdict = escalation.checkInvite(req.access, { role, staffRoleId: req.body?.accessRoleId || null });
+  if (!verdict.ok) return refuse(res, verdict);
 
   let created;
   try {
+    const accessRole = await readAccessRole(req.body, role, req.user.school);
+    if (accessRole.error) return res.status(400).json({ status: "failed", message: accessRole.error });
     const { rows } = await db.query(adminUserQueries.insertInvitedUser, [
-      email, `${firstName} ${lastName}`, firstName, lastName, req.user.school, role,
+      email, `${firstName} ${lastName}`, firstName, lastName, req.user.school, role, accessRole.id ?? null,
     ]);
     created = rows[0];
   } catch (error) {
@@ -219,6 +252,8 @@ const resendInvite = async (req, res) => {
     if (rows.length === 0 || isStudentLogin(rows[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
+    const verdict = escalation.checkTouch(req.access, rows[0]);
+    if (!verdict.ok) return refuse(res, verdict);
     if (!rows[0].invite_pending) {
       return res.status(400).json({ status: "failed", message: "This user has already set a password" });
     }
@@ -234,7 +269,7 @@ const resendInvite = async (req, res) => {
   }
 };
 
-// PATCH /api/admin/users/:id  { firstName, lastName, role, isVerifiedSchool, staffTitle? }
+// PATCH /api/admin/users/:id  { firstName, lastName, role, isVerifiedSchool, staffTitle?, accessRoleId? }
 const MAX_STAFF_TITLE = 60;
 const updateUser = async (req, res) => {
   const { id } = req.params;
@@ -262,16 +297,37 @@ const updateUser = async (req, res) => {
   }
 
   try {
+    const { rows: found } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
+    const target = found[0];
+    if (!target || isStudentLogin(target)) {
+      return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    if (target.is_archived) {
+      return res.status(409).json({ status: "failed", message: "This account is archived. Restore it before editing." });
+    }
+
+    const accessRole = await readAccessRole(req.body, role, school);
+    if (accessRole.error) return res.status(400).json({ status: "failed", message: accessRole.error });
+    const verdict = escalation.checkEdit(req.access, selfId, target, {
+      role, staffRoleProvided: accessRole.provided, staffRoleId: accessRole.id,
+    });
+    if (!verdict.ok) return refuse(res, verdict);
+    // A parent can't hold an access role; moving someone to PARENT drops it.
+    const setRole = role === "PARENT" ? { provided: true, id: null } : accessRole;
+
     const { rows } = await db.query(adminUserQueries.updateUserInSchool, [
       firstName, lastName, role, isVerifiedSchool, id, school, role === "ADMIN" ? staffTitle : null,
+      setRole.provided, setRole.id ?? null,
     ]);
     if (rows.length === 0) {
-      // Either not ours, or archived (the update only touches active accounts).
-      const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-      if (existing.rows[0]?.is_archived && !isStudentLogin(existing.rows[0])) {
-        return res.status(409).json({ status: "failed", message: "This account is archived. Restore it before editing." });
-      }
       return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    invalidateUser(id);
+    if ((rows[0].staff_role_id ?? null) !== (target.staff_role_id ?? null) || rows[0].role !== target.role) {
+      logger.info(
+        { actor: selfId, target: id, school, fromRole: target.role, toRole: rows[0].role, fromAccessRole: target.staff_role_id ?? null, toAccessRole: rows[0].staff_role_id ?? null },
+        "User role or access role changed"
+      );
     }
     return res.status(200).json({ status: "success", message: "User updated", data: toUser(rows[0]) });
   } catch (error) {
@@ -297,6 +353,8 @@ const archiveUser = async (req, res) => {
     if (existing.length === 0 || isStudentLogin(existing[0])) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
+    const verdict = escalation.checkTouch(req.access, existing[0]);
+    if (!verdict.ok) return refuse(res, verdict);
     if (existing[0].is_archived) {
       return res.status(409).json({ status: "failed", message: "This account is already archived" });
     }
@@ -317,6 +375,7 @@ const archiveUser = async (req, res) => {
     if (rows.length === 0) {
       return res.status(409).json({ status: "failed", message: "This account is already archived" });
     }
+    invalidateUser(id);
     return res.status(200).json({ status: "success", message: "User archived", data: toUser(rows[0]) });
   } catch (error) {
     logger.error({ err: error }, "Failed to archive user");
@@ -330,14 +389,18 @@ const unarchiveUser = async (req, res) => {
   const { school } = req.user;
 
   try {
+    const { rows: existing } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
+    if (existing.length === 0 || isStudentLogin(existing[0])) {
+      return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    const verdict = escalation.checkTouch(req.access, existing[0]);
+    if (!verdict.ok) return refuse(res, verdict);
+
     const { rows } = await db.query(adminUserQueries.unarchiveUserInSchool, [id, school]);
     if (rows.length === 0) {
-      const existing = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
-      if (existing.rows.length === 0 || isStudentLogin(existing.rows[0])) {
-        return res.status(404).json({ status: "failed", message: "User not found" });
-      }
       return res.status(409).json({ status: "failed", message: "This account isn't archived" });
     }
+    invalidateUser(id);
     return res.status(200).json({ status: "success", message: "User restored", data: toUser(rows[0]) });
   } catch (error) {
     logger.error({ err: error }, "Failed to restore user");
@@ -354,6 +417,13 @@ const deleteUser = async (req, res) => {
   }
 
   try {
+    const { rows: existing } = await db.query(adminUserQueries.selectUserInSchool, [id, req.user.school]);
+    if (existing.length === 0 || isStudentLogin(existing[0])) {
+      return res.status(404).json({ status: "failed", message: "User not found" });
+    }
+    const verdict = escalation.checkTouch(req.access, existing[0]);
+    if (!verdict.ok) return refuse(res, verdict);
+
     // Never let a delete cascade through a teacher's classes.
     const { rows: lead } = await db.query(adminUserQueries.countLeadClasses, [id]);
     if (lead[0].count > 0) {
@@ -367,6 +437,7 @@ const deleteUser = async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ status: "failed", message: "User not found" });
     }
+    invalidateUser(id);
     return res.status(200).json({ status: "success", message: "User deleted" });
   } catch (error) {
     // Lead teacher on a class, homeroom teacher, etc. — records still point at them.
@@ -382,8 +453,9 @@ const deleteUser = async (req, res) => {
 };
 
 // POST /api/admin/users/:id/impersonate  { view? }
-// "View as": issues a short-lived, read-only token for a teacher or parent in
-// the admin's school so the admin can see exactly what that user sees. The
+// "View as": issues a short-lived, read-only token for a teacher, parent,
+// student or restricted admin in the admin's school (who may preview whom:
+// escalation.checkImpersonate; `users` holders preview students only) so the admin can see exactly what that user sees. The
 // token is the target's normal session payload plus `impersonator`, which
 // verifyUser uses to refuse every non-GET request and /auth/me echoes back so
 // the preview banner survives a reload. The response mirrors /auth/login so
@@ -403,7 +475,7 @@ const impersonateUser = async (req, res) => {
   }
 
   // A preview token can't reach here: verifyUser refuses every non-GET
-  // request that carries one, and requireAdmin rejects its TEACHER/PARENT role.
+  // request that carries one.
   if (id === admin.userId) {
     return res.status(400).json({ status: "failed", message: "You're already signed in as yourself" });
   }
@@ -418,6 +490,8 @@ const impersonateUser = async (req, res) => {
     if (!IMPERSONATABLE_ROLES.includes(user.role)) {
       return res.status(400).json({ status: "failed", message: "Only teachers, parents and students can be previewed" });
     }
+    const verdict = escalation.checkImpersonate(req.access, user);
+    if (!verdict.ok) return refuse(res, verdict);
     if (user.is_archived) {
       return res.status(409).json({ status: "failed", message: "Archived users can't be previewed. Restore them first." });
     }
@@ -448,9 +522,13 @@ const impersonateUser = async (req, res) => {
     if (!roles.includes(view)) {
       return res.status(400).json({
         status: "failed",
-        message: "This account has no parent view: it isn't linked to a student this year",
+        message: view === "PARENT"
+          ? "This account has no parent view: it isn't linked to a student this year"
+          : "This account can't be previewed in that view",
       });
     }
+    // The previewee's own access, so the preview shows exactly their pages.
+    const access = await sessionAccess({ userId: user.user_id, school: user.school, baseRole: user.role }, view);
 
     const target = toUser(user);
     const adminRow = adminRows[0];
@@ -501,6 +579,7 @@ const impersonateUser = async (req, res) => {
         activeTerm: activeTerm ? activeTerm.name : false,
         activeSchoolYear: yearContext.activeSchoolYear,
         schoolYears: yearContext.schoolYears,
+        ...access,
         impersonator,
         token,
       },

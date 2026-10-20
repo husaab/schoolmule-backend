@@ -53,7 +53,7 @@ const NON_ROUTER_MOUNTS = ['/api/finance/families/import']; // larger JSON body 
 // Path-less app.use(...) calls in server.js (global middleware, not routes).
 const GLOBAL_MIDDLEWARE = [
   'cors(corsOptions)', 'express.json()', 'globalLimiter', 'httpLogger',
-  'verifyUser', 'observeRequest', 'resolveSchoolYear', 'errorHandler',
+  'verifyUser', 'observeRequest', 'attachAccess', 'parentApiGate', 'resolveSchoolYear', 'errorHandler',
 ];
 
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');

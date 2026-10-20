@@ -57,6 +57,9 @@ const observeRoutes = require("./routes/observe.routes");
 const observeClientEventsRoutes = require("./routes/observeClientEvents.routes");
 const healthRoutes = require("./routes/health.routes");
 const observeRequest = require("./middleware/observeRequest");
+const { attachAccess } = require("./middleware/access");
+const parentApiGate = require("./middleware/parentApiGate");
+const staffRoleRoutes = require("./routes/staffRole.routes");
 const requirePlatformOwner = require("./middleware/requirePlatformOwner");
 
 const logger = require('./logger')
@@ -119,6 +122,11 @@ app.use("/api/observe/client-events", verifyUser.tokenOnly, observeClientEventsR
 
 app.use(verifyUser);
 app.use(observeRequest);
+// RBAC: req.access (permissions) for every signed-in request, read from the
+// database so a role change or an archived account applies at once. Then
+// parent views are held to the parent portal's API areas.
+app.use(attachAccess);
+app.use(parentApiGate);
 // Owner-gated console. Cross-school by design: mounted before resolveSchoolYear.
 app.use("/api/observe", requirePlatformOwner, observeRoutes);
 
@@ -131,6 +139,7 @@ app.use("/api/schools", schoolRoutes);
 app.use(resolveSchoolYear);
 
 app.use("/api/users", userRoutes);
+app.use("/api/admin/roles", staffRoleRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/admin/approvals", adminApprovalRoutes);
 app.use("/api/admin/student-requests", adminStudentRequestRoutes);

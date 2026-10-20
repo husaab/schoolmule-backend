@@ -37,7 +37,26 @@ async function fetchAccessRow(who, { fresh = false } = {}) {
   return row;
 }
 
+// For the session payload only (not cached): does this account lead or
+// co-teach a class of the school's active year? The UI uses it to show
+// Classes and Class Attendance to someone without classes.all.
+const TEACHES_SQL = `/* access:teaches */
+  SELECT EXISTS (
+    SELECT 1
+      FROM classes c
+      JOIN school_years sy ON sy.school_year_id = c.school_year_id AND sy.is_active = TRUE
+     WHERE c.school = $2
+       AND (c.teacher_id = $1
+            OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1))
+  ) AS teaches`;
+
+/** who = { userId, school } */
+async function teachesAnyClass(who) {
+  const { rows } = await db.query(TEACHES_SQL, [who.userId, who.school]);
+  return Boolean(rows[0] && rows[0].teaches);
+}
+
 const invalidateUser = (userId) => { cache.delete(userId); };
 const invalidateAll = () => { cache.clear(); };
 
-module.exports = { fetchAccessRow, invalidateUser, invalidateAll, SQL, TTL_MS };
+module.exports = { fetchAccessRow, teachesAnyClass, invalidateUser, invalidateAll, SQL, TEACHES_SQL, TTL_MS };

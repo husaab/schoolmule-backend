@@ -16,6 +16,8 @@ const {
 } = require('../../helpers/mockAuth');
 const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
 const { buildUserRow } = require('../../helpers/factories');
+const { giveRole, ROLE_ID } = require('../../helpers/mockAccess');
+const { KEYS } = require('../../../config/permissions');
 
 const app = getApp();
 
@@ -151,11 +153,53 @@ describe('POST /api/admin/users/:id/impersonate', () => {
     expect(res.status).toBe(404);
   });
 
-  it('refuses previewing another admin', async () => {
+  it('refuses previewing a full admin', async () => {
     mockQueryResponse([teacherRow({ role: 'ADMIN' })]);
     const res = await post(TEST_TEACHER_USER_ID);
-    expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/teachers, parents and students/i);
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(/full administrator cannot be previewed/i);
+  });
+
+  describe('RBAC access roles', () => {
+    it('lets a full admin preview a restricted admin, with that role\'s access', async () => {
+      giveRole(TEST_TEACHER_USER_ID, ['students', 'forms'], 'Office Staff');
+      mockHappyPath(teacherRow({ role: 'ADMIN', staff_role_id: ROLE_ID }));
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(200);
+      expect(res.body.data.role).toBe('ADMIN');
+      expect(res.body.data).toMatchObject({
+        permissions: ['students', 'forms'],
+        isFullAdmin: false,
+        accessRole: { id: ROLE_ID, name: 'Office Staff' },
+        teachesClasses: false,
+      });
+    });
+
+    it("returns a teacher's built-in access", async () => {
+      mockHappyPath(teacherRow());
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.body.data).toMatchObject({
+        permissions: ['report_cards', 'students', 'analytics', 'attendance.daily'].sort((a, b) => KEYS.indexOf(a) - KEYS.indexOf(b)),
+        isFullAdmin: false,
+        accessRole: null,
+        teachesClasses: true,
+      });
+    });
+
+    it('refuses a users holder previewing a teacher', async () => {
+      giveRole(TEST_ADMIN_USER_ID, ['users']);
+      mockQueryResponse([teacherRow()]);
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/full administrator can preview staff and parents/i);
+    });
+
+    it('refuses an admin without the users permission outright', async () => {
+      giveRole(TEST_ADMIN_USER_ID, ['forms']);
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('PERMISSION_DENIED');
+    });
   });
 
   describe('a student', () => {
@@ -182,6 +226,17 @@ describe('POST /api/admin/users/:id/impersonate', () => {
       expect(decoded).toMatchObject({ role: 'STUDENT', baseRole: 'STUDENT' });
       expect(decoded.impersonator.userId).toBe(TEST_ADMIN_USER_ID);
       expect(decoded.exp - decoded.iat).toBe(2 * 60 * 60);
+    });
+
+    it('lets someone who manages users (not a full admin) preview a student (D14)', async () => {
+      giveRole(TEST_ADMIN_USER_ID, ['users']);
+      mockQueryResponse([studentRow()]);
+      mockQueryResponse([signInContext()]);
+      mockQueryResponse([adminRow]);
+      mockQueryResponse([{ name: 'Term 1' }]);
+      const res = await post(TEST_TEACHER_USER_ID);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ role: 'STUDENT', permissions: [], isFullAdmin: false, teachesClasses: false });
     });
 
     it("refuses a student with no link to this school year (409)", async () => {

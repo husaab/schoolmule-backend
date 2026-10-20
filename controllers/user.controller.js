@@ -2,6 +2,9 @@ const db = require("../config/database");
 const bcrypt = require("bcrypt");
 const userQueries = require("../queries/user.queries");
 const logger = require("../logger");
+const { can, isFullAdmin } = require("../services/access/access");
+const { checkTouch } = require("../services/access/escalation");
+const { invalidateUser } = require("../services/access/accessStore");
 
 // email_token is a secret (it verifies the account) and is never sent out.
 const toUser = (user) => ({
@@ -18,11 +21,17 @@ const toUser = (user) => ({
   isVerified: user.is_verified,
 });
 
-const isAdmin = (req) => req.user?.role === "ADMIN";
+// Managing other accounts needs the `users` permission (RBAC). The Users page
+// (/api/admin/users) is the real admin surface; these legacy routes keep only
+// the same rules, never more.
+const isAdmin = (req) => can(req, "users");
+const LEGACY_ROLES = ["ADMIN", "TEACHER", "PARENT"];
 
-// A user may act on their own record; an admin may act on anyone in their school.
+// A user may act on their own record; a `users` holder may act on anyone in
+// their school except a full admin (unless they are one).
 const canAccess = (req, target) =>
-  target.user_id === req.user?.userId || (isAdmin(req) && target.school === req.user?.school);
+  target.user_id === req.user?.userId
+  || (isAdmin(req) && target.school === req.user?.school && checkTouch(req.access, target).ok);
 
 const forbidden = (res) =>
   res.status(403).json({ status: "failed", message: "You don't have access to this user" });
@@ -102,7 +111,7 @@ const deleteUser = async (req, res) => {
     if (!target) {
       return res.status(404).json({ status: "failed", message: "User not found or already deleted" });
     }
-    if (!isAdmin(req) || target.school !== req.user.school) return forbidden(res);
+    if (!isAdmin(req) || target.school !== req.user.school || !checkTouch(req.access, target).ok) return forbidden(res);
 
     // classes.teacher_id cascades in production: never delete a lead teacher.
     const { rows: lead } = await db.query(userQueries.countLeadClasses, [id]);
@@ -114,6 +123,7 @@ const deleteUser = async (req, res) => {
     }
 
     await db.query(userQueries.deleteUser, [id]);
+    invalidateUser(id);
 
     logger.info({ status: "success", message: "User deleted" });
     return res.status(200).json({ status: "success", message: "User deleted successfully" });
@@ -142,12 +152,14 @@ const updateUser = async (req, res) => {
     }
     if (!canAccess(req, target)) return forbidden(res);
 
-    // Nobody moves an account to another school, and only admins change roles.
-    if (school !== target.school || (role !== target.role && !isAdmin(req))) {
+    // Nobody moves an account to another school, and only full admins change
+    // roles here (the Users page applies the finer escalation rules).
+    if (school !== target.school || (role !== target.role && (!isFullAdmin(req) || !LEGACY_ROLES.includes(role)))) {
       return forbidden(res);
     }
 
     await db.query(userQueries.updateUserById, [email, username, firstName, lastName, school, role, id]);
+    invalidateUser(id);
 
     logger.info({ status: "success", message: "User updated" });
     return res.status(200).json({ status: "success", message: "User updated successfully" });

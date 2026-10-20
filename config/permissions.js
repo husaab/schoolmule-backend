@@ -90,7 +90,7 @@ const KEY_SET = new Set(KEYS);
 
 const ADMIN_DEFAULT = Object.freeze([...KEYS]);
 // Today's teacher access, made explicit. Their own classes come on top.
-const TEACHER_DEFAULT = Object.freeze(['students', 'analytics', 'report_cards', 'attendance.daily']);
+const TEACHER_DEFAULT = Object.freeze(['analytics', 'report_cards', 'students', 'attendance.daily']); // catalog order
 // "Start from" template in the roles editor; not seeded.
 const OFFICE_STAFF_PRESET = Object.freeze(
   KEYS.filter((k) => !['classes.all', 'classes.manage', 'analytics', 'finance'].includes(k)),

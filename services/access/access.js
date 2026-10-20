@@ -117,6 +117,16 @@ const accessPayload = (access) => ({
   accessRole: access.staffRoleId ? { id: access.staffRoleId, name: access.roleName } : null,
 });
 
+/**
+ * Everything a session payload carries about access: accessPayload plus
+ * teachesClasses. who = { userId, school, baseRole }; view = active role.
+ */
+async function sessionAccess(who, view) {
+  const access = await accessForSession(who, view);
+  const teachesClasses = access.isStaffView ? await store.teachesAnyClass(who) : false;
+  return { ...accessPayload(access), teachesClasses };
+}
+
 const accessErrorResponse = (res, err) => {
   if (err instanceof AccessRevokedError) {
     return res.status(err.status).json({
@@ -143,6 +153,7 @@ module.exports = {
   isStaffView,
   effectiveRole,
   accessPayload,
+  sessionAccess,
   accessErrorResponse,
   AccessRevokedError,
 };

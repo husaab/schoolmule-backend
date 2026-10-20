@@ -19,6 +19,11 @@ const toUser = (row) => ({
   archivedAt: row.archived_at,
   declinedAt: row.declined_at ?? null,
   invitePending: row.invite_pending,
+  /** RBAC access role (staff_roles); null = the built-in role for `role`. */
+  accessRoleId: row.staff_role_id ?? null,
+  accessRoleName: row.staff_role_name ?? null,
+  /** An ADMIN on the built-in Admin role: only another full admin may change them. */
+  isFullAdmin: row.role === 'ADMIN' && !row.staff_role_id,
   /** {style, skin, bg}; null = the neutral avatar (and for rows from queries that do not select it). */
   avatar: row.avatar ?? null,
   createdAt: row.created_at,

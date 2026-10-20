@@ -61,7 +61,7 @@ const userQueries = {
     `,
 
     selectById: `
-      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, avatar, photo_path, created_at, last_modified_at
+      SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, avatar, photo_path, staff_role_id, created_at, last_modified_at
       FROM users 
       WHERE user_id = $1
     `,

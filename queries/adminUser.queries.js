@@ -1,6 +1,11 @@
 // Queries for the admin Users page (/api/admin/users). Every statement is
 // pinned to a school so an admin can only ever see or touch their own tenant.
 
+// The account's access role (RBAC staff role): id and name, for every row the
+// Users page shows. A subquery so it also works in RETURNING.
+const ACCESS_ROLE_COLS = `staff_role_id,
+      (SELECT r.name FROM staff_roles r WHERE r.role_id = users.staff_role_id) AS staff_role_name`;
+
 const adminUserQueries = {
   //  $1 = school. Student logins are managed on Student accounts, not here.
   //  role::text so the filter parses even before the enum has 'STUDENT'.
@@ -9,7 +14,8 @@ const adminUserQueries = {
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, created_at, last_modified_at,
-      (password = '!') AS invite_pending
+      (password = '!') AS invite_pending,
+      ${ACCESS_ROLE_COLS}
     FROM users
     WHERE school = $1 AND role::text <> 'STUDENT'
     ORDER BY is_archived, lower(last_name), lower(first_name)
@@ -22,7 +28,8 @@ const adminUserQueries = {
       user_id, email, username, first_name, last_name, school, role, staff_title,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, created_at, last_modified_at,
-      (password = '!') AS invite_pending
+      (password = '!') AS invite_pending,
+      ${ACCESS_ROLE_COLS}
     FROM users
     WHERE user_id = $1 AND school = $2
   `,
@@ -80,17 +87,19 @@ const adminUserQueries = {
 
   //  Invited accounts get the unusable password '!' (bcrypt never matches it)
   //  until they set one through the invite link.
-  //  $1 = email, $2 = username, $3 = first_name, $4 = last_name, $5 = school, $6 = role
+  //  $1 = email, $2 = username, $3 = first_name, $4 = last_name, $5 = school, $6 = role,
+  //  $7 = staff_role_id|null (access role; staff only, the controller checks it)
   insertInvitedUser: `
     INSERT INTO users
       (user_id, email, username, password, first_name, last_name, school, role,
-       is_verified, is_verified_school, created_at, last_modified_at)
+       is_verified, is_verified_school, staff_role_id, created_at, last_modified_at)
     VALUES
-      (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, NOW(), NOW())
+      (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, $7, NOW(), NOW())
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
-              true AS invite_pending
+              true AS invite_pending,
+              ${ACCESS_ROLE_COLS}
   `,
 
   //  $1 = first_name, $2 = last_name, $3 = role, $4 = is_verified_school,
@@ -98,6 +107,8 @@ const adminUserQueries = {
   //  parents; the controller sends null for any other role). $3 is used only
   //  as the role: users.role is the enum "role" in prod, and a second, text
   //  use of $3 fails with "inconsistent types deduced for parameter $3".
+  //  $8 = whether to set the access role, $9 = staff_role_id|null (the
+  //  controller clears it for a PARENT and checks who may change it).
   updateUserInSchool: `
     UPDATE users
     SET first_name = $1::text,
@@ -106,12 +117,14 @@ const adminUserQueries = {
         role = $3,
         is_verified_school = $4,
         staff_title = $7,
+        staff_role_id = CASE WHEN $8::boolean THEN $9::uuid ELSE staff_role_id END,
         last_modified_at = NOW()
     WHERE user_id = $5 AND school = $6 AND is_archived = false AND role::text <> 'STUDENT'
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
-              (password = '!') AS invite_pending
+              (password = '!') AS invite_pending,
+              ${ACCESS_ROLE_COLS}
   `,
 
   //  What stops a user being archived: classes they lead and homeroom students
@@ -144,7 +157,8 @@ const adminUserQueries = {
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
-              (password = '!') AS invite_pending
+              (password = '!') AS invite_pending,
+              ${ACCESS_ROLE_COLS}
   `,
 
   //  Restore: back to an ordinary active account with school access.
@@ -161,7 +175,8 @@ const adminUserQueries = {
     RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
-              (password = '!') AS invite_pending
+              (password = '!') AS invite_pending,
+              ${ACCESS_ROLE_COLS}
   `,
 
   //  Classes a user leads in any year. In production classes.teacher_id is

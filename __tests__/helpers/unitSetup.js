@@ -44,6 +44,12 @@ jest.mock('../../services/access/accessStore', () => {
         ...(rows.get(who.userId) || {}),
       };
     }),
+    // Teachers teach; override with mockAccess.setRow(id, { teaches: true }).
+    teachesAnyClass: jest.fn(async (who) => {
+      const override = rows.get(who.userId);
+      if (override && 'teaches' in override) return override.teaches;
+      return (who.baseRole ?? who.role) === 'TEACHER';
+    }),
   };
 });
 
