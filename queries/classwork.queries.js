@@ -196,6 +196,11 @@ ORDER BY i.created_at, i.item_id`,
     ORDER BY sort_order NULLS LAST, created_at, assessment_id
     FOR UPDATE`,
 
+  //  Any column of this class (a category or not), read without a lock. $1 assessment_id, $2 class_id
+  selectColumnInClass: `
+    SELECT assessment_id, parent_assessment_id, COALESCE(is_parent, FALSE) AS is_parent
+    FROM assessments WHERE assessment_id = $1 AND class_id = $2`,
+
   //  Any column of this class (a category or not), locked. $1 assessment_id, $2 class_id
   lockColumnInClass: `
     SELECT assessment_id, class_id, parent_assessment_id, COALESCE(is_parent, FALSE) AS is_parent,

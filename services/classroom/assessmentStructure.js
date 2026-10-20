@@ -19,6 +19,7 @@ const CATEGORY_MOVE_MESSAGE = "A category can't move. Move the assessments insid
 const NOT_A_CATEGORY_MESSAGE = "Choose one of this class's categories.";
 const MAKE_CATEGORY_MESSAGE = 'Only an assessment that counts on its own can become a multiple assessment.';
 const NOT_FOUND_MESSAGE = 'That assessment is not in this class.';
+const CHANGED_MESSAGE = 'This assessment just changed. Reload the page and try again.';
 
 const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
 
@@ -41,13 +42,18 @@ const nextSortOrder = (children) => children.reduce((m, c) => Math.max(m, Number
  * its old category's place in the list. Returns whether anything changed.
  */
 async function moveAssessment(client, { classId, assessmentId, categoryId }) {
-  const col = await lockColumn(client, classId, assessmentId);
-  if (col.is_parent) throw httpError(400, CATEGORY_MOVE_MESSAGE);
-  const from = lower(col.parent_assessment_id) || null;
+  // Categories are locked before the column, in id order, as Classwork's
+  // writers lock them (category, then its columns), so the two never deadlock.
+  const seen = await one(client, q.selectColumnInClass, [assessmentId, classId]);
+  if (!seen) throw httpError(404, NOT_FOUND_MESSAGE);
+  if (seen.is_parent) throw httpError(400, CATEGORY_MOVE_MESSAGE);
+  const from = lower(seen.parent_assessment_id) || null;
   const to = lower(categoryId) || null;
   if (from === to) return { changed: false };
 
   await client.query(q.lockCategoriesInOrder, [[from, to].filter(Boolean).sort()]);
+  const col = await lockColumn(client, classId, assessmentId);
+  if ((lower(col.parent_assessment_id) || null) !== from) throw httpError(409, CHANGED_MESSAGE);
   const points = Number(col.weight_points || 0);
   let sortOrder = col.sort_order;
   if (to) {
@@ -109,6 +115,6 @@ async function listClassAssessments(client, classId) {
 }
 
 module.exports = {
-  CATEGORY_MOVE_MESSAGE, NOT_A_CATEGORY_MESSAGE, MAKE_CATEGORY_MESSAGE, NOT_FOUND_MESSAGE,
+  CATEGORY_MOVE_MESSAGE, NOT_A_CATEGORY_MESSAGE, MAKE_CATEGORY_MESSAGE, NOT_FOUND_MESSAGE, CHANGED_MESSAGE,
   moveAssessment, makeCategory, listClassAssessments, toAssessmentPayload,
 };

@@ -32,11 +32,12 @@ const moveAssessment = async (req, res) => {
     return failed(res, 400, 'categoryId must be a category id or null');
   }
   try {
-    const assessments = await inTransaction(async (client) => {
-      const { changed } = await structure.moveAssessment(client, { classId, assessmentId, categoryId });
-      if (changed) engine.invalidateCache(school);
-      return structure.listClassAssessments(client, classId);
+    const { changed, assessments } = await inTransaction(async (client) => {
+      const moved = await structure.moveAssessment(client, { classId, assessmentId, categoryId });
+      return { changed: moved.changed, assessments: await structure.listClassAssessments(client, classId) };
     });
+    // After the commit, so a grade read in between can't cache the old layout.
+    if (changed) engine.invalidateCache(school);
     return res.status(200).json({ status: 'success', data: { assessments } });
   } catch (error) {
     return fail(res, error, "The assessment couldn't be moved", { classId, assessmentId });
