@@ -11,11 +11,54 @@
 const { Resend } = require('resend');
 const logger = require('../logger');
 
+// Domains that can never take mail (RFC 2606, RFC 6761). Test tenants such as
+// PLAYGROUND give their synthetic people these addresses, so a send to one is
+// dropped here instead of bouncing through Resend and hurting the sender's
+// reputation.
+const RESERVED_DOMAIN = /(^|\.)(example\.(com|net|org)|test|example|invalid|localhost)$/i;
+
+const isReservedAddress = (recipient) => {
+  const match = /@([^@<>\s]+)>?\s*$/.exec(typeof recipient === 'string' ? recipient.trim() : '');
+  return Boolean(match) && RESERVED_DOMAIN.test(match[1]);
+};
+
+const asList = (value) => (value == null ? [] : [].concat(value));
+
+// Patches a Resend client's emails.send so reserved recipients are dropped. A
+// send left with no "to" takes its real cc as the "to"; one left with nobody
+// answers like an accepted send, so every caller treats it as delivered.
+const withReservedDomainGuard = (resend) => {
+  const send = resend.emails.send.bind(resend.emails);
+  resend.emails.send = async (payload) => {
+    const fields = ['to', 'cc', 'bcc'].filter((field) => payload[field] != null);
+    const suppressed = fields.flatMap((field) => asList(payload[field]).filter(isReservedAddress));
+    if (!suppressed.length) return send(payload);
+
+    const kept = Object.fromEntries(
+      fields.map((field) => [field, asList(payload[field]).filter((r) => !isReservedAddress(r))]),
+    );
+    if (!kept.to?.length) {
+      kept.to = [...(kept.cc || []), ...(kept.bcc || [])];
+      if (kept.cc) kept.cc = [];
+      if (kept.bcc) kept.bcc = [];
+    }
+    logger.info({ suppressed, subject: payload.subject }, 'Email to reserved test domain not sent');
+    if (!kept.to.length) return { data: { id: 'suppressed' }, error: null };
+    return send({ ...payload, ...kept });
+  };
+  return resend;
+};
+
 // One client for the whole process. Constructed lazily so a missing key only
-// fails at send time, not at boot of a worker that may never send.
+// fails at send time, not at boot of a worker that may never send. Tests and
+// local smoke stacks that capture mail set EMAIL_DELIVER_RESERVED_DOMAINS=true
+// to get the raw client.
 let client = null;
 const getResend = () => {
-  if (!client) client = new Resend(process.env.RESEND_API_KEY);
+  if (!client) {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    client = process.env.EMAIL_DELIVER_RESERVED_DOMAINS === 'true' ? resend : withReservedDomainGuard(resend);
+  }
   return client;
 };
 
@@ -61,6 +104,8 @@ const sendSafely = async (resend, payload, message, context = {}) => {
 module.exports = {
   cleanEmailArray,
   getResend,
+  isReservedAddress,
   sendOrThrow,
   sendSafely,
+  withReservedDomainGuard,
 };

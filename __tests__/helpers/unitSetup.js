@@ -14,6 +14,9 @@ process.env.MAIL_DOMAIN = process.env.MAIL_DOMAIN || 'test.com';
 // Observe capture is off in unit tests: its fire-and-forget last_seen UPDATE
 // would otherwise consume a response another test queued for its controller.
 process.env.OBSERVE_DISABLED = 'true';
+// Tests mock Resend and assert sends to example.com, so they take the raw
+// client rather than the reserved-domain guard (utils/emailUtils.js).
+process.env.EMAIL_DELIVER_RESERVED_DOMAINS = 'true';
 
 // RBAC: the real access resolver reads users + staff_roles. Unit tests derive
 // the row from the token claims instead, so it never consumes a response a

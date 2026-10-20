@@ -1,6 +1,9 @@
 // supertest's servers listen on 127.0.0.1 only (see the helper; M8 flakes).
 require('../../helpers/loopbackListen');
 const { Pool } = require('pg');
+// Tests mock Resend and assert sends to example.com, so they take the raw
+// client rather than the reserved-domain guard (utils/emailUtils.js).
+process.env.EMAIL_DELIVER_RESERVED_DOMAINS = 'true';
 
 // All tables in the test schema — order doesn't matter with CASCADE
 const ALL_TABLES = [
