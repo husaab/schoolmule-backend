@@ -90,6 +90,14 @@ const AMBIGUOUS_EMAIL = Object.freeze({
   code: 'EMAIL_AMBIGUOUS',
   message: "More than one account uses this email address with different capital letters. Type it exactly as it was set up, or ask your school to fix the account.",
 });
+// Signup refuses an address that already has an account, in any spelling:
+// a second spelling would be one more pair the rule above can't tell apart.
+const EMAIL_TAKEN = Object.freeze({
+  status: 400,
+  code: 'EMAIL_TAKEN',
+  message: 'An account with this email already exists. Sign in instead, or reset your password if you forgot it.',
+});
+const ARCHIVED_MESSAGE = 'This account has been archived. Contact your school admin.';
 /** loginUser-style rows → { user } (null when none) or { ambiguous: true }. */
 const matchAccountByEmail = (rows, typed) => {
   if (rows.length <= 1) return { user: rows[0] || null };
@@ -119,7 +127,7 @@ const openSession = async (req, user, { email, message, via = 'password', qrCard
   // Archived accounts keep their history but can't sign in.
   if (user.is_archived) {
     recordLogin(req, { email, user, outcome: 'archived' });
-    throw { status: 403, message: "This account has been archived. Contact your school admin." };
+    throw { status: 403, message: ARCHIVED_MESSAGE };
   }
 
   // Students also need classrooms on, a link to this year's row, consent and
@@ -227,6 +235,13 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
         return { status: 400, message: "Please sign up as a teacher or a parent." };
       }
 
+      // users.email is unique only as typed, so look for every spelling.
+      const existing = await client.query(userQueries.selectByEmailIgnoringCase, [typedEmail(email)]);
+      if (existing.rowCount > 0) {
+        await client.query('ROLLBACK');
+        return { ...EMAIL_TAKEN };
+      }
+
       const hashedPassword = await bcrypt.hash(password, saltRounds);
       const [firstName = '', lastName = ''] = username.split(" ");
 
@@ -316,13 +331,12 @@ const unusablePasswordHash = () => bcrypt.hash(crypto.randomBytes(32).toString('
 
     } catch (error) {
       await client.query('ROLLBACK');
-      logger.error({ err: error }, "User registration failed");
+      // Two signups for one address racing past the check above. An answer,
+      // not a failure: keep it out of the error log.
       if (error.code === '23505' && error.constraint === 'users_duplicate_email_key') {
-        return {
-          status: 400,
-          message: "An account with this email already exists.",
-        };
+        return { ...EMAIL_TAKEN };
       }
+      logger.error({ err: error }, "User registration failed");
 
       return {
         status: 500,
@@ -844,6 +858,10 @@ const requestPasswordReset = async (req, res) => {
     }
 
     const user = match.user;
+    // Same answer as sign-in: an archived account gets no link to use.
+    if (user.is_archived) {
+      return res.status(403).json({ success: false, code: 'ACCOUNT_ARCHIVED', message: ARCHIVED_MESSAGE });
+    }
     if (user.role === 'STUDENT') {
       const verdict = await studentPasswordVerdict(user);
       if (verdict) return res.status(verdict.status).json({ success: false, code: verdict.code, message: verdict.message });
@@ -854,7 +872,7 @@ const requestPasswordReset = async (req, res) => {
 
     const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
 
-    await sendResetEmail(user.email, resetLink);
+    await sendResetEmail(user, resetLink);
 
     res.json({ success: true, message: 'Password reset email sent.' });
   } catch (err) {
@@ -863,31 +881,61 @@ const requestPasswordReset = async (req, res) => {
   }
 };
 
-const sendResetEmail = async (to, url) => {
-  const html = getResetEmailHTML({ name: 'there', url }); // you can customize name later
+const sendResetEmail = async (user, url) => {
+  const html = getResetEmailHTML({ name: user.first_name?.trim() || 'there', url });
   await sendOrThrow(getResend(), {
     ...platformSender('reset'),
-    to,
+    to: user.email,
     subject: 'Reset your password',
     html
   });
 };
 
 const RESET_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const INVALID_RESET_TOKEN = { success: false, message: 'Invalid or expired token.' };
+// The code lets the page tell a dead link from a refused password.
+const INVALID_RESET_TOKEN = { success: false, code: 'RESET_LINK_INVALID', message: 'Invalid or expired token.' };
+
+/**
+ * The account a password link opens, as { user }, or the refusal as
+ * { status, body }. The page checks the link before asking for a password
+ * and again on submit, and both answer the same: an unknown, expired or used
+ * link and an archived account are a dead link, and a student in a
+ * Google-only school is told to use Google.
+ */
+const resetLinkVerdict = async (token) => {
+  if (typeof token !== 'string' || !RESET_TOKEN_RE.test(token)) return { status: 400, body: INVALID_RESET_TOKEN };
+
+  const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
+  if (tokenResult.rowCount === 0) return { status: 400, body: INVALID_RESET_TOKEN };
+
+  const { rows: [user] } = await db.query(userQueries.selectById, [tokenResult.rows[0].user_id]);
+  // An archived account keeps its records but never gets a new password.
+  if (!user || user.is_archived) return { status: 400, body: INVALID_RESET_TOKEN };
+
+  if (user.role === 'STUDENT') {
+    const settings = await getClassroomSettings(user.school);
+    if (settings.studentSignIn === 'google_only') {
+      return {
+        status: PASSWORD_SIGN_IN_OFF.status,
+        body: { success: false, code: PASSWORD_SIGN_IN_OFF.code, message: PASSWORD_SIGN_IN_OFF.message },
+      };
+    }
+  }
+  return { user };
+};
 
 const validateResetToken = async (req, res) => {
-  const { token } = req.query;
-  if (typeof token !== 'string' || !RESET_TOKEN_RE.test(token)) return res.status(400).json(INVALID_RESET_TOKEN);
-
   try {
-    const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
+    const verdict = await resetLinkVerdict(req.query.token);
+    if (!verdict.user) return res.status(verdict.status).json(verdict.body);
 
-    if (tokenResult.rowCount === 0) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired token.' });
-    }
-
-    res.json({ success: true, message: 'Token is valid.' });
+    // Students choose a password under the invite's stricter rule; the page
+    // shows it before they type.
+    res.json({
+      success: true,
+      message: 'Token is valid.',
+      data: { passwordRule: verdict.user.role === 'STUDENT' ? 'student' : 'standard' },
+    });
   } catch (err) {
     logger.error({ err }, "Reset token validation failed");
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -902,30 +950,21 @@ const resetPassword = async (req, res) => {
   }
 
   try {
-    const tokenResult = await db.query(passwordQueries.validatePasswordResetToken, [token]);
-    if (tokenResult.rowCount === 0) return res.status(400).json(INVALID_RESET_TOKEN);
+    const verdict = await resetLinkVerdict(token);
+    if (!verdict.user) return res.status(verdict.status).json(verdict.body);
+    const { user } = verdict;
 
-    const { user_id } = tokenResult.rows[0];
-    const { rows: [user] } = await db.query(userQueries.selectById, [user_id]);
-    // An archived account keeps its records but never gets a new password.
-    if (!user || user.is_archived) return res.status(400).json(INVALID_RESET_TOKEN);
-
-    // Students follow the invite's rules: none in a Google-only school, and
-    // the same password policy as accepting an invite.
+    // Students follow the invite's password policy.
     if (user.role === 'STUDENT') {
-      const settings = await getClassroomSettings(user.school);
-      if (settings.studentSignIn === 'google_only') {
-        return res.status(PASSWORD_SIGN_IN_OFF.status).json({ success: false, code: PASSWORD_SIGN_IN_OFF.code, message: PASSWORD_SIGN_IN_OFF.message });
-      }
       const problem = passwordProblem(newPassword, { email: user.email, firstName: user.first_name, lastName: user.last_name });
       if (problem) return res.status(400).json({ success: false, code: 'PASSWORD_WEAK', message: problem });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    await db.query(userQueries.updatePassword, [hashedPassword, user_id]);
+    await db.query(userQueries.updatePassword, [hashedPassword, user.user_id]);
     // Every open link of this user dies, not just the one used.
-    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user_id]);
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user.user_id]);
 
     res.json({ success: true, message: 'Password updated successfully.' });
   } catch (err) {

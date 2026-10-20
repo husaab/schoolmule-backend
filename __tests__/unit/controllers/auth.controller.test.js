@@ -85,8 +85,8 @@ describe('POST /api/auth/register', () => {
       is_verified_school: false,
     });
 
-    // Transaction: BEGIN, createUser, COMMIT
-    mockTransactionSequence([{ rows: [createdUser] }]);
+    // Transaction: BEGIN, no account in any spelling, createUser, COMMIT
+    mockTransactionSequence([{ rows: [] }, { rows: [createdUser] }]);
     // getActiveTermForSchool query
     const term = buildTermRow({ name: 'Term 1 2025-2026' });
     mockQueryResponse([term]);
@@ -139,6 +139,23 @@ describe('POST /api/auth/register', () => {
     // responseParser wraps the returned { status: 400, message: ... }
     expect(res.status).toBe(400);
     expect(res.body.message).toContain('email already exists');
+    expect(res.body.code).toBe('EMAIL_TAKEN');
+  });
+
+  it('refuses an address that already has an account in another spelling, before inserting', async () => {
+    const body = buildRegisterBody({ email: 'Pat.Kareem@Example.com' });
+    const client = db._mockClient;
+    client.query.mockResolvedValueOnce({}); // BEGIN
+    client.query.mockResolvedValueOnce({ rows: [buildUserRow({ email: 'pat.kareem@example.com' })], rowCount: 1 });
+    client.query.mockResolvedValueOnce({}); // ROLLBACK
+
+    const res = await request(app).post(url).send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, code: 'EMAIL_TAKEN' });
+    const sql = client.query.mock.calls.map((c) => c[0]);
+    expect(sql).toContain(userQueries.selectByEmailIgnoringCase);
+    expect(sql).not.toContain(userQueries.createUser);
   });
 });
 
@@ -598,6 +615,32 @@ describe('POST /api/auth/request-password-reset', () => {
     expect(res.body.message).toContain('reset email sent');
   });
 
+  it('greets the person by first name in the email', async () => {
+    const user = buildUserRow({ first_name: 'Rania' });
+    mockQueryResponse([user], 1);
+    mockQueryResponse([buildPasswordResetTokenRow({ user_id: user.user_id })]);
+    mockSend.mockClear();
+
+    // Its own network: the route allows 3 requests per 15 minutes per IP.
+    const res = await request(app).post(url).set('X-Forwarded-For', '10.20.0.1').send({ email: user.email });
+
+    expect(res.status).toBe(200);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ to: user.email });
+    expect(mockSend.mock.calls[0][0].html).toContain('Hi Rania,');
+  });
+
+  it('refuses an archived account like sign-in does, without making a link', async () => {
+    mockQueryResponse([buildUserRow({ is_archived: true })], 1);
+
+    const res = await request(app).post(url).set('X-Forwarded-For', '10.20.0.2').send({ email: 'archived@test.com' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ success: false, code: 'ACCOUNT_ARCHIVED' });
+    expect(res.body.message).toMatch(/archived/i);
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 404 when email not found', async () => {
     mockQueryResponse([], 0);
 
@@ -617,6 +660,8 @@ describe('GET /api/auth/validate-reset-token', () => {
     // uuid is mocked in this file; a reset token is always a real UUID.
     const tokenRow = buildPasswordResetTokenRow({ token: '3b0c2f1e-8d4a-4c6b-9e2f-1a2b3c4d5e6f' });
     mockQueryResponse([tokenRow], 1);
+    // selectById: the link's account, live
+    mockQueryResponse([buildUserRow({ user_id: tokenRow.user_id, role: 'TEACHER', is_archived: false })], 1);
 
     const res = await request(app)
       .get(url)
@@ -624,6 +669,18 @@ describe('GET /api/auth/validate-reset-token', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual({ passwordRule: 'standard' });
+  });
+
+  it("a link to an archived account is a dead link (RESET_LINK_INVALID)", async () => {
+    const tokenRow = buildPasswordResetTokenRow({ token: '3b0c2f1e-8d4a-4c6b-9e2f-1a2b3c4d5e6f' });
+    mockQueryResponse([tokenRow], 1);
+    mockQueryResponse([buildUserRow({ user_id: tokenRow.user_id, is_archived: true })], 1);
+
+    const res = await request(app).get(url).query({ token: tokenRow.token });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, code: 'RESET_LINK_INVALID' });
   });
 
   it('returns 400 for invalid/expired token', async () => {

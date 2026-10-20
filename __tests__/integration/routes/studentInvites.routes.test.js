@@ -517,6 +517,30 @@ describe('Integration: Student invitations', () => {
       expect((await pub('/api/auth/login').send({ email: 'office@example.com', password: 'wrong' })).status).toBe(401);
     });
 
+    it("a student's Forgot password link announces the student rule, and the page shows why a password is refused", async () => {
+      mockSend.mockClear();
+      await invite([amalId]);
+      const secret = secretIn(mockSend.mock.calls[0][0].html);
+      expect((await pub('/api/auth/student-invite/accept').send({ token: secret, password: 'cedar-river' })).status).toBe(200);
+
+      expect((await pub('/api/auth/request-password-reset').send({ email: 'amal.haddad@example.com' })).status).toBe(200);
+      const { rows: [{ token }] } = await pool.query(`SELECT token FROM password_reset_tokens`);
+      const check = () => request(getApp()).get(`/api/auth/validate-reset-token?token=${token}`).set('X-Forwarded-For', addr);
+
+      const valid = await check();
+      expect(valid.status).toBe(200);
+      expect(valid.body.data).toEqual({ passwordRule: 'student' });
+
+      const weak = await pub('/api/auth/reset-password').send({ token, newPassword: 'amalhaddad1' });
+      expect(weak.status).toBe(400);
+      expect(weak.body).toMatchObject({ code: 'PASSWORD_WEAK', message: "Don't use your name in your password." });
+
+      // Switching the school to Google-only turns the open link off on both routes.
+      await pool.query(`UPDATE school_classroom_settings SET student_sign_in = 'google_only'`);
+      expect((await check()).body.code).toBe('PASSWORD_SIGN_IN_OFF');
+      expect((await pub('/api/auth/reset-password').send({ token, newPassword: 'pine-harbour-7' })).body.code).toBe('PASSWORD_SIGN_IN_OFF');
+    });
+
     it("a pending student's first Google sign-in on /login ends the invite, kills the reset token and tells guardians once (R2)", async () => {
       await pool.query(
         `INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school)

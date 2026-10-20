@@ -89,6 +89,20 @@ describe('Integration: Auth Routes', () => {
       // Controller catches the duplicate key error and RETURNS { status: 400 }.
       expect(res.body.success).toBe(false);
       expect(res.body.message).toContain('email already exists');
+      expect(res.body.code).toBe('EMAIL_TAKEN');
+    });
+
+    it('refuses the same address in another spelling, so sign-in never sees two accounts', async () => {
+      const signUp = (email) => request(app).post('/api/auth/register').set('X-Forwarded-For', '10.7.0.1').send({
+        username: 'Sara Mansour', email, password: 'password123', school: 'ALHAADIACADEMY', role: 'PARENT',
+      });
+      expect((await signUp('sara.mansour@example.com')).status).toBe(200);
+
+      const again = await signUp(' Sara.Mansour@Example.com ');
+      expect(again.status).toBe(400);
+      expect(again.body).toMatchObject({ success: false, code: 'EMAIL_TAKEN' });
+      const { rows } = await pool.query(`SELECT email FROM users WHERE LOWER(email) = 'sara.mansour@example.com'`);
+      expect(rows).toEqual([{ email: 'sara.mansour@example.com' }]);
     });
   });
 
@@ -255,6 +269,28 @@ describe('Integration: Auth Routes', () => {
       const res = await reset({ token: await token(), newPassword: 'long-enough' });
       expect(res.status).toBe(400);
       expect((await pool.query(`SELECT password FROM users WHERE user_id = $1`, [TEST_USER_ID])).rows[0].password).toBe('old-hash');
+    });
+
+    it('a dead link answers RESET_LINK_INVALID, so the page can tell it from a refused password', async () => {
+      await insertUser();
+      const t = await token();
+      const check = () => request(app).get(`/api/auth/validate-reset-token?token=${t}`).set('X-Forwarded-For', '10.8.0.2');
+      expect((await check()).body).toMatchObject({ success: true, data: { passwordRule: 'standard' } });
+
+      expect((await reset({ token: t, newPassword: 'long-enough' })).status).toBe(200);
+      for (const res of [await check(), await reset({ token: t, newPassword: 'long-enough' })]) {
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('RESET_LINK_INVALID');
+      }
+    });
+
+    it('"Forgot password" makes no link for an archived account and says why', async () => {
+      await insertUser({ archived: true });
+      const res = await request(app).post('/api/auth/request-password-reset').set('X-Forwarded-For', '10.8.0.3')
+        .send({ email: 'pat.reset@example.com' });
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ success: false, code: 'ACCOUNT_ARCHIVED', message: 'This account has been archived. Contact your school admin.' });
+      expect((await pool.query(`SELECT 1 FROM password_reset_tokens`)).rows).toHaveLength(0);
     });
   });
 
