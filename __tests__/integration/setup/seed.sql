@@ -2013,6 +2013,8 @@ ALTER TABLE student_accounts ADD COLUMN IF NOT EXISTS guardians_notified_at TIME
 ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS student_email_domains TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS student_sign_in TEXT NOT NULL DEFAULT 'google_or_password'
   CHECK (student_sign_in IN ('google_or_password','google_only'));
+-- parent_summary_01: the parents' weekly summary has its own switch.
+ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS parent_summary BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ============================================================
 -- Student account requests (database/migrations/student_account_requests_01.sql)

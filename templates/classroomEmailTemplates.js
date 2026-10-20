@@ -249,7 +249,7 @@ function childSummary(child, { dueHeading }) {
  */
 function weeklySummaryEmail({
   recipientFirstName, frequency = 'weekly', dayName, rangeLabel, children, link: url,
-  dailyLink = null, offLink = null, prefsLink = null, schoolName, schoolInfo,
+  dailyLink = null, offLink = null, prefsLink = null, setupLink = null, schoolName, schoolInfo,
 }) {
   const daily = frequency === 'daily';
   const period = daily ? 'day' : 'week';
@@ -266,7 +266,11 @@ function weeklySummaryEmail({
     ? [daily ? (prefsLink ? link('Get it weekly', prefsLink) : null) : (dailyLink ? link('Get it daily', dailyLink) : null), link('Turn it off', offLink)]
       .filter(Boolean).join(' · ')
     : '';
-  const prefsLine = `${escapeHtml(when)}${links ? ` ${links}.` : ''} Announcements always arrive right away.`;
+  // A parent with no account (setupLink) gets it at the address on file: no
+  // settings to change, and announcements may not reach that address.
+  const prefsLine = setupLink
+    ? escapeHtml(when)
+    : `${escapeHtml(when)}${links ? ` ${links}.` : ''} Announcements always arrive right away.`;
 
   return {
     subject,
@@ -279,7 +283,9 @@ function weeklySummaryEmail({
         paragraph(escapeHtml(intro)),
         sections,
         '<div style="height:12px;"></div>',
-        button('Open SchoolMule', url),
+        setupLink
+          ? paragraph('Set up your free parent account to see grades, work and messages any time.') + button('Set up your parent account', setupLink)
+          : button('Open SchoolMule', url),
       ].join(''),
       footer: footerWith([prefsLine], schoolInfo, schoolName),
     }),

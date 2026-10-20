@@ -9,7 +9,10 @@
 //   missing_alert  a guardian address, from 4 pm: one job per child × item
 //                  that went missing in (yesterday 4 pm, today 4 pm], sent as
 //                  one email per family; not for daily-summary readers
-//   weekly_summary a guardian address, from 4 pm on their day (or daily)
+//   weekly_summary a guardian address, from 4 pm on their day (or daily), in
+//                  schools with the parents' summary on (its own switch, apart
+//                  from the student portal); also an address with no account
+//                  (weekly, the school's day, no way to turn it off)
 // Students are emailed like T10's announcement emails: classrooms on, student
 // email on for their grade, a usable login (consent, set password, address,
 // at or above the sign-in grade), re-checked when the email is sent. Every
@@ -270,8 +273,10 @@ const prefsLinks = (recipient) => (recipient.role === 'PARENT'
   }
   : { dailyLink: null, offLink: null, prefsLink: null });
 
-async function childrenWork(parentId, now, since) {
-  const { rows: children } = await db.query(q.selectGuardianChildren, [parentId]);
+// A summary's children: an account's, or an address's with no account.
+async function childrenWork(recipient, now, since) {
+  const { rows: children } = await db.query(q.selectSummaryChildren, [
+    recipient.user_id || null, recipient.user_id ? null : recipient.email]);
   if (!children.length) return { children, work: new Map() };
   const earliest = digest.addDays(digest.torontoParts(now).date, -digest.MISSING_DAYS);
   const { rows } = await db.query(q.selectChildWork, [children.map((c) => c.student_id), iso(now), iso(since), earliest]);
@@ -326,9 +331,9 @@ async function buildSummary(job, recipient, now) {
   const windows = digest.sweepWindows(now);
   const since = job.payload?.since ? new Date(job.payload.since) : (frequency === 'daily' ? windows.day : windows.week);
   const until = job.payload?.until ? new Date(job.payload.until) : windows.until;
-  const { children, work } = await childrenWork(recipient.user_id, now, since);
+  const { children, work } = await childrenWork(recipient, now, since);
   if (!children.length) return { skip: 'nothing to report' };
-  const { rows: postRows } = await db.query(q.selectChildPosts, [children.map((c) => c.student_id), iso(since), iso(until), recipient.user_id]);
+  const { rows: postRows } = await db.query(q.selectChildPosts, [children.map((c) => c.student_id), iso(since), iso(until), recipient.user_id || null]);
   // A post for the whole school or grade reaches several children: list it once, under the first.
   const seen = new Set();
   const posts = new Map();
@@ -353,7 +358,8 @@ async function buildSummary(job, recipient, now) {
         title: p.title,
         authorName: p.author_name,
         note: digest.excerpt(p.body, POST_NOTE_MAX) || null,
-        ackLink: p.ack_requested && !p.acked
+        // "Got it" needs a sign-in; an address with no account gets the post without it.
+        ackLink: p.ack_requested && !p.acked && recipient.user_id
           ? `${base()}/parent/messages?tab=announcements&announcement=${p.announcement_id}&ack=1`
           : null,
       })),
@@ -370,6 +376,8 @@ async function buildSummary(job, recipient, now) {
       children: blocks,
       link: `${base()}/parent/classes`,
       ...prefsLinks(recipient),
+      // No account yet: a link to set one up instead of the portal.
+      setupLink: recipient.user_id ? null : `${base()}/signup/${String(job.school).toLowerCase()}/parent`,
       ...school,
     }),
   };
@@ -394,6 +402,11 @@ async function schoolOf(school) {
   return { schoolInfo, schoolName: getSchoolName(school) };
 }
 
+// A summary for an address with no account: no name, no role, no preferences.
+const addressRecipient = (job) => ({
+  user_id: null, first_name: null, last_name: null, role: null, email: job.recipient_email, is_archived: false, invite_pending: false,
+});
+
 /**
  * Renders one claimed job as things stand now and sends it once.
  * @returns {Promise<'sent'|'skipped'>} throws when the send fails (the caller retries)
@@ -408,7 +421,9 @@ async function processClassroomJob(job, { now = new Date() } = {}) {
   };
   const build = BUILDERS[job.kind];
   if (!build) return skip('unknown kind');
-  const { rows: [recipient] } = job.recipient_id ? await db.query(q.selectRecipient, [job.recipient_id]) : { rows: [] };
+  const { rows: [recipient] } = job.recipient_id
+    ? await db.query(q.selectRecipient, [job.recipient_id])
+    : { rows: job.kind === 'weekly_summary' ? [addressRecipient(job)] : [] };
   if (!recipient || !recipient.email) return skip('no recipient');
   if (recipient.is_archived) return skip('recipient archived');
   if (recipient.invite_pending) return skip('invite pending');

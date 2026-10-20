@@ -147,7 +147,7 @@ describe('Integration: classroom emails', () => {
     await user(BILAL_USER_ID, 'bilal.karim@example.com', 'Bilal', 'Karim', 'STUDENT');
     await user(SAMI_USER_ID, 'sami.haddad@example.com', 'Sami', 'Haddad', 'STUDENT');
     await user(DALIA_USER_ID, 'dalia.nassar@example.com', 'Dalia', 'Nassar', 'STUDENT', '!'); // invite pending
-    await pool.query(`INSERT INTO school_classroom_settings (school, enabled) VALUES ('ALHAADIACADEMY', TRUE)`);
+    await pool.query(`INSERT INTO school_classroom_settings (school, enabled, parent_summary) VALUES ('ALHAADIACADEMY', TRUE, TRUE)`);
 
     sciId = await makeClass('Science', '5');
     engId = await makeClass('English', '3');
@@ -757,6 +757,86 @@ describe('Integration: classroom emails', () => {
       ['rania.karim@example.com', 'daily:2030-10-20'],
       ['rania.karim@example.com', 'daily:2030-10-21'],
     ]);
+  });
+
+  // The parents' summary has its own switch (owner, 2026-10-19): it does not
+  // need the Student Portal on, and it reaches parents without an account too.
+  const gradedThisWeek = async (studentId, title, score) => {
+    const it = await assignment({ title, dueAt: hoursFrom(FRIDAY, -50).toISOString(), gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
+    await publishGrade({ itemId: it.itemId, assessmentId: it.gradebook.assessmentId, studentId, score, at: hoursFrom(FRIDAY, -5) });
+  };
+
+  it("the parents' weekly summary has its own switch: it goes out with the Student Portal off, and not while its switch is off", async () => {
+    await gradedThisWeek(amalId, 'Seed journal', 8);
+    await settings({ enabled: false });
+    await classroom.runSchedule(FRIDAY);
+    const rows = await jobs('weekly_summary');
+    expect(rows.map((r) => r.recipient_email)).toEqual(['mona.haddad@example.com', 'rania.karim@example.com']);
+    expect((await processJob(rows.find((r) => r.recipient_email === 'mona.haddad@example.com'), FRIDAY)).outcome).toBe('sent');
+    expect(text(sent()[0].html)).toContain('Seed journal · Science 8/10');
+
+    await pool.query(`DELETE FROM classroom_email_jobs`);
+    classroom.resetScheduleState();
+    await settings({ enabled: true, parent_summary: false });
+    await classroom.runSchedule(FRIDAY);
+    expect(await jobs('weekly_summary')).toEqual([]);
+  });
+
+  it('parents without an account get the summary at the address on file, one per address, with a set-up link and no settings links', async () => {
+    // Lina has no account: her address is on the guardian records of Dalia and Yusuf.
+    const yusufId = await makeStudent('Yusuf Nassar', '5', sciId, null);
+    await guardian(null, daliaId, 'Lina Nassar', 'Lina.Nassar@example.com');
+    await guardian(null, yusufId, 'Lina Nassar', 'lina.nassar@example.com');
+    // Omar has no guardian record: his mother's and father's addresses on the student record are used.
+    const omarId = await makeStudent('Omar Saleh', '5', sciId, null);
+    await pool.query(`UPDATE students SET mother_email = 'noor.saleh@example.com', father_email = 'karim.saleh@example.com' WHERE student_id = $1`, [omarId]);
+    // An invited parent who never set a password counts as no account.
+    const INVITED_ID = '550e8400-e29b-41d4-a716-446655440007';
+    await user(INVITED_ID, 'reem.ali@example.com', 'Reem', 'Ali', 'PARENT', '!');
+    const zaidId = await makeStudent('Zaid Ali', '5', sciId, null);
+    await guardian(INVITED_ID, zaidId, 'Reem Ali', 'reem.ali@example.com');
+    for (const [id, title] of [[daliaId, 'Leaf rubbing'], [yusufId, 'Bark rubbing'], [omarId, 'Seed chart'], [zaidId, 'Root sketch']]) {
+      await gradedThisWeek(id, title, 7);
+    }
+    await pool.query(
+      `INSERT INTO announcements (school, school_year_id, scope, class_id, title, body, author_id, author_role, published_at, ack_requested)
+       VALUES ('ALHAADIACADEMY', $1, 'class', $2, 'Science Centre trip', 'Please sign the permission form by Monday.', $3, 'TEACHER', $4, TRUE)`,
+      [yearId, sciId, TEACHER_ID, hoursFrom(FRIDAY, -24)],
+    );
+
+    await classroom.runSchedule(FRIDAY);
+    const rows = await jobs('weekly_summary');
+    expect(rows.map((r) => [r.recipient_email, r.recipient_id])).toEqual([
+      ['karim.saleh@example.com', null],
+      ['lina.nassar@example.com', null],
+      ['mona.haddad@example.com', MONA_ID],
+      ['noor.saleh@example.com', null],
+      ['rania.karim@example.com', RANIA_ID],
+      ['reem.ali@example.com', null],
+    ]);
+
+    const lina = rows.find((r) => r.recipient_email === 'lina.nassar@example.com');
+    expect((await processJob(lina, FRIDAY)).outcome).toBe('sent');
+    const [email] = sent();
+    expect(email.to).toEqual(['lina.nassar@example.com']);
+    const body = text(email.html);
+    expect(body).toContain('Hi there,');
+    expect(body).toContain('Dalia · Grade 5');
+    expect(body).toContain('Yusuf · Grade 5');
+    expect(body).toContain('Leaf rubbing · Science 7/10');
+    expect(body).toContain('Bark rubbing · Science 7/10');
+    expect(body).not.toContain('Amal');
+    expect(body).toContain('Science Centre trip');
+    // No account: nothing to sign in to for "Got it" or settings, and no way to switch it off; a link to set one up.
+    expect(email.html).not.toContain('ack=1');
+    expect(email.html).not.toContain('/parent/notifications');
+    expect(email.html).toContain('http://localhost:3000/signup/alhaadiacademy/parent');
+    expect(body).toContain('You get this summary on Fridays.');
+
+    expect((await processJob(rows.find((r) => r.recipient_email === 'noor.saleh@example.com'), FRIDAY)).outcome).toBe('sent');
+    expect(text(sent()[1].html)).toContain('Seed chart · Science 7/10');
+    expect((await processJob(rows.find((r) => r.recipient_email === 'reem.ali@example.com'), FRIDAY)).outcome).toBe('sent');
+    expect(text(sent()[2].html)).toContain('Root sketch · Science 7/10');
   });
 
   it('two publishes inside one 15-minute bucket produce one graded job listing both grades', async () => {

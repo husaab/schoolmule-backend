@@ -205,4 +205,19 @@ describe('weeklySummaryEmail', () => {
     expect(text(html)).toContain('You get this summary on Fridays. Announcements always arrive right away.');
     expect(html).not.toContain('set=off');
   });
+  it('to a parent with no account: a link to set one up instead of the portal, and no way to turn it off', () => {
+    const { html } = t.weeklySummaryEmail({
+      ...base, recipientFirstName: null, dailyLink: null, offLink: null, prefsLink: null,
+      setupLink: 'http://localhost:3000/signup/alhaadiacademy/parent',
+    });
+    const body = text(html);
+    expect(body).toContain('Hi there,');
+    expect(body).toContain('Set up your parent account');
+    expect(body).toContain('to see grades, work and messages any time');
+    expect(html).toContain('href="http://localhost:3000/signup/alhaadiacademy/parent"');
+    expect(body).not.toContain('Open SchoolMule');
+    expect(body).toContain('You get this summary on Fridays.');
+    expect(body).not.toContain('Turn it off');
+    expect(body).not.toContain('Announcements always arrive right away');
+  });
 });

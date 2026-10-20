@@ -34,6 +34,10 @@ const STUDENT_EMAIL_OK = (s) => `(${s}.is_archived IS NOT TRUE AND ${STUDENT_EMA
 
 // A guardian account that can read the email and open the portal.
 const GUARDIAN_OK = (u) => `(${u}.is_archived IS NOT TRUE AND ${u}.password <> '!' AND TRIM(COALESCE(${u}.email, '')) <> '')`;
+// A guardian record (ps) with no usable account (u, LEFT JOINed): none, or an
+// invite never taken up; and the address it reaches, lowercased.
+const NO_ACCOUNT_LINK = `(ps.parent_id IS NULL OR (u.password = '!' AND u.is_archived IS NOT TRUE))`;
+const NO_ACCOUNT_ADDRESS = `LOWER(TRIM(COALESCE(NULLIF(TRIM(u.email), ''), ps.parent_email, '')))`;
 
 // The student row of the school's active year (rows are per year; a school
 // with no year at all keeps its NULL-year rows).
@@ -242,29 +246,60 @@ const classroomEmailQueries = {
     RETURNING job_id`,
 
   //  The summaries due today: daily ones, and weekly ones whose day (the
-  //  parent's, else the school's) is today. Whether there is anything to say
-  //  is decided at send time. The windows are fixed 4 pm Toronto instants
-  //  (classroomDigest.sweepWindows), so a re-run reads the same ones.
+  //  parent's, else the school's) is today, in schools with the parents'
+  //  summary on (its own switch, apart from the student portal). Parents with
+  //  an account get it on their own day and frequency; an address with no
+  //  account (a guardian record with none, or an invite never taken up; else
+  //  a child's mother and father addresses when the child has no guardian
+  //  record) gets it weekly on the school's day, and cannot turn it off. One
+  //  per address. Whether there is anything to say is decided at send time.
+  //  The windows are fixed 4 pm Toronto instants (classroomDigest.sweepWindows),
+  //  so a re-run reads the same ones.
   //  $1 now, $2 Toronto weekday, $3 weekly key, $4 daily key, $5 weekly since,
   //  $6 daily since, $7 until
   enqueueSummaries: `
     INSERT INTO classroom_email_jobs ${JOB_COLUMNS}
-    SELECT DISTINCT ON (LOWER(TRIM(gu.email)))
-           'weekly_summary', CASE WHEN f.daily THEN $4::text ELSE $3::text END,
-           gu.user_id, LOWER(TRIM(gu.email)), s.school,
-           jsonb_build_object('frequency', CASE WHEN f.daily THEN 'daily' ELSE 'weekly' END,
-                              'since', CASE WHEN f.daily THEN $6::timestamptz ELSE $5::timestamptz END,
+    SELECT DISTINCT ON (r.email)
+           'weekly_summary', CASE WHEN r.daily THEN $4::text ELSE $3::text END,
+           r.user_id, r.email, r.school,
+           jsonb_build_object('frequency', CASE WHEN r.daily THEN 'daily' ELSE 'weekly' END,
+                              'since', CASE WHEN r.daily THEN $6::timestamptz ELSE $5::timestamptz END,
                               'until', $7::timestamptz),
            $1::timestamptz
-    FROM parent_students ps
-    JOIN students s ON s.student_id = ps.student_id AND s.is_archived IS NOT TRUE
-    JOIN school_classroom_settings scs ON scs.school = s.school AND scs.enabled
-    JOIN users gu ON gu.user_id = ps.parent_id AND ${GUARDIAN_OK('gu')}
-    LEFT JOIN notification_prefs np ON np.user_id = gu.user_id
-    CROSS JOIN LATERAL (SELECT COALESCE(np.summary_frequency, 'weekly') = 'daily' AS daily) f
-    WHERE ${ACTIVE_YEAR('s')} AND COALESCE(np.weekly_summary, TRUE)
-      AND (f.daily OR COALESCE(np.summary_dow, scs.summary_dow, 5) = $2::int)
-    ORDER BY LOWER(TRIM(gu.email)), gu.user_id
+    FROM (
+      SELECT gu.user_id, LOWER(TRIM(gu.email)) AS email, s.school,
+             COALESCE(np.summary_frequency, 'weekly') = 'daily' AS daily,
+             COALESCE(np.summary_dow, scs.summary_dow, 5) AS dow,
+             COALESCE(np.weekly_summary, TRUE) AS wanted
+      FROM parent_students ps
+      JOIN students s ON s.student_id = ps.student_id AND s.is_archived IS NOT TRUE
+      JOIN school_classroom_settings scs ON scs.school = s.school AND scs.parent_summary
+      JOIN users gu ON gu.user_id = ps.parent_id AND ${GUARDIAN_OK('gu')}
+      LEFT JOIN notification_prefs np ON np.user_id = gu.user_id
+      WHERE ${ACTIVE_YEAR('s')}
+      UNION ALL
+      SELECT NULL::uuid, ${NO_ACCOUNT_ADDRESS}, s.school, FALSE, scs.summary_dow, TRUE
+      FROM parent_students ps
+      JOIN students s ON s.student_id = ps.student_id AND s.is_archived IS NOT TRUE
+      JOIN school_classroom_settings scs ON scs.school = s.school AND scs.parent_summary
+      LEFT JOIN users u ON u.user_id = ps.parent_id
+      WHERE ${ACTIVE_YEAR('s')} AND ${NO_ACCOUNT_LINK}
+        AND ${NO_ACCOUNT_ADDRESS} <> ''
+      UNION ALL
+      SELECT NULL::uuid, LOWER(TRIM(home.email)), s.school, FALSE, scs.summary_dow, TRUE
+      FROM students s
+      JOIN school_classroom_settings scs ON scs.school = s.school AND scs.parent_summary
+      CROSS JOIN LATERAL (VALUES (s.mother_email), (s.father_email)) AS home(email)
+      WHERE s.is_archived IS NOT TRUE AND ${ACTIVE_YEAR('s')}
+        AND NOT EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id)
+        AND TRIM(COALESCE(home.email, '')) <> ''
+    ) r
+    WHERE r.wanted AND (r.daily OR r.dow = $2::int)
+      -- An address that belongs to a parent's account follows that account's choices.
+      AND (r.user_id IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM parent_students pa JOIN users gu ON gu.user_id = pa.parent_id AND ${GUARDIAN_OK('gu')}
+        WHERE LOWER(TRIM(gu.email)) = r.email))
+    ORDER BY r.email, r.user_id NULLS LAST
     ${ON_CONFLICT}
     RETURNING job_id`,
 
@@ -449,6 +484,23 @@ const classroomEmailQueries = {
     JOIN school_classroom_settings scs ON scs.school = s.school AND scs.enabled
     WHERE s.is_archived IS NOT TRUE AND ${ACTIVE_YEAR('s')}
       AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id AND ps.parent_id = $1)
+    ORDER BY ${GRADE_RANK('s.grade::text')} DESC, s.name, s.student_id`,
+
+  //  The children a summary covers, oldest grade first, in schools with the
+  //  parents' summary on: an account's ($1), or an address's with no account
+  //  ($2, lowercased): its guardian records with no account (or an invite
+  //  never taken up), and children with no guardian record whose mother or
+  //  father address it is. Exactly one of $1, $2 is set.
+  selectSummaryChildren: `
+    SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id, ${studentAvatarSql('s')}
+    FROM students s
+    JOIN school_classroom_settings scs ON scs.school = s.school AND scs.parent_summary
+    WHERE s.is_archived IS NOT TRUE AND ${ACTIVE_YEAR('s')}
+      AND (EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id AND ps.parent_id = $1::uuid)
+        OR EXISTS (SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+                   WHERE ps.student_id = s.student_id AND ${NO_ACCOUNT_LINK} AND ${NO_ACCOUNT_ADDRESS} = $2::text)
+        OR (NOT EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id)
+            AND $2::text IN (LOWER(TRIM(s.mother_email)), LOWER(TRIM(s.father_email)))))
     ORDER BY ${GRADE_RANK('s.grade::text')} DESC, s.name, s.student_id`,
 
   //  The children's visible work that may belong in a summary or alert: due

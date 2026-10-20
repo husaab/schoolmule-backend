@@ -170,6 +170,7 @@ describe('PUT /api/admin/classroom-settings', () => {
       studentEmailFromGrade: null,
       parentsReadPrivateComments: false,
       summaryDow: 4,
+      parentSummary: false, // the mocked row has no parent_summary
       studentPhotos: true,
       consentNoticeVersion: '2026-11',
       studentEmailDomains: [],

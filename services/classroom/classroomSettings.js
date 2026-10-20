@@ -1,8 +1,10 @@
 // services/classroom/classroomSettings.js
 //
 // The school's classroom settings (who gets a student login, QR cards,
-// student email, the parents' weekly summary day...). One row per school;
-// a school that never saved them gets DEFAULTS with updatedAt null.
+// student email, the parents' weekly summary and its day...). One row per
+// school; a school that never saved them gets DEFAULTS with updatedAt null.
+// `enabled` is the student portal (student sign-in and student email);
+// `parentSummary` is the parents' weekly summary, its own switch.
 
 const db = require('../../config/database');
 const q = require('../../queries/classroomSettings.queries');
@@ -15,6 +17,7 @@ const DEFAULTS = Object.freeze({
   studentEmailFromGrade: '1',
   parentsReadPrivateComments: true,
   summaryDow: 5,
+  parentSummary: false,
   studentPhotos: false,
   consentNoticeVersion: '2026-10',
   // The domains of the school's student addresses ([] = no domain checks).
@@ -23,12 +26,13 @@ const DEFAULTS = Object.freeze({
   studentSignIn: 'google_or_password',
 });
 
-// Keys every PUT must carry. The two invitation settings came later and are
-// optional, so the body main's frontend sends keeps working (they then keep
+// Keys every PUT must carry. The settings that came later (the two
+// invitation ones, parentSummary) are optional, as is consentNoticeVersion
+// now that it is not shown, so an older body keeps working (they then keep
 // their saved values).
 const REQUIRED_KEYS = [
   'enabled', 'loginFromGrade', 'qrUntilGrade', 'studentEmailFromGrade',
-  'parentsReadPrivateComments', 'summaryDow', 'studentPhotos', 'consentNoticeVersion',
+  'parentsReadPrivateComments', 'summaryDow', 'studentPhotos',
 ];
 
 const MAX_NOTICE_VERSION = 40;
@@ -46,6 +50,7 @@ const toSettings = (row) => ({
   studentEmailFromGrade: row.student_email_from_grade ?? null,
   parentsReadPrivateComments: row.parents_read_private_comments,
   summaryDow: Number(row.summary_dow),
+  parentSummary: row.parent_summary === true,
   studentPhotos: row.student_photos,
   consentNoticeVersion: row.consent_notice_version,
   studentEmailDomains: row.student_email_domains ?? [],
@@ -96,7 +101,11 @@ function validateSettings(body, current = DEFAULTS) {
   if (!Number.isInteger(body.summaryDow) || body.summaryDow < 0 || body.summaryDow > 6) {
     return { error: 'summaryDow must be a whole number from 0 (Sunday) to 6 (Saturday)' };
   }
-  const version = typeof body.consentNoticeVersion === 'string' ? body.consentNoticeVersion.trim() : '';
+  const parentSummary = has(body, 'parentSummary') ? body.parentSummary : (current.parentSummary ?? DEFAULTS.parentSummary);
+  if (typeof parentSummary !== 'boolean') return { error: 'parentSummary must be true or false' };
+  const version = has(body, 'consentNoticeVersion')
+    ? (typeof body.consentNoticeVersion === 'string' ? body.consentNoticeVersion.trim() : '')
+    : (current.consentNoticeVersion ?? DEFAULTS.consentNoticeVersion);
   if (version.length < 1 || version.length > MAX_NOTICE_VERSION) {
     return { error: `consentNoticeVersion must be 1 to ${MAX_NOTICE_VERSION} characters` };
   }
@@ -119,6 +128,7 @@ function validateSettings(body, current = DEFAULTS) {
       studentEmailFromGrade: body.studentEmailFromGrade,
       parentsReadPrivateComments: body.parentsReadPrivateComments,
       summaryDow: body.summaryDow,
+      parentSummary,
       studentPhotos: body.studentPhotos,
       consentNoticeVersion: version,
       studentEmailDomains,
@@ -142,6 +152,7 @@ async function saveSettings(school, value, userId) {
     userId || null,
     value.studentEmailDomains,
     value.studentSignIn,
+    value.parentSummary,
   ]);
   return toSettings(rows[0]);
 }

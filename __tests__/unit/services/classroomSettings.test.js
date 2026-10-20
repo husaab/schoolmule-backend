@@ -46,3 +46,26 @@ describe('validateSettings', () => {
     });
   });
 });
+
+// The parents' weekly summary has its own switch (owner, 2026-10-19); the
+// consent notice version is no longer shown, so a body may leave it out.
+describe('validateSettings: parentSummary and consentNoticeVersion', () => {
+  it('parentSummary is off by default and kept when a body leaves it out', () => {
+    expect(DEFAULTS.parentSummary).toBe(false);
+    expect(validateSettings(mainBody, DEFAULTS).value.parentSummary).toBe(false);
+    expect(validateSettings(mainBody, { ...current, parentSummary: true }).value.parentSummary).toBe(true);
+  });
+
+  it('parentSummary can be turned on or off on its own, whatever the student portal switch says', () => {
+    expect(validateSettings({ ...mainBody, enabled: false, parentSummary: true }, DEFAULTS).value).toMatchObject({ enabled: false, parentSummary: true });
+    expect(validateSettings({ ...mainBody, parentSummary: false }, { ...current, parentSummary: true }).value.parentSummary).toBe(false);
+    expect(validateSettings({ ...mainBody, parentSummary: 'yes' }, DEFAULTS).error).toBe('parentSummary must be true or false');
+  });
+
+  it('a body without consentNoticeVersion keeps the saved one', () => {
+    const { consentNoticeVersion, ...withoutVersion } = mainBody;
+    expect(consentNoticeVersion).toBe('2026-10');
+    expect(validateSettings(withoutVersion, { ...current, consentNoticeVersion: '2027-01' }).value.consentNoticeVersion).toBe('2027-01');
+    expect(validateSettings(withoutVersion, DEFAULTS).value.consentNoticeVersion).toBe('2026-10');
+  });
+});
