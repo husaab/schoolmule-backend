@@ -30,7 +30,7 @@ const engine = require('../services/analyticsEngine');
 const publishQueries = require('../queries/assessmentPublish.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
-const { askFields } = require('../utils/parentLinks');
+const { parentAskLink, speakLabel } = require('../utils/parentLinks');
 const { cleanEmailArray, getResend, sendOrThrow } = require('../utils/emailUtils');
 const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
@@ -696,13 +696,18 @@ async function loadEmailContext(classId, school) {
   return { className, schoolInfo, teacherName, askable };
 }
 
-/** A task's rows, each with its "Ask <teacher> about this" link when the class allows it. */
-function linesWithAsk(task, classId, { teacherName, askable }) {
-  if (!askable) return task.lines;
-  return task.lines.map((line) => ({
-    ...line,
-    ...askFields({ studentId: task.studentId, classId, assessmentId: line.assessmentId, about: line.name, teacherName }),
-  }));
+/**
+ * The email's "Speak to <teacher> about this" button, beside View in Parent
+ * Portal, when the class allows it. It opens a new message about the first
+ * row's item; the parent can pick another item of the class in the window.
+ */
+function speakButton(task, classId, { teacherName, askable }) {
+  const [first] = task.lines;
+  if (!askable || !first) return null;
+  return {
+    label: speakLabel(teacherName, task.lines.length),
+    url: parentAskLink({ studentId: task.studentId, classId, assessmentId: first.assessmentId, about: first.name }),
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -756,7 +761,8 @@ const previewPublishEmail = async (req, res) => {
       html: getAssessmentPublishedEmailHTML({
         studentName: sample.studentName,
         className,
-        assessments: linesWithAsk(sample, classId, emailContext),
+        assessments: sample.lines,
+        speak: speakButton(sample, classId, emailContext),
         runningGradeLabel: sample.runningGradeLabel,
         batchComment: trimmedBatchComment,
         schoolName: getSchoolName(school),
@@ -839,7 +845,8 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
         html: getAssessmentPublishedEmailHTML({
           studentName: task.studentName,
           className,
-          assessments: linesWithAsk(task, classId, emailContext),
+          assessments: task.lines,
+          speak: speakButton(task, classId, emailContext),
           runningGradeLabel: task.runningGradeLabel,
           batchComment: batchComment || null,
           schoolName,

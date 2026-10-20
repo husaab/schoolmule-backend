@@ -1,4 +1,4 @@
-const { parentAskLink, askLabel, askFields } = require('../../../utils/parentLinks');
+const { parentAskLink, askLabel, askFields, speakLabel } = require('../../../utils/parentLinks');
 
 describe('parentAskLink', () => {
   const env = process.env.FRONTEND_URL;
@@ -24,6 +24,14 @@ describe('askFields', () => {
   it("gives an email row its link and the teacher's name", () => {
     const fields = askFields({ studentId: 's1', classId: 'c1', assessmentId: 'a1', about: 'Quiz 1', teacherName: 'Ms. Clarke' });
     expect(fields).toEqual({ askUrl: parentAskLink({ studentId: 's1', classId: 'c1', assessmentId: 'a1', about: 'Quiz 1' }), askLabel: 'Ask Ms. Clarke about this' });
+  });
+});
+
+describe('speakLabel', () => {
+  it('names the teacher, and says "these grades" for several', () => {
+    expect(speakLabel('Sara Clarke')).toBe('Speak to Sara Clarke about this');
+    expect(speakLabel('Sara Clarke', 3)).toBe('Speak to Sara Clarke about these grades');
+    expect(speakLabel(null)).toBe('Speak to the teacher about this');
   });
 });
 

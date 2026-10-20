@@ -93,18 +93,23 @@ function button(label, url) {
   </table>`;
 }
 
-/** Buttons side by side, e.g. "Got it ✓" and "Read in SchoolMule": the first filled, the rest outlined. */
+/**
+ * Buttons side by side, e.g. "View in Parent Portal" and "Speak to … about
+ * this": the first filled, the rest outlined. Each sits in an inline-block, so
+ * on a narrow phone the second wraps under the first instead of overflowing.
+ */
 function buttonRow(buttons) {
-  const cells = buttons
-    .map(({ label, url }, i) => (i === 0
-      ? buttonCell(label, url)
-      : `<td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>${buttonCell(label, url, { outline: true })}`))
+  const items = buttons
+    .map(({ label, url }, i) => `
+    <div style="display:inline-block;vertical-align:top;margin:0 10px 10px 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr>${buttonCell(label, url, { outline: i > 0 })}
+        </tr>
+      </table>
+    </div>`)
     .join('');
-  return `
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 24px;">
-    <tr>${cells}
-    </tr>
-  </table>`;
+  return `<div style="margin:4px 0 14px;">${items}
+  </div>`;
 }
 
 // "Ask Ms. Clarke about this →" under an item with { askUrl, askLabel }

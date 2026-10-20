@@ -13,7 +13,6 @@ const {
   finePrint,
   button,
   buttonRow,
-  askLine,
   note,
   facts,
   signOff,
@@ -590,8 +589,8 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
   });
 }
 
-// The graded assessments table: category, name, the teacher's note and the ask
-// link on the left; score and percentage on the right (rose when missing).
+// The graded assessments table: category, name and the teacher's note on the
+// left; score and percentage on the right (rose when missing).
 function gradeRowsTable(assessments) {
   const cell = `font-family:${FONT_BODY};padding:12px 0;border-top:1px solid ${COLORS.divider};vertical-align:top;`;
   const rows = assessments
@@ -604,7 +603,6 @@ function gradeRowsTable(assessments) {
         ${a.group ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;line-height:1.4;color:${COLORS.muted};margin:0 0 2px;">${escapeHtml(a.group)}</div>` : ''}
         <div style="font-size:15px;font-weight:500;line-height:1.4;color:${COLORS.heading};">${escapeHtml(a.name)}</div>
         ${a.comment ? `<div style="font-size:13px;line-height:1.5;color:${COLORS.muted};margin-top:2px;">${multiline(a.comment)}</div>` : ''}
-        ${askLine(a)}
       </td>
       <td align="right" style="${cell}${last}padding-left:16px;text-align:right;white-space:nowrap;">
         ${a.scoreLabel ? `<div style="font-size:15px;font-weight:600;color:${ink};">${escapeHtml(a.scoreLabel)}</div>` : ''}
@@ -624,10 +622,10 @@ const currentGrade = (className, runningGradeLabel) =>
 /**
  * "New grades posted" digest — one per guardian per child per publish batch.
  *
- * assessments: [{ name, group?, scoreLabel, pctLabel, isMissing?, comment?, askUrl?, askLabel? }],
+ * assessments: [{ name, group?, scoreLabel, pctLabel, isMissing?, comment? }],
  * one row per released item, already formatted by the caller, which owns the
- * grade math. `group` is the category the item sits in; `askUrl` opens a new
- * message to the teacher about it ("Ask Ms. Clarke about this").
+ * grade math. `group` is the category the item sits in. `speak` ({ label, url })
+ * adds "Speak to <teacher> about this" beside View in Parent Portal.
  */
 function getAssessmentPublishedEmailHTML({
   studentName,
@@ -638,6 +636,7 @@ function getAssessmentPublishedEmailHTML({
   schoolName,
   schoolInfo,
   portalUrl,
+  speak = null,
 }) {
   const count = assessments.length === 1 ? 'One assessment' : `${assessments.length} assessments`;
 
@@ -651,7 +650,7 @@ function getAssessmentPublishedEmailHTML({
       gradeRowsTable(assessments),
       currentGrade(className, runningGradeLabel),
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
-      button('View in Parent Portal', portalUrl),
+      speak ? buttonRow([{ label: 'View in Parent Portal', url: portalUrl }, speak]) : button('View in Parent Portal', portalUrl),
       signOff(schoolName),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),

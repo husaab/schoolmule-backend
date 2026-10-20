@@ -143,12 +143,16 @@ describe('emailTemplate – every template uses the shared layout', () => {
       expect(html).toContain('>95%</div>');
     });
 
-    it('link a row to a message to the teacher when the sender gives one', () => {
-      const askUrl = 'https://example.com/parent/messages?tab=conversations&ask=s1&askClass=c1&askAssessment=a1';
-      const html = render([{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%', askUrl, askLabel: 'Ask <Ms. Clarke> about this' }]);
+    it('add "Speak to <teacher> about this" beside View in Parent Portal when the sender gives one', () => {
+      const url = 'https://example.com/parent/messages?tab=conversations&ask=s1&askClass=c1&askAssessment=a1';
+      const rows = [{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%' }];
+      const html = templates.getAssessmentPublishedEmailHTML({ ...cases.getAssessmentPublishedEmailHTML, assessments: rows, speak: { label: 'Speak to <Sara Clarke> about this', url } });
+      expect(html).toContain('href="https://example.com/p"');
       expect(html).toContain('href="https://example.com/parent/messages?tab=conversations&amp;ask=s1&amp;askClass=c1&amp;askAssessment=a1"');
-      expect(html).toContain('Ask &lt;Ms. Clarke&gt; about this &rarr;');
-      expect(render([{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%' }])).not.toContain('about this');
+      expect(html).toContain('>Speak to &lt;Sara Clarke&gt; about this</a>');
+      // Side by side, wrapping on a phone.
+      expect(html.match(/display:inline-block;vertical-align:top/g)).toHaveLength(2);
+      expect(render(rows)).not.toContain('Speak to');
     });
 
     it('colour missing work rose', () => {

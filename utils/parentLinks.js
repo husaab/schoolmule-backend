@@ -23,4 +23,8 @@ const askLabel = (teacherName) => `Ask ${String(teacherName || '').trim() || 'th
 /** An email row's { askUrl, askLabel }, as the templates' askLine reads them. */
 const askFields = ({ teacherName, ...link }) => ({ askUrl: parentAskLink(link), askLabel: askLabel(teacherName) });
 
-module.exports = { parentAskLink, askLabel, askFields };
+/** The grade email's button: "Speak to Doha Chahade about this", or "…about these grades" for several. */
+const speakLabel = (teacherName, count = 1) =>
+  `Speak to ${String(teacherName || '').trim() || 'the teacher'} about ${count > 1 ? 'these grades' : 'this'}`;
+
+module.exports = { parentAskLink, askLabel, askFields, speakLabel };
