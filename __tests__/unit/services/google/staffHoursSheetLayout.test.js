@@ -78,6 +78,10 @@ describe('dayCell', () => {
     expect(layout.dayCell({ record: { status: 'ABSENT', hours: null }, key: '2026-09-08', workDays })).toBe('A');
   });
 
+  it('shows H for a paid holiday', () => {
+    expect(layout.dayCell({ record: { status: 'HOLIDAY', hours: null }, key: '2026-10-12', workDays })).toBe('H');
+  });
+
   it('appends the hours when an admin overrode the day', () => {
     expect(layout.dayCell({ record: { status: 'PRESENT', hours: 4 }, key: '2026-09-08', workDays })).toBe('P 4h');
     expect(layout.dayCell({ record: { status: 'PRESENT', hours: 3.5 }, key: '2026-09-08', workDays })).toBe('P 3.5h');
@@ -105,6 +109,7 @@ describe('buildPeriodTab', () => {
     expect(tab.width).toBe(8 + 31); // Aug 26 – Sept 25
     expect(tab.headerRows[0][0]).toBe(`September 25, 2026 Pay Day · ${longDate('2026-08-26')} – ${longDate('2026-09-25')}`);
     expect(tab.headerRows[0][1]).toBe('Period complete');
+    expect(tab.headerRows[0][2]).toBe('P present · A absent · H paid holiday · – not scheduled');
     expect(tab.headerRows[1].slice(0, 8)).toEqual(layout.FIXED_COLUMNS);
     expect(tab.headerRows[1][8]).toBe('Wed 26 Aug');
     expect(tab.headerRows[1]).toHaveLength(tab.width);

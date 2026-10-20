@@ -137,6 +137,9 @@ const getStaffAttendanceHTML = (data) => {
           } else if (status === "ABSENT") {
             bg = "#fee2e2";
             text = "A";
+          } else if (status === "HOLIDAY") {
+            bg = "#e0f2fe";
+            text = "H";
           }
           if (hasHours) {
             text += `<div style="font-size:8px;color:#0e7490;line-height:1;">${fmtHours(record.hours)}h</div>`;
@@ -222,6 +225,7 @@ const getStaffAttendanceHTML = (data) => {
   <div class="legend">
     <div class="legend-item"><div class="legend-box" style="background:#dcfce7;"></div> Present</div>
     <div class="legend-item"><div class="legend-box" style="background:#fee2e2;"></div> Absent</div>
+    <div class="legend-item"><div class="legend-box" style="background:#e0f2fe;"></div> H Paid holiday</div>
     <div class="legend-item"><div class="legend-box" style="background:#f1f5f9;"></div> Weekend</div>
     <div class="legend-item"><div class="legend-box" style="background:#f8fafc;"></div> – Not scheduled</div>
     <div class="legend-item"><div class="legend-box" style="background:#fefce8;border-color:#fde047;"></div> Has note</div>

@@ -1,14 +1,15 @@
 // services/staffAttendance/assembly.js
 //
 // Turns raw attendance rows into what every staff-attendance surface shows:
-// each person's records over a date range with assumed-present days filled
-// in, their work days, working-day counts and hours worked. Shared by the
-// HTTP controller (month view, pay-period view, PDF) and the Google Sheet
-// sync engine, which has no request to hang this off.
+// each person's records over a date range with assumed-present days and paid
+// holidays filled in, their work days, working-day counts and hours worked.
+// Shared by the HTTP controller (month view, pay-period view, PDF) and the
+// Google Sheet sync engine, which has no request to hang this off.
 
 const db = require("../../config/database");
 const teacherAttendanceQueries = require("../../queries/teacherAttendance.queries");
 const payPeriods = require("../payPeriods");
+const { statHolidaysBetween } = require("./statHolidays");
 
 /**
  * Staff are assumed present on every open school day from this date onward
@@ -59,9 +60,33 @@ const mapRecord = (row) => ({
 
 // ─── Loaders ──────────────────────────────────────────────────────────────
 
-const loadOpenSchoolDays = async (start, end, school) => {
-  const { rows } = await db.query(teacherAttendanceQueries.selectOpenSchoolDays, [start, end, school]);
-  return rows.map((r) => ({ day: r.day, isElapsed: r.is_elapsed }));
+/**
+ * Sorts the school's weekdays (selectSchoolDays rows) into what staff get:
+ *  - openDays: days they are expected in — no closure, or a closure the
+ *    school marked as a staff work day (a PA day)
+ *  - paidHolidays: Ontario stat holidays (whatever the calendar says) and
+ *    closures marked as paid, each with the name to show
+ * Any other closure is an unpaid day off and appears in neither.
+ */
+const classifySchoolDays = (rows) => {
+  const openDays = [];
+  const paidHolidays = [];
+  if (rows.length === 0) return { openDays, paidHolidays };
+
+  const stats = statHolidaysBetween(rows[0].day, rows[rows.length - 1].day);
+  for (const row of rows) {
+    const day = { day: row.day, isElapsed: row.is_elapsed };
+    const staffDay = row.closed_staff_day ?? null;
+    if (stats.has(row.day)) paidHolidays.push({ ...day, name: stats.get(row.day) });
+    else if (staffDay === "paid") paidHolidays.push({ ...day, name: row.closure_title });
+    else if (staffDay === null || staffDay === "work") openDays.push(day);
+  }
+  return { openDays, paidHolidays };
+};
+
+const loadSchoolDays = async (start, end, school) => {
+  const { rows } = await db.query(teacherAttendanceQueries.selectSchoolDays, [start, end, school]);
+  return classifySchoolDays(rows);
 };
 
 /**
@@ -145,10 +170,30 @@ const withAssumedPresent = (records, expectedDays) => {
   );
 };
 
-/** One person's assembled range: records with assumed days, work days, hours. */
-const assemblePerson = (records, openDays, profile, schoolHoursPerDay) => {
+/**
+ * Add a HOLIDAY record for each paid holiday that has passed, falls on one
+ * of the person's work days and has no record of its own (a real record —
+ * someone came in, or an admin set the hours — stands in for it). Like
+ * assumed-present days, these are never written to the database. Floored at
+ * ASSUMED_PRESENT_FROM so earlier years keep exactly the records they have.
+ */
+const withPaidHolidays = (records, paidHolidays, profile) => {
+  const recorded = new Set(records.map((r) => dateKey(r.attendanceDate)));
+
+  const holidays = paidHolidays
+    .filter((d) => d.isElapsed && d.day >= ASSUMED_PRESENT_FROM && !recorded.has(d.day))
+    .filter((d) => profile.days.includes(isoWeekday(d.day)))
+    .map((d) => ({ attendanceDate: d.day, status: "HOLIDAY", notes: null, hours: null, holidayName: d.name }));
+
+  return [...records, ...holidays].sort((a, b) =>
+    dateKey(a.attendanceDate).localeCompare(dateKey(b.attendanceDate))
+  );
+};
+
+/** One person's assembled range: records with assumed days and paid holidays, work days, hours. */
+const assemblePerson = (records, openDays, profile, schoolHoursPerDay, paidHolidays = []) => {
   const expectedDays = expectedDaysFor(openDays, profile);
-  const filled = withAssumedPresent(records, expectedDays);
+  const filled = withPaidHolidays(withAssumedPresent(records, expectedDays), paidHolidays, profile);
   const hoursPerDay = profile.hoursPerDay ?? schoolHoursPerDay;
   return {
     records: filled,
@@ -158,6 +203,7 @@ const assemblePerson = (records, openDays, profile, schoolHoursPerDay) => {
     elapsedWorkingDays: expectedDays.filter((d) => d.isElapsed).length,
     presentDays: filled.filter((r) => r.status === "PRESENT").length,
     absentDays: filled.filter((r) => r.status === "ABSENT").length,
+    holidayDays: filled.filter((r) => r.status === "HOLIDAY").length,
     hoursPerDay,
     hoursPerDaySource: profile.hoursPerDay !== null ? "custom" : "school",
     hoursWorked: payPeriods.sumHours(filled, hoursPerDay),
@@ -166,20 +212,22 @@ const assemblePerson = (records, openDays, profile, schoolHoursPerDay) => {
 
 /**
  * Everything the assembly needs for a date range, loaded once: attendance
- * rows for every teacher (or one), open school days, work profiles and the
- * pay schedule. Kept separate from assembleRange so a caller with several
- * sub-ranges (the sheet sync, one tab per pay period) loads once and slices.
+ * rows for every teacher (or one), open school days and paid holidays, work
+ * profiles and the pay schedule. Kept separate from assembleRange so a caller
+ * with several sub-ranges (the sheet sync, one tab per pay period) loads once
+ * and slices.
  */
 const loadRangeInputs = async (start, end, school, userId = null) => {
-  const [dataResult, openDays, profiles, schedule] = await Promise.all([
+  const [dataResult, { openDays, paidHolidays }, profiles, schedule] = await Promise.all([
     db.query(teacherAttendanceQueries.selectAllForSchoolRange, [start, end, school, userId]),
-    loadOpenSchoolDays(start, end, school),
+    loadSchoolDays(start, end, school),
     loadWorkDays(start, end, school, userId),
     loadPaySchedule(school),
   ]);
   return {
     rows: dataResult.rows,
     openDays,
+    paidHolidays,
     profiles,
     schedule,
     schoolHoursPerDay: schedule?.defaultHoursPerDay ?? DEFAULT_HOURS_PER_DAY,
@@ -187,15 +235,17 @@ const loadRangeInputs = async (start, end, school, userId = null) => {
 };
 
 /**
- * Assemble every teacher from inputs already loaded. With a `slice`, rows and
- * open days outside [slice.start, slice.end] are ignored, so inputs loaded for
- * a wider span (one query for a whole year of pay periods) carve up correctly.
+ * Assemble every teacher from inputs already loaded. With a `slice`, rows,
+ * open days and paid holidays outside [slice.start, slice.end] are ignored, so
+ * inputs loaded for a wider span (one query for a whole year of pay periods)
+ * carve up correctly.
  * Without one, everything loaded counts — the queries already scoped it.
  */
 const assembleRange = (inputs, slice = null) => {
   const { rows, profiles, schedule, schoolHoursPerDay } = inputs;
   const inSlice = (key) => !slice || (key >= slice.start && key <= slice.end);
   const openDays = inputs.openDays.filter((d) => inSlice(d.day));
+  const paidHolidays = (inputs.paidHolidays ?? []).filter((d) => inSlice(d.day));
 
   const teacherMap = {};
   rows.forEach((row) => {
@@ -216,7 +266,7 @@ const assembleRange = (inputs, slice = null) => {
 
   const teachers = Object.values(teacherMap).map((t) => ({
     ...t,
-    ...assemblePerson(t.records, openDays, profiles.get(t.teacherId) ?? DEFAULT_PROFILE, schoolHoursPerDay),
+    ...assemblePerson(t.records, openDays, profiles.get(t.teacherId) ?? DEFAULT_PROFILE, schoolHoursPerDay, paidHolidays),
   }));
 
   // Top-level workingDays stays the school's open days for older clients.
@@ -226,8 +276,8 @@ const assembleRange = (inputs, slice = null) => {
 /**
  * Shared read path for the admin views, the pay-period views and the PDF:
  * every teacher at the school (or one, with userId) with their records over
- * a date range, assumed-present days included, plus work days, working-day
- * count and hours worked.
+ * a date range, assumed-present days and paid holidays included, plus work
+ * days, working-day count and hours worked.
  */
 const buildSchoolRange = async (start, end, school, userId = null) =>
   assembleRange(await loadRangeInputs(start, end, school, userId));
@@ -280,11 +330,13 @@ module.exports = {
   isoWeekday,
   mapRecord,
   mapSchedule,
-  loadOpenSchoolDays,
+  classifySchoolDays,
+  loadSchoolDays,
   loadWorkDays,
   loadPaySchedule,
   expectedDaysFor,
   withAssumedPresent,
+  withPaidHolidays,
   assemblePerson,
   loadRangeInputs,
   assembleRange,

@@ -12,9 +12,9 @@ jest.mock('puppeteer', () => ({
 const request = require('supertest');
 
 /**
- * Rows shaped like teacherAttendanceQueries.selectOpenSchoolDays returns: the
- * first `count` weekdays of the month, all elapsed. (The real query never
- * returns weekends, and work days default to Mon–Fri.)
+ * Rows shaped like teacherAttendanceQueries.selectSchoolDays returns: the
+ * first `count` weekdays of the month, all elapsed, none closed. (The real
+ * query never returns weekends, and work days default to Mon–Fri.)
  */
 const openSchoolDayRows = (month, count) => {
   const [y, m] = month.split('-').map(Number);
@@ -96,6 +96,24 @@ describe('Teacher Attendance Controller', () => {
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(400);
+    });
+
+    it('does not expect a check-in on a stat holiday, so the dashboard stays quiet', async () => {
+      const token = mockTeacherUser();
+      const db = require('../../__mocks__/config/database');
+      db.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { day: '2026-10-09', is_elapsed: true, closed_staff_day: null, closure_title: null },
+          { day: '2026-10-12', is_elapsed: true, closed_staff_day: 'off', closure_title: 'Thanksgiving' },
+        ],
+        rowCount: 2,
+      });
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`).query({ date: '2026-10-12' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.expected).toBe(false);
     });
 
     it('should return 400 when date format is invalid', async () => {
@@ -239,8 +257,9 @@ describe('Teacher Attendance Controller', () => {
         ],
         rowCount: 2,
       });
-      // Open school days query — 22 elapsed weekdays, none assumed-present
-      // because October 2025 predates ASSUMED_PRESENT_FROM.
+      // School days query — 22 elapsed weekdays, none assumed-present
+      // because October 2025 predates ASSUMED_PRESENT_FROM. One is
+      // Thanksgiving (Oct 13), a stat holiday, so 21 are working days.
       db.query.mockResolvedValueOnce({
         rows: openSchoolDayRows('2025-10', 22),
         rowCount: 22,
@@ -254,7 +273,7 @@ describe('Teacher Attendance Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data.records).toHaveLength(2);
-      expect(res.body.data.workingDays).toBe(22);
+      expect(res.body.data.workingDays).toBe(21);
       expect(res.body.data.presentDays).toBe(1);
       expect(res.body.data.absentDays).toBe(1);
     });
@@ -304,6 +323,36 @@ describe('Teacher Attendance Controller', () => {
       expect(res.body.data.absentDays).toBe(1);
       // Working days counts every open school day, elapsed or not.
       expect(res.body.data.workingDays).toBe(5);
+    });
+
+    it('pays stat holidays and paid closures as HOLIDAY days, and treats a PA work day as a school day', async () => {
+      const token = mockTeacherUser();
+      const db = require('../../__mocks__/config/database');
+
+      db.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { day: '2026-10-09', is_elapsed: true, closed_staff_day: null, closure_title: null },
+          { day: '2026-10-12', is_elapsed: true, closed_staff_day: 'off', closure_title: 'Thanksgiving' },
+          { day: '2026-10-13', is_elapsed: true, closed_staff_day: 'paid', closure_title: 'Founders Day' },
+          { day: '2026-10-14', is_elapsed: true, closed_staff_day: 'off', closure_title: 'Snow Day' },
+          { day: '2026-10-15', is_elapsed: true, closed_staff_day: 'work', closure_title: 'PA Day' },
+        ],
+        rowCount: 5,
+      });
+      db.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      db.query.mockResolvedValueOnce({ rows: [payScheduleRow()], rowCount: 1 });
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`).query({ month: '2026-10' });
+
+      expect(res.status).toBe(200);
+      const byDate = Object.fromEntries(res.body.data.records.map((r) => [r.attendanceDate, r]));
+      expect(byDate['2026-10-09'].status).toBe('PRESENT');
+      expect(byDate['2026-10-12']).toMatchObject({ status: 'HOLIDAY', holidayName: 'Thanksgiving' });
+      expect(byDate['2026-10-13']).toMatchObject({ status: 'HOLIDAY', holidayName: 'Founders Day' });
+      expect(byDate['2026-10-14']).toBeUndefined();
+      expect(byDate['2026-10-15'].status).toBe('PRESENT');
+      expect(res.body.data).toMatchObject({ workingDays: 2, presentDays: 2, holidayDays: 2, hoursWorked: 28 });
     });
 
     it('should return 400 when month is missing', async () => {
@@ -406,8 +455,9 @@ describe('Teacher Attendance Controller', () => {
         ],
         rowCount: 1,
       });
-      // Open school days query — 22 elapsed weekdays, none assumed-present
-      // because October 2025 predates ASSUMED_PRESENT_FROM.
+      // School days query — 22 elapsed weekdays, none assumed-present
+      // because October 2025 predates ASSUMED_PRESENT_FROM. One is
+      // Thanksgiving (Oct 13), a stat holiday, so 21 are working days.
       db.query.mockResolvedValueOnce({
         rows: openSchoolDayRows('2025-10', 22),
         rowCount: 22,
@@ -421,7 +471,7 @@ describe('Teacher Attendance Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
       expect(res.body.data.teachers).toHaveLength(1);
-      expect(res.body.data.workingDays).toBe(22);
+      expect(res.body.data.workingDays).toBe(21);
     });
 
     it('should return 403 for non-admin', async () => {

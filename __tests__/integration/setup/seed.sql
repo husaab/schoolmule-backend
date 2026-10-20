@@ -693,6 +693,9 @@ CREATE TABLE IF NOT EXISTS school_calendar_events (
   start_date       DATE NOT NULL,
   end_date         DATE,
   is_school_closed BOOLEAN NOT NULL DEFAULT false,
+  staff_day        VARCHAR(10) NOT NULL DEFAULT 'off'
+                     CONSTRAINT school_calendar_events_staff_day_check
+                     CHECK (staff_day IN ('off', 'paid', 'work')),
   notes            TEXT,
   school_year_id   UUID REFERENCES school_years(school_year_id),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),

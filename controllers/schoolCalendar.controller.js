@@ -6,6 +6,18 @@ const logger = require('../logger');
 const { academicYearToRange } = require('../utils/agendaCalendar');
 
 /**
+ * What a school closure means for staff hours: an unpaid day off, a paid
+ * holiday, or a staff work day (students stay home, staff come in — a PA
+ * day). Ontario stat holidays are paid whatever this says.
+ */
+const STAFF_DAYS = ['off', 'paid', 'work'];
+const defaultStaffDay = (category) => (category === 'pa-day' ? 'work' : 'off');
+const badStaffDay = (res) => res.status(400).json({
+  status: 'failed',
+  message: `staffDay must be one of ${STAFF_DAYS.join(', ')}`
+});
+
+/**
  * Helper function to convert event row to camelCase
  */
 const mapEventToResponse = (event) => ({
@@ -17,6 +29,7 @@ const mapEventToResponse = (event) => ({
   startDate: event.start_date,
   endDate: event.end_date,
   isSchoolClosed: event.is_school_closed,
+  staffDay: event.staff_day ?? 'off',
   notes: event.notes,
   createdAt: event.created_at,
   updatedAt: event.updated_at
@@ -63,7 +76,7 @@ const getEventsBySchool = async (req, res) => {
  */
 const createEvent = async (req, res) => {
   // Always in the caller's own school (a body `school` is ignored).
-  const { title, category, startDate, endDate, isSchoolClosed, notes } = req.body;
+  const { title, category, startDate, endDate, isSchoolClosed, notes, staffDay } = req.body;
   const { school } = req.user;
 
   if (!title || !startDate) {
@@ -72,6 +85,7 @@ const createEvent = async (req, res) => {
       message: 'title and startDate are required'
     });
   }
+  if (staffDay !== undefined && !STAFF_DAYS.includes(staffDay)) return badStaffDay(res);
 
   try {
     // Best-effort school_id resolution (school enum values match school_code)
@@ -90,7 +104,8 @@ const createEvent = async (req, res) => {
       endDate || null,
       isSchoolClosed === true,
       notes || null,
-      req.schoolYear?.schoolYearId || null
+      req.schoolYear?.schoolYearId || null,
+      staffDay ?? defaultStaffDay(category || 'event')
     ]);
 
     return res.status(201).json({
@@ -112,7 +127,8 @@ const createEvent = async (req, res) => {
  */
 const updateEvent = async (req, res) => {
   const { eventId } = req.params;
-  const { title, category, startDate, endDate, isSchoolClosed, notes } = req.body;
+  const { title, category, startDate, endDate, isSchoolClosed, notes, staffDay } = req.body;
+  if (staffDay !== undefined && !STAFF_DAYS.includes(staffDay)) return badStaffDay(res);
 
   try {
     const { rows: existingRows } = await db.query(schoolCalendarQueries.selectEventById, [eventId]);
@@ -132,7 +148,8 @@ const updateEvent = async (req, res) => {
       endDate !== undefined ? endDate : existing.end_date,
       isSchoolClosed !== undefined ? isSchoolClosed === true : existing.is_school_closed,
       notes !== undefined ? notes : existing.notes,
-      eventId
+      eventId,
+      staffDay ?? existing.staff_day ?? 'off'
     ]);
 
     return res.status(200).json({

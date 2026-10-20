@@ -103,12 +103,12 @@ const periodsPaidInMonth = (schedule, month) => {
 
 /**
  * Hours a single attendance record is worth. An explicit override on the
- * record wins (an admin logged a half day); otherwise a present day is a full
- * work day and an absence is nothing.
+ * record wins (an admin logged a half day); otherwise a present day or a paid
+ * holiday is a full work day and an absence is nothing.
  */
 const recordHours = (record, hoursPerDay) => {
   if (record.hours !== null && record.hours !== undefined) return Number(record.hours);
-  return record.status === "PRESENT" ? Number(hoursPerDay) : 0;
+  return record.status === "PRESENT" || record.status === "HOLIDAY" ? Number(hoursPerDay) : 0;
 };
 
 const sumHours = (records, hoursPerDay) =>

@@ -120,11 +120,11 @@ const rolloverQueries = {
   `,
 
   copyCalendarEvents: `
-    INSERT INTO school_calendar_events (school, school_id, title, category, start_date, end_date, is_school_closed, notes, school_year_id)
+    INSERT INTO school_calendar_events (school, school_id, title, category, start_date, end_date, is_school_closed, staff_day, notes, school_year_id)
     SELECT school, school_id, title, category,
            (start_date + INTERVAL '1 year')::date,
            (end_date + INTERVAL '1 year')::date,
-           is_school_closed, notes, $2
+           is_school_closed, staff_day, notes, $2
     FROM school_calendar_events WHERE school = $1 AND school_year_id = $3
   `,
 };

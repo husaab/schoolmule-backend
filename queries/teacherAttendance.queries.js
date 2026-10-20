@@ -85,36 +85,44 @@ const teacherAttendanceQueries = {
   `,
 
   /**
-   * Open school days in a month — the days staff are actually expected in.
-   * A day qualifies when it is a weekday, falls inside one of the school's
-   * configured school years, and is not covered by a calendar event flagged
-   * is_school_closed (holidays, PA days, breaks).
+   * Every weekday inside one of the school's configured school years, with
+   * the closure covering it, if any. The assembly sorts these into open days
+   * (staff expected in), paid holidays and unpaid days off — see
+   * assembly.classifySchoolDays — so the "Working Days" stat, the
+   * assumed-present rule and holiday pay can never disagree.
    *
-   * This backs both the "Working Days" stat and the assumed-present rule, so
-   * the two can never disagree. `is_elapsed` marks days on or before today in
-   * the schools' local timezone — every tenant is an Ontario school, and using
-   * the DB's UTC "today" would mark tomorrow as elapsed all evening.
+   * closed_staff_day is the staff treatment of a calendar event flagged
+   * is_school_closed: 'off' (unpaid), 'paid' (paid holiday) or 'work' (staff
+   * come in, e.g. a PA day); null when school is open. When closures overlap,
+   * 'work' beats 'paid' beats 'off', so a paid day marked inside an unpaid
+   * break still pays. `is_elapsed` marks days on or before today in the
+   * schools' local timezone — every tenant is an Ontario school, and using the
+   * DB's UTC "today" would mark tomorrow as elapsed all evening.
    *
    * $1 = start date, $2 = end date (inclusive), $3 = school enum
    */
-  selectOpenSchoolDays: `
+  selectSchoolDays: `
     SELECT
       to_char(d, 'YYYY-MM-DD') AS day,
-      (d::date <= (now() AT TIME ZONE 'America/Toronto')::date) AS is_elapsed
+      (d::date <= (now() AT TIME ZONE 'America/Toronto')::date) AS is_elapsed,
+      closure.staff_day AS closed_staff_day,
+      closure.title AS closure_title
     FROM generate_series($1::date, $2::date, '1 day') AS d
+    LEFT JOIN LATERAL (
+      SELECT e.staff_day, e.title
+      FROM school_calendar_events e
+      WHERE e.school = $3
+        AND e.is_school_closed = true
+        AND d::date BETWEEN e.start_date AND COALESCE(e.end_date, e.start_date)
+      ORDER BY CASE e.staff_day WHEN 'work' THEN 0 WHEN 'paid' THEN 1 ELSE 2 END, e.start_date DESC
+      LIMIT 1
+    ) closure ON true
     WHERE EXTRACT(dow FROM d) NOT IN (0, 6)
       AND EXISTS (
         SELECT 1
         FROM school_years sy
         WHERE sy.school = $3
           AND d::date BETWEEN sy.start_date AND sy.end_date
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM school_calendar_events e
-        WHERE e.school = $3
-          AND e.is_school_closed = true
-          AND d::date BETWEEN e.start_date AND COALESCE(e.end_date, e.start_date)
       )
     ORDER BY d
   `,

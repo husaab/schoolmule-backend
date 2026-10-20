@@ -16,6 +16,7 @@ const schoolCalendarQueries = {
       e.start_date,
       e.end_date,
       e.is_school_closed,
+      e.staff_day,
       e.notes,
       e.created_at,
       e.updated_at
@@ -41,6 +42,7 @@ const schoolCalendarQueries = {
       e.start_date,
       e.end_date,
       e.is_school_closed,
+      e.staff_day,
       e.notes,
       e.created_at,
       e.updated_at
@@ -64,6 +66,7 @@ const schoolCalendarQueries = {
       e.start_date,
       e.end_date,
       e.is_school_closed,
+      e.staff_day,
       e.notes,
       e.created_at,
       e.updated_at
@@ -73,7 +76,8 @@ const schoolCalendarQueries = {
 
   /**
    * Create new event
-   * Params: school, school_id, title, category, start_date, end_date, is_school_closed, notes
+   * Params: school, school_id, title, category, start_date, end_date, is_school_closed, notes,
+   *         school_year_id, staff_day
    */
   insertEvent: `
     INSERT INTO school_calendar_events (
@@ -86,15 +90,16 @@ const schoolCalendarQueries = {
       is_school_closed,
       notes,
       school_year_id,
+      staff_day,
       updated_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
     RETURNING *
   `,
 
   /**
    * Update event
-   * Params: title, category, start_date, end_date, is_school_closed, notes, event_id
+   * Params: title, category, start_date, end_date, is_school_closed, notes, event_id, staff_day
    */
   updateEvent: `
     UPDATE school_calendar_events
@@ -105,6 +110,7 @@ const schoolCalendarQueries = {
       end_date = $4,
       is_school_closed = $5,
       notes = $6,
+      staff_day = $8,
       updated_at = NOW()
     WHERE event_id = $7
     RETURNING *

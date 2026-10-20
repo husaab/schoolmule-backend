@@ -14,7 +14,7 @@ const {
   monthRange,
   mapRecord,
   mapSchedule,
-  loadOpenSchoolDays,
+  loadSchoolDays,
   loadWorkDays,
   loadPaySchedule,
   expectedDaysFor,
@@ -60,9 +60,9 @@ const getTodayStatus = async (req, res) => {
     }
 
     const { start, end } = monthRange(date.substring(0, 7));
-    const [{ rows }, openDays, profiles] = await Promise.all([
+    const [{ rows }, { openDays }, profiles] = await Promise.all([
       db.query(teacherAttendanceQueries.selectTodayStatus, [userId, date]),
-      loadOpenSchoolDays(start, end, school),
+      loadSchoolDays(start, end, school),
       loadWorkDays(start, end, school, userId),
     ]);
     const profile = profiles.get(userId) ?? DEFAULT_PROFILE;
@@ -73,8 +73,8 @@ const getTodayStatus = async (req, res) => {
         checkedIn: rows.length > 0,
         status: rows.length > 0 ? rows[0].status : null,
         notes: rows.length > 0 ? rows[0].notes : null,
-        // False on school closures and on this person's days off, so the
-        // dashboard doesn't ask them to check in.
+        // False on school closures (paid holidays included) and on this
+        // person's days off, so the dashboard doesn't ask them to check in.
         expected: expectedDaysFor(openDays, profile).some((d) => d.day === date),
       },
     });
@@ -123,9 +123,9 @@ const getMyMonth = async (req, res) => {
     }
 
     const { start, end } = monthRange(month);
-    const [recordsResult, openDays, profiles, schedule] = await Promise.all([
+    const [recordsResult, { openDays, paidHolidays }, profiles, schedule] = await Promise.all([
       db.query(teacherAttendanceQueries.selectMyRange, [userId, start, end]),
-      loadOpenSchoolDays(start, end, school),
+      loadSchoolDays(start, end, school),
       loadWorkDays(start, end, school, userId),
       loadPaySchedule(school),
     ]);
@@ -134,7 +134,8 @@ const getMyMonth = async (req, res) => {
       recordsResult.rows.map(mapRecord),
       openDays,
       profiles.get(userId) ?? DEFAULT_PROFILE,
-      schedule?.defaultHoursPerDay ?? DEFAULT_HOURS_PER_DAY
+      schedule?.defaultHoursPerDay ?? DEFAULT_HOURS_PER_DAY,
+      paidHolidays
     );
 
     return res.status(200).json({ status: "success", data: person });

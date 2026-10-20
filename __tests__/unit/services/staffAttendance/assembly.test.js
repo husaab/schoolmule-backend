@@ -82,3 +82,69 @@ describe('assembly.buildSchoolRange', () => {
     expect(teachers[0]).toMatchObject({ absentDays: 1, hoursWorked: 0 });
   });
 });
+
+describe('paid holidays', () => {
+  // A school-day row as selectSchoolDays returns it: closed_staff_day is the
+  // staff treatment of a closure covering the day (null when school is open).
+  const day = (d, closed_staff_day = null, closure_title = null, is_elapsed = true) => ({
+    day: d, is_elapsed, closed_staff_day, closure_title,
+  });
+  const range = (rows, openDays, profile = null) => {
+    db.query.mockImplementation((sql) => {
+      if (/LEFT JOIN teacher_attendance ta/.test(sql)) return Promise.resolve({ rows });
+      if (/is_elapsed/.test(sql)) return Promise.resolve({ rows: openDays });
+      if (/FROM staff_pay_schedules/.test(sql)) return Promise.resolve({ rows: [schedule] });
+      if (/custom_days/.test(sql) && profile) return Promise.resolve({ rows: [{ user_id: 't1', is_archived: false, ...profile }] });
+      return Promise.resolve({ rows: [] });
+    });
+    return assembly.buildSchoolRange('2026-10-01', '2026-10-31', SCHOOL).then((r) => r.teachers[0]);
+  };
+  const byDate = (t) => Object.fromEntries(t.records.map((r) => [r.attendanceDate, r]));
+
+  it('pays an Ontario stat holiday the school closed for, without counting it present or scheduled', async () => {
+    const t = await range([person(null)], [day('2026-10-09'), day('2026-10-12', 'off', 'Thanksgiving'), day('2026-10-13')]);
+    expect(byDate(t)['2026-10-12']).toEqual({
+      attendanceDate: '2026-10-12', status: 'HOLIDAY', notes: null, hours: null, holidayName: 'Thanksgiving',
+    });
+    expect(t).toMatchObject({ workingDays: 2, presentDays: 2, absentDays: 0, holidayDays: 1, hoursWorked: 19.5 });
+  });
+
+  it('pays a stat holiday even when the calendar never mentions it', async () => {
+    const t = await range([person(null)], [day('2026-10-12')]);
+    expect(byDate(t)['2026-10-12']).toMatchObject({ status: 'HOLIDAY', holidayName: 'Thanksgiving' });
+    expect(t).toMatchObject({ workingDays: 0, holidayDays: 1, hoursWorked: 6.5 });
+  });
+
+  it('pays a closure the school marked as a paid holiday, under its calendar title', async () => {
+    const t = await range([person(null)], [day('2026-10-14', 'paid', 'Eid Day')]);
+    expect(byDate(t)['2026-10-14']).toMatchObject({ status: 'HOLIDAY', holidayName: 'Eid Day' });
+    expect(t).toMatchObject({ workingDays: 0, holidayDays: 1, hoursWorked: 6.5 });
+  });
+
+  it('treats a staff work day (a PA day) as an ordinary school day', async () => {
+    const t = await range([person(null)], [day('2026-10-16', 'work', 'PA Day')]);
+    expect(byDate(t)['2026-10-16']).toMatchObject({ status: 'PRESENT' });
+    expect(t).toMatchObject({ workingDays: 1, presentDays: 1, holidayDays: 0, hoursWorked: 6.5 });
+  });
+
+  it('leaves an unpaid closure that is not a stat holiday empty', async () => {
+    const t = await range([person(null)], [day('2026-10-14', 'off', 'Easter Monday')]);
+    expect(t.records).toEqual([]);
+    expect(t).toMatchObject({ workingDays: 0, holidayDays: 0, hoursWorked: 0 });
+  });
+
+  it('lets a real record on a holiday stand in for it', async () => {
+    const t = await range([person('2026-10-12', 'PRESENT', 3)], [day('2026-10-12', 'off', 'Thanksgiving')]);
+    expect(t.records).toHaveLength(1);
+    expect(t.records[0]).toMatchObject({ status: 'PRESENT', hours: 3 });
+    expect(t).toMatchObject({ holidayDays: 0, hoursWorked: 3 });
+  });
+
+  it('pays a holiday only on a day the person works, and only once it has passed', async () => {
+    const partTimer = await range([person(null)], [day('2026-10-12', 'off', 'Thanksgiving')], { custom_days: [2, 3, 4] });
+    expect(partTimer).toMatchObject({ records: [], holidayDays: 0, hoursWorked: 0 });
+
+    const ahead = await range([person(null)], [day('2026-10-12', 'off', 'Thanksgiving', false)]);
+    expect(ahead).toMatchObject({ records: [], holidayDays: 0, hoursWorked: 0 });
+  });
+});

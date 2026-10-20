@@ -74,17 +74,24 @@ function dateHeader(key) {
   return `${WEEKDAY_SHORT[dow]} ${d} ${MONTH_SHORT[m - 1]}`;
 }
 
+/** The letter a day's status shows as in the grid. */
+const STATUS_LETTER = { PRESENT: 'P', ABSENT: 'A', HOLIDAY: 'H' };
+
+/** Row 1's key to the grid letters. */
+const GRID_KEY = 'P present · A absent · H paid holiday · – not scheduled';
+
 /**
  * What one person's cell says for one date:
  *   "P" / "A"        a recorded or assumed day
+ *   "H"              a paid holiday (a stat holiday, or a closure the school pays)
  *   "P 4h" / "A 0h"  the same, with an admin's hours override
  *   "–"              a weekday this person does not work
- *   ""               a weekend, a school closure, or a day still ahead
+ *   ""               a weekend, an unpaid closure, or a day still ahead
  */
 function dayCell({ record, key, workDays }) {
   if (record) {
     const hasHours = record.hours !== null && record.hours !== undefined;
-    return `${record.status === 'PRESENT' ? 'P' : 'A'}${hasHours ? ` ${fmtHours(record.hours)}h` : ''}`;
+    return `${STATUS_LETTER[record.status] ?? 'A'}${hasHours ? ` ${fmtHours(record.hours)}h` : ''}`;
   }
   const dow = isoWeekday(key);
   if (dow <= 5 && !workDays.includes(dow)) return '–';
@@ -121,6 +128,7 @@ function buildPeriodTab(built) {
   const infoRow = [
     `${periodTabTitle(built)} · ${longDate(built.startDate)} – ${longDate(built.endDate)}`,
     scope,
+    GRID_KEY,
   ];
   const headerRow = [...FIXED_COLUMNS, ...dates.map(dateHeader)];
 
