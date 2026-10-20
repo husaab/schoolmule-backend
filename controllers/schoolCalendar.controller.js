@@ -28,14 +28,9 @@ const mapEventToResponse = (event) => ({
  * Get events for a school, optionally within an academic year or date range
  */
 const getEventsBySchool = async (req, res) => {
-  const { school, academicYear, from, to } = req.query;
-
-  if (!school) {
-    return res.status(400).json({
-      status: 'failed',
-      message: 'School parameter is required'
-    });
-  }
+  // Always the caller's own school (a ?school= is ignored).
+  const { academicYear, from, to } = req.query;
+  const { school } = req.user;
 
   try {
     const yearId = req.schoolYear?.schoolYearId || null;
@@ -67,12 +62,14 @@ const getEventsBySchool = async (req, res) => {
  * Create a new calendar event
  */
 const createEvent = async (req, res) => {
-  const { school, title, category, startDate, endDate, isSchoolClosed, notes } = req.body;
+  // Always in the caller's own school (a body `school` is ignored).
+  const { title, category, startDate, endDate, isSchoolClosed, notes } = req.body;
+  const { school } = req.user;
 
-  if (!school || !title || !startDate) {
+  if (!title || !startDate) {
     return res.status(400).json({
       status: 'failed',
-      message: 'school, title and startDate are required'
+      message: 'title and startDate are required'
     });
   }
 
@@ -119,7 +116,8 @@ const updateEvent = async (req, res) => {
 
   try {
     const { rows: existingRows } = await db.query(schoolCalendarQueries.selectEventById, [eventId]);
-    if (existingRows.length === 0) {
+    // Another school's event reads as missing.
+    if (existingRows.length === 0 || String(existingRows[0].school) !== String(req.user.school)) {
       return res.status(404).json({
         status: 'failed',
         message: 'Event not found'
@@ -158,7 +156,7 @@ const deleteEvent = async (req, res) => {
   const { eventId } = req.params;
 
   try {
-    const { rows } = await db.query(schoolCalendarQueries.deleteEvent, [eventId]);
+    const { rows } = await db.query(schoolCalendarQueries.deleteEvent, [eventId, req.user.school]);
     if (rows.length === 0) {
       return res.status(404).json({
         status: 'failed',

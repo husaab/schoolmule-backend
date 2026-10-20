@@ -116,7 +116,7 @@ const schoolCalendarQueries = {
    */
   deleteEvent: `
     DELETE FROM school_calendar_events
-    WHERE event_id = $1
+    WHERE event_id = $1 AND school = $2
     RETURNING *
   `
 };

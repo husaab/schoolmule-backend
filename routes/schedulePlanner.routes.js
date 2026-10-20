@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const requireAdmin = require('../middleware/requireAdmin');
+const { requirePermission } = require('../middleware/access');
 const requireStaff = require('../middleware/requireStaff');
 const controller = require('../controllers/schedulePlanner.controller');
 
@@ -15,8 +15,8 @@ router.get('/my-schedule/ics', controller.getMyScheduleIcs);
 // colleague — but parents never see other people's timetables.
 router.get('/school-schedule', requireStaff, controller.getSchoolSchedule);
 
-// Everything below is ADMIN-only
-router.use(requireAdmin);
+// Everything below is the planner itself: scheduling (RBAC).
+router.use(requirePermission('scheduling'));
 
 router.get('/config', controller.getConfig);
 

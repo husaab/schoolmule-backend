@@ -6,7 +6,7 @@ const registrationQueries = {
       (SELECT COUNT(*) FROM registration_form_submissions s
        WHERE s.form_id = f.form_id AND s.status = 'new') AS new_submissions_count
     FROM registration_forms f
-    WHERE f.school = $1
+    WHERE f.school = $1 AND ($2::uuid IS NULL OR f.created_by = $2::uuid)
     ORDER BY f.created_at DESC
   `,
 
@@ -180,7 +180,7 @@ const registrationQueries = {
     SELECT COUNT(*) AS count
     FROM registration_form_submissions s
     JOIN registration_forms f ON s.form_id = f.form_id
-    WHERE f.school = $1 AND s.status = 'new'
+    WHERE f.school = $1 AND s.status = 'new' AND ($2::uuid IS NULL OR f.created_by = $2::uuid)
   `,
 };
 

@@ -154,11 +154,8 @@ const findAgendaOr404 = async (agendaId, res) => {
  * GET /api/agendas?school=SCHOOL_ENUM
  */
 const getAgendasBySchool = async (req, res) => {
-  const { school } = req.query;
-
-  if (!school) {
-    return res.status(400).json({ status: 'failed', message: 'School parameter is required' });
-  }
+  // Always the caller's own school (a ?school= is ignored).
+  const { school } = req.user;
 
   try {
     const { rows } = await db.query(agendaQueries.selectAgendasBySchool, [school]);
@@ -175,10 +172,12 @@ const getAgendasBySchool = async (req, res) => {
  * Creates the agenda and seeds its month config rows.
  */
 const createAgenda = async (req, res) => {
-  const { school, academicYear, title, footerText } = req.body;
+  // Always in the caller's own school (a body `school` is ignored).
+  const { academicYear, title, footerText } = req.body;
+  const { school } = req.user;
 
-  if (!school || !academicYear) {
-    return res.status(400).json({ status: 'failed', message: 'school and academicYear are required' });
+  if (!academicYear) {
+    return res.status(400).json({ status: 'failed', message: 'academicYear is required' });
   }
 
   try {

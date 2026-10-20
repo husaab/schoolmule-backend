@@ -17,6 +17,11 @@ const {
 
 const router = express.Router();
 
+// RBAC: student views are part of `students`; who may change which view is
+// decided per view in the controller (own school only).
+const { requirePermission } = require('../middleware/access');
+router.use(requirePermission('students'));
+
 router.get('/', listViews);
 router.post('/', createView);
 router.post('/preview', evaluatePreview);

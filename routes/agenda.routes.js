@@ -23,7 +23,30 @@ const {
   cloneAgenda
 } = require('../controllers/agenda.controller');
 
+const db = require('../config/database');
+const logger = require('../logger');
+const { requirePermission } = require('../middleware/access');
+
 const router = express.Router();
+
+// RBAC: the agenda editor is scheduling. Every :agendaId must be an agenda
+// of the caller's school (anything else reads as missing), and signed URLs
+// only ever cover the school's own storage folder.
+router.use(requirePermission('scheduling'));
+
+router.param('agendaId', async (req, res, next, agendaId) => {
+  try {
+    const { rows } = await db.query('SELECT 1 FROM agendas WHERE agenda_id = $1 AND school = $2', [agendaId, req.user.school]);
+    if (rows.length === 0) return res.status(404).json({ status: 'failed', message: 'Agenda not found' });
+    return next();
+  } catch (error) {
+    logger.error({ err: error }, 'Error checking agenda ownership');
+    return res.status(404).json({ status: 'failed', message: 'Agenda not found' });
+  }
+});
+
+const ownFolder = (req, path) =>
+  typeof path === 'string' && !path.includes('..') && path.startsWith(`${String(req.user.school).replace(/\s+/g, '').toUpperCase()}/`);
 
 // Signed URL for the assembled agenda PDF (before /:agendaId so 'signed-url'
 // isn't captured as an ID)
@@ -31,6 +54,7 @@ router.get('/signed-url', async (req, res) => {
   const { path } = req.query;
 
   if (!path) return res.status(400).json({ error: 'Missing file path' });
+  if (!ownFolder(req, path)) return res.status(403).json({ error: 'Not authorized for this file' });
 
   const { data, error } = await supabase
     .storage

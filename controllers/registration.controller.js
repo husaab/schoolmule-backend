@@ -3,6 +3,7 @@ const registrationQueries = require('../queries/registration.queries');
 const statusQueries = require('../queries/registrationStatus.queries');
 const googleSheetsQueries = require('../queries/googleSheets.queries');
 const logger = require('../logger');
+const { formCreatorFilter } = require('../middleware/requireFormAccess');
 const supabase = require('../config/supabaseClient');
 const multer = require('multer');
 const path = require('path');
@@ -82,7 +83,8 @@ const upload = multer({
 const getForms = async (req, res) => {
   try {
     const school = req.user.school;
-    const { rows } = await db.query(registrationQueries.selectFormsBySchool, [school]);
+    // Every form of the school with `forms`, otherwise the caller's own (D8).
+    const { rows } = await db.query(registrationQueries.selectFormsBySchool, [school, formCreatorFilter(req)]);
     return res.status(200).json({
       status: 'success',
       data: rows.map(toCamelForm),
@@ -725,7 +727,7 @@ const exportSubmissions = async (req, res) => {
 const getNewCount = async (req, res) => {
   try {
     const school = req.user.school;
-    const { rows } = await db.query(registrationQueries.countNewSubmissionsBySchool, [school]);
+    const { rows } = await db.query(registrationQueries.countNewSubmissionsBySchool, [school, formCreatorFilter(req)]);
     return res.status(200).json({
       status: 'success',
       data: { count: parseInt(rows[0].count, 10) },

@@ -3,6 +3,7 @@
 const db = require('../config/database');
 const ExcelJS = require('exceljs');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const q = require('../queries/studentView.queries');
 const studentViewEmailsQueries = require('../queries/studentViewEmails.queries');
 const schoolQueries = require('../queries/school.queries');
@@ -61,25 +62,35 @@ function validateCriteria(c) {
   return null;
 }
 
-function canAccess(view, userId) {
-  return view.is_system || view.is_shared || view.owner_user_id === userId;
+// Every rule starts with the caller's own school: another school's view reads
+// as forbidden whatever its flags say.
+const sameSchool = (view, req) => String(view.school) === String(req.user.school);
+
+// Managing everyone's views (and system views) is an admin holding `students`
+// (RBAC); a restricted admin without it is treated like anyone else.
+const managesViews = (req) => req.user.role === 'ADMIN' && can(req, 'students');
+
+function canAccess(view, req) {
+  return sameSchool(view, req) && (view.is_system || view.is_shared || view.owner_user_id === req.user.userId);
 }
 
 // Edit rule:
-//   - Admins can edit any view in their school, including system views.
-//   - Non-admins can only edit views they personally own.
-function canEdit(view, userId, role) {
-  if (role === 'ADMIN') return true;
-  return !view.is_system && view.owner_user_id === userId;
+//   - Admins who manage students can edit any view in their school, including system views.
+//   - Anyone else can only edit views they personally own.
+function canEdit(view, req) {
+  if (!sameSchool(view, req)) return false;
+  if (managesViews(req)) return true;
+  return !view.is_system && view.owner_user_id === req.user.userId;
 }
 
 // Delete rule:
-//   - Admins can delete ANY view in their school, including system views.
-//     System view deletion still requires a double-confirm in the UI.
-//   - Non-admins can only delete views they personally own.
-function canDelete(view, userId, role) {
-  if (role === 'ADMIN') return true;
-  return !view.is_system && view.owner_user_id === userId;
+//   - Admins who manage students can delete ANY view in their school, including
+//     system views. System view deletion still requires a double-confirm in the UI.
+//   - Anyone else can only delete views they personally own.
+function canDelete(view, req) {
+  if (!sameSchool(view, req)) return false;
+  if (managesViews(req)) return true;
+  return !view.is_system && view.owner_user_id === req.user.userId;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -98,13 +109,12 @@ const listViews = async (req, res) => {
 };
 
 const getView = async (req, res) => {
-  const { userId } = req.user;
   const { viewId } = req.params;
   try {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
     return res.status(200).json({ status: 'success', data: mapViewRow(view) });
   } catch (err) {
     logger.error({ err }, 'getView failed');
@@ -113,7 +123,7 @@ const getView = async (req, res) => {
 };
 
 const createView = async (req, res) => {
-  const { school, userId, role } = req.user;
+  const { school, userId } = req.user;
   const { name, description, isShared, isSystem, criteria } = req.body;
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ status: 'failed', message: 'name is required' });
@@ -122,7 +132,7 @@ const createView = async (req, res) => {
   if (err) return res.status(400).json({ status: 'failed', message: err });
 
   // System view creation is admin-only. System views are unowned and always shared.
-  if (isSystem && role !== 'ADMIN') {
+  if (isSystem && !managesViews(req)) {
     return res
       .status(403)
       .json({ status: 'failed', message: 'Only admins can create system views' });
@@ -157,7 +167,7 @@ const createView = async (req, res) => {
 };
 
 const updateView = async (req, res) => {
-  const { userId, role } = req.user;
+  const { userId } = req.user;
   const { viewId } = req.params;
   const { name, description, isShared, isSystem, criteria } = req.body;
 
@@ -167,7 +177,7 @@ const updateView = async (req, res) => {
   }
 
   // System-flag flips (promote/demote) are admin-only.
-  if (isSystem != null && role !== 'ADMIN') {
+  if (isSystem != null && !managesViews(req)) {
     return res
       .status(403)
       .json({ status: 'failed', message: 'Only admins can change a view\'s system status' });
@@ -177,7 +187,7 @@ const updateView = async (req, res) => {
     const existing = await db.query(q.selectViewById, [viewId]);
     const view = existing.rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canEdit(view, userId, role)) {
+    if (!canEdit(view, req)) {
       return res.status(403).json({
         status: 'failed',
         message: view.is_system
@@ -228,13 +238,12 @@ const updateView = async (req, res) => {
 };
 
 const deleteView = async (req, res) => {
-  const { userId, role } = req.user;
   const { viewId } = req.params;
   try {
     const existing = await db.query(q.selectViewById, [viewId]);
     const view = existing.rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canDelete(view, userId, role)) {
+    if (!canDelete(view, req)) {
       return res.status(403).json({
         status: 'failed',
         message: view.is_system
@@ -255,13 +264,12 @@ const deleteView = async (req, res) => {
 // ────────────────────────────────────────────────────────────────────
 
 const evaluateSavedView = async (req, res) => {
-  const { userId } = req.user;
   const { viewId } = req.params;
   try {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
 
     const students = await evaluateView(view);
     return res.status(200).json({ status: 'success', data: { view: mapViewRow(view), students } });
@@ -292,13 +300,12 @@ const evaluatePreview = async (req, res) => {
 // ────────────────────────────────────────────────────────────────────
 
 const exportCsv = async (req, res) => {
-  const { userId } = req.user;
   const { viewId } = req.params;
   try {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
 
     const students = await evaluateView(view);
 
@@ -343,7 +350,7 @@ const generateCertificates = async (req, res) => {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
 
     const students = await evaluateView(view);
     const selected = students.filter((s) => studentIds.includes(s.studentId));
@@ -403,7 +410,7 @@ const sendStudentViewCertificateEmails = async (req, res) => {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
 
     // Qualifying students for this view, narrowed to the caller's selection.
     const evaluated = await evaluateView(view);
@@ -594,7 +601,7 @@ const sendSingleStudentViewCertificateEmail = async (req, res) => {
     const { rows } = await db.query(q.selectViewById, [viewId]);
     const view = rows[0];
     if (!view) return res.status(404).json({ status: 'failed', message: 'View not found' });
-    if (!canAccess(view, userId)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
+    if (!canAccess(view, req)) return res.status(403).json({ status: 'failed', message: 'Forbidden' });
 
     // The certificate states the student's metric/award, so only send for a
     // student who currently qualifies for this view.
