@@ -19,6 +19,7 @@ const { platformSender } = require('../services/email/senderIdentity');
 const observeBuffer = require('../services/observe/eventBuffer');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
+const { verifyEmailLoginToken } = require('../utils/emailLoginLink');
 const { GoogleSignInError } = googleSignInService;
 const {
   assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, sessionRevoked, MESSAGES: STUDENT_MESSAGES,
@@ -646,6 +647,47 @@ const googleSignIn = async (req) => {
   }
 };
 
+const EMAIL_LINK_INVALID = Object.freeze({
+  status: 401,
+  code: 'EMAIL_LINK_INVALID',
+  message: 'This sign-in link has expired. Sign in to continue.',
+});
+
+// POST /api/auth/email-link { token }
+//
+// One-tap sign-in from a parent email's button (utils/emailLoginLink). The
+// token names a parent account, a child and the address the email went to;
+// all three must still hold: a PARENT account (staff never sign in this way)
+// still linked to that child, at that address. Then the usual openSession
+// gate (archived accounts are refused; pending ones reach the waiting page).
+// Same response as /api/auth/login.
+const emailLinkLogin = async (req) => {
+  let claims;
+  try {
+    claims = verifyEmailLoginToken(req.body?.token);
+  } catch {
+    recordLogin(req, { email: '', user: null, outcome: 'email_link_invalid' });
+    return { ...EMAIL_LINK_INVALID };
+  }
+
+  try {
+    const { rows } = await db.query(userQueries.selectEmailLinkUser, [claims.userId, claims.studentId]);
+    const user = rows[0];
+    if (!user || String(user.role) !== 'PARENT' || !user.linked || String(user.email).trim().toLowerCase() !== claims.email) {
+      recordLogin(req, { email: claims.email, user: user || null, outcome: 'email_link_refused' });
+      return { ...EMAIL_LINK_INVALID };
+    }
+    return await openSession(req, user, { email: user.email, message: 'Signed in' });
+  } catch (error) {
+    const status = Number.isInteger(error.status) ? error.status : 500;
+    if (status >= 500) {
+      logger.error({ err: error }, 'Email link sign-in failed');
+      return { status, message: 'Sign-in failed. Please try again.' };
+    }
+    return { status, ...(error.code && { code: error.code }), message: error.message };
+  }
+};
+
   const sendVerificationEmail = async (req, res) => {
     const { email } = req.body;
   
@@ -1186,6 +1228,7 @@ module.exports = {
     registerUser,
     login,
     googleSignIn,
+    emailLinkLogin,
     studentQrLogin,
     switchView,
     sendVerificationEmail,

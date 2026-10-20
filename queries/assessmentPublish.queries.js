@@ -147,6 +147,19 @@ const assessmentPublishQueries = {
     WHERE cl.class_id = $1
   `,
 
+  /**
+   * The accounts behind a digest's guardian addresses, so each address gets
+   * the right buttons (recipientAccess): a parent account linked to the child
+   * signs in on one tap, an address with no account is asked to create one.
+   * Params: $1 lowercased address[], $2 student_id
+   */
+  selectRecipientAccounts: `
+    SELECT LOWER(TRIM(u.email)) AS email, u.user_id, u.role::text AS role, u.is_archived,
+           EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = u.user_id AND ps.student_id = $2) AS linked
+    FROM users AS u
+    WHERE LOWER(TRIM(u.email)) = ANY($1::text[])
+  `,
+
   // ────────────────────────────────────────────────────────────
   // Mutations
   // ────────────────────────────────────────────────────────────

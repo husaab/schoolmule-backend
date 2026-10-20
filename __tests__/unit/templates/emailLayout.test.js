@@ -155,6 +155,19 @@ describe('emailTemplate – every template uses the shared layout', () => {
       expect(render(rows)).not.toContain('Speak to');
     });
 
+    it('give an address with no account one "Create your account" button instead', () => {
+      const html = templates.getAssessmentPublishedEmailHTML({
+        ...cases.getAssessmentPublishedEmailHTML,
+        speak: { label: 'Speak to Sara Clarke about this', url: 'https://example.com/s' },
+        setupUrl: 'https://example.com/signup/alhaadiacademy/parent?email=a%40b.test',
+      });
+      expect(html).toContain('href="https://example.com/signup/alhaadiacademy/parent?email=a%40b.test"');
+      expect(html).toContain('>Create your account</a>');
+      expect(html).toContain("You don't have a SchoolMule account yet");
+      expect(html).not.toContain('View in Parent Portal');
+      expect(html).not.toContain('Speak to');
+    });
+
     it('colour missing work rose', () => {
       const html = render([{ name: 'Reading Log', scoreLabel: 'Missing', pctLabel: '0%', isMissing: true }]);
       expect(html).toMatch(/color:#be123c;">Missing</);

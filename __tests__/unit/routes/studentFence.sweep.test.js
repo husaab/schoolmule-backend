@@ -28,6 +28,7 @@ const UNFENCED_ROUTES = [
   'GET /api/health',                                              // liveness probe
   'POST /api/auth/register',                                      // public signup
   'POST /api/auth/login',                                         // public sign-in
+  'POST /api/auth/email-link',
   'POST /api/auth/google',                                        // public Google sign-in/up
   'POST /api/auth/student-qr',                                    // public QR-card sign-in, rate limited
   'POST /api/auth/student-invite',                                // public invite check, rate limited

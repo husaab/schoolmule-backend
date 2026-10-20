@@ -6,6 +6,8 @@ const {
   overlayDrafts,
   planPublish,
   publishDigestTasks,
+  recipientAccess,
+  recipientButtons,
 } = require('../../../controllers/assessmentPublish.controller');
 
 // Shape matches selectAllAssessmentsInClass.
@@ -347,5 +349,56 @@ describe('planPublish (classwork drafts)', () => {
     expect(out.get('s2').rows.find((r) => r.assessment_id === 'solo')).toMatchObject({ score: null, status: 'missing', is_excluded: false });
     expect(out.has('gone')).toBe(false);
     expect(rows.get('s1').rows.find((r) => r.assessment_id === 'solo').score).toBeNull();
+  });
+});
+
+// Each guardian address gets its own email and its own buttons.
+describe('recipientAccess + recipientButtons', () => {
+  const env = { secret: process.env.JWT_SECRET, url: process.env.FRONTEND_URL };
+  beforeAll(() => {
+    process.env.JWT_SECRET = 'test-secret';
+    process.env.FRONTEND_URL = 'https://schoolmule.test';
+  });
+  afterAll(() => {
+    process.env.JWT_SECRET = env.secret;
+    process.env.FRONTEND_URL = env.url;
+  });
+
+  const account = (email, extra = {}) => ({ email, user_id: `u-${email}`, role: 'PARENT', is_archived: false, linked: true, ...extra });
+  const speak = { label: 'Speak to Sara Clarke about this', path: '/parent/messages?tab=conversations&ask=s1&askClass=c1' };
+
+  it('signs a linked parent in on one tap, from both buttons', () => {
+    const access = recipientAccess('sam@example.test', [account('sam@example.test')]);
+    expect(access).toEqual({ kind: 'signIn', userId: 'u-sam@example.test' });
+    const { portalUrl, speak: button } = recipientButtons({ access, address: 'sam@example.test', studentId: 's1', school: 'ALHAADIACADEMY', speak });
+    const portal = new URL(portalUrl);
+    expect(portal.pathname).toBe('/email-login');
+    expect(portal.searchParams.get('next')).toBe('/parent/grades');
+    expect(portal.hash.length).toBeGreaterThan(20);
+    expect(new URL(button.url).searchParams.get('next')).toBe(speak.path);
+    expect(button.label).toBe(speak.label);
+  });
+
+  it('asks an address with no account to create one, with the address filled in', () => {
+    const access = recipientAccess('new.parent@example.test', [account('sam@example.test')]);
+    expect(access).toEqual({ kind: 'signup' });
+    expect(recipientButtons({ access, address: 'new.parent@example.test', studentId: 's1', school: 'ALHAADIACADEMY', speak })).toEqual({
+      setupUrl: 'https://schoolmule.test/signup/alhaadiacademy/parent?email=new.parent%40example.test',
+    });
+  });
+
+  it('gives plain links to staff, archived, unlinked and ambiguous accounts', () => {
+    const cases = [
+      [account('t@example.test', { role: 'TEACHER' })],
+      [account('t@example.test', { is_archived: true })],
+      [account('t@example.test', { linked: false })],
+      [account('t@example.test'), account('t@example.test', { user_id: 'u-other' })],
+    ];
+    for (const accounts of cases) expect(recipientAccess('t@example.test', accounts)).toEqual({ kind: 'plain' });
+    const plain = recipientButtons({ access: { kind: 'plain' }, address: 't@example.test', studentId: 's1', school: 'ALHAADIACADEMY', speak });
+    expect(plain).toEqual({
+      portalUrl: 'https://schoolmule.test/parent/grades',
+      speak: { label: speak.label, url: `https://schoolmule.test${speak.path}` },
+    });
   });
 });

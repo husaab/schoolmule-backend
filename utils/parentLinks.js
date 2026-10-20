@@ -9,13 +9,16 @@
 const ABOUT_MAX = 100;
 
 /** /parent/messages?tab=conversations&ask=<studentId>&askClass=…[&askAssessment=…][&askAbout=…] */
-const parentAskLink = ({ studentId, classId, assessmentId = null, about = null }) => {
+const parentAskPath = ({ studentId, classId, assessmentId = null, about = null }) => {
   const params = new URLSearchParams({ tab: 'conversations', ask: studentId, askClass: classId });
   if (assessmentId) params.set('askAssessment', assessmentId);
   const title = String(about || '').replace(/\s+/g, ' ').trim().slice(0, ABOUT_MAX);
   if (title) params.set('askAbout', title);
-  return `${process.env.FRONTEND_URL || ''}/parent/messages?${params}`;
+  return `/parent/messages?${params}`;
 };
+
+/** parentAskPath on the portal's origin. */
+const parentAskLink = (link) => `${process.env.FRONTEND_URL || ''}${parentAskPath(link)}`;
 
 /** "Ask Ms. Clarke about this", or "Ask the teacher about this" with no name on file. */
 const askLabel = (teacherName) => `Ask ${String(teacherName || '').trim() || 'the teacher'} about this`;
@@ -27,4 +30,4 @@ const askFields = ({ teacherName, ...link }) => ({ askUrl: parentAskLink(link), 
 const speakLabel = (teacherName, count = 1) =>
   `Speak to ${String(teacherName || '').trim() || 'the teacher'} about ${count > 1 ? 'these grades' : 'this'}`;
 
-module.exports = { parentAskLink, askLabel, askFields, speakLabel };
+module.exports = { parentAskPath, parentAskLink, askLabel, askFields, speakLabel };

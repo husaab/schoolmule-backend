@@ -30,7 +30,8 @@ const engine = require('../services/analyticsEngine');
 const publishQueries = require('../queries/assessmentPublish.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
-const { parentAskLink, speakLabel } = require('../utils/parentLinks');
+const { parentAskPath, speakLabel } = require('../utils/parentLinks');
+const { signEmailLoginToken, emailLoginUrl } = require('../utils/emailLoginLink');
 const { cleanEmailArray, getResend, sendOrThrow } = require('../utils/emailUtils');
 const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
@@ -698,16 +699,63 @@ async function loadEmailContext(classId, school) {
 
 /**
  * The email's "Speak to <teacher> about this" button, beside View in Parent
- * Portal, when the class allows it. It opens a new message about the first
- * row's item; the parent can pick another item of the class in the window.
+ * Portal, when the class allows it: { label, path }. It opens a new message
+ * about the first row's item; the parent can pick another item of the class
+ * in the window.
  */
 function speakButton(task, classId, { teacherName, askable }) {
   const [first] = task.lines;
   if (!askable || !first) return null;
   return {
     label: speakLabel(teacherName, task.lines.length),
-    url: parentAskLink({ studentId: task.studentId, classId, assessmentId: first.assessmentId, about: first.name }),
+    path: parentAskPath({ studentId: task.studentId, classId, assessmentId: first.assessmentId, about: first.name }),
   };
+}
+
+const PORTAL_PATH = '/parent/grades';
+const portalOrigin = () => process.env.FRONTEND_URL || '';
+
+/**
+ * How one guardian address opens the portal from its email:
+ * - signIn: a parent account linked to the child. Its buttons sign that parent
+ *   in on one tap (utils/emailLoginLink).
+ * - signup: no account at all. "Create your account" with the address filled
+ *   in; signup matches the children by email.
+ * - plain: anything else (a staff account, an archived or unlinked parent, two
+ *   accounts differing only by case). The buttons ask for a normal sign-in.
+ * `accounts` are selectRecipientAccounts rows.
+ */
+function recipientAccess(address, accounts) {
+  const mine = accounts.filter((a) => a.email === address);
+  if (mine.length === 0) return { kind: 'signup' };
+  const [account] = mine;
+  if (mine.length === 1 && account.role === 'PARENT' && account.linked && !account.is_archived) {
+    return { kind: 'signIn', userId: account.user_id };
+  }
+  return { kind: 'plain' };
+}
+
+/** The template's buttons for one address: { portalUrl, speak } or { setupUrl }. */
+function recipientButtons({ access, address, studentId, school, speak }) {
+  if (access.kind === 'signup') {
+    return { setupUrl: `${portalOrigin()}/signup/${String(school).toLowerCase()}/parent?email=${encodeURIComponent(address)}` };
+  }
+  const link = access.kind === 'signIn'
+    ? ((path) => emailLoginUrl({ token: signEmailLoginToken({ userId: access.userId, studentId, email: address }), next: path }))
+    : ((path) => `${portalOrigin()}${path}`);
+  return { portalUrl: link(PORTAL_PATH), speak: speak && { label: speak.label, url: link(speak.path) } };
+}
+
+/** Each address of a task with its access; an address lookup failure falls back to plain links. */
+async function recipientsOf(task) {
+  const addresses = task.emails.map((e) => String(e).trim().toLowerCase());
+  try {
+    const { rows } = await db.query(publishQueries.selectRecipientAccounts, [addresses, task.studentId]);
+    return addresses.map((address) => ({ address, access: recipientAccess(address, rows) }));
+  } catch (error) {
+    logger.warn('Could not look up accounts for the publish email; sending plain links:', error);
+    return addresses.map((address) => ({ address, access: { kind: 'plain' } }));
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -752,6 +800,8 @@ const previewPublishEmail = async (req, res) => {
     ]);
     const { className, schoolInfo } = emailContext;
     const sample = tasks[0];
+    // The preview goes to the teacher, so its buttons are plain links.
+    const previewSpeak = speakButton(sample, classId, emailContext);
     const trimmedBatchComment = typeof batchComment === 'string' && batchComment.trim() ? batchComment.trim() : null;
 
     await sendOrThrow(getResend(), {
@@ -762,7 +812,7 @@ const previewPublishEmail = async (req, res) => {
         studentName: sample.studentName,
         className,
         assessments: sample.lines,
-        speak: speakButton(sample, classId, emailContext),
+        speak: previewSpeak && { label: previewSpeak.label, url: `${portalOrigin()}${previewSpeak.path}` },
         runningGradeLabel: sample.runningGradeLabel,
         batchComment: trimmedBatchComment,
         schoolName: getSchoolName(school),
@@ -803,15 +853,14 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
   const schoolName = getSchoolName(school);
   const sender = schoolSender({ school, schoolInfo, role: 'academics' });
   const resend = getResend();
-  const portalUrl = `${process.env.FRONTEND_URL}/parent/grades`;
 
-  const logEmail = async (task, status, errorMessage) => {
+  const logEmail = async (task, status, errorMessage, addresses = task.emails) => {
     try {
       await db.query(publishQueries.insertPublicationEmail, [
         batchId,
         task.studentId,
         userId,
-        JSON.stringify(task.emails),
+        JSON.stringify(addresses),
         task.gradedAssessmentIds,
         school,
         status,
@@ -822,7 +871,8 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
     }
   };
 
-  for (const [index, task] of tasks.entries()) {
+  let first = true;
+  for (const task of tasks) {
     summary.attempted += 1;
 
     if (task.emails.length === 0) {
@@ -837,49 +887,53 @@ async function sendPublishEmails({ tasks, batchId, classId, school, userId, batc
       continue;
     }
 
-    try {
-      const result = await resend.emails.send({
-        ...sender,
-        to: task.emails,
-        subject: `${task.studentName} — New Grades Posted (${className})`,
-        html: getAssessmentPublishedEmailHTML({
-          studentName: task.studentName,
-          className,
-          assessments: task.lines,
-          speak: speakButton(task, classId, emailContext),
-          runningGradeLabel: task.runningGradeLabel,
-          batchComment: batchComment || null,
-          schoolName,
-          schoolInfo,
-          portalUrl,
-        }),
-      });
-
-      if (result.error) {
-        throw new Error(result.error.message || 'Email sending failed');
+    // One email per address: each carries its own buttons (a one-tap sign-in
+    // link is for one parent's account only, never a co-recipient's).
+    const speak = speakButton(task, classId, emailContext);
+    const sentTo = [];
+    const failures = [];
+    for (const { address, access } of await recipientsOf(task)) {
+      if (!first) await sleep(EMAIL_RATE_LIMIT_MS);
+      first = false;
+      try {
+        const result = await resend.emails.send({
+          ...sender,
+          to: [address],
+          subject: `${task.studentName} — New Grades Posted (${className})`,
+          html: getAssessmentPublishedEmailHTML({
+            studentName: task.studentName,
+            className,
+            assessments: task.lines,
+            runningGradeLabel: task.runningGradeLabel,
+            batchComment: batchComment || null,
+            schoolName,
+            schoolInfo,
+            ...recipientButtons({ access, address, studentId: task.studentId, school, speak }),
+          }),
+        });
+        if (result.error) throw new Error(result.error.message || 'Email sending failed');
+        sentTo.push(address);
+      } catch (sendError) {
+        logger.error(`Failed to send publish email for ${task.studentName}:`, sendError);
+        failures.push({ address, message: sendError.message });
       }
-
-      summary.sent += 1;
-      summary.results.push({
-        studentId: task.studentId,
-        studentName: task.studentName,
-        status: 'sent',
-        sentTo: task.emails,
-      });
-      await logEmail(task, 'sent', null);
-    } catch (sendError) {
-      logger.error(`Failed to send publish email for ${task.studentName}:`, sendError);
-      summary.failed += 1;
-      summary.results.push({
-        studentId: task.studentId,
-        studentName: task.studentName,
-        status: 'failed',
-        error: sendError.message,
-      });
-      await logEmail(task, 'failed', sendError.message);
     }
 
-    if (index < tasks.length - 1) await sleep(EMAIL_RATE_LIMIT_MS);
+    // The audit names exactly the addresses each outcome covers (the 4 pm
+    // Missing alert reads which address a digest reached).
+    if (sentTo.length > 0) {
+      summary.sent += 1;
+      summary.results.push({ studentId: task.studentId, studentName: task.studentName, status: 'sent', sentTo });
+      await logEmail(task, 'sent', null, sentTo);
+    }
+    if (failures.length > 0) {
+      const error = failures.map((f) => `${f.address}: ${f.message}`).join('; ');
+      if (sentTo.length === 0) {
+        summary.failed += 1;
+        summary.results.push({ studentId: task.studentId, studentName: task.studentName, status: 'failed', error });
+      }
+      await logEmail(task, 'failed', error, failures.map((f) => f.address));
+    }
   }
 
   return summary;
@@ -1051,6 +1105,8 @@ module.exports = {
   countUngradedStudents,
   buildEmailTasks,
   publishDigestTasks,
+  recipientAccess,
+  recipientButtons,
   topLevelLines,
   overlayDrafts,
   planPublish,

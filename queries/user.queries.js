@@ -23,6 +23,18 @@ const userQueries = {
 
     touchLastLogin: `UPDATE users SET last_login_at = NOW() WHERE user_id = $1`,
 
+    // The account a parent email's sign-in link names (utils/emailLoginLink),
+    // with whether it is still a guardian of the link's child. Same columns as
+    // loginUser. $1 user_id, $2 student_id
+    selectEmailLinkUser: `
+      SELECT u.user_id, u.email, u.username, u.password, u.first_name, u.last_name,
+            u.school, u.role, u.email_token, u.is_verified, u.is_verified_school, u.is_archived,
+            u.avatar, u.photo_path, u.created_at, u.last_modified_at,
+            EXISTS (SELECT 1 FROM parent_students ps WHERE ps.parent_id = u.user_id AND ps.student_id = $2) AS linked
+      FROM users u
+      WHERE u.user_id = $1
+    `,
+
     // Google sign-in candidates: the account already linked to this Google
     // account, plus every account whose email matches ignoring case (signup
     // never normalised addresses, so 'Jo@x.com' and 'jo@x.com' can coexist).

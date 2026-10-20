@@ -625,7 +625,8 @@ const currentGrade = (className, runningGradeLabel) =>
  * assessments: [{ name, group?, scoreLabel, pctLabel, isMissing?, comment? }],
  * one row per released item, already formatted by the caller, which owns the
  * grade math. `group` is the category the item sits in. `speak` ({ label, url })
- * adds "Speak to <teacher> about this" beside View in Parent Portal.
+ * adds "Speak to <teacher> about this" beside View in Parent Portal. `setupUrl`
+ * is for an address with no account: one "Create your account" button instead.
  */
 function getAssessmentPublishedEmailHTML({
   studentName,
@@ -637,6 +638,7 @@ function getAssessmentPublishedEmailHTML({
   schoolInfo,
   portalUrl,
   speak = null,
+  setupUrl = null,
 }) {
   const count = assessments.length === 1 ? 'One assessment' : `${assessments.length} assessments`;
 
@@ -650,7 +652,12 @@ function getAssessmentPublishedEmailHTML({
       gradeRowsTable(assessments),
       currentGrade(className, runningGradeLabel),
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
-      speak ? buttonRow([{ label: 'View in Parent Portal', url: portalUrl }, speak]) : button('View in Parent Portal', portalUrl),
+      ...(setupUrl
+        ? [
+          button('Create your account', setupUrl),
+          finePrint(`You don't have a SchoolMule account yet. Create one with this email address to see all of ${escapeHtml(studentName)}'s grades and message the teachers.`),
+        ]
+        : [speak ? buttonRow([{ label: 'View in Parent Portal', url: portalUrl }, speak]) : button('View in Parent Portal', portalUrl)]),
       signOff(schoolName),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),
