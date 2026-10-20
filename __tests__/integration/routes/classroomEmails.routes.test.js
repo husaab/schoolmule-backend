@@ -839,6 +839,23 @@ describe('Integration: classroom emails', () => {
     expect(text(sent()[2].html)).toContain('Root sketch · Science 7/10');
   });
 
+  it("previewSummary renders an address's or an account's summary as it would go out now, sending and recording nothing", async () => {
+    await gradedThisWeek(daliaId, 'Leaf rubbing', 7);
+    await guardian(null, daliaId, 'Lina Nassar', 'lina.nassar@example.com');
+    const lina = await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'lina.nassar@example.com', now: FRIDAY });
+    expect(lina.subject).toContain('Dalia');
+    expect(text(lina.html)).toContain('Leaf rubbing · Science 7/10');
+    expect(lina.html).toContain('/signup/alhaadiacademy/parent');
+    const mona = await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'mona.haddad@example.com', userId: MONA_ID, now: FRIDAY });
+    expect(mona.subject).toBe('Your week: Amal has 1 missing');
+    expect(mona.html).toContain('/parent/notifications');
+    // Huda has no child linked: nothing to send.
+    expect(await classroom.previewSummary({ school: 'ALHAADIACADEMY', email: 'huda.saleh@example.com', userId: HUDA_ID, now: FRIDAY }))
+      .toEqual({ skip: 'nothing to report' });
+    expect(sent()).toEqual([]);
+    expect(await jobs('weekly_summary')).toEqual([]);
+  });
+
   it('two publishes inside one 15-minute bucket produce one graded job listing both grades', async () => {
     const graded = (title) => assignment({ title, gradebook: { mode: 'category', categoryId: homeworkId, maxScore: 10 } });
     const first = await graded('Plant cell diagram');

@@ -475,8 +475,24 @@ async function drainClassroomJobs({ limit = DRAIN_LIMIT } = {}) {
   return handled;
 }
 
+/**
+ * A parent's summary as it would go out now, built the same way, without
+ * sending or recording anything: { subject, html }, or { skip } when there is
+ * nothing to send. For an account pass its userId; an address with no
+ * account passes only its email. (scripts/previewParentSummaries.js)
+ */
+async function previewSummary({ school, email, userId = null, now = new Date() }) {
+  const job = { kind: 'weekly_summary', school, recipient_id: userId, recipient_email: String(email).trim().toLowerCase(), payload: { frequency: 'weekly' } };
+  const { rows: [recipient] } = userId ? await db.query(q.selectRecipient, [userId]) : { rows: [addressRecipient(job)] };
+  if (!recipient) return { skip: 'no recipient' };
+  const built = await buildSummary(job, recipient, now);
+  if (built.skip) return { skip: built.skip };
+  return built.render(await schoolOf(school));
+}
+
 module.exports = {
   MAX_ATTEMPTS,
+  previewSummary,
   enqueueNewWork,
   enqueueGraded,
   runSchedule,
