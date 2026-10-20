@@ -17,6 +17,7 @@
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const { can } = require('../services/access/access');
 const engine = require('../services/analyticsEngine');
 const q = require('../queries/grading.queries');
 const classworkQueries = require('../queries/classwork.queries');
@@ -339,7 +340,8 @@ const ensureStudentThread = async (req, res) => {
     // A thread is titled with the item and shows in the family's Messages:
     // never for work the students can't see yet (a draft or scheduled item).
     if (!anchor.is_live) throw httpError(409, ITEM_NOT_POSTED_MESSAGE, 'ITEM_NOT_POSTED');
-    if (term && req.user.role !== 'ADMIN' && !anchor.in_current_term) throw httpError(400, PAST_TERM_MESSAGE);
+    // Past-term threads are the office's (messages.all), as in messaging.
+    if (term && !can(req, 'messages.all') && !anchor.in_current_term) throw httpError(400, PAST_TERM_MESSAGE);
     const { rows: [c] } = await db.query(messagingQueries.insertClassworkThread, [
       school, studentId, anchor.class_id, anchor.lead_teacher_id ?? null, anchor.title || 'Classwork', req.user.userId, itemId,
     ]);

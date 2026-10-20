@@ -13,7 +13,7 @@ const makeRes = () => {
 };
 const makeReq = (over = {}) => ({
   headers: {}, method: 'GET',
-  user: { school: 'ALHAADIACADEMY', role: 'ADMIN' },
+  user: { userId: 'admin-1', school: 'ALHAADIACADEMY', role: 'ADMIN' },
   ...over,
 });
 
@@ -67,6 +67,17 @@ describe('resolveSchoolYear', () => {
     await resolveSchoolYear(req, makeRes(), next);
     expect(next).toHaveBeenCalledWith();
     expect(req.schoolYear.isActive).toBe(false);
+  });
+
+  it('keeps a past year read-only for an admin without school_setup (RBAC)', async () => {
+    require('../../helpers/mockAccess').giveRole('admin-1', ['students', 'forms']);
+    db.query.mockSchoolYearsResponseOnce({ rows: [pastRow] });
+    const req = makeReq({ headers: { 'x-school-year': YEAR_ID }, method: 'PUT' });
+    const res = makeRes();
+    const next = jest.fn();
+    await resolveSchoolYear(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
   });
 
   it('passes through with null year and blocks writes when school has no years', async () => {

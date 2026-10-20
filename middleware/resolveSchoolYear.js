@@ -1,7 +1,14 @@
 const db = require('../config/database');
 const schoolYearQueries = require('../queries/schoolYear.queries');
+const { ensureAccess, can } = require('../services/access/access');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const editsPastYears = async (req) => {
+  if (req.user.role !== 'ADMIN') return false;
+  await ensureAccess(req);
+  return can(req, 'school_setup');
+};
 
 // Resolves the school-year context for every authenticated request.
 // Header X-School-Year (a school_year_id) selects a year explicitly;
@@ -45,7 +52,9 @@ const resolveSchoolYear = async (req, res, next) => {
       isActive: year.is_active,
     };
 
-    if (!year.is_active && req.user.role !== 'ADMIN' && req.method !== 'GET') {
+    // Past years are read-only except for an admin holding school_setup (RBAC):
+    // a restricted admin without it is as read-only as a teacher.
+    if (!year.is_active && req.method !== 'GET' && !(await editsPastYears(req))) {
       return res.status(403).json({
         status: 'failed',
         message: `${year.label} is read-only: only admins can modify a past school year`,

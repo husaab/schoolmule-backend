@@ -7,6 +7,7 @@ const userQueries = require("../queries/user.queries");
 const passwordQueries = require('../queries/password.queries');
 const logger = require("../logger");
 const { sessionAccess } = require('../services/access/access');
+const { recipientEmails } = require('../services/access/recipients');
 const { getVerificationEmailHTML, getConfirmedEmailHTML, getApprovalEmailHTML, getAdminNotifyEmailHTML,
   getResetEmailHTML } = require('../templates/emailTemplate');
 const approvalActions = require('../services/approvalActions');
@@ -213,18 +214,18 @@ const notifyAccountVerified = async (user) => {
     html: getConfirmedEmailHTML({ name: user.username }),
   }, "Email-verified confirmation failed to send", { userId: user.user_id });
 
-  let admins;
+  // Everyone who approves sign-ups (RBAC `users`, D12), never archived or
+  // unapproved accounts.
+  let recipients;
   try {
-    admins = await db.query(userQueries.getAdminsBySchool, [user.school]);
+    recipients = await recipientEmails(user.school, 'users');
   } catch (err) {
     logger.error({ err, school: user.school, userId: user.user_id }, "Admin lookup for approval notification failed");
     return;
   }
 
-  logger.info({ school: user.school, adminCount: admins.rows.length }, "Admins found for school");
-  const recipients = [...new Set(admins.rows.map(a => a.email).filter(Boolean))];
-
-  logger.info({ recipientCount: recipients.length }, "Notifying admins");
+  logger.info({ school: user.school, recipientCount: recipients.length }, "Notifying the school's approvers");
+  if (recipients.length === 0) return;
   await sendSafely(getResend(), {
     ...platformSender('notification'),
     to: recipients,

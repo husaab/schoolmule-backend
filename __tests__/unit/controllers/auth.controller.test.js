@@ -296,7 +296,7 @@ describe('GET /api/auth/confirm-email', () => {
     const user = buildUserRow({ is_verified: true });
     // verifyEmailToken query
     mockQueryResponse([user], 1);
-    // getAdminsBySchool query
+    // approver recipients (services/access/recipients.js)
     mockQueryResponse([{ email: 'admin@school.com' }]);
 
     const res = await request(app)
@@ -339,7 +339,7 @@ describe('GET /api/auth/confirm-email', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data).toEqual({ alreadyVerified: true });
     expect(mockSend).not.toHaveBeenCalled();
-    expect(callsTo(userQueries.getAdminsBySchool)).toHaveLength(0);
+    expect(callsTo(require('../../../services/access/recipients').SQL)).toHaveLength(0);
   });
 
   it('returns 400 when token is missing', async () => {

@@ -42,6 +42,8 @@ const bcrypt = require('bcrypt');
 const db = require('../../__mocks__/config/database');
 const userQueries = require('../../../queries/user.queries');
 const { verifySignInCode, GoogleSignInError } = require('../../../services/google/googleSignIn');
+// Sign-up notices go to the school's approvers (services/access/recipients.js).
+const { SQL: recipientsSql } = require('../../../services/access/recipients');
 
 const url = '/api/auth/google';
 
@@ -219,7 +221,7 @@ describe('POST /api/auth/google: sign in', () => {
     routeQueries(new Map([
       [userQueries.selectForGoogleSignIn, [user]],
       [userQueries.linkGoogleAccount, [{ ...user, is_verified: true, google_sub: GOOGLE.sub }]],
-      [userQueries.getAdminsBySchool, [{ email: 'admin.demo@example.com', first_name: 'Admin' }]],
+      [recipientsSql, [{ email: 'admin.demo@example.com' }]],
     ]));
 
     const res = await request(app).post(url).send({ code: 'c' });
@@ -260,7 +262,7 @@ describe('POST /api/auth/google: sign in', () => {
     routeQueries(new Map([
       [userQueries.selectForGoogleSignIn, [user]],
       [userQueries.linkGoogleAccount, [{ ...user, is_verified: true, google_sub: GOOGLE.sub }]],
-      [userQueries.getAdminsBySchool, new Error('connection reset')],
+      [recipientsSql, new Error('connection reset')],
     ]));
 
     const res = await request(app).post(url).send({ code: 'c' });
@@ -324,7 +326,7 @@ describe('POST /api/auth/google: sign up', () => {
         user_id: p[0], email: p[1], username: p[2], password: p[3], first_name: p[4], last_name: p[5],
         school: p[6], role: p[7], google_sub: p[8], email_token: null, is_verified: true, is_verified_school: false,
       })]],
-      [userQueries.getAdminsBySchool, [{ email: 'admin.demo@example.com', first_name: 'Admin' }]],
+      [recipientsSql, [{ email: 'admin.demo@example.com' }]],
     ]));
 
     const res = await request(app).post(url).send(body);

@@ -97,12 +97,6 @@ const financeQueries = {
     RETURNING settings
   `,
 
-  // Who gets the sync-failure email when FINANCE_ALERT_EMAIL is not set.
-  selectAdminEmails: `
-    SELECT email FROM users
-    WHERE school = $1 AND role = 'ADMIN' AND is_verified_school = true AND is_archived = false
-  `,
-
   markAlerted: `
     UPDATE finance_qbo_connections SET alerted_at = now() WHERE school = $1
   `,

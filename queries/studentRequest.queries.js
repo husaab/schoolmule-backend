@@ -44,12 +44,6 @@ const studentRequestQueries = {
       AND (student_requests_notified_at IS NULL OR student_requests_notified_at < NOW() - INTERVAL '1 hour')
     RETURNING name`,
 
-  //  The school's admins who can read the email. $1 school
-  selectAdminRecipients: `
-    SELECT DISTINCT email FROM users
-    WHERE school::text = $1 AND role = 'ADMIN' AND is_archived IS NOT TRUE AND is_verified
-      AND TRIM(COALESCE(email, '')) <> ''`,
-
   //  Pending and declined requests, newest first, with whether an account
   //  already uses the address. $1 school
   listForSchool: `

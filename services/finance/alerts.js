@@ -7,6 +7,7 @@
 // Alert failures never fail a sync run: they are logged and swallowed.
 
 const db = require('../../config/database');
+const { recipientEmails } = require('../access/recipients');
 const logger = require('../../logger');
 const queries = require('../../queries/finance.queries');
 const { getResend, sendOrThrow } = require('../../utils/emailUtils');
@@ -17,10 +18,10 @@ const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// FINANCE_ALERT_EMAIL wins; otherwise everyone holding finance (RBAC D12).
 async function recipients(school) {
   if (process.env.FINANCE_ALERT_EMAIL) return [process.env.FINANCE_ALERT_EMAIL];
-  const { rows } = await db.query(queries.selectAdminEmails, [school]);
-  return rows.map((r) => r.email).filter(Boolean);
+  return recipientEmails(school, 'finance');
 }
 
 /**

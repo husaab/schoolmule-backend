@@ -10,6 +10,7 @@
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const { can, effectiveRole } = require('../services/access/access');
 const engine = require('../services/analyticsEngine');
 const q = require('../queries/classwork.queries');
 const items = require('../services/classroom/classworkItems');
@@ -402,7 +403,9 @@ const attachmentUrl = async (req, res) => {
 // The caller's other classes in this class's year (admins: every class).
 const copySources = async (req, res) => {
   const { classId, school } = req.class;
-  const { userId, role } = req.user;
+  const { userId } = req.user;
+  // Copy sources: your own classes, or every class with classes.all (RBAC).
+  const role = effectiveRole(req, 'classes.all');
   try {
     const { rows: [cls] } = await db.query(q.selectClassSchoolYear, [classId]);
     const { rows } = await db.query(q.selectCopySources, [userId, school, role, cls?.school_year_id ?? null, classId]);
@@ -422,7 +425,7 @@ const copySources = async (req, res) => {
 // name, else ungraded (plain assessments are skipped), with warnings.
 const copyFromClass = async (req, res) => {
   const { classId, school } = req.class;
-  const { userId, role } = req.user;
+  const { userId } = req.user;
   const body = req.body || {};
   const sourceClassId = typeof body.sourceClassId === 'string' ? body.sourceClassId.toLowerCase() : '';
   if (!UUID_RE.test(sourceClassId)) return failed(res, 400, 'Choose a class to copy from');
@@ -443,7 +446,7 @@ const copyFromClass = async (req, res) => {
     const { rows: [source] } = await db.query(q.selectSourceClass, [sourceClassId, userId]);
     if (!source) return failed(res, 404, 'Class not found');
     const teaches = source.teacher_id === userId || source.is_co_teacher;
-    if (source.school !== school || (role !== 'ADMIN' && !teaches)) return failed(res, 403, 'Not authorized for that class');
+    if (source.school !== school || (!can(req, 'classes.all') && !teaches)) return failed(res, 403, 'Not authorized for that class');
 
     const result = await items.inTransaction((client) => items.copyClasswork(client, {
       sourceClassId, targetClassId: classId, school, userId, itemIds, includeTopics, copied,

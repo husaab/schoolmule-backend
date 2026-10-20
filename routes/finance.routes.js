@@ -1,5 +1,5 @@
 const express = require('express');
-const requireAdmin = require('../middleware/requireAdmin');
+const { requirePermission } = require('../middleware/access');
 const controller = require('../controllers/finance.controller');
 const families = require('../controllers/financeFamilies.controller');
 
@@ -9,7 +9,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Everything under /api/finance is admin-only. The public OAuth callback lives
 // in financePublic.routes.js, mounted before verifyUser.
-router.use(requireAdmin);
+router.use(requirePermission('finance'));
 
 router.param('familyId', (req, res, next, id) => {
   if (!UUID_RE.test(id)) return res.status(404).json({ status: 'failed', message: 'Family not found' });

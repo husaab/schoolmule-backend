@@ -152,12 +152,6 @@ const userQueries = {
       WHERE user_id = $1 AND school = $2 AND is_verified = true AND is_verified_school = false
     `,
 
-    getAdminsBySchool: `
-      SELECT email, first_name
-      FROM users
-      WHERE school = $1 AND role = 'ADMIN'
-    `,
-
       selectUsersBySchool: `
         SELECT
           user_id, email, username, first_name, last_name,

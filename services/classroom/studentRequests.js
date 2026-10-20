@@ -15,6 +15,7 @@
 // an account.
 
 const db = require('../../config/database');
+const { recipientEmails } = require('../access/recipients');
 const logger = require('../../logger');
 const q = require('../../queries/studentRequest.queries');
 const accountQueries = require('../../queries/studentAccount.queries');
@@ -88,12 +89,13 @@ async function notifyAdminsOfRequest(school) {
   try {
     const { rows: [claimed] } = await db.query(q.claimNotice, [school]);
     if (!claimed) return;
-    const { rows: admins } = await db.query(q.selectAdminRecipients, [school]);
-    if (admins.length === 0) return;
+    // Everyone who manages student accounts (RBAC `users`, D12/D13).
+    const to = await recipientEmails(school, 'users');
+    if (to.length === 0) return;
     const { rows: [pending] } = await db.query(q.countPending, [school]);
     await sendSafely(getResend(), {
       ...platformSender('notification'),
-      to: admins.map((a) => a.email),
+      to,
       subject: `Student account requests at ${claimed.name}`,
       html: getStudentRequestNotifyEmailHTML({ schoolName: claimed.name, pendingCount: pending.n }),
     }, 'Student request notification failed to send', { school });

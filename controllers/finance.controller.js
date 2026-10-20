@@ -11,6 +11,7 @@
 const ExcelJS = require('exceljs');
 const db = require('../config/database');
 const logger = require('../logger');
+const { accessForSession } = require('../services/access/access');
 const queries = require('../queries/finance.queries');
 const schoolYearQueries = require('../queries/schoolYear.queries');
 const qboAuth = require('../services/finance/qboAuth');
@@ -146,7 +147,11 @@ const oauthCallback = async (req, res) => {
     // The state proves who started the flow; the database proves they still may finish it.
     const { rows: users } = await db.query(queries.selectUserForOAuth, [state.userId]);
     const actor = users[0];
-    if (!actor || actor.role !== 'ADMIN' || actor.school !== state.school || actor.is_archived) {
+    // RBAC: they must still hold the finance permission, read fresh.
+    const access = actor && !actor.is_archived && actor.school === state.school
+      ? await accessForSession({ userId: actor.user_id, school: actor.school, baseRole: actor.role }, actor.role)
+      : null;
+    if (!access || !access.permissions.has('finance')) {
       logger.warn({ school: state.school, userId: state.userId }, 'QuickBooks connect refused: not an active admin of the school');
       return back('forbidden');
     }

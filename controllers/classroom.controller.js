@@ -11,6 +11,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const { can, effectiveRole } = require('../services/access/access');
 const q = require('../queries/studentAccount.queries');
 const identityQueries = require('../queries/classIdentity.queries');
 const classroomQueries = require('../queries/classroom.queries');
@@ -30,7 +31,13 @@ const { sendQrCards } = require('./studentAccount.controller');
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 
-const isAdminUser = (req) => req.user.role === 'ADMIN';
+// RBAC. Seeing every class of the school is classes.all (the class SQL still
+// branches on an effective role); a past school year is editable for an
+// admin holding school_setup (same rule as resolveSchoolYear); inviting
+// students is users (student accounts).
+const seesAllClasses = (req) => can(req, 'classes.all');
+const classRole = (req) => effectiveRole(req, 'classes.all');
+const editsPastYears = (req) => req.user.role === 'ADMIN' && can(req, 'school_setup');
 
 /** The class's teachers (lead first) with signed photo URLs, for the header and People. */
 async function loadTeachers(classId) {
@@ -43,7 +50,8 @@ async function loadTeachers(classId) {
 // for a grade, what is coming up across them, and their drafts and scheduled
 // items. Archived classes are left out unless archived=1.
 const listClasses = async (req, res) => {
-  const { userId, school, role } = req.user;
+  const { userId, school } = req.user;
+  const role = classRole(req);
   const yearId = req.schoolYear?.schoolYearId ?? null;
   const includeArchived = ['1', 'true'].includes(String(req.query.archived));
   const empty = { classes: [], toReview: [], comingUp: [], draftsAndScheduled: [] };
@@ -81,16 +89,18 @@ const getClass = async (req, res) => {
     ]);
     const row = cardRes.rows[0];
     if (!row) return failed(res, 404, 'Class not found');
-    const isAdmin = isAdminUser(req);
+    const isAdmin = seesAllClasses(req);
     // Advisory, for hiding controls: a past school year is read-only for teachers. The server enforces
     // that only for requests made in a past year (resolveSchoolYear), not for a past-year class by id.
     // requireClassOwnership has already let only an admin or this class's lead or co-teacher through.
     // Deleting follows editing: every teacher of a current-year class may delete it, as on /classes.
-    const canEdit = isAdmin || row.year_is_active !== false;
+    const canEdit = editsPastYears(req) || row.year_is_active !== false;
     return ok(res, {
       class: toHeaderClass(row),
       teachers,
-      permissions: { canEdit, canDelete: canEdit, isAdmin },
+      // isAdmin: school-level class power (classes.all); canRetryEmails: the
+      // Stream's "retry failed emails" (announcements.school).
+      permissions: { canEdit, canDelete: canEdit, isAdmin, canRetryEmails: can(req, 'announcements.school') },
       settings: {
         parentsReadPrivateComments: settings.parentsReadPrivateComments,
         studentPhotos: settings.studentPhotos,
@@ -119,7 +129,7 @@ const getPeople = async (req, res) => {
       teachers,
       students,
       counts: peopleCounts(students),
-      canInvite: isAdminUser(req),
+      canInvite: can(req, 'users'),
       canManageAccounts: true,
     });
   } catch (error) {
@@ -138,16 +148,16 @@ const STREAM_LIMIT = 50;
 // notices are the class's posted assignments, quizzes and materials.
 const getStream = async (req, res) => {
   const { classId, school } = req.class;
-  const { userId, role } = req.user;
+  const { userId } = req.user;
   const yearId = req.schoolYear?.schoolYearId ?? null;
   try {
     const [postRes, comingRes, previewRes, noticeRes] = await Promise.all([
       // Any scope with this class: class posts, and custom posts composed in this
       // class's Stream (their audience stays the picked students).
       db.query(announcementQueries.listAnnouncements, [
-        userId, school, role, null, classId, null, null, null, false, false, null, null, STREAM_LIMIT,
+        userId, school, effectiveRole(req, 'announcements.school'), null, classId, null, null, null, false, false, null, null, STREAM_LIMIT,
       ]),
-      yearId ? db.query(classroomQueries.COMING_UP, [userId, school, role, yearId, classId]) : Promise.resolve({ rows: [] }),
+      yearId ? db.query(classroomQueries.COMING_UP, [userId, school, classRole(req), yearId, classId]) : Promise.resolve({ rows: [] }),
       db.query(announcementQueries.selectAudiencePreview, [school, 'class', classId, null, yearId, null]),
       db.query(classroomQueries.STREAM_NOTICES, [classId]),
     ]);
