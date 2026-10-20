@@ -17,6 +17,11 @@ const { v4: uuidv4 } = require('uuid');
 
 const app = getApp();
 
+// Per-class routes look the class up first (requireClassOwnership); the test
+// admin is a full admin, so any class of the school lets them in.
+const mockClassGuard = () =>
+  mockQueryResponse([{ class_id: 'guarded-class', school: TEST_SCHOOL, teacher_id: 'some-teacher', is_co_teacher: false }]);
+
 function authGet(url) {
   const token = mockAdminUser();
   return request(app).get(url).set('Authorization', `Bearer ${token}`);
@@ -71,6 +76,7 @@ describe('Class Controller', () => {
   // ── getClassById ──────────────────────────────────────────────
   describe('GET /api/classes/:id', () => {
     it('should return 200 with the class', async () => {
+      mockClassGuard();
       const row = buildClassRow();
       // selectClassById
       mockQueryResponse([row]);
@@ -83,6 +89,7 @@ describe('Class Controller', () => {
     });
 
     it('carries the class identity, options and archive state, defaulting from the subject', async () => {
+      mockClassGuard();
       const row = buildClassRow({ subject: 'Quran Teaching', grade: '3' });
       mockQueryResponse([row]);
       mockQueryResponse([]);
@@ -98,6 +105,7 @@ describe('Class Controller', () => {
     });
 
     it('reports a stored pick, option and archive time', async () => {
+      mockClassGuard();
       const row = buildClassRow({
         subject: 'Math', banner_key: 'art', color: 'rose', accept_late: false, show_class_average: true,
         archived_at: '2026-10-01T12:00:00.000Z',
@@ -114,12 +122,14 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 for invalid UUID', async () => {
+      mockClassGuard();
       const res = await authGet('/api/classes/not-a-uuid');
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('error');
     });
 
     it('should return 404 when class not found', async () => {
+      mockClassGuard();
       const id = uuidv4();
       mockQueryResponse([]);
       const res = await authGet(`/api/classes/${id}`);
@@ -128,6 +138,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       const id = uuidv4();
       mockQueryError('DB error');
       const res = await authGet(`/api/classes/${id}`);
@@ -261,6 +272,7 @@ describe('Class Controller', () => {
   // ── updateClass ──────────────────────────────────────────────
   describe('PATCH /api/classes/:id', () => {
     it('should return 200 on successful update', async () => {
+      mockClassGuard();
       const row = buildClassRow({ subject: 'Science' });
       mockQueryResponse([row], 1);
       const id = row.class_id;
@@ -270,6 +282,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when class not found', async () => {
+      mockClassGuard();
       mockQueryResponse([], 0);
       const res = await authPatch(`/api/classes/${uuidv4()}`).send({ subject: 'Science' });
       expect(res.status).toBe(404);
@@ -277,6 +290,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('update failed');
       const res = await authPatch(`/api/classes/${uuidv4()}`).send({ subject: 'Science' });
       expect(res.status).toBe(500);
@@ -287,6 +301,7 @@ describe('Class Controller', () => {
   // ── deleteClass ──────────────────────────────────────────────
   describe('DELETE /api/classes/:id', () => {
     it('should return 200 on successful deletion', async () => {
+      mockClassGuard();
       mockQueryResponse([], 1);
       const res = await authDelete(`/api/classes/${uuidv4()}`);
       expect(res.status).toBe(200);
@@ -294,6 +309,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when class not found', async () => {
+      mockClassGuard();
       mockQueryResponse([], 0);
       const res = await authDelete(`/api/classes/${uuidv4()}`);
       expect(res.status).toBe(404);
@@ -301,6 +317,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('delete failed');
       const res = await authDelete(`/api/classes/${uuidv4()}`);
       expect(res.status).toBe(500);
@@ -311,6 +328,7 @@ describe('Class Controller', () => {
   // ── getStudentsInClass ──────────────────────────────────────────────
   describe('GET /api/classes/:classId/students', () => {
     it('should return 200 with students', async () => {
+      mockClassGuard();
       const student = buildStudentRow();
       mockQueryResponse([student]);
       const res = await authGet(`/api/classes/${uuidv4()}/students`);
@@ -320,6 +338,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('DB error');
       const res = await authGet(`/api/classes/${uuidv4()}/students`);
       expect(res.status).toBe(500);
@@ -330,6 +349,7 @@ describe('Class Controller', () => {
   // ── getAssessmentsByClass ──────────────────────────────────────────────
   describe('GET /api/classes/:classId/assessments', () => {
     it('should return 200 with assessments', async () => {
+      mockClassGuard();
       const assessment = buildAssessmentRow();
       mockQueryResponse([assessment]);
       const res = await authGet(`/api/classes/${uuidv4()}/assessments`);
@@ -339,6 +359,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('DB error');
       const res = await authGet(`/api/classes/${uuidv4()}/assessments`);
       expect(res.status).toBe(500);
@@ -349,6 +370,7 @@ describe('Class Controller', () => {
   // ── addStudentToClass ──────────────────────────────────────────────
   describe('POST /api/classes/:classId/students', () => {
     it('should return 201 on successful enrollment', async () => {
+      mockClassGuard();
       const classId = uuidv4();
       const studentId = uuidv4();
       mockQueryResponse([{ class_id: classId, student_id: studentId }]);
@@ -359,12 +381,14 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 when studentId is missing', async () => {
+      mockClassGuard();
       const res = await authPost(`/api/classes/${uuidv4()}/students`).send({});
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
     });
 
     it('should return 409 on duplicate enrollment', async () => {
+      mockClassGuard();
       const err = new Error('duplicate key');
       err.code = '23505';
       const db = require('../../__mocks__/config/database');
@@ -377,6 +401,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('insert failed');
       const res = await authPost(`/api/classes/${uuidv4()}/students`).send({
         studentId: uuidv4(),
@@ -389,6 +414,7 @@ describe('Class Controller', () => {
   // ── removeStudentFromClass ──────────────────────────────────────────────
   describe('DELETE /api/classes/:classId/students/:studentId', () => {
     it('should return 200 on successful removal', async () => {
+      mockClassGuard();
       mockQueryResponse([], 1);
       const res = await authDelete(`/api/classes/${uuidv4()}/students/${uuidv4()}`);
       expect(res.status).toBe(200);
@@ -396,6 +422,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when enrollment not found', async () => {
+      mockClassGuard();
       mockQueryResponse([], 0);
       const res = await authDelete(`/api/classes/${uuidv4()}/students/${uuidv4()}`);
       expect(res.status).toBe(404);
@@ -403,6 +430,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('delete failed');
       const res = await authDelete(`/api/classes/${uuidv4()}/students/${uuidv4()}`);
       expect(res.status).toBe(500);
@@ -413,6 +441,7 @@ describe('Class Controller', () => {
   // ── bulkEnrollStudentsToClass ──────────────────────────────────────────────
   describe('POST /api/classes/:classId/students/bulk', () => {
     it('should return 201 when enrolling specific students', async () => {
+      mockClassGuard();
       const classId = uuidv4();
       const sid1 = uuidv4();
       const sid2 = uuidv4();
@@ -429,6 +458,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 201 when enrolling all in grade', async () => {
+      mockClassGuard();
       const classId = uuidv4();
       const classRow = buildClassRow({ class_id: classId, grade: 5 });
       const sid = uuidv4();
@@ -448,6 +478,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 when studentIds is empty and enrollAllInGrade is false', async () => {
+      mockClassGuard();
       const res = await authPost(`/api/classes/${uuidv4()}/students/bulk`).send({
         studentIds: [],
       });
@@ -456,6 +487,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when class not found for enrollAllInGrade', async () => {
+      mockClassGuard();
       mockQueryResponse([]);
       const res = await authPost(`/api/classes/${uuidv4()}/students/bulk`).send({
         enrollAllInGrade: true,
@@ -465,6 +497,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('bulk error');
       const res = await authPost(`/api/classes/${uuidv4()}/students/bulk`).send({
         studentIds: [uuidv4()],
@@ -477,6 +510,7 @@ describe('Class Controller', () => {
   // ── bulkUnenrollStudentsFromClass ──────────────────────────────────────────────
   describe('POST /api/classes/:classId/students/bulk-unenroll', () => {
     it('should return 200 on successful bulk unenrollment', async () => {
+      mockClassGuard();
       mockQueryResponse([], 5);
       const res = await authPost(`/api/classes/${uuidv4()}/students/bulk-unenroll`);
       expect(res.status).toBe(200);
@@ -484,6 +518,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('unenroll error');
       const res = await authPost(`/api/classes/${uuidv4()}/students/bulk-unenroll`);
       expect(res.status).toBe(500);
@@ -494,6 +529,7 @@ describe('Class Controller', () => {
   // ── duplicateClass ──────────────────────────────────────────────
   describe('POST /api/classes/:sourceClassId/duplicate', () => {
     it('should return 201 on successful duplication', async () => {
+      mockClassGuard();
       const sourceId = uuidv4();
       const sourceRow = buildClassRow({ class_id: sourceId });
       const newRow = buildClassRow();
@@ -526,6 +562,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 for invalid source class ID format', async () => {
+      mockClassGuard();
       const res = await authPost('/api/classes/not-a-uuid/duplicate').send({
         grade: 5,
         subject: 'Science',
@@ -538,6 +575,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 when required fields are missing', async () => {
+      mockClassGuard();
       const res = await authPost(`/api/classes/${uuidv4()}/duplicate`).send({
         grade: 5,
       });
@@ -546,6 +584,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when source class not found', async () => {
+      mockClassGuard();
       const sourceId = uuidv4();
       mockTransactionSequence([
         { rows: [] },
@@ -563,6 +602,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on transaction error', async () => {
+      mockClassGuard();
       mockTransactionError(0, 'tx failed');
       const res = await authPost(`/api/classes/${uuidv4()}/duplicate`).send({
         grade: 5,
@@ -580,6 +620,7 @@ describe('Class Controller', () => {
   // ── addTeacherToClass ──────────────────────────────────────────────
   describe('POST /api/classes/:classId/teachers', () => {
     it('should return 201 on successful addition', async () => {
+      mockClassGuard();
       const classId = uuidv4();
       const teacherId = uuidv4();
       const classRow = buildClassRow({ class_id: classId, teacher_id: TEST_TEACHER_USER_ID });
@@ -593,12 +634,14 @@ describe('Class Controller', () => {
     });
 
     it('should return 400 when teacherId is missing', async () => {
+      mockClassGuard();
       const res = await authPost(`/api/classes/${uuidv4()}/teachers`).send({});
       expect(res.status).toBe(400);
       expect(res.body.status).toBe('failed');
     });
 
     it('should return 404 when class not found', async () => {
+      mockClassGuard();
       mockQueryResponse([]);
       const res = await authPost(`/api/classes/${uuidv4()}/teachers`).send({
         teacherId: uuidv4(),
@@ -608,6 +651,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 409 when adding primary teacher as additional', async () => {
+      mockClassGuard();
       const classId = uuidv4();
       const classRow = buildClassRow({ class_id: classId, teacher_id: TEST_TEACHER_USER_ID });
       mockQueryResponse([classRow]);
@@ -619,6 +663,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('insert failed');
       const res = await authPost(`/api/classes/${uuidv4()}/teachers`).send({
         teacherId: uuidv4(),
@@ -631,6 +676,7 @@ describe('Class Controller', () => {
   // ── removeTeacherFromClass ──────────────────────────────────────────────
   describe('DELETE /api/classes/:classId/teachers/:teacherId', () => {
     it('should return 200 on successful removal', async () => {
+      mockClassGuard();
       mockQueryResponse([], 1);
       const res = await authDelete(`/api/classes/${uuidv4()}/teachers/${uuidv4()}`);
       expect(res.status).toBe(200);
@@ -638,6 +684,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 404 when assignment not found', async () => {
+      mockClassGuard();
       mockQueryResponse([], 0);
       const res = await authDelete(`/api/classes/${uuidv4()}/teachers/${uuidv4()}`);
       expect(res.status).toBe(404);
@@ -645,6 +692,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 on database error', async () => {
+      mockClassGuard();
       mockQueryError('delete failed');
       const res = await authDelete(`/api/classes/${uuidv4()}/teachers/${uuidv4()}`);
       expect(res.status).toBe(500);

@@ -5,6 +5,8 @@
 // class_teachers) or holds classes.all (RBAC, middleware/access.js).
 // requireClassOwnership.or('attendance.classes') also lets in holders of the
 // given keys: class attendance for every class without the gradebook.
+// requireClassOwnership.with({ keys, classIdOf }) reads the class id from
+// elsewhere (e.g. the body); a missing id is a 400.
 //
 // On success: req.class = { classId, school, teacherId }.
 
@@ -15,10 +17,13 @@ const { assertKey } = require('../services/access/access');
 
 const NOT_AUTHORIZED = { status: 'failed', message: 'Not authorized for this class' };
 
-const makeClassGuard = (extraKeys = []) => {
+const fromParams = (req) => req.params.classId;
+
+const makeClassGuard = (extraKeys = [], classIdOf = fromParams) => {
   extraKeys.forEach(assertKey);
   return withAccess(async (req, res, next) => {
-    const { classId } = req.params;
+    const classId = classIdOf(req);
+    if (!classId) return res.status(400).json({ status: 'failed', message: 'classId is required' });
 
     try {
       const { rows } = await db.query(
@@ -58,5 +63,6 @@ const makeClassGuard = (extraKeys = []) => {
 
 const requireClassOwnership = makeClassGuard();
 requireClassOwnership.or = (...keys) => makeClassGuard(keys);
+requireClassOwnership.with = ({ keys = [], classIdOf = fromParams } = {}) => makeClassGuard(keys, classIdOf);
 
 module.exports = requireClassOwnership;

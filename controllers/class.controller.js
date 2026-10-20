@@ -9,6 +9,28 @@ const { v4: uuidv4 } = require("uuid");
 const { identityOf, optionsOf } = require("../services/classroom/classView");
 const { copyAttachments, copyQuizContent } = require("../services/classroom/classworkItems");
 const { removeObjects } = require("../utils/attachmentUpload");
+const { canAny } = require("../services/access/access");
+
+// RBAC. Class lists (names, grades, teachers) show the whole school to every
+// area that works across classes; anyone else sees the classes they teach.
+// What is inside a class (gradebook, roster) is guarded per class in
+// routes/class.routes.js. Managing classes they don't teach (or giving a
+// class to another teacher) is classes.manage, or classes.all.
+const CLASS_LIST_KEYS = [
+  "classes.all", "classes.manage", "attendance.classes", "report_cards", "students",
+  "users", "messages.all", "announcements.school", "scheduling",
+];
+const seesAllClasses = (req) => canAny(req, ...CLASS_LIST_KEYS);
+const managesClasses = (req) => canAny(req, "classes.manage", "classes.all");
+const teaches = (userId, c, atMap) =>
+  c.teacher_id === userId || (atMap[c.class_id] || []).some((t) => t.teacherId === userId);
+const visibleClasses = (req, rows, atMap) => rows
+  .filter((c) => String(c.school) === String(req.user.school))
+  .filter((c) => seesAllClasses(req) || teaches(req.user.userId, c, atMap));
+const NOT_YOURS = {
+  status: "failed",
+  message: "Only someone who manages classes can give a class to another teacher",
+};
 
 // ── Shared helper: fetch additional teachers for a single class ──
 const fetchAdditionalTeachers = async (classId) => {
@@ -82,7 +104,7 @@ const getAllClasses = async (req, res) => {
     logger.info(`All classes fetched successfully for school="${requestedSchool}"`);
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
+      data: visibleClasses(req, rows, atMap).map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -158,7 +180,7 @@ const getClassesByGrade = async (req, res) => {
     );
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
+      data: visibleClasses(req, rows, atMap).map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -195,7 +217,7 @@ const getClassesByTeacher = async (req, res) => {
     logger.info(`Classes fetched successfully for teacherName="${teacherName}"`);
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || [])),
+      data: visibleClasses(req, rows, atMap).map((c) => mapClassRow(c, atMap[c.class_id] || [])),
     });
   } catch (error) {
     logger.error(error);
@@ -224,6 +246,11 @@ const createClass = async (req, res) => {
       message:
         "Missing required fields: school, grade, subject, teacherName, teacherId, termId, termName"
     });
+  }
+
+  // Anyone on staff may create a class they lead themselves.
+  if (teacherId !== req.user.userId && !managesClasses(req)) {
+    return res.status(403).json(NOT_YOURS);
   }
 
   const client = await db.connect();
@@ -288,8 +315,9 @@ const createClass = async (req, res) => {
 //
 const updateClass = async (req, res) => {
   const { id } = req.params;
+  // A class never moves school: any `school` in the body is ignored.
+  const school = null;
   const {
-    school          = null,
     grade           = null,
     subject         = null,
     teacherName     = null,
@@ -297,6 +325,12 @@ const updateClass = async (req, res) => {
     termId          = null,
     termName        = null
   } = req.body;
+
+  // requireClassOwnership set req.class; handing the class to someone else
+  // is classes.manage.
+  if (teacherId && req.class && teacherId !== req.class.teacherId && !managesClasses(req)) {
+    return res.status(403).json(NOT_YOURS);
+  }
 
   // Build the parameter array in the same order as `updateClassById`
   // (i.e. $1=school, $2=grade, $3=subject, $4=teacher_name, $5=teacher_id, $6=term_id, $7=term_name, $8=class_id)
@@ -656,6 +690,10 @@ const getClassesByTeacherId = async (req, res) => {
 
   const schoolYearId = req.schoolYear?.schoolYearId || null;
 
+  if (teacherId !== req.user.userId && !seesAllClasses(req)) {
+    return res.status(403).json({ status: "failed", message: "You can only list your own classes" });
+  }
+
   try {
     // Run the new query
     const { rows } = await db.query(
@@ -669,7 +707,7 @@ const getClassesByTeacherId = async (req, res) => {
     logger.info(`Classes fetched successfully for teacher_id="${teacherId}"`)
     return res.status(200).json({
       status: "success",
-      data: rows.map((c) => mapClassRow(c, atMap[c.class_id] || []))
+      data: visibleClasses(req, rows, atMap).map((c) => mapClassRow(c, atMap[c.class_id] || []))
     })
   } catch (error) {
     logger.error(error)
@@ -702,6 +740,10 @@ const duplicateClass = async (req, res) => {
       message: "Missing required fields: grade, subject, teacherName, teacherId, termId, termName",
     });
   }
+  if (teacherId !== req.user.userId && !managesClasses(req)) {
+    return res.status(403).json(NOT_YOURS);
+  }
+
 
   const client = await db.connect();
   // Storage objects copied for classwork attachments; removed if the copy rolls back.

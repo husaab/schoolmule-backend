@@ -9,6 +9,9 @@ beforeAll(() => {
   app = getApp();
 });
 
+// The class guard looks the class up first (requireClassOwnership).
+const mockClass = () => mockQueryResponse([{ class_id: 'class-123', school: TEST_SCHOOL, teacher_id: 'someone', is_co_teacher: false }]);
+
 // Attendance routes are behind verifyUser middleware (mounted after app.use(verifyUser))
 const authHeader = () => {
   const token = mockAdminUser();
@@ -95,6 +98,7 @@ describe('POST /api/attendance/class', () => {
   const url = '/api/attendance/class';
 
   it('records class attendance successfully', async () => {
+    mockClass();
     mockQueryResponse([]);
 
     const res = await request(app)
@@ -115,6 +119,7 @@ describe('POST /api/attendance/class', () => {
   });
 
   it('returns 400 when required fields are missing', async () => {
+    mockClass();
     const res = await request(app)
       .post(url)
       .set(authHeader())
@@ -125,6 +130,7 @@ describe('POST /api/attendance/class', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockClass();
     mockQueryError('DB error');
 
     const res = await request(app)
@@ -174,14 +180,17 @@ describe('GET /api/attendance/general', () => {
     expect(res.body.status).toBe('failed');
   });
 
-  it('returns 400 when school is missing', async () => {
+  it("reads the caller's school, never the query's", async () => {
+    mockQueryResponse([]);
     const res = await request(app)
       .get(url)
       .set(authHeader())
-      .query({ date: '2025-10-15' });
+      .query({ date: '2025-10-15', school: 'PLAYGROUND' });
 
-    expect(res.status).toBe(400);
-    expect(res.body.status).toBe('failed');
+    expect(res.status).toBe(200);
+    const db = require('../../__mocks__/config/database');
+    const call = db.query.mock.calls.find(([sql]) => /general_attendance/.test(sql));
+    expect(call[1]).toEqual(['2025-10-15', TEST_SCHOOL]);
   });
 
   it('returns empty array when no attendance records', async () => {
@@ -212,6 +221,7 @@ describe('GET /api/attendance/general', () => {
 // ─── GET /api/attendance/class/:classId ─────────────────────────
 describe('GET /api/attendance/class/:classId', () => {
   it('returns class attendance by date', async () => {
+    mockClass();
     const rows = [
       buildClassAttendanceRow({ student_id: 's1', status: 'PRESENT' }),
       buildClassAttendanceRow({ student_id: 's2', status: 'LATE' }),
@@ -230,6 +240,7 @@ describe('GET /api/attendance/class/:classId', () => {
   });
 
   it('returns 400 when date query param is missing', async () => {
+    mockClass();
     const res = await request(app)
       .get('/api/attendance/class/class-123')
       .set(authHeader());
@@ -239,6 +250,7 @@ describe('GET /api/attendance/class/:classId', () => {
   });
 
   it('returns 500 on database error', async () => {
+    mockClass();
     mockQueryError('DB error');
 
     const res = await request(app)
@@ -248,5 +260,31 @@ describe('GET /api/attendance/class/:classId', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.status).toBe('failed');
+  });
+});
+
+describe('RBAC on attendance', () => {
+  const { giveRole } = require('../../helpers/mockAccess');
+  const { TEST_ADMIN_USER_ID, mockTeacherUser } = require('../../helpers/mockAuth');
+
+  it('lets office staff with attendance.classes mark a class they do not teach', async () => {
+    giveRole(TEST_ADMIN_USER_ID, ['attendance.daily', 'attendance.classes']);
+    mockClass();
+    mockQueryResponse([]);
+    const res = await request(app).post('/api/attendance/class').set(authHeader())
+      .send({ classId: 'class-123', attendanceDate: '2025-10-15', entries: [] });
+    expect(res.status).toBe(200);
+  });
+
+  it("keeps a teacher out of another teacher's class attendance", async () => {
+    mockClass();
+    const res = await request(app).get('/api/attendance/class/class-123').set({ Authorization: `Bearer ${mockTeacherUser()}` }).query({ date: '2025-10-15' });
+    expect(res.status).toBe(403);
+  });
+
+  it('needs attendance.daily for general attendance', async () => {
+    giveRole(TEST_ADMIN_USER_ID, ['attendance.classes']);
+    const res = await request(app).get('/api/attendance/general').set(authHeader()).query({ date: '2025-10-15' });
+    expect(res.status).toBe(403);
   });
 });

@@ -3,14 +3,15 @@ const attendanceQueries = require('../queries/attendance.queries');
 const logger = require('../logger');
 
 // POST /attendance/general
-// POST /attendance/general
-// Body: { attendanceDate, entries: [{ studentId, status }], school }
+// Body: { attendanceDate, entries: [{ studentId, status }] }. The school is
+// always the caller's (a `school` in the body is ignored).
 const submitGeneralAttendance = async (req, res) => {
-  const { attendanceDate, entries, school } = req.body;
-  if (!attendanceDate || !Array.isArray(entries) || !school) {
+  const { attendanceDate, entries } = req.body;
+  const { school } = req.user;
+  if (!attendanceDate || !Array.isArray(entries)) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing required fields: attendanceDate, entries[], school',
+      message: 'Missing required fields: attendanceDate, entries[]',
     });
   }
 
@@ -70,12 +71,14 @@ const submitClassAttendance = async (req, res) => {
   }
 };
 
+// GET /attendance/general?date=  (school from the token; ?school= is ignored)
 const getGeneralAttendanceByDate = async (req, res) => {
-  const { date, school } = req.query;
-  if (!date || !school) {
+  const { date } = req.query;
+  const { school } = req.user;
+  if (!date) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Missing required query params: date, school',
+      message: 'Missing required query param: date',
     });
   }
 
