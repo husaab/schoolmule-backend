@@ -244,7 +244,7 @@ const previewPublish = async (req, res) => {
     const { requested, allAssessments } = resolved;
     const { cascade, scoreRowsByStudent } = planPublish(resolved);
     const warnings = countUngradedStudents(requested, allAssessments, scoreRowsByStudent);
-    const tasks = buildEmailTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
+    const tasks = publishDigestTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
     const recipients = await resolveRecipients(tasks);
 
     return res.status(200).json({
@@ -326,7 +326,7 @@ function planPublish({ requested, allAssessments, scoreRowsByStudent, pendingDra
  * already represented by its category's rollup, and listing both would
  * double-report the same work.
  */
-function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { visibleLines = false, alsoListed = null } = {}) {
+function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { visibleLines = false, alsoListed = null, publishing = [] } = {}) {
   const publishedSet = new Set(publishedIds);
   const topLevelPublished = allAssessments.filter(
     (a) => publishedSet.has(a.assessment_id) && !a.parent_assessment_id,
@@ -334,8 +334,11 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { vis
 
   // Every assessment the parent can see after this publish, including
   // earlier batches, so the running grade in the email matches the portal.
+  // `publishing` names columns this publish releases that aren't lines
+  // themselves (a child listed through its category's line, before commit).
+  const releasing = new Set([...publishedSet, ...publishing]);
   const allPublishedIds = new Set(
-    allAssessments.filter((a) => a.is_published || publishedSet.has(a.assessment_id)).map((a) => a.assessment_id),
+    allAssessments.filter((a) => a.is_published || releasing.has(a.assessment_id)).map((a) => a.assessment_id),
   );
   const parentVisible = visibleAssessments(allPublishedIds, allAssessments);
   // A Classwork publish of one column under a category (sendGradeDigest)
@@ -519,7 +522,7 @@ const publishAssessments = async (req, res) => {
       const { rows: committedRows } = await db.query(publishQueries.selectClassScoreRows, [classId]);
       committedScoreRows = groupScoreRowsByStudent(committedRows);
     }
-    const tasks = buildEmailTasks(cascade.finalIds, freshAssessments, committedScoreRows);
+    const tasks = publishDigestTasks(cascade.finalIds, freshAssessments, committedScoreRows);
     tasksWithEmails = await resolveRecipients(tasks);
 
     // New marks invalidate this week's AI summary for the affected students.
@@ -600,6 +603,25 @@ function topLevelLines(assessmentIds, allAssessments) {
     if (a.assessment_id !== id) alsoListed.set(a.assessment_id, [...(alsoListed.get(a.assessment_id) || []), id]);
   }
   return { lineIds, alsoListed };
+}
+
+/**
+ * The parent digest for the gradebook's Publish (its preview, the send and
+ * the preview email) of `finalIds`, the cascade's result. Each column is
+ * listed through its top-level line, so a column inside a category published
+ * on its own (the category window's "Publish 1 selected") is emailed as its
+ * category's line, built from what parents will see: published columns plus
+ * the ones being published now. A category published with its children, or
+ * a column on its own, reads exactly as before.
+ */
+function publishDigestTasks(finalIds, allAssessments, scoreRowsByStudent) {
+  const { lineIds, alsoListed } = topLevelLines(finalIds, allAssessments);
+  // A category published itself is named alone in the audit row, as before
+  // (the 4 pm Missing alert reads it); only a child published without its
+  // category is named under the category's line, as Classwork's digest does.
+  const selected = new Set(finalIds);
+  for (const lineId of [...alsoListed.keys()]) if (selected.has(lineId)) alsoListed.delete(lineId);
+  return buildEmailTasks(lineIds, allAssessments, scoreRowsByStudent, { visibleLines: true, alsoListed, publishing: finalIds });
 }
 
 /**
@@ -692,7 +714,7 @@ const previewPublishEmail = async (req, res) => {
       return typeof draft === 'string' && draft.trim() ? { ...a, parent_comment: draft.trim() } : a;
     });
     const { cascade, scoreRowsByStudent } = planPublish({ ...resolved, allAssessments });
-    const tasks = buildEmailTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
+    const tasks = publishDigestTasks(cascade.finalIds, allAssessments, scoreRowsByStudent);
     if (tasks.length === 0) {
       return res.status(400).json({ status: 'failed', message: 'Nobody has a score for this selection yet, so there is no email to preview' });
     }
@@ -988,6 +1010,7 @@ module.exports = {
   expandCascade,
   countUngradedStudents,
   buildEmailTasks,
+  publishDigestTasks,
   topLevelLines,
   overlayDrafts,
   planPublish,

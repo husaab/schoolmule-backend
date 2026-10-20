@@ -499,6 +499,34 @@ describe('Integration: grading and per-student Publish', () => {
     expect(sent().map((m) => m.to)).toEqual([['lina.nassar@example.com']]);
   });
 
+  it("the gradebook's Publish of one column inside a category (the category window) counts and emails its parents, as the category's line", async () => {
+    const testsId = await assessment(sciId, 'Tests', { isParent: true, weight: 30 });
+    const unit1 = await assessment(sciId, 'Unit Test 1', { parentId: testsId, weight: 15, max: 50 });
+    const unit2 = await assessment(sciId, 'Unit Test 2', { parentId: testsId, weight: 15, max: 50 });
+    await post(`/api/studentAssessments/classes/${sciId}/scores`, {
+      scores: [
+        { studentId: amalId, assessmentId: unit1, score: 10 },
+        { studentId: amalId, assessmentId: unit2, score: 45 },
+        { studentId: bilalId, assessmentId: unit2, score: 30 },
+      ],
+    });
+
+    // It used to say "notify 0 parents covering 0 students".
+    const preview = (await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [unit2] })).data;
+    expect(preview.publishAssessmentIds).toEqual([unit2]);
+    expect(preview).toMatchObject({ studentCount: 2, recipientCount: 2, studentsWithoutEmail: 0 });
+
+    const res = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
+      .send({ assessmentIds: [unit2] }), 201);
+    expect(res.data.emailSummary).toMatchObject({ sent: 2, failed: 0 });
+    expect(await isPublished(unit2)).toBe(true);
+    expect(await isPublished(unit1)).toBe(false);
+    const toAmal = sent().find((m) => m.to.includes('mona.haddad@example.com'));
+    expect(toAmal.html).toContain('Tests');
+    expect(toAmal.html).toContain('90%'); // Unit Test 2 alone: Unit Test 1 isn't published, so it stays out of the line
+    expect(sent().map((m) => m.to).sort()).toEqual([['mona.haddad@example.com'], ['rania.karim@example.com']]);
+  });
+
   it("a grading-view Publish of a column that counts on its own sends today's digest to the published students' parents only", async () => {
     const solo = await createItem({
       kind: 'assignment', title: 'Science fair board', submissionMode: 'done', dueAt: inDays(5),

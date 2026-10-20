@@ -5,6 +5,7 @@ const {
   topLevelLines,
   overlayDrafts,
   planPublish,
+  publishDigestTasks,
 } = require('../../../controllers/assessmentPublish.controller');
 
 // Shape matches selectAllAssessmentsInClass.
@@ -205,6 +206,41 @@ describe('topLevelLines + buildEmailTasks for a column under a category', () => 
     // kid2 has a score but isn't published: it never enters the rollup.
     expect(task.lines).toEqual([{ name: 'Homework', scoreLabel: '', pctLabel: '(80%)', comment: null }]);
     expect(task.gradedAssessmentIds).toEqual(['cat', 'kid1']);
+  });
+});
+
+// The gradebook's Publish (preview, send and the preview email): a column
+// inside a category published on its own, from the category window, is
+// emailed as its category's line, counting the columns being published now.
+// It used to produce no email at all ("notify 0 parents").
+describe('publishDigestTasks', () => {
+  const category = assessment({ assessment_id: 'cat', name: 'Tests', is_parent: true, weight_points: 30, max_score: null });
+  const unit1 = assessment({ assessment_id: 'u1', name: 'Unit Test 1', parent_assessment_id: 'cat', max_score: 10, is_published: true });
+  const unit2 = assessment({ assessment_id: 'u2', name: 'Unit Test 2', parent_assessment_id: 'cat', max_score: 10 });
+  const unit3 = assessment({ assessment_id: 'u3', name: 'Unit Test 3', parent_assessment_id: 'cat', max_score: 10 });
+  const solo = assessment({ assessment_id: 'solo', name: 'Project', max_score: 50 });
+  const all = [category, unit1, unit2, unit3, solo];
+  const scores = new Map([
+    student('s1', 'Alice', [scoreRow('u1', 8), scoreRow('u2', 6), scoreRow('u3', 0), scoreRow('solo', 40)]),
+    student('s2', 'Bilal', [scoreRow('u1', 10), scoreRow('u2', 9)]),
+  ]);
+
+  it('emails a child published on its own (not yet published) as its category line, for every graded student', () => {
+    const tasks = publishDigestTasks(['u2'], all, scores);
+    expect(tasks.map((t) => t.studentName)).toEqual(['Alice', 'Bilal']);
+    // Unit Test 1 (published) and Unit Test 2 (being published); Unit Test 3 is graded but unpublished, so it stays out.
+    expect(tasks[0].lines).toEqual([{ name: 'Tests', scoreLabel: '', pctLabel: '(70%)', comment: null }]);
+    expect(tasks[0].gradedAssessmentIds).toEqual(['cat', 'u2']);
+  });
+
+  it('keeps a category published with its children as one category line, and a column on its own as itself', () => {
+    const [alice] = publishDigestTasks(['cat', 'u2', 'u3', 'solo'], all, scores);
+    // The audit names the category alone, as before (the 4 pm Missing alert reads it).
+    expect(alice.gradedAssessmentIds).toEqual(['cat', 'solo']);
+    expect(alice.lines).toEqual([
+      { name: 'Tests', scoreLabel: '', pctLabel: '(46.7%)', comment: null },
+      { name: 'Project', scoreLabel: '40/50', pctLabel: '(80%)', comment: null },
+    ]);
   });
 });
 
