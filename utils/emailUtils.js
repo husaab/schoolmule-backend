@@ -25,8 +25,9 @@ const isReservedAddress = (recipient) => {
 const asList = (value) => (value == null ? [] : [].concat(value));
 
 // Patches a Resend client's emails.send so reserved recipients are dropped. A
-// send left with no "to" takes its real cc as the "to"; one left with nobody
-// answers like an accepted send, so every caller treats it as delivered.
+// send left with no "to" takes its real cc as the "to" (never its bcc, which
+// would show those addresses to each other); one left with no "to" answers
+// like an accepted send, so every caller treats it as delivered.
 const withReservedDomainGuard = (resend) => {
   const send = resend.emails.send.bind(resend.emails);
   resend.emails.send = async (payload) => {
@@ -38,9 +39,8 @@ const withReservedDomainGuard = (resend) => {
       fields.map((field) => [field, asList(payload[field]).filter((r) => !isReservedAddress(r))]),
     );
     if (!kept.to?.length) {
-      kept.to = [...(kept.cc || []), ...(kept.bcc || [])];
+      kept.to = kept.cc || [];
       if (kept.cc) kept.cc = [];
-      if (kept.bcc) kept.bcc = [];
     }
     logger.info({ suppressed, subject: payload.subject }, 'Email to reserved test domain not sent');
     if (!kept.to.length) return { data: { id: 'suppressed' }, error: null };

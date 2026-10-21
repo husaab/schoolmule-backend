@@ -89,6 +89,14 @@ describe('emailUtils', () => {
       await withReservedDomainGuard(inner).emails.send({ ...payload, to: 'parent@playground.test', cc: ['a@gmail.com'] });
       expect(send).toHaveBeenCalledWith({ ...payload, to: ['a@gmail.com'], cc: [] });
     });
+
+    it('never turns bcc into a visible "to": with only bcc left it is not sent', async () => {
+      const inner = resolving({ data: { id: 'em_5' }, error: null });
+      const send = inner.emails.send;
+      const result = await withReservedDomainGuard(inner).emails.send({ ...payload, to: 'parent@playground.test', bcc: ['a@gmail.com', 'b@gmail.com'] });
+      expect(send).not.toHaveBeenCalled();
+      expect(result).toEqual({ data: { id: 'suppressed' }, error: null });
+    });
   });
 
   describe('getResend and EMAIL_DELIVER_RESERVED_DOMAINS', () => {
