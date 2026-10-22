@@ -14,6 +14,7 @@
 const { ITEM_VISIBLE } = require('./classwork.queries');
 const { inCurrentTerm } = require('./termScope');
 const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_SQL, WORK_LATE_SQL, WORK_JOINS } = require('./workState');
+const { PERSON_NAME } = require('./personName');
 
 // One work row: the item, the student's status, and the grade only when visible.
 const WORK_COLUMNS = `
@@ -31,7 +32,7 @@ const WORK_COLUMNS = `
   CASE WHEN i.kind = 'quiz' THEN (SELECT COUNT(*) FROM quiz_questions qq WHERE qq.item_id = i.item_id)::int ELSE 0 END AS question_count,
   c.subject, c.grade::text AS grade, c.banner_key, c.banner_path, c.icon_key, c.color,
   tu.user_id AS teacher_id, tu.avatar AS teacher_avatar, tu.photo_path AS teacher_photo_path,
-  COALESCE(NULLIF(TRIM(CONCAT(tu.first_name, ' ', tu.last_name)), ''), c.teacher_name) AS teacher_name`;
+  COALESCE(NULLIF(${PERSON_NAME('tu')}, ''), c.teacher_name) AS teacher_name`;
 
 // The student's items: on the roster, the class live and in the school, the
 // item visible to them (ITEM_VISIBLE). `ro` carries the student id.

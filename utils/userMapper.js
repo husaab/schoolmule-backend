@@ -13,6 +13,8 @@ const toUser = (row) => ({
   role: row.role,
   /** Admins only: shown to parents as the role they can message (e.g. Principal). */
   staffTitle: row.staff_title ?? null,
+  /** Staff only: Mr. | Ms. | Mrs. | Dr. before the name parents see ("Ms. Doha Chahade"); null = plain name. */
+  honorific: row.honorific ?? null,
   isVerified: row.is_verified,
   isVerifiedSchool: row.is_verified_school,
   isArchived: row.is_archived,

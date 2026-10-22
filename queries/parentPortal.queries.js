@@ -4,6 +4,7 @@
 // portal otherwise reuses parentStudent/term/progressReports/schoolCalendar
 // queries and the analytics engine.
 
+const { CLASS_TEACHER_NAME } = require('./personName');
 const parentPortalQueries = {
   /**
    * Day-by-day general attendance for one student in a date range.
@@ -36,9 +37,10 @@ const parentPortalQueries = {
       rcf.comment,
       c.subject,
       c.grade AS class_grade,
-      c.teacher_name
+      ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name
     FROM report_card_feedback rcf
     JOIN classes c ON rcf.class_id = c.class_id
+    LEFT JOIN users ctn ON ctn.user_id = c.teacher_id
     WHERE rcf.student_id = $1
     ORDER BY rcf.term, c.subject
   `,

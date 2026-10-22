@@ -3,7 +3,7 @@ const rolloverQueries = {
     SELECT student_id, name, grade::text AS grade, oen, homeroom_teacher_id,
            mother_name, mother_email, mother_number,
            father_name, father_email, father_number, emergency_contact,
-           student_email, avatar
+           student_email, avatar, gender
     FROM students
     WHERE school = $1 AND school_year_id = $2 AND is_archived = false
     ORDER BY name
@@ -20,8 +20,8 @@ const rolloverQueries = {
       name, homeroom_teacher_id, grade, oen, school,
       mother_name, mother_email, mother_number,
       father_name, father_email, father_number, emergency_contact,
-      school_year_id, previous_student_id, student_email, avatar
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+      school_year_id, previous_student_id, student_email, avatar, gender
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)
     RETURNING student_id
   `,
 

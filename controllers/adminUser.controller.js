@@ -193,7 +193,21 @@ const getUserDetails = async (req, res) => {
   }
 };
 
-// POST /api/admin/users  { firstName, lastName, email, role, accessRoleId? }
+const HONORIFICS = ["Mr.", "Ms.", "Mrs.", "Dr."];
+
+// The salutation (users.honorific) from a request body. { provided: false } when the field is
+// absent, so a form that doesn't send it keeps the stored title; null clears
+// it. A parent never carries one.
+const readHonorific = (body, role) => {
+  if (role === "PARENT") return { provided: true, value: null };
+  if (!body || !Object.prototype.hasOwnProperty.call(body, "honorific")) return { provided: false };
+  const value = body.honorific;
+  if (value === null || value === "") return { provided: true, value: null };
+  if (!HONORIFICS.includes(value)) return { error: "Choose Mr., Ms., Mrs., Dr. or no title" };
+  return { provided: true, value };
+};
+
+// POST /api/admin/users  { firstName, lastName, email, role, honorific?, accessRoleId? }
 const inviteUser = async (req, res) => {
   const firstName = req.body?.firstName?.trim();
   const lastName = req.body?.lastName?.trim();
@@ -211,6 +225,8 @@ const inviteUser = async (req, res) => {
   }
   const verdict = escalation.checkInvite(req.access, { role, staffRoleId: req.body?.accessRoleId || null });
   if (!verdict.ok) return refuse(res, verdict);
+  const honorific = readHonorific(req.body, role);
+  if (honorific.error) return res.status(400).json({ status: "failed", message: honorific.error });
 
   let created;
   try {
@@ -218,6 +234,7 @@ const inviteUser = async (req, res) => {
     if (accessRole.error) return res.status(400).json({ status: "failed", message: accessRole.error });
     const { rows } = await db.query(adminUserQueries.insertInvitedUser, [
       email, `${firstName} ${lastName}`, firstName, lastName, req.user.school, role, accessRole.id ?? null,
+      honorific.value ?? null,
     ]);
     created = rows[0];
   } catch (error) {
@@ -294,6 +311,8 @@ const updateUser = async (req, res) => {
   if (staffTitle && staffTitle.length > MAX_STAFF_TITLE) {
     return res.status(400).json({ status: "failed", message: `Title must be ${MAX_STAFF_TITLE} characters or fewer` });
   }
+  const honorific = readHonorific(req.body, role);
+  if (honorific.error) return res.status(400).json({ status: "failed", message: honorific.error });
   try {
     const { rows: found } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
     const target = found[0];
@@ -321,6 +340,7 @@ const updateUser = async (req, res) => {
     const { rows } = await db.query(adminUserQueries.updateUserInSchool, [
       firstName, lastName, role, isVerifiedSchool, id, school, role === "ADMIN" ? staffTitle : null,
       setRole.provided, setRole.id ?? null,
+      honorific.provided, honorific.value ?? null,
     ]);
     if (rows.length === 0) {
       return res.status(404).json({ status: "failed", message: "User not found" });

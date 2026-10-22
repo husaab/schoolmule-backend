@@ -14,17 +14,18 @@ const { studentAvatarSql } = require('../utils/avatar');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { conflictLateral } = require('../services/classroom/emailProblems');
 const { INVITE_COLUMNS, latestInviteLateral } = require('../utils/inviteSql');
+const { PERSON_NAME } = require('./personName');
 
 // The latest invite of the login (inv.*) and the first conflict on the
 // student's own address (services/classroom/emailProblems.js conflictLateral).
 const ROW_SELECT = `
 SELECT s.student_id, s.name, s.grade::text AS grade, s.student_email, s.school_year_id,
        ${studentAvatarSql('s', 'student_avatar')},
-       NULLIF(TRIM(CONCAT(h.first_name, ' ', h.last_name)), '') AS homeroom_teacher_name,
+       NULLIF(${PERSON_NAME('h')}, '') AS homeroom_teacher_name,
        u.user_id, u.email AS account_email, u.photo_path, u.is_archived, (u.password = '!') AS invite_pending,
        (u.google_sub IS NOT NULL) AS has_google,
        u.created_at AS account_created_at, u.last_login_at, u.last_seen_at,
-       sa.consent_at, sa.consent_notice_version, NULLIF(TRIM(CONCAT(cb.first_name, ' ', cb.last_name)), '') AS consent_by_name,
+       sa.consent_at, sa.consent_notice_version, NULLIF(${PERSON_NAME('cb')}, '') AS consent_by_name,
        sa.qr_issued_at, sa.qr_voided_at, (sa.qr_secret_hash IS NOT NULL AND sa.qr_voided_at IS NULL) AS qr_active,
        sa.activated_at, sa.activated_via,${INVITE_COLUMNS},
        cf.kind AS conflict_kind, cf.role AS conflict_role, cf.same_school AS conflict_same_school,
@@ -169,7 +170,7 @@ WHERE s.school = $1 AND s.student_id = ANY($2::uuid[]) AND s.is_archived IS NOT 
   //  relink picker. $1 = school, $2 = school_year_id (NULL: none are linked)
   selectUnlinkedStudentUsers: `
     SELECT u.user_id,
-           NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS name,
+           NULLIF(${PERSON_NAME('u')}, '') AS name,
            u.email,
            (SELECT sy.label
               FROM student_account_links l

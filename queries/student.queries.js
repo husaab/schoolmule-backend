@@ -21,6 +21,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,
@@ -51,6 +52,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,
@@ -86,6 +88,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,
@@ -120,6 +123,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,
@@ -153,9 +157,10 @@ const studentQueries = {
       address,
       health_card_number,
       medical_notes,
-      student_email
+      student_email,
+      gender
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
     )
     RETURNING *
   `,
@@ -182,6 +187,8 @@ const studentQueries = {
       -- $18 = the body carried studentEmail (so null/'' clears it), $19 = the value.
       student_email        = CASE WHEN $18::boolean
                                   THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
+      -- $20 = the body carried gender (so null clears it), $21 = the value.
+      gender               = CASE WHEN $20::boolean THEN $21::text ELSE gender END,
       last_modified_at     = NOW()
     -- $5 = the caller's school: only their own students, and a student never
     -- moves to another school here.
@@ -222,6 +229,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,
@@ -280,6 +288,7 @@ const studentQueries = {
       date_of_birth,
       address,
       health_card_number,
+      gender,
       medical_notes,
       source_submission_id,
       created_at,

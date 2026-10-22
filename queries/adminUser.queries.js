@@ -11,7 +11,7 @@ const adminUserQueries = {
   //  role::text so the filter parses even before the enum has 'STUDENT'.
   selectUsersBySchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role, staff_title,
+      user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
@@ -25,7 +25,7 @@ const adminUserQueries = {
   //  STUDENT login on the Users page routes (they live on Student accounts).
   selectUserInSchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role, staff_title,
+      user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
@@ -88,14 +88,15 @@ const adminUserQueries = {
   //  Invited accounts get the unusable password '!' (bcrypt never matches it)
   //  until they set one through the invite link.
   //  $1 = email, $2 = username, $3 = first_name, $4 = last_name, $5 = school, $6 = role,
-  //  $7 = staff_role_id|null (access role; staff only, the controller checks it)
+  //  $7 = staff_role_id|null (access role; staff only, the controller checks it),
+  //  $8 = honorific|null (Mr./Ms./Mrs./Dr.; staff only)
   insertInvitedUser: `
     INSERT INTO users
       (user_id, email, username, password, first_name, last_name, school, role,
-       is_verified, is_verified_school, staff_role_id, created_at, last_modified_at)
+       is_verified, is_verified_school, staff_role_id, honorific, created_at, last_modified_at)
     VALUES
-      (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, $7, NOW(), NOW())
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
+      (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, $7, $8, NOW(), NOW())
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               true AS invite_pending,
@@ -109,6 +110,8 @@ const adminUserQueries = {
   //  use of $3 fails with "inconsistent types deduced for parameter $3".
   //  $8 = whether to set the access role, $9 = staff_role_id|null (the
   //  controller clears it for a PARENT and checks who may change it).
+  //  $10 = whether to set the title, $11 = honorific|null (a form that
+  //  doesn't send one keeps the stored title).
   updateUserInSchool: `
     UPDATE users
     SET first_name = $1::text,
@@ -118,9 +121,10 @@ const adminUserQueries = {
         is_verified_school = $4,
         staff_title = $7,
         staff_role_id = CASE WHEN $8::boolean THEN $9::uuid ELSE staff_role_id END,
+        honorific = CASE WHEN $10::boolean THEN $11::text ELSE honorific END,
         last_modified_at = NOW()
     WHERE user_id = $5 AND school = $6 AND is_archived = false AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,
@@ -154,7 +158,7 @@ const adminUserQueries = {
         is_verified_school = false,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = false AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,
@@ -172,7 +176,7 @@ const adminUserQueries = {
         is_verified_school = true,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = true AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,

@@ -234,7 +234,7 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
         }
         const [firstName, ...rest] = name.split(/\s+/);
         const lastName = rest.join(' ') || '';
-        const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT', null]);
+        const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT', null, null]);
         const newUser = created[0];
         await db.query(q.linkGuardianToUser, [link.parent_student_link_id, newUser.user_id, user.userId, conv.conversationId, true]);
         const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [newUser.user_id]);

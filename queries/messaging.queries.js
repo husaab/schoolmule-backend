@@ -18,6 +18,7 @@
 const { inCurrentTerm, selectCurrentTerm } = require('./termScope');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
+const { PERSON_NAME } = require('./personName');
 
 // An item thread the school keeps from guardians. `c` is the conversations
 // alias. Never true for a thread with no classwork anchor, so every
@@ -84,7 +85,7 @@ const LAST_MESSAGE_SQL = `
       'body', CASE WHEN lm.deleted_at IS NOT NULL THEN NULL ELSE LEFT(lm.body, 140) END,
       'deleted', lm.deleted_at IS NOT NULL,
       'createdAt', lm.created_at,
-      'senderName', TRIM(CONCAT(su.first_name, ' ', su.last_name)))
+      'senderName', ${PERSON_NAME('su')})
    FROM messages lm LEFT JOIN users su ON su.user_id = lm.sender_id
    WHERE lm.conversation_id = c.conversation_id
    ORDER BY lm.created_at DESC LIMIT 1) AS last_message
@@ -100,17 +101,17 @@ const listBody = (scopeSql) => `
     s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
     ${studentAvatarSql('s', 'student_avatar')},
     ${studentPhotoSql('s', 'student_photo_path')},
-    TRIM(CONCAT(lt.first_name, ' ', lt.last_name)) AS lead_teacher_name,
+    ${PERSON_NAME('lt')} AS lead_teacher_name,
     lt.avatar AS lead_teacher_avatar, lt.photo_path AS lead_teacher_photo_path,
     -- Who the thread is addressed to: its own teacher (a student's co-teacher,
     -- homeroom teacher or teaching admin), else the class lead.
-    NULLIF(TRIM(CONCAT(adr.first_name, ' ', adr.last_name)), '') AS addressee_name,
+    NULLIF(${PERSON_NAME('adr')}, '') AS addressee_name,
     cl.term_name,
     -- No guardian names on an item thread the school keeps from guardians (they aren't in it).
     CASE WHEN ${GUARDIANS_HIDDEN} THEN '{}'::text[] ELSE
-    COALESCE((SELECT ARRAY_AGG(DISTINCT COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name))
+    COALESCE((SELECT ARRAY_AGG(DISTINCT COALESCE(NULLIF(${PERSON_NAME('gu')}, ''), ps.parent_name))
               FROM parent_students ps LEFT JOIN users gu ON gu.user_id = ps.parent_id
-              WHERE ps.student_id = c.student_id AND COALESCE(NULLIF(TRIM(CONCAT(gu.first_name, ' ', gu.last_name)), ''), ps.parent_name) IS NOT NULL), '{}')::text[]
+              WHERE ps.student_id = c.student_id AND COALESCE(NULLIF(${PERSON_NAME('gu')}, ''), ps.parent_name) IS NOT NULL), '{}')::text[]
     END AS guardian_names,
     cp.last_read_at,
     ${UNREAD_COUNT_EXPR} AS unread_count,
@@ -286,7 +287,7 @@ const messagingQueries = {
   // $1 conversation_id
   selectMessages: `
     SELECT m.message_id, m.sender_id, m.sender_role, m.kind, m.body, m.created_at, m.edited_at, m.deleted_at,
-           TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
+           ${PERSON_NAME('u')} AS sender_name,
            COALESCE(u.avatar, CASE WHEN m.sender_role = 'STUDENT' THEN
              (SELECT st.avatar FROM conversations sc JOIN students st ON st.student_id = sc.student_id
                WHERE sc.conversation_id = m.conversation_id) END) AS sender_avatar,
@@ -319,13 +320,13 @@ const messagingQueries = {
   // login, not archived; avatar by the student display rule), lead +
   // co-teachers, admins who joined. $1 conversation_id
   selectParticipants: `
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.role, ps.relation, (u.password = '!') AS invite_pending, u.avatar, u.photo_path
+    SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.role, ps.relation, (u.password = '!') AS invite_pending, u.avatar, u.photo_path
     FROM conversations c
     JOIN parent_students ps ON ps.student_id = c.student_id AND ps.parent_id IS NOT NULL
     JOIN users u ON u.user_id = ps.parent_id
     WHERE c.conversation_id = $1 AND NOT ${GUARDIANS_HIDDEN}
     UNION
-    SELECT u.user_id, COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), st.name), u.role, 'student', FALSE,
+    SELECT u.user_id, COALESCE(NULLIF(${PERSON_NAME('u')}, ''), st.name), u.role, 'student', FALSE,
            COALESCE(u.avatar, st.avatar), u.photo_path
     FROM conversations c
     JOIN students st ON st.student_id = c.student_id
@@ -333,16 +334,16 @@ const messagingQueries = {
     JOIN users u ON u.user_id = sal.user_id AND u.is_archived = FALSE
     WHERE c.conversation_id = $1 AND c.includes_student
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar, u.photo_path
+    SELECT u.user_id, ${PERSON_NAME('u')}, u.role, NULL, FALSE, u.avatar, u.photo_path
     FROM conversations c LEFT JOIN classes cl ON cl.class_id = c.class_id
     JOIN users u ON u.user_id = COALESCE(cl.teacher_id, c.teacher_id)
     WHERE c.conversation_id = $1
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar, u.photo_path
+    SELECT u.user_id, ${PERSON_NAME('u')}, u.role, NULL, FALSE, u.avatar, u.photo_path
     FROM conversations c JOIN class_teachers ct ON ct.class_id = c.class_id JOIN users u ON u.user_id = ct.teacher_id
     WHERE c.conversation_id = $1
     UNION
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar, u.photo_path
+    SELECT u.user_id, ${PERSON_NAME('u')}, u.role, NULL, FALSE, u.avatar, u.photo_path
     FROM messages m JOIN users u ON u.user_id = m.sender_id
     WHERE m.conversation_id = $1 AND m.kind = 'message' AND u.role::text IN ('ADMIN', 'TEACHER')
   `,
@@ -464,7 +465,7 @@ const messagingQueries = {
   // created_at_exact keeps the microseconds for markEmailed and the next "since".
   selectMessagesForEmail: `
     SELECT m.message_id, m.body, m.created_at, m.created_at::text AS created_at_exact, m.sender_role::text AS sender_role,
-           TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS sender_name,
+           ${PERSON_NAME('u')} AS sender_name,
            (SELECT COUNT(*) FROM message_attachments ma WHERE ma.message_id = m.message_id)::int AS attachment_count
     FROM messages m LEFT JOIN users u ON u.user_id = m.sender_id
     WHERE m.conversation_id = $1 AND m.kind = 'message' AND m.deleted_at IS NULL
@@ -499,7 +500,7 @@ const messagingQueries = {
   // Parent picker: the child's current-term classes. $1 student_id, $2 school_year_id|null,
   // $3 current term_id|null, $4 current term name|null
   selectParentTargets: `
-    SELECT cl.class_id, cl.subject, cl.teacher_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name,
+    SELECT cl.class_id, cl.subject, cl.teacher_id, ${PERSON_NAME('u')} AS teacher_name,
            a.assessment_id, a.name AS assessment_name, a.date, a.is_published,
            cv.conversation_id
     FROM class_students cs
@@ -515,7 +516,7 @@ const messagingQueries = {
     SELECT s.student_id, s.name,
            COALESCE(json_agg(json_build_object(
                       'linkId', ps.parent_student_link_id,
-                      'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
+                      'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
                       'relation', ps.relation,
                       'email', COALESCE(u.email, ps.parent_email),
                       'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
@@ -535,7 +536,7 @@ const messagingQueries = {
     SELECT s.student_id, s.name,
            COALESCE(json_agg(json_build_object(
                       'linkId', ps.parent_student_link_id,
-                      'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
+                      'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
                       'relation', ps.relation,
                       'email', COALESCE(u.email, ps.parent_email),
                       'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
@@ -575,7 +576,7 @@ const messagingQueries = {
       s.student_id, s.name AS student_name, s.school AS student_school,
       t.school AS teacher_school, t.role AS teacher_role, t.is_archived AS teacher_archived,
       NULLIF(t.staff_title, '') AS teacher_staff_title,
-      TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS teacher_name,
+      ${PERSON_NAME('t')} AS teacher_name,
       (s.homeroom_teacher_id = $2) AS is_homeroom,
       (SELECT cl.class_id FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
         WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
@@ -603,20 +604,20 @@ const messagingQueries = {
   selectParentTeacherTargets: `
     SELECT user_id, name, via, role FROM (
     SELECT DISTINCT ON (user_id) user_id, name, via, role, pri FROM (
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, 'Homeroom' AS via, u.role, 0 AS pri
+      SELECT u.user_id, ${PERSON_NAME('u')} AS name, 'Homeroom' AS via, u.role, 0 AS pri
       FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
       WHERE s.student_id = $1 AND u.is_archived = FALSE
       UNION ALL
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 1
+      SELECT u.user_id, ${PERSON_NAME('u')}, cl.subject, u.role, 1
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id JOIN users u ON u.user_id = cl.teacher_id
       WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE
       UNION ALL
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), cl.subject, u.role, 2
+      SELECT u.user_id, ${PERSON_NAME('u')}, cl.subject, u.role, 2
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
       JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
       WHERE cs.student_id = $1 AND ($2::uuid IS NULL OR cl.school_year_id = $2) AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE
       UNION ALL
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.staff_title, u.role, 3
+      SELECT u.user_id, ${PERSON_NAME('u')}, u.staff_title, u.role, 3
       FROM students s JOIN users u ON u.school = s.school
       WHERE s.student_id = $1 AND u.role = 'ADMIN' AND NULLIF(u.staff_title, '') IS NOT NULL AND u.is_archived = FALSE
     ) x
@@ -627,7 +628,7 @@ const messagingQueries = {
   // Staff context strip for a general thread. $1 student_id
   selectStudentContext: `
     SELECT s.student_id, s.name, s.grade, ${studentAvatarSql('s', 'student_avatar')}, ${studentPhotoSql('s', 'student_photo_path')},
-           TRIM(CONCAT(h.first_name, ' ', h.last_name)) AS homeroom_teacher_name,
+           ${PERSON_NAME('h')} AS homeroom_teacher_name,
            (SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE ga.status = 'PRESENT') / NULLIF(COUNT(*), 0), 0)
               FROM general_attendance ga WHERE ga.student_id = s.student_id AND ga.attendance_date >= CURRENT_DATE - 60) AS attendance_pct
     FROM students s LEFT JOIN users h ON h.user_id = s.homeroom_teacher_id
@@ -663,7 +664,7 @@ const messagingQueries = {
   // current-term classes (admin: every current-term class). $1 user_id, $2 school,
   // $3 role, $4 school_year_id|null, $5 current term_id|null, $6 current term name|null
   selectStaffRosterClasses: `
-    SELECT cl.class_id, cl.subject, cl.grade::text AS grade, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS teacher_name
+    SELECT cl.class_id, cl.subject, cl.grade::text AS grade, ${PERSON_NAME('u')} AS teacher_name
     FROM classes cl
     LEFT JOIN users u ON u.user_id = cl.teacher_id
     WHERE cl.school = $2 AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
@@ -681,7 +682,7 @@ const messagingQueries = {
                    AND ($3::text = 'ADMIN' OR cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))), '{}')::uuid[] AS class_ids,
       COALESCE((SELECT json_agg(json_build_object(
                   'linkId', ps.parent_student_link_id,
-                  'name', COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name),
+                  'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
                   'relation', ps.relation,
                   'email', COALESCE(u.email, ps.parent_email),
                   'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
@@ -744,7 +745,7 @@ const messagingQueries = {
   selectInviteReminderCandidates: `
     SELECT ps.parent_student_link_id, ps.parent_id, ps.parent_name, ps.school, ps.invite_conversation_id,
            s.name AS student_name, u.email, u.first_name,
-           TRIM(CONCAT(t.first_name, ' ', t.last_name)) AS invited_by_name
+           ${PERSON_NAME('t')} AS invited_by_name
     FROM parent_students ps
     JOIN users u ON u.user_id = ps.parent_id AND u.password = '!'
     JOIN students s ON s.student_id = ps.student_id
@@ -776,19 +777,19 @@ const messagingQueries = {
            COALESCE(json_agg(json_build_object('classId', t.class_id, 'subject', t.subject) ORDER BY t.subject, t.class_id)
                     FILTER (WHERE t.class_id IS NOT NULL), '[]') AS classes
     FROM (
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.avatar, u.photo_path, cl.class_id, cl.subject
+      SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.avatar, u.photo_path, cl.class_id, cl.subject
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
       JOIN users u ON u.user_id = cl.teacher_id
       WHERE cs.student_id = $1 AND cl.archived_at IS NULL AND ($2::uuid IS NULL OR cl.school_year_id = $2)
         AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE AND u.role IN ('TEACHER', 'ADMIN')
       UNION
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.avatar, u.photo_path, cl.class_id, cl.subject
+      SELECT u.user_id, ${PERSON_NAME('u')}, u.avatar, u.photo_path, cl.class_id, cl.subject
       FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
       JOIN class_teachers ct ON ct.class_id = cl.class_id JOIN users u ON u.user_id = ct.teacher_id
       WHERE cs.student_id = $1 AND cl.archived_at IS NULL AND ($2::uuid IS NULL OR cl.school_year_id = $2)
         AND ${inCurrentTerm('cl', '$3', '$4')} AND u.is_archived = FALSE AND u.role IN ('TEACHER', 'ADMIN')
       UNION
-      SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.avatar, u.photo_path, NULL::uuid, NULL
+      SELECT u.user_id, ${PERSON_NAME('u')}, u.avatar, u.photo_path, NULL::uuid, NULL
       FROM students s JOIN users u ON u.user_id = s.homeroom_teacher_id
       WHERE s.student_id = $1 AND u.is_archived = FALSE AND u.role IN ('TEACHER', 'ADMIN')
     ) t
@@ -799,7 +800,7 @@ const messagingQueries = {
   selectStudentGuardians: `
     SELECT name, relation, avatar, photo_path FROM (
       SELECT DISTINCT ON (ps.parent_id)
-             COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name) AS name, ps.relation,
+             COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name) AS name, ps.relation,
              u.avatar, u.photo_path
       FROM parent_students ps JOIN users u ON u.user_id = ps.parent_id AND u.is_archived = FALSE
       WHERE ps.student_id = $1 AND ps.parent_id IS NOT NULL

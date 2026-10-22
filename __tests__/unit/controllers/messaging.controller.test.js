@@ -448,7 +448,7 @@ describe('messaging controller', () => {
       });
       const res = await replyAsTeacher();
       expect(res.status).toBe(201);
-      expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT', null]);
+      expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT', null, null]);
       expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'new-user', TEACHER, CONVO, true]);
       expect(r.ran('INSERT INTO password_reset_tokens')[0].params).toEqual(['new-user']);
       expect(global.__mockInviteSend).toHaveBeenCalledTimes(1);

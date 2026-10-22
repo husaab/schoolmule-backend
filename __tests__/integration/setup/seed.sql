@@ -2096,3 +2096,7 @@ CREATE INDEX IF NOT EXISTS idx_email_outbox_due ON email_outbox (priority, send_
 CREATE INDEX IF NOT EXISTS idx_email_outbox_coalesce
   ON email_outbox (kind, LOWER(recipient_email), coalesce_key) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_email_outbox_subject ON email_outbox (subject_type, subject_id);
+
+-- database/migrations/honorific_gender_migration.sql
+ALTER TABLE users    ADD COLUMN IF NOT EXISTS honorific TEXT CHECK (honorific IS NULL OR honorific IN ('Mr.', 'Ms.', 'Mrs.', 'Dr.'));
+ALTER TABLE students ADD COLUMN IF NOT EXISTS gender    TEXT CHECK (gender IS NULL OR gender IN ('male', 'female'));

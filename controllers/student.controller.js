@@ -42,6 +42,17 @@ const hideStudentEmail = (req) => (student) => {
   return rest;
 };
 
+const GENDERS = ['male', 'female'];
+// A gender from a request body: { provided: false } when the field is absent,
+// so a form that doesn't send it keeps the stored value; null/'' clears it.
+const readGender = (body) => {
+  if (!body || !Object.prototype.hasOwnProperty.call(body, 'gender')) return { provided: false, value: null };
+  const value = body.gender;
+  if (value === null || value === '') return { provided: true, value: null };
+  if (!GENDERS.includes(value)) return { error: 'Gender must be male, female or not set' };
+  return { provided: true, value };
+};
+
 // Convert database row to camelCase
 const toCamel = (s) => ({
   studentId: s.student_id,
@@ -70,6 +81,7 @@ const toCamel = (s) => ({
   address: s.address,
   healthCardNumber: s.health_card_number,
   medicalNotes: s.medical_notes,
+  gender: s.gender ?? null,
   // Set when this student was created (or enriched) by importing a
   // registration form submission; null for manually-entered students.
   sourceSubmissionId: s.source_submission_id ?? null,
@@ -149,6 +161,10 @@ const createStudent = async (req, res) => {
   if (email.error) {
     return res.status(400).json({ status: "failed", message: email.error });
   }
+  const gender = readGender(req.body);
+  if (gender.error) {
+    return res.status(400).json({ status: "failed", message: gender.error });
+  }
 
   try {
     const vals = [
@@ -169,7 +185,8 @@ const createStudent = async (req, res) => {
       address || null,
       healthCardNumber || null,
       medicalNotes || null,
-      email.value
+      email.value,
+      gender.value,
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
@@ -211,6 +228,10 @@ const updateStudent = async (req, res) => {
   if (email.error) {
     return res.status(400).json({ status: "failed", message: email.error });
   }
+  const gender = readGender(req.body);
+  if (gender.error) {
+    return res.status(400).json({ status: "failed", message: gender.error });
+  }
 
   const vals = [
     name ?? null,
@@ -232,6 +253,8 @@ const updateStudent = async (req, res) => {
     medicalNotes ?? null,
     carriesEmail,
     email.value,
+    gender.provided,
+    gender.value,
   ];
 
   try {

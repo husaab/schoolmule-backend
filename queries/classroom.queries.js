@@ -15,6 +15,7 @@ const { GRADE_RANK } = require('../utils/gradeRank');
 const { ISO, EFFECTIVE_POSTED, ITEM_DAY, AUDIENCE_SIZE, TURNED_IN_COUNT, ITEM_VISIBLE } = require('./classwork.queries');
 const { WORK_STATE_SQL, WORK_JOINS } = require('./workState');
 const { AWAITING_FROM } = require('./grading.queries');
+const { PERSON_NAME } = require('./personName');
 
 const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
 
@@ -129,7 +130,7 @@ SELECT c.class_id, c.subject, c.grade::text AS grade, c.term_id, c.term_name, c.
        (SELECT COUNT(*) FROM class_students cs JOIN students s ON s.student_id = cs.student_id
          WHERE cs.class_id = c.class_id AND s.is_archived IS NOT TRUE)::int AS student_count,
        COALESCE((SELECT json_agg(json_build_object(
-                   'userId', u.user_id, 'name', TRIM(CONCAT(u.first_name, ' ', u.last_name)), 'avatar', u.avatar,
+                   'userId', u.user_id, 'name', ${PERSON_NAME('u')}, 'avatar', u.avatar,
                    'photoPath', u.photo_path,
                    'role', CASE WHEN u.user_id = c.teacher_id THEN 'lead' ELSE 'co' END)
                  ORDER BY (u.user_id = c.teacher_id) DESC, u.last_name)
@@ -175,7 +176,7 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
   //  the class's year whose students have this teacher as homeroom teacher
   //  (the most common one if there are several). $1 class_id
   selectClassTeachers: `
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.avatar, u.photo_path,
+    SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.avatar, u.photo_path,
            CASE WHEN u.user_id = c.teacher_id THEN 'lead' ELSE 'co' END AS role,
            (SELECT s.grade::text
               FROM students s
@@ -206,7 +207,7 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
                        'name', g.name, 'relation', g.relation, 'hasAccount', g.has_account, 'emailKey', g.email_key)
                      ORDER BY g.has_account DESC, g.src, g.created_at, g.link_id)
                      FROM (
-                       SELECT COALESCE(NULLIF(TRIM(CONCAT(pu.first_name, ' ', pu.last_name)), ''), NULLIF(TRIM(ps.parent_name), '')) AS name,
+                       SELECT COALESCE(NULLIF(${PERSON_NAME('pu')}, ''), NULLIF(TRIM(ps.parent_name), '')) AS name,
                               NULLIF(TRIM(ps.relation), '') AS relation, pu.user_id IS NOT NULL AS has_account,
                               LOWER(TRIM(COALESCE(pu.email, ps.parent_email, ''))) AS email_key,
                               0 AS src, ps.created_at, ps.parent_student_link_id::text AS link_id

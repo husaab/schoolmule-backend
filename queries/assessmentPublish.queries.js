@@ -7,6 +7,7 @@
 // guardian email writes one `assessment_publication_emails` row.
 
 const { inCurrentTerm } = require('./termScope');
+const { PERSON_NAME } = require('./personName');
 
 const assessmentPublishQueries = {
   // ────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ const assessmentPublishQueries = {
   selectEmailClassContext: `
     SELECT
       cl.subject,
-      NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS teacher_name,
+      NULLIF(${PERSON_NAME('u')}, '') AS teacher_name,
       (cl.school_year_id IS NULL OR COALESCE(sy.is_active, FALSE))
         AND ${inCurrentTerm('cl', 't.term_id', 't.name')} AS askable
     FROM classes AS cl
@@ -281,7 +282,7 @@ const assessmentPublishQueries = {
       b.student_warning_count,
       b.created_at,
       b.triggered_by,
-      TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS triggered_by_name,
+      ${PERSON_NAME('u')} AS triggered_by_name,
       COALESCE(
         (
           SELECT JSON_AGG(JSON_BUILD_OBJECT(

@@ -13,12 +13,13 @@ const { GRADE_RANK } = require('../utils/gradeRank');
 const { inCurrentTerm } = require('./termScope');
 const { IN_AUDIENCE } = require('./announcement.queries');
 const { SIGNS_IN } = require('./studentSignsIn');
+const { PERSON_NAME, CLASS_TEACHER_NAME } = require('./personName');
 
 // A class's teachers, lead first then co-teachers by last name, as PersonLite
 // JSON. Archived accounts are left out (they are no one to talk to). `c` is
 // the classes alias.
 const TEACHERS_JSON = (c) => `COALESCE((
-    SELECT json_agg(json_build_object('userId', u.user_id, 'name', TRIM(CONCAT(u.first_name, ' ', u.last_name)),
+    SELECT json_agg(json_build_object('userId', u.user_id, 'name', ${PERSON_NAME('u')},
                                       'avatar', u.avatar, 'photoPath', u.photo_path, 'role', t.role)
                     ORDER BY t.ord, u.last_name, u.first_name)
     FROM (SELECT ${c}.teacher_id AS user_id, 'lead' AS role, 0 AS ord
@@ -48,7 +49,7 @@ const childClassroomQueries = {
   selectChildProfile: `
     SELECT s.student_id, s.name, s.grade::text AS grade, s.school, s.school_year_id, s.is_archived,
            ${studentAvatarSql('s')},
-           NULLIF(TRIM(CONCAT(ht.first_name, ' ', ht.last_name)), '') AS homeroom_teacher_name,
+           NULLIF(${PERSON_NAME('ht')}, '') AS homeroom_teacher_name,
            ${SIGNS_IN('s')} AS signs_in
     FROM students s
     LEFT JOIN users ht ON ht.user_id = s.homeroom_teacher_id
@@ -83,7 +84,7 @@ const childClassroomQueries = {
   // The class's teachers (lead first), only for a student on its roster.
   // $1 class_id, $2 student_id
   selectChildClassTeachers: `
-    SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)) AS name, u.avatar, u.photo_path, t.role
+    SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.avatar, u.photo_path, t.role
     FROM (SELECT c.teacher_id AS user_id, 'lead' AS role, 0 AS ord FROM classes c WHERE c.class_id = $1
           UNION
           SELECT ct.teacher_id, 'co', 1 FROM class_teachers ct JOIN classes c ON c.class_id = ct.class_id
@@ -98,9 +99,10 @@ const childClassroomQueries = {
   // (Grade 1-8) classes of one term, or of every term when $3 is NULL.
   // Classes with nothing graded yet are listed too. $1 student_id, $2 school, $3 term_id|null
   selectGradeClasses: `
-    SELECT c.class_id, c.subject, c.grade::text AS grade, c.teacher_name, c.show_class_average, ${IDENTITY_COLUMNS('c')}
+    SELECT c.class_id, c.subject, c.grade::text AS grade, ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name, c.show_class_average, ${IDENTITY_COLUMNS('c')}
     FROM class_students cs
     JOIN classes c ON c.class_id = cs.class_id
+    LEFT JOIN users ctn ON ctn.user_id = c.teacher_id
     WHERE cs.student_id = $1 AND c.school = $2 AND c.archived_at IS NULL
       AND ($3::uuid IS NULL OR c.term_id = $3)
       AND c.grade::text NOT IN ('JK', 'SK')
@@ -112,7 +114,7 @@ const childClassroomQueries = {
   selectParentChildren: `
     SELECT s.student_id, s.name, s.grade::text AS grade, s.school_year_id,
            ${studentAvatarSql('s')}, ${studentPhotoSql('s')},
-           NULLIF(TRIM(CONCAT(ht.first_name, ' ', ht.last_name)), '') AS homeroom_teacher_name,
+           NULLIF(${PERSON_NAME('ht')}, '') AS homeroom_teacher_name,
            ${SIGNS_IN('s')} AS signs_in
     FROM students s
     LEFT JOIN users ht ON ht.user_id = s.homeroom_teacher_id
@@ -134,7 +136,7 @@ const childClassroomQueries = {
         AND EXISTS (SELECT 1 FROM parent_students ps WHERE ps.student_id = s.student_id AND ps.parent_id = $1)
     )
     SELECT a.announcement_id, a.title, a.published_at, cl.subject AS class_subject,
-           NULLIF(TRIM(CONCAT(au.first_name, ' ', au.last_name)), '') AS author_name,
+           NULLIF(${PERSON_NAME('au')}, '') AS author_name,
            ARRAY_AGG(s.student_id ORDER BY s.name, s.student_id) AS student_ids
     FROM announcements a
     LEFT JOIN classes cl ON cl.class_id = a.class_id
@@ -145,7 +147,7 @@ const childClassroomQueries = {
       AND a.published_at >= NOW() - INTERVAL '30 days'
       AND ($3::uuid IS NULL OR a.school_year_id IS NULL OR a.school_year_id = $3)
       AND NOT EXISTS (SELECT 1 FROM announcement_acks k WHERE k.announcement_id = a.announcement_id AND k.user_id = $1)
-    GROUP BY a.announcement_id, a.title, a.published_at, cl.subject, au.first_name, au.last_name
+    GROUP BY a.announcement_id, a.title, a.published_at, cl.subject, au.honorific, au.first_name, au.last_name
     ORDER BY a.published_at DESC, a.announcement_id
   `,
 };

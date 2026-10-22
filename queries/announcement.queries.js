@@ -10,6 +10,7 @@
 
 const { inCurrentTerm } = require('./termScope');
 const { GRADE_RANK } = require('../utils/gradeRank');
+const { PERSON_NAME } = require('./personName');
 
 // Custom scope: the hand-picked rows in announcement_students. The audience
 // preview has no announcement row yet, so it passes its own predicate
@@ -31,19 +32,19 @@ const IN_AUDIENCE = (s, custom = CUSTOM_BY_TABLE(s)) => `
 // link, not a sign-up link). `src` 0 = link row, 1 = student record.
 const GUARDIAN_EMAILS = (s) => `
   SELECT ps.parent_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))) AS email,
-         COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), NULLIF(TRIM(ps.parent_name), ''), ps.parent_email) AS name,
+         COALESCE(NULLIF(${PERSON_NAME('u')}, ''), NULLIF(TRIM(ps.parent_name), ''), ps.parent_email) AS name,
          ps.relation, u.first_name, u.password AS user_password, COALESCE(u.is_archived, FALSE) AS user_archived, 0 AS src
   FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
   WHERE ps.student_id = ${s}.student_id AND TRIM(COALESCE(u.email, ps.parent_email, '')) <> ''
   UNION ALL
   SELECT mu.user_id, LOWER(TRIM(${s}.mother_email)),
-         COALESCE(NULLIF(TRIM(CONCAT(mu.first_name, ' ', mu.last_name)), ''), NULLIF(TRIM(${s}.mother_name), ''), ${s}.mother_email),
+         COALESCE(NULLIF(${PERSON_NAME('mu')}, ''), NULLIF(TRIM(${s}.mother_name), ''), ${s}.mother_email),
          'Mother', mu.first_name, mu.password, COALESCE(mu.is_archived, FALSE), 1
   FROM (SELECT 1) one LEFT JOIN users mu ON LOWER(mu.email) = LOWER(TRIM(${s}.mother_email)) AND mu.school = ${s}.school
   WHERE TRIM(COALESCE(${s}.mother_email, '')) <> ''
   UNION ALL
   SELECT fu.user_id, LOWER(TRIM(${s}.father_email)),
-         COALESCE(NULLIF(TRIM(CONCAT(fu.first_name, ' ', fu.last_name)), ''), NULLIF(TRIM(${s}.father_name), ''), ${s}.father_email),
+         COALESCE(NULLIF(${PERSON_NAME('fu')}, ''), NULLIF(TRIM(${s}.father_name), ''), ${s}.father_email),
          'Father', fu.first_name, fu.password, COALESCE(fu.is_archived, FALSE), 1
   FROM (SELECT 1) one LEFT JOIN users fu ON LOWER(fu.email) = LOWER(TRIM(${s}.father_email)) AND fu.school = ${s}.school
   WHERE TRIM(COALESCE(${s}.father_email, '')) <> ''`;
@@ -126,7 +127,7 @@ const BASE_COLUMNS = `
   a.author_id, a.author_role, a.published_at, a.edited_at, a.deleted_at, a.created_at, a.ack_requested, a.send_email,
   TO_CHAR(a.pinned_until, 'YYYY-MM-DD') AS pinned_until,  -- DATE as the YYYY-MM-DD the API promises, not a JS Date
   cl.subject AS class_subject, cl.grade AS class_grade,
-  TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
+  ${PERSON_NAME('au')} AS author_name,
   au.avatar AS author_avatar, au.photo_path AS author_photo_path,
   ${IS_PINNED} AS is_pinned,
   (SELECT COUNT(*) FROM announcement_attachments x WHERE x.announcement_id = a.announcement_id)::int AS attachment_count,
@@ -389,7 +390,7 @@ const announcementQueries = {
     SELECT j.job_id, j.kind, j.recipient_id, j.recipient_email, j.school,
       a.announcement_id, a.class_id, a.title, a.body, a.scope, a.grade, a.deleted_at, a.author_id, a.author_role, a.ack_requested,
       cl.subject AS class_subject, cl.grade AS class_grade,
-      TRIM(CONCAT(au.first_name, ' ', au.last_name)) AS author_name,
+      ${PERSON_NAME('au')} AS author_name,
       au.email AS author_email, COALESCE(au.is_archived, FALSE) AS author_archived, au.avatar AS author_avatar,
       -- Student jobs: is the recipient's student row still in the audience, does
       -- the school still email that grade, and the student's first name.
@@ -525,7 +526,7 @@ const announcementQueries = {
   `,
   // Office inboxes that belong to an account in the school, for the sender line. $1 school, $2 lower-cased emails
   selectUserNamesByEmail: `
-    SELECT LOWER(email) AS email, TRIM(CONCAT(first_name, ' ', last_name)) AS name
+    SELECT LOWER(email) AS email, ${PERSON_NAME('users')} AS name
     FROM users WHERE school = $1 AND LOWER(email) = ANY($2::text[])
   `,
   // ── Student feed (T12 reuses it for the parent lens with the parent as reader) ──

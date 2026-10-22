@@ -7,6 +7,7 @@
 // 'YYYY-MM-DD' text so they never shift through a JS Date.
 
 const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
+const { PERSON_NAME, CLASS_TEACHER_NAME } = require('./personName');
 
 const studentOverviewQueries = {
   // $1 student_id
@@ -16,7 +17,7 @@ const studentOverviewQueries = {
       -- After s.* so it wins: the student login's own pick over the teacher-set avatar.
       ${studentAvatarSql('s')},
       ${studentPhotoSql('s')},
-      NULLIF(TRIM(CONCAT(hr.first_name, ' ', hr.last_name)), '') AS homeroom_teacher_name
+      NULLIF(${PERSON_NAME('hr')}, '') AS homeroom_teacher_name
     FROM students s
     LEFT JOIN users hr ON hr.user_id = s.homeroom_teacher_id
     WHERE s.student_id = $1
@@ -44,10 +45,11 @@ const studentOverviewQueries = {
       c.subject,
       c.grade::text AS class_grade,
       c.teacher_id,
-      c.teacher_name,
+      ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name,
       c.term_id
     FROM class_students cs
     JOIN classes c ON c.class_id = cs.class_id
+    LEFT JOIN users ctn ON ctn.user_id = c.teacher_id
     LEFT JOIN terms t ON t.term_id = c.term_id
     WHERE cs.student_id = $1 AND c.school = $2
     ORDER BY t.start_date NULLS LAST, c.subject
@@ -68,7 +70,7 @@ const studentOverviewQueries = {
       ps.parent_student_link_id,
       ps.parent_id,
       ps.relation,
-      COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), ps.parent_name) AS name,
+      COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name) AS name,
       COALESCE(u.email, ps.parent_email) AS email,
       ps.parent_number AS phone,
       ps.invited_at

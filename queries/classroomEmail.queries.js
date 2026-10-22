@@ -16,6 +16,7 @@ const { studentAvatarSql } = require('../utils/avatar');
 const { IN_AUDIENCE, STUDENT_EMAIL_JOINS, STUDENT_EMAIL_GRADE_OK } = require('./announcement.queries');
 const { ITEM_VISIBLE } = require('./classwork.queries');
 const { GRADE_VISIBLE, TURN_IN_ITEM, WORK_STATE_AT, WORK_JOINS } = require('./workState');
+const { PERSON_NAME } = require('./personName');
 
 const TZ = 'America/Toronto';
 
@@ -101,8 +102,11 @@ const IN_SENT_DIGEST = (student, assessment, email, after, confirmed) => `(EXIST
 // no separate missing alert next to it). `np` is their notification_prefs row.
 const GETS_DAILY_SUMMARY = (np) => `(COALESCE(${np}.weekly_summary, TRUE) AND COALESCE(${np}.summary_frequency, 'weekly') = 'daily')`;
 
-const TEACHER_NAME = (u1, u2) => `COALESCE(NULLIF(TRIM(CONCAT(${u1}.first_name, ' ', ${u1}.last_name)), ''),
-  NULLIF(TRIM(CONCAT(${u2}.first_name, ' ', ${u2}.last_name)), ''), c.teacher_name)`;
+// Who to name in a classroom email: the account that posted or graded (u1),
+// else the class's teacher (u2), else the name stored on the class. Like
+// personName.CLASS_TEACHER_NAME with the acting account tried first.
+const TEACHER_NAME = (u1, u2) => `COALESCE(NULLIF(${PERSON_NAME(u1)}, ''),
+  NULLIF(${PERSON_NAME(u2)}, ''), c.teacher_name)`;
 
 // A publish instant to the microsecond, part of the identity of one publish
 // (a re-publish after a regrade, or a column published again, is a new one).
@@ -553,7 +557,7 @@ const classroomEmailQueries = {
   //  $1 student ids, $2 item ids (pairwise), $3 now, $4 recipient email
   selectAlertItems: `
     SELECT ro.student_id, i.item_id, i.kind, i.class_id, i.assessment_id, COALESCE(a.name, i.title) AS title, c.subject,
-           NULLIF(TRIM(CONCAT(tu.first_name, ' ', tu.last_name)), '') AS teacher_name,
+           NULLIF(${PERSON_NAME('tu')}, '') AS teacher_name,
            i.due_at, TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
            ${WORK_STATE_AT('$3::timestamptz')} AS state,
            ${IN_SENT_DIGEST('ro.student_id', 'i.assessment_id', '$4::text', MISSING_SINCE, GRADE_VISIBLE)} AS announced
@@ -570,7 +574,7 @@ const classroomEmailQueries = {
   //  this parent has pressed "Got it". $1 student ids, $2 since, $3 now, $4 parent user_id
   selectChildPosts: `
     SELECT s.student_id, a.announcement_id, a.title, a.body, a.ack_requested, a.published_at,
-           NULLIF(TRIM(CONCAT(au.first_name, ' ', au.last_name)), '') AS author_name,
+           NULLIF(${PERSON_NAME('au')}, '') AS author_name,
            EXISTS (SELECT 1 FROM announcement_acks k WHERE k.announcement_id = a.announcement_id AND k.user_id = $4) AS acked
     FROM students s
     JOIN announcements a ON a.school = s.school AND a.deleted_at IS NULL

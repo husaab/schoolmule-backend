@@ -116,28 +116,76 @@ describe('Users page escalation guards', () => {
       expect(give.status).toBe(200);
       expect(give.body.data.accessRoleName).toBe('Office Staff');
       const update = userCalls().find(([sql]) => /UPDATE users/.test(sql));
-      expect(update[1].slice(7)).toEqual([true, ROLE_ID]);
+      expect(update[1].slice(7, 9)).toEqual([true, ROLE_ID]);
 
       db.query.mockClear();
       mockQueryResponse([target({ staff_role_id: ROLE_ID })]);
       mockQueryResponse([target()]);
       const clear = await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ accessRoleId: null }));
       expect(clear.status).toBe(200);
-      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7)).toEqual([true, null]);
+      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7, 9)).toEqual([true, null]);
     });
 
     it('keeps the access role when none is sent', async () => {
       mockQueryResponse([target({ staff_role_id: ROLE_ID })]);
       mockQueryResponse([target({ staff_role_id: ROLE_ID })]);
       await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit());
-      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7)).toEqual([false, null]);
+      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7, 9)).toEqual([false, null]);
     });
 
     it('drops the access role when someone becomes a parent', async () => {
       mockQueryResponse([target({ staff_role_id: ROLE_ID })]);
       mockQueryResponse([target({ role: 'PARENT' })]);
       await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ role: 'PARENT' }));
-      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7)).toEqual([true, null]);
+      expect(userCalls().find(([sql]) => /UPDATE users/.test(sql))[1].slice(7, 9)).toEqual([true, null]);
+    });
+  });
+
+  describe('staff title (Mr./Ms./Mrs./Dr.)', () => {
+    const updateParams = () => userCalls().find(([sql]) => /UPDATE users/.test(sql))[1];
+
+    it('sets and clears the title', async () => {
+      mockQueryResponse([target()]);
+      mockQueryResponse([target({ honorific: 'Ms.' })]);
+      const set = await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: 'Ms.' }));
+      expect(set.status).toBe(200);
+      expect(set.body.data.honorific).toBe('Ms.');
+      expect(updateParams().slice(9)).toEqual([true, 'Ms.']);
+
+      db.query.mockClear();
+      mockQueryResponse([target({ honorific: 'Ms.' })]);
+      mockQueryResponse([target()]);
+      await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: '' }));
+      expect(updateParams().slice(9)).toEqual([true, null]);
+    });
+
+    it('keeps the stored title when a form sends none', async () => {
+      mockQueryResponse([target({ honorific: 'Mr.' })]);
+      mockQueryResponse([target({ honorific: 'Mr.' })]);
+      await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit());
+      expect(updateParams().slice(9)).toEqual([false, null]);
+    });
+
+    it('drops the title when someone becomes a parent, and refuses an unknown one', async () => {
+      mockQueryResponse([target({ honorific: 'Ms.' })]);
+      mockQueryResponse([target({ role: 'PARENT' })]);
+      await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ role: 'PARENT', honorific: 'Ms.' }));
+      expect(updateParams().slice(9)).toEqual([true, null]);
+
+      db.query.mockClear();
+      const bad = await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: 'Sir' }));
+      expect(bad.status).toBe(400);
+      expect(userCalls()).toHaveLength(0);
+    });
+
+    it('saves the title on an invite', async () => {
+      mockQueryResponse([target({ user_id: 'new-user', honorific: 'Mr.', invite_pending: true })]);
+      mockQueryResponse([{ token: 'tok' }]);
+      mockQueryResponse([{ name: 'Test School' }]);
+      const res = await authenticatedRequest('post', '/api/admin/users')
+        .send({ firstName: 'A', lastName: 'B', email: 'new@test.com', role: 'TEACHER', honorific: 'Mr.' });
+      expect(res.status).toBe(201);
+      expect(userCalls().find(([sql]) => /INSERT INTO users/.test(sql))[1][7]).toBe('Mr.');
     });
   });
 

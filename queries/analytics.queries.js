@@ -8,6 +8,7 @@
 // At current scale (~190 students x ~10 assessments) this is <30k rows —
 // a single fast round-trip, no N+1 per class.
 
+const { CLASS_TEACHER_NAME } = require('./personName');
 const analyticsQueries = {
   /**
    * The full score matrix for a school + term.
@@ -20,7 +21,7 @@ const analyticsQueries = {
       c.class_id,
       c.grade::text           AS class_grade,
       c.subject,
-      c.teacher_name,
+      ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name,
       c.show_class_average,
       c.term_id,
       cs.student_id,
@@ -46,6 +47,8 @@ const analyticsQueries = {
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
+    LEFT JOIN users AS ctn
+      ON ctn.user_id = c.teacher_id
     JOIN students AS s
       ON s.student_id = cs.student_id
      AND s.is_archived = FALSE
@@ -77,7 +80,7 @@ const analyticsQueries = {
       c.class_id,
       c.grade::text           AS class_grade,
       c.subject,
-      c.teacher_name,
+      ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name,
       c.show_class_average,
       c.term_id,
       cs.student_id,
@@ -103,6 +106,8 @@ const analyticsQueries = {
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
+    LEFT JOIN users AS ctn
+      ON ctn.user_id = c.teacher_id
     JOIN students AS s
       ON s.student_id = cs.student_id
      AND s.is_archived = FALSE
@@ -133,7 +138,7 @@ const analyticsQueries = {
       c.class_id,
       c.grade::text           AS class_grade,
       c.subject,
-      c.teacher_name,
+      ${CLASS_TEACHER_NAME('c', 'ctn')} AS teacher_name,
       c.show_class_average,
       c.term_id,
       cs.student_id,
@@ -159,6 +164,8 @@ const analyticsQueries = {
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
+    LEFT JOIN users AS ctn
+      ON ctn.user_id = c.teacher_id
     JOIN students AS s
       ON s.student_id = cs.student_id
      AND s.is_archived = FALSE
