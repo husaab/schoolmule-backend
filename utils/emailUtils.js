@@ -30,10 +30,12 @@ const asList = (value) => (value == null ? [] : [].concat(value));
 // like an accepted send, so every caller treats it as delivered.
 const withReservedDomainGuard = (resend) => {
   const send = resend.emails.send.bind(resend.emails);
-  resend.emails.send = async (payload) => {
+  resend.emails.send = async (payload, options) => {
+    // Resend's own options (an idempotency key) ride along when given.
+    const forward = (p) => (options === undefined ? send(p) : send(p, options));
     const fields = ['to', 'cc', 'bcc'].filter((field) => payload[field] != null);
     const suppressed = fields.flatMap((field) => asList(payload[field]).filter(isReservedAddress));
-    if (!suppressed.length) return send(payload);
+    if (!suppressed.length) return forward(payload);
 
     const kept = Object.fromEntries(
       fields.map((field) => [field, asList(payload[field]).filter((r) => !isReservedAddress(r))]),
@@ -44,7 +46,7 @@ const withReservedDomainGuard = (resend) => {
     }
     logger.info({ suppressed, subject: payload.subject }, 'Email to reserved test domain not sent');
     if (!kept.to.length) return { data: { id: 'suppressed' }, error: null };
-    return send({ ...payload, ...kept });
+    return forward({ ...payload, ...kept });
   };
   return resend;
 };
@@ -78,8 +80,10 @@ const cleanEmailArray = (emails) => {
 // of throwing. Throw so callers' existing catch blocks see a rejected email.
 // Resend's statusCode is deliberately not copied to err.status, or the error
 // handler would answer the client with Resend's HTTP status.
-const sendOrThrow = async (resend, payload) => {
-  const result = await resend.emails.send(payload);
+// `options` reaches Resend as is: { idempotencyKey } makes a retried send of
+// the same email a no-op on Resend's side for 24 hours.
+const sendOrThrow = async (resend, payload, options) => {
+  const result = options ? await resend.emails.send(payload, options) : await resend.emails.send(payload);
   if (result?.error) {
     const err = new Error(result.error.message || 'Email sending failed');
     err.name = 'ResendError';

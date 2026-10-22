@@ -18,6 +18,7 @@ const notifier = require('../../../services/messageNotifier');
 const classroom = require('../../../services/classroom/classroomNotifier');
 const { gradedBucket } = require('../../../services/classroom/classroomDigest');
 const { getResend } = require('../../../utils/emailUtils');
+const { deliverQueuedEmails } = require('../../helpers/emailOutbox');
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const MONA_ID = '550e8400-e29b-41d4-a716-446655440004';
@@ -422,7 +423,8 @@ describe('Integration: classroom emails', () => {
 
     // The teacher marks Bilal and Amal missing: published at once, with today's parent digest.
     const res = await post(`/api/classroom/items/${item.itemId}/mark-missing`, { studentIds: [bilalId, amalId] });
-    expect(res.data.emailSummary).toMatchObject({ attempted: 2, sent: 2 });
+    expect(res.data.delivery).toMatchObject({ families: 2 });
+    await deliverQueuedEmails(pool);
     const digests = (await pool.query(
       `SELECT student_id, status, email_addresses, assessment_ids FROM assessment_publication_emails ORDER BY student_id`,
     )).rows;
@@ -446,10 +448,12 @@ describe('Integration: classroom emails', () => {
 
     // Confirmed between the sweep and the send: the digest announces it, the alert stays quiet.
     getResend().emails.send.mockClear();
-    expect((await post(`/api/classroom/items/${spelling.itemId}/mark-missing`, { studentIds: [samiId] })).data.emailSummary)
-      .toMatchObject({ attempted: 1, sent: 1 });
-    expect(sent().map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
+    expect((await post(`/api/classroom/items/${spelling.itemId}/mark-missing`, { studentIds: [samiId] })).data.delivery)
+      .toMatchObject({ families: 1 });
+    // Still queued (inside its hold): it will say so, so the alert stays quiet already.
     expect((await processJob(mona[0], FRIDAY)).row).toMatchObject({ status: 'skipped', last_error: 'nothing new' });
+    await deliverQueuedEmails(pool);
+    expect(sent().map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
     expect(sent()).toHaveLength(1);
   });
 
@@ -465,6 +469,7 @@ describe('Integration: classroom emails', () => {
     await turnIn(item.itemId, asBilal);
     await patchReq(`/api/classroom/items/${item.itemId}/submissions/${bilalId}`, { draftScore: 8 });
     expect((await post(`/api/classroom/items/${item.itemId}/publish`, { studentIds: [bilalId] })).data.assessmentPublished).toBe(true);
+    await deliverQueuedEmails(pool);
     // ...then the teacher marks Amal "M" in the grid: live at once (D17), no digest.
     getResend().emails.send.mockClear();
     await post(`/api/studentAssessments/classes/${sciId}/scores`, { scores: [{ studentId: amalId, assessmentId: columnId, score: null, status: 'missing' }] });
@@ -482,6 +487,7 @@ describe('Integration: classroom emails', () => {
       .send({ studentId: amalId, assessmentId: lab.gradebook.assessmentId, status: 'missing' }), 200);
     await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
       .send({ assessmentIds: [labsId] }), 201);
+    await deliverQueuedEmails(pool);
     const labDigest = (await pool.query(
       `SELECT assessment_ids FROM assessment_publication_emails WHERE student_id = $1 AND status = 'sent' AND $2 = ANY(assessment_ids)`, [amalId, labsId],
     )).rows;
@@ -524,6 +530,7 @@ describe('Integration: classroom emails', () => {
     // The teacher publishes Homework in Grades: Mona's digest lists the category line (A only, for Amal).
     await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
       .send({ assessmentIds: [homeworkId] }), 201);
+    await deliverQueuedEmails(pool);
     const amalDigest = (await pool.query(
       `SELECT e.assessment_ids, b.assessment_ids AS batch_ids FROM assessment_publication_emails e
        JOIN assessment_publication_batches b ON b.batch_id = e.batch_id WHERE e.student_id = $1 AND e.status = 'sent'`, [amalId],
@@ -918,7 +925,9 @@ describe('Integration: classroom emails', () => {
     // Dalia's login is invite-pending: no student email for her.
     const rows = await jobs('graded');
     expect(rows.map((r) => r.recipient_email)).toEqual(['amal.haddad@example.com', 'bilal.karim@example.com']);
-    // The parents' publish digest went out exactly as before.
+    // The parents' publish digest is queued, and goes out as before.
+    expect(sent().some((m) => m.to.includes('mona.haddad@example.com'))).toBe(false);
+    await deliverQueuedEmails(pool);
     expect(sent().some((m) => m.to.includes('mona.haddad@example.com'))).toBe(true);
 
     getResend().emails.send.mockClear();

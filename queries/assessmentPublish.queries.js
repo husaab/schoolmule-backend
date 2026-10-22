@@ -222,6 +222,39 @@ const assessmentPublishQueries = {
   // Reads
   // ────────────────────────────────────────────────────────────
 
+  /**
+   * Queued "New Grades Posted" emails of a class whose columns are all
+   * unpublished now: skipped, never sent (an unpublish inside the hold).
+   * Params: $1 class_id, $2 reason
+   */
+  skipUnpublishedDigests: `
+    UPDATE email_outbox AS o
+    SET status = 'skipped', skip_reason = $2, finished_at = NOW()
+    WHERE o.kind = 'grades_digest' AND o.status = 'pending' AND o.class_id = $1
+      AND NOT EXISTS (
+        SELECT 1 FROM assessments AS a
+        WHERE a.is_published
+          AND a.assessment_id::text IN (SELECT jsonb_array_elements_text(o.payload->'assessmentIds'))
+      )
+    RETURNING o.id
+  `,
+
+
+  /** Notes to all parents of these publishes, oldest first. Params: $1 batch_id[] */
+  selectBatchNotes: `
+    SELECT batch_id, batch_comment, created_at
+    FROM assessment_publication_batches
+    WHERE batch_id = ANY($1::uuid[])
+    ORDER BY created_at
+  `,
+
+  /** A publish of this class. Params: $1 batch_id, $2 class_id */
+  selectBatchInClass: `
+    SELECT batch_id, class_id, action, created_at
+    FROM assessment_publication_batches
+    WHERE batch_id = $1 AND class_id = $2
+  `,
+
   /** Current publish state for every assessment in a class. Params: $1 class_id */
   selectPublicationStateByClass: `
     SELECT

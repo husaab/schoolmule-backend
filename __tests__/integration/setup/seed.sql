@@ -2057,3 +2057,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_student_account_requests_pending
   ON student_account_requests (school, lower(email)) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_student_account_requests_school
   ON student_account_requests (school, status, created_at DESC);
+
+-- ============================================================
+-- Email outbox (database/migrations/email_outbox_migration.sql)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS email_outbox (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind                TEXT NOT NULL,
+  school              school NOT NULL,
+  recipient_user_id   UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  recipient_email     TEXT,
+  subject_type        TEXT NOT NULL,
+  subject_id          UUID,
+  class_id            UUID REFERENCES classes(class_id) ON DELETE CASCADE,
+  student_id          UUID REFERENCES students(student_id) ON DELETE CASCADE,
+  dedupe_key          TEXT NOT NULL,
+  coalesce_key        TEXT,
+  payload             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  priority            SMALLINT NOT NULL DEFAULT 5,
+  send_after          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status              TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'sent', 'skipped', 'failed')),
+  attempts            INT NOT NULL DEFAULT 0,
+  error_count         INT NOT NULL DEFAULT 0,
+  last_error          TEXT,
+  skip_reason         TEXT,
+  merged_into         UUID REFERENCES email_outbox(id) ON DELETE SET NULL,
+  provider_message_id TEXT,
+  sent_content        JSONB,
+  created_by          UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at         TIMESTAMPTZ,
+  CONSTRAINT email_outbox_recipient_ck CHECK (recipient_email IS NOT NULL OR status = 'skipped')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_email_outbox_dedupe
+  ON email_outbox (kind, LOWER(COALESCE(recipient_email, '')), dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_email_outbox_due ON email_outbox (priority, send_after) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_email_outbox_coalesce
+  ON email_outbox (kind, LOWER(recipient_email), coalesce_key) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_email_outbox_subject ON email_outbox (subject_type, subject_id);

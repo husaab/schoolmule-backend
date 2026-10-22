@@ -14,6 +14,7 @@ const { getTestPool } = require('../setup/setupTestDB');
 const supabase = require('../../../config/supabaseClient');
 const engine = require('../../../services/analyticsEngine');
 const { getResend } = require('../../../utils/emailUtils');
+const { deliverQueuedEmails } = require('../../helpers/emailOutbox');
 
 const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -113,6 +114,8 @@ describe('Integration: grading and per-student Publish', () => {
     .find((a) => a.assessmentId === assessmentId) ?? null;
   const studentItem = async (who, itemId = item.itemId) => (await get(`/api/student/items/${itemId}`, who)).data;
   const sent = () => getResend().emails.send.mock.calls.map(([msg]) => msg);
+  // A publish queues its parents' emails; this sends them, as the notifier's tick does.
+  const deliver = () => deliverQueuedEmails(pool);
 
   beforeEach(async () => {
     supabase._reset();
@@ -471,7 +474,9 @@ describe('Integration: grading and per-student Publish', () => {
         .sort((x, y) => x.student_id.localeCompare(y.student_id)),
     );
     expect((await submission(amalId)).published_at).not.toBeNull();
-    expect(res.data.emailSummary).toMatchObject({ sent: 2, failed: 0 });
+    expect(res.data.delivery).toMatchObject({ families: 2, noEmail: 0 });
+    expect(sent()).toEqual([]); // queued, never sent inside the request
+    await deliver();
 
     const emails = sent();
     const toAmal = emails.find((m) => m.to.includes('mona.haddad@example.com'));
@@ -496,6 +501,7 @@ describe('Integration: grading and per-student Publish', () => {
     const plain = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
       .send({ assessmentIds: [quizId] }), 201);
     expect(plain.data.classworkPublished).toEqual([]);
+    await deliver();
     expect(sent().map((m) => m.to)).toEqual([['lina.nassar@example.com']]);
   });
 
@@ -518,7 +524,8 @@ describe('Integration: grading and per-student Publish', () => {
 
     const res = await expectStatus(authenticatedRequest('post', `/api/assessment-publications/classes/${sciId}/publish`, asTeacher)
       .send({ assessmentIds: [unit2] }), 201);
-    expect(res.data.emailSummary).toMatchObject({ sent: 2, failed: 0 });
+    expect(res.data.delivery).toMatchObject({ families: 2, noEmail: 0 });
+    await deliver();
     expect(await isPublished(unit2)).toBe(true);
     expect(await isPublished(unit1)).toBe(false);
     const toAmal = sent().find((m) => m.to.includes('mona.haddad@example.com'));
@@ -536,7 +543,9 @@ describe('Integration: grading and per-student Publish', () => {
     await expectStatus(authenticatedRequest('patch', `${soloUrl}/submissions/${amalId}`, asTeacher).send({ draftScore: 18 }), 200);
     await expectStatus(authenticatedRequest('patch', `${soloUrl}/submissions/${bilalId}`, asTeacher).send({ draftScore: 10 }), 200);
     const { data } = await post(`${soloUrl}/publish`, { studentIds: [amalId] });
-    expect(data.emailSummary).toMatchObject({ sent: 1 });
+    expect(data.delivery).toMatchObject({ families: 1 });
+    expect(sent()).toEqual([]);
+    await deliver();
     const emails = sent();
     expect(emails.map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
     expect(emails[0].html).toContain('18/20');
@@ -563,7 +572,8 @@ describe('Integration: grading and per-student Publish', () => {
     await patch(bilalId, { draftScore: 6 });
     const many = (await publish('graded')).data;
     expect(many.publishedStudentIds.sort()).toEqual([amalId, bilalId].sort());
-    expect(many.emailSummary).toMatchObject({ attempted: 2, sent: 2, failed: 0 });
+    expect(many.delivery).toMatchObject({ families: 2, noEmail: 0 });
+    await deliver();
     let emails = sent();
     expect(emails.map((m) => m.to).sort()).toEqual([['mona.haddad@example.com'], ['rania.karim@example.com']]);
     const toAmal = emails.find((m) => m.to[0] === 'mona.haddad@example.com');
@@ -583,7 +593,8 @@ describe('Integration: grading and per-student Publish', () => {
     await patch(amalId, { draftScore: 9 }); // live on the published column, no email
     expect(sent()).toEqual([]);
     const one = (await publish([amalId])).data;
-    expect(one.emailSummary).toMatchObject({ attempted: 1, sent: 1 });
+    expect(one.delivery).toMatchObject({ families: 1 });
+    await deliver();
     emails = sent();
     expect(emails.map((m) => m.to)).toEqual([['mona.haddad@example.com']]);
     expect(emails[0].html).toContain('90%');
@@ -591,7 +602,8 @@ describe('Integration: grading and per-student Publish', () => {
     // Mark missing: one digest saying so through the category's line.
     getResend().emails.send.mockClear();
     const missing = (await post(`${itemUrl}/mark-missing`, { studentIds: [daliaId] })).data;
-    expect(missing.emailSummary).toMatchObject({ attempted: 1, sent: 1 });
+    expect(missing.delivery).toMatchObject({ families: 1 });
+    await deliver();
     expect(sent().map((m) => m.to)).toEqual([['lina.nassar@example.com']]);
     expect(sent()[0].html).toContain('Homework');
     rows = await digestRows();
@@ -844,16 +856,19 @@ describe('Integration: grading and per-student Publish', () => {
       });
       const soloUrl = `/api/classroom/items/${solo.itemId}`;
       await patchOn(soloUrl, amalId, { draftScore: 18 });
-      expect((await post(`${soloUrl}/publish`, { studentIds: [amalId] })).data.emailSummary).toMatchObject({ sent: 1 });
+      expect((await post(`${soloUrl}/publish`, { studentIds: [amalId] })).data.delivery).toMatchObject({ families: 1 });
+      await deliver();
 
       const again = (await post(`${soloUrl}/publish`, { studentIds: [amalId, daliaId] })).data;
       expect(again.publishedStudentIds).toEqual([]);
       expect(again.skipped).toEqual([{ studentId: amalId, reason: 'unchanged' }, { studentId: daliaId, reason: 'no_draft' }]);
+      await deliver();
       expect(sent()).toHaveLength(1);
 
       await patchOn(soloUrl, amalId, { draftScore: 19 }); // live regrade
       const regraded = (await post(`${soloUrl}/publish`, { studentIds: [amalId] })).data;
       expect(regraded.publishedStudentIds).toEqual([amalId]);
+      await deliver();
       expect(sent()).toHaveLength(2);
     });
 
@@ -1018,6 +1033,7 @@ describe('Integration: grading and per-student Publish', () => {
         await patchOn(url, bilalId, { draftScore: 6 });
         await post(`${url}/publish`, { studentIds: [amalId] });
         expect(await isPublished(colId)).toBe(true);
+        await deliver();
         const emails = sent().length;
 
         const res = await editItem(url, { audience: 'some', studentIds: [amalId] }, 409);
@@ -1029,6 +1045,7 @@ describe('Integration: grading and per-student Publish', () => {
         expect(await submission(bilalId, lab.itemId)).toMatchObject({ draft_score: 6, draft_status: 'graded', published_at: null });
         expect(await studentGrade(asBilal, colId)).toBeNull();
         expect(parentScore(await parentGrades(asParentB, bilalId), colId)?.score ?? null).toBeNull();
+        await deliver();
         expect(sent()).toHaveLength(emails);
         const bilal = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
         expect(bilal).toMatchObject({ label: 'Graded · draft', draftScore: 6, needsPublish: true });
@@ -1203,9 +1220,11 @@ describe('Integration: grading and per-student Publish', () => {
         await editItem(url, { audience: 'some', studentIds: [amalId, bilalId] }, 200);
         const row = (await get(`${url}/submissions`)).data.students.find((r) => r.studentId === bilalId);
         expect(row).toMatchObject({ draftScore: null, needsPublish: false });
+        await deliver(); // the earlier publishes' emails
         getResend().emails.send.mockClear();
         expect((await publish('graded')).data.publishedStudentIds).toEqual([]);
         expect(await cell(bilalId, colId)).toMatchObject({ score: 9 });
+        await deliver();
         expect(sent()).toEqual([]);
       });
 
@@ -1309,6 +1328,7 @@ describe('Integration: grading and per-student Publish', () => {
       ]));
       expect(await cell(amalId)).toBeUndefined();
       expect((await studentItem(asAmal)).grade).toBeNull();
+      await deliver();
       expect(sent().flatMap((m) => m.to)).not.toContain('mona.haddad@example.com');
       // Publishing Amal by name is refused the same way.
       const named = (await publish([amalId])).data;
@@ -1358,6 +1378,7 @@ describe('Integration: grading and per-student Publish', () => {
       expect((await studentItem(asAmal)).grade).toBeNull();
       expect(await studentGrade(asAmal)).toBeNull();
       expect(parentScore(await parentGrades(asParentA, amalId))?.score ?? null).toBeNull();
+      await deliver();
       expect(sent().flatMap((m) => m.to)).toEqual(['rania.karim@example.com']);
       // The teacher's draft and feedback are kept, still held.
       expect(await submission(amalId)).toMatchObject({ draft_score: 6, draft_status: 'graded', feedback: 'Redo question 3', published_at: null });

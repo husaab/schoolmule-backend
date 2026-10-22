@@ -30,6 +30,7 @@ const workQ = require('../../queries/classworkSubmission.queries');
 const scoring = require('./quizScoring');
 const { httpError, inTransaction } = require('./classworkItems');
 const { publishSubmissions, ensurePublishBatch } = require('./publish');
+const { enqueueGradeDigest } = require('../gradesDigest');
 const { toWork } = require('./studentWork');
 const { signedUrlMap } = require('../../utils/attachmentUpload');
 
@@ -682,6 +683,7 @@ async function saveAnswers({ studentId, school, itemId, answers }) {
  * answer waits for the teacher). Released "on submit", it is published for
  * this student at once through publishSubmissions (unless the column's
  * first per-student Publish is refused: then it stays a draft).
+ * The parents' email is queued in the same transaction.
  * @returns {Promise<{ item, published }>} for the caller's after-COMMIT work
  *   (item.release_by: the teacher recorded as the publisher)
  */
@@ -736,6 +738,13 @@ async function submitQuiz({ studentId, school, itemId }) {
       try {
         published = await publishSubmissions(client, { item, studentIds: [studentId], userId, school });
         published.batchId = await ensurePublishBatch(client, { item, school, userId, published });
+        // The parents' "New Grades Posted" email, queued with the release.
+        if (quiz.assessment_id && published.publishedStudentIds.length > 0) {
+          await enqueueGradeDigest(client, {
+            classId: quiz.class_id, school, userId, batchId: published.batchId,
+            assessmentIds: [quiz.assessment_id], studentIds: published.publishedStudentIds,
+          });
+        }
       } catch (error) {
         if (error.code !== 'OUTSIDE_AUDIENCE_GRADES') throw error;
         // The column holds grades of students the quiz isn't for: it must be

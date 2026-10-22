@@ -90,6 +90,17 @@ describe('emailUtils', () => {
       expect(send).toHaveBeenCalledWith({ ...payload, to: ['a@gmail.com'], cc: [] });
     });
 
+    it("hands Resend's options (an idempotency key) through, with or without a dropped recipient", async () => {
+      const inner = resolving({ data: { id: 'em_6' }, error: null });
+      const send = inner.emails.send;
+      const client = withReservedDomainGuard(inner);
+      const options = { idempotencyKey: 'grades_digest:row-1:0' };
+      await client.emails.send({ ...payload, to: 'a@gmail.com' }, options);
+      expect(send).toHaveBeenLastCalledWith({ ...payload, to: 'a@gmail.com' }, options);
+      await client.emails.send({ ...payload, to: ['a@gmail.com', 'parent@playground.test'] }, options);
+      expect(send).toHaveBeenLastCalledWith({ ...payload, to: ['a@gmail.com'] }, options);
+    });
+
     it('never turns bcc into a visible "to": with only bcc left it is not sent', async () => {
       const inner = resolving({ data: { id: 'em_5' }, error: null });
       const send = inner.emails.send;
@@ -131,6 +142,12 @@ describe('emailUtils', () => {
       const client = resolving({ data: { id: 'em_1' }, error: null });
       await expect(sendOrThrow(client, payload)).resolves.toEqual({ data: { id: 'em_1' }, error: null });
       expect(client.emails.send).toHaveBeenCalledWith(payload);
+    });
+
+    it('passes options (an idempotency key) to Resend', async () => {
+      const client = resolving({ data: { id: 'em_2' }, error: null });
+      await sendOrThrow(client, payload, { idempotencyKey: 'k1' });
+      expect(client.emails.send).toHaveBeenCalledWith(payload, { idempotencyKey: 'k1' });
     });
 
     it('treats a result without an error key as success', async () => {

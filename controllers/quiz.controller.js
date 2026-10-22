@@ -14,7 +14,6 @@ const logger = require('../logger');
 const engine = require('../services/analyticsEngine');
 const quizzes = require('../services/classroom/quizzes');
 const { afterPublish } = require('../services/classroom/publish');
-const { sendGradeDigest } = require('./assessmentPublish.controller');
 const { BUCKET, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
 
 const NOTE_MAX = 2000;
@@ -149,21 +148,15 @@ const saveStudentAnswers = async (req, res) => {
 };
 
 // POST /api/student/items/:itemId/quiz-submit → StudentQuiz
-// Released on submit: published for this student at once, and after COMMIT
-// the same bookkeeping and emails as any Publish (the student's graded
-// email, the parents' publish digest).
+// Released on submit: published for this student at once, the parents'
+// email queued with it, and after COMMIT the same bookkeeping as any
+// Publish (the student's graded email).
 const submitStudentQuiz = async (req, res) => {
   const p = mine(req);
   try {
-    const { item, published } = await quizzes.submitQuiz(p);
+    const { published } = await quizzes.submitQuiz(p);
     if (published.publishedStudentIds.length > 0) {
       await afterPublish({ school: p.school, studentIds: published.publishedStudentIds, itemId: p.itemId });
-      if (item.assessment_id) {
-        await sendGradeDigest({
-          classId: item.class_id, school: p.school, userId: item.release_by ?? null, batchId: published.batchId,
-          assessmentIds: [item.assessment_id], studentIds: published.publishedStudentIds,
-        });
-      }
     }
     return ok(res, await quizzes.buildStudentQuiz(p));
   } catch (error) {

@@ -25,6 +25,7 @@ const adminUserQueries = require('../queries/adminUser.queries');
 const { emailAttachments } = require('../utils/attachmentUpload');
 const scheduler = require('./classroom/scheduler');
 const classroom = require('./classroom/classroomNotifier');
+const outbox = require('./email/outbox');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -477,6 +478,19 @@ async function classroomTick(now = new Date()) {
 }
 
 /**
+ * Sends due email_outbox rows (the parents' "New Grades Posted"), first in
+ * the tick: a teacher may be watching the publish window. Never throws.
+ */
+async function drainEmailOutbox() {
+  try {
+    return await outbox.drainOutbox();
+  } catch (error) {
+    logger.error({ err: error }, 'Sending outbox emails failed');
+    return 0;
+  }
+}
+
+/**
  * Sends due classroom emails, last in the tick so a 4 pm surge of summaries
  * never holds back message digests or announcements. Never throws.
  */
@@ -495,6 +509,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   announcementsDisabled = null;
   classworkDisabled = null;
   classroom.resetScheduleState();
+  outbox.resetOutboxState();
   // A restart part-way through the day must not re-run the reminder sweep.
   lastReminderDate = torontoDate();
   timer = setInterval(async () => {
@@ -502,6 +517,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
     if (draining) return;
     draining = true;
     try {
+      await drainEmailOutbox();
       await classroomTick();
       if (!disabledReason) await remindIfDue();
       await drainAll();
@@ -529,4 +545,5 @@ function stopWorker() {
 module.exports = {
   startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS,
   drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick, drainClassroom,
+  drainEmailOutbox,
 };

@@ -9,17 +9,17 @@
 //
 // Two ordering rules this file exists to get right:
 //
-//   1. The publish transaction COMMITs before a single email is sent. A
-//      Resend outage must never roll back or 500 an otherwise-successful
-//      publish — see registerUser in auth.controller.js for the bug this
-//      avoids (it commits, then emails inside the same try, so an email
-//      failure ROLLBACKs an already-committed transaction and returns 500
-//      for a user that was in fact created).
-//   2. Every email is wrapped individually, so one bad address cannot
-//      abort the rest of the batch. Outcomes are logged per recipient and
-//      reported back to the teacher.
+//   1. No email is sent inside a request. A publish queues the parents'
+//      "New Grades Posted" email in its own transaction (one outbox row per
+//      guardian address, services/gradesDigest.js), so the grades and their
+//      email commit together or not at all, and the notifier's tick sends it
+//      after a short hold (services/email/outbox.js). A Resend outage can
+//      never roll back or 500 a publish, and a restart can't lose an email.
+//   2. Each address is its own row, retried on its own; the teacher sees
+//      every outcome (GET .../batches/:batchId/delivery) and can resend the
+//      failed ones (POST .../retry).
 //
-// All grade math routes through studentViewEvaluator.computeAssessmentForStudent —
+// All grade math routes through gradeEngine.computeAssessmentForStudent —
 // the same null-skip helper the parent portal and report cards use. Never
 // re-derive weighting here.
 
@@ -28,47 +28,41 @@ const db = require('../config/database');
 const logger = require('../logger');
 const engine = require('../services/analyticsEngine');
 const publishQueries = require('../queries/assessmentPublish.queries');
-const schoolQueries = require('../queries/school.queries');
+const outboxQueries = require('../queries/emailOutbox.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
-const { parentAskPath, speakLabel } = require('../utils/parentLinks');
-const { signEmailLoginToken, emailLoginUrl } = require('../utils/emailLoginLink');
-const { cleanEmailArray, getResend, sendOrThrow } = require('../utils/emailUtils');
+const { getResend, sendOrThrow } = require('../utils/emailUtils');
 const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const {
   computeAssessmentForStudent,
   buildScoreLookup,
-  computeClassGrade,
-  formatCoverage,
   cellState,
 } = require('../services/gradeEngine');
 const { invalidateWeeklySummaries } = require('../services/aiWeeklySummary.service');
 const gradingQueries = require('../queries/grading.queries');
 const { publishSubmissions, afterPublish } = require('../services/classroom/publish');
 const { enqueueGraded } = require('../services/classroom/classroomNotifier');
+const digest = require('../services/gradesDigest');
 
-// Resend allows ~2 requests/second. Matches sendBulkReportEmails.
+const {
+  groupScoreRowsByStudent,
+  buildEmailTasks,
+  resolveRecipients,
+  topLevelLines,
+  publishDigestTasks,
+  loadEmailContext,
+  speakButton,
+  recipientAccess,
+  recipientButtons,
+  portalOrigin,
+} = digest;
+
+// Resend allows 10 requests a second per team; the backfill script paces itself with this.
 const EMAIL_RATE_LIMIT_MS = 600;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────
-
-/** Group flat score rows into { studentId -> { name, rows[] } }. */
-function groupScoreRowsByStudent(rows) {
-  const byStudent = new Map();
-  for (const r of rows) {
-    let entry = byStudent.get(r.student_id);
-    if (!entry) {
-      entry = { studentId: r.student_id, studentName: r.student_name, rows: [] };
-      byStudent.set(r.student_id, entry);
-    }
-    entry.rows.push(r);
-  }
-  return byStudent;
-}
 
 /**
  * The score rows as they will stand once these classwork drafts are published
@@ -161,40 +155,6 @@ function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
   }
 
   return warnings;
-}
-
-/**
- * One released column's row in the email: its own score, labelled with its
- * category (`group`) when it sits inside one. `assessmentId` lets the sender
- * link the row to a conversation about it.
- */
-function formatAssessmentLine(assessment, result, { group = null, comment = assessment.parent_comment || null } = {}) {
-  const isMissing = result.state === 'missing';
-  return {
-    assessmentId: assessment.assessment_id,
-    name: assessment.name,
-    group,
-    scoreLabel: isMissing ? 'Missing' : `${result.earned}/${result.max}`,
-    pctLabel: `${Math.round(result.pct * 10) / 10}%`,
-    isMissing,
-    comment,
-  };
-}
-
-/**
- * The assessments a parent can see once `publishedIds` are published:
- * published ones plus any category with a published child (same structural
- * rule as analyticsEngine.prunePublishedOnly).
- */
-function visibleAssessments(publishedSet, allAssessments) {
-  const visible = new Set(publishedSet);
-  for (const a of allAssessments) {
-    if (!a.is_parent) continue;
-    if (allAssessments.some((c) => c.parent_assessment_id === a.assessment_id && publishedSet.has(c.assessment_id))) {
-      visible.add(a.assessment_id);
-    }
-  }
-  return allAssessments.filter((a) => visible.has(a.assessment_id));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -321,96 +281,6 @@ function planPublish({ requested, allAssessments, scoreRowsByStudent, pendingDra
   return { cascade, scoreRowsByStudent: overlayDrafts(scoreRowsByStudent, drafts) };
 }
 
-/**
- * One email task per student who has at least one graded (or missing) column
- * among those this publish releases. A student with nothing graded gets no
- * email at all — an empty digest tells a parent nothing.
- *
- * `publishedIds` are top-level lines: a standalone column, or a category.
- * Each column released under a line is its own row with its own score: the
- * line itself when standalone; for a category, its children released now
- * (published with it, in `publishing`, or on their own, in `alsoListed`), never
- * an older sibling. A category's running average is not shown — parents asked
- * what the new work scored. The audit ids stay per line, as before.
- */
-function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { alsoListed = new Map(), publishing = [] } = {}) {
-  const publishedSet = new Set(publishedIds);
-  const topLevelPublished = allAssessments.filter(
-    (a) => publishedSet.has(a.assessment_id) && !a.parent_assessment_id,
-  );
-  const listedUnder = (line) => alsoListed.get(line.assessment_id) || [];
-
-  // Every assessment the parent can see after this publish, including
-  // earlier batches, so the running grade in the email matches the portal.
-  // `publishing` and `alsoListed` name columns this publish releases that
-  // aren't lines themselves (children, before commit).
-  const releasing = new Set([...publishedSet, ...publishing, ...[...alsoListed.values()].flat()]);
-  const allPublishedIds = new Set(
-    allAssessments.filter((a) => a.is_published || releasing.has(a.assessment_id)).map((a) => a.assessment_id),
-  );
-  const parentVisible = visibleAssessments(allPublishedIds, allAssessments);
-
-  const columnsOf = (line) => (line.is_parent
-    ? allAssessments.filter((c) => c.parent_assessment_id === line.assessment_id && !c.is_parent && releasing.has(c.assessment_id))
-    : [line]);
-
-  const tasks = [];
-  for (const student of scoreRowsByStudent.values()) {
-    const lookup = buildScoreLookup(student.rows);
-    const lines = [];
-    const gradedIds = [];
-
-    for (const line of topLevelPublished) {
-      // A category published itself has no alsoListed entry (publishDigestTasks);
-      // the note the teacher left on it opens its first row.
-      let categoryNote = line.is_parent && !listedUnder(line).length ? line.parent_comment || null : null;
-      let listed = false;
-      for (const column of columnsOf(line)) {
-        const result = computeAssessmentForStudent(column, allAssessments, lookup);
-        if (!result.isCounted) continue;
-        const comment = [categoryNote, column.parent_comment].filter(Boolean).join('\n') || null;
-        lines.push(formatAssessmentLine(column, result, { group: line.is_parent ? line.name : null, comment }));
-        categoryNote = null;
-        listed = true;
-      }
-      if (!listed) continue;
-      gradedIds.push(line.assessment_id);
-      // The audit row also names the columns under that line this publish released.
-      for (const extra of listedUnder(line)) gradedIds.push(extra);
-    }
-
-    if (lines.length === 0) continue;
-    const running = computeClassGrade(parentVisible, student.rows);
-    tasks.push({
-      studentId: student.studentId,
-      studentName: student.studentName,
-      lines,
-      gradedAssessmentIds: gradedIds,
-      runningGradeLabel:
-        running.pct == null
-          ? null
-          : `${Math.round(running.pct * 10) / 10}% · based on ${formatCoverage(running.coverage)}`,
-    });
-  }
-
-  return tasks;
-}
-
-/** Attach guardian email addresses to each email task. */
-async function resolveRecipients(tasks) {
-  if (tasks.length === 0) return [];
-
-  const { rows } = await db.query(publishQueries.selectGuardianEmailsByStudent, [
-    tasks.map((t) => t.studentId),
-  ]);
-  const emailsByStudent = new Map(rows.map((r) => [r.student_id, r.guardian_emails || []]));
-
-  return tasks.map((task) => ({
-    ...task,
-    emails: [...new Set(cleanEmailArray(emailsByStudent.get(task.studentId) || []))],
-  }));
-}
-
 // ────────────────────────────────────────────────────────────────────
 // POST /api/assessment-publications/classes/:classId/publish
 // ────────────────────────────────────────────────────────────────────
@@ -425,14 +295,11 @@ const publishAssessments = async (req, res) => {
 
   let batchId;
   let cascade;
-  let tasksWithEmails;
-  let committedScoreRows;
+  let queued;
   // Turn-in columns in the batch: their drafts are published in the same
   // transaction (spec D3), so "Publish" means the same here and in Classwork.
   const classworkPublished = [];
   const classworkStudents = new Map();
-  // A held student's old cell went back to a draft (post-Fable m1).
-  let heldAny = false;
 
   try {
     const resolved = await resolveSelection(classId, assessmentIds);
@@ -446,7 +313,7 @@ const publishAssessments = async (req, res) => {
     const { scoreRowsByStudent } = plan;
     const warnings = countUngradedStudents(requested, allAssessments, scoreRowsByStudent);
 
-    // ── Transaction: publish state only. No email inside. ──
+    // ── Transaction: the publish and its queued emails, together. ──
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -486,7 +353,6 @@ const publishAssessments = async (req, res) => {
         if (heldIds.length > 0) {
           await client.query(gradingQueries.holdCellsAsDrafts, [row.item_id, row.assessment_id, heldIds]);
           await client.query(gradingQueries.withdrawHeldPublish, [row.item_id, heldIds]);
-          heldAny = true;
         }
         const result = await publishSubmissions(client, {
           item: { ...row, is_published: true },
@@ -503,6 +369,12 @@ const publishAssessments = async (req, res) => {
         if (result.publishedStudentIds.length > 0) classworkStudents.set(row.item_id, result.publishedStudentIds);
       }
 
+      // Last, so it reads the gradebook exactly as this publish leaves it
+      // (comments, copied drafts, held cells): what the email will say.
+      queued = await digest.enqueueGradeDigest(client, {
+        classId, school, userId, batchId, assessmentIds: cascade.finalIds,
+      });
+
       await client.query('COMMIT');
     } catch (txError) {
       await client.query('ROLLBACK');
@@ -510,79 +382,29 @@ const publishAssessments = async (req, res) => {
     } finally {
       client.release();
     }
-
-    committedScoreRows = scoreRowsByStudent;
   } catch (error) {
     logger.error('Error publishing assessments:', error);
     return res.status(500).json({ status: 'failed', message: 'Error publishing assessments' });
   }
 
-  // ── Everything below runs AFTER the commit, so nothing here may turn a
-  // durable publish into a 500. A transient DB hiccup while working out who
-  // to email must not tell the teacher the publish failed — the assessments
-  // are already live, and they'd re-publish and double-notify the class.
+  // ── After the commit: bookkeeping only, so nothing here may turn a durable
+  // publish into a 500 (the teacher would publish again).
   try {
     // Parents must see the change immediately, so drop the cached matrices
     // (both the full and published-only variants) for this school.
     engine.invalidateCache(school);
-
-    // Re-read assessments so the email picks up comments written above.
-    const { rows: freshAssessments } = await db.query(
-      publishQueries.selectAllAssessmentsInClass,
-      [classId],
-    );
-    // Classwork drafts were copied under lock inside the transaction: the
-    // email reads the committed gradebook, so it says exactly what was
-    // published (a draft edited meanwhile is never emailed unpublished).
-    if (classworkStudents.size > 0 || heldAny) {
-      const { rows: committedRows } = await db.query(publishQueries.selectClassScoreRows, [classId]);
-      committedScoreRows = groupScoreRowsByStudent(committedRows);
-    }
-    const tasks = publishDigestTasks(cascade.finalIds, freshAssessments, committedScoreRows);
-    tasksWithEmails = await resolveRecipients(tasks);
-
     // New marks invalidate this week's AI summary for the affected students.
-    await invalidateWeeklySummaries(tasks.map((t) => t.studentId));
+    await invalidateWeeklySummaries(queued.students.map((s) => s.studentId));
     for (const [itemId, studentIds] of classworkStudents) {
       await afterPublish({ school, studentIds, itemId });
     }
     // Students get their "graded" email for every column published here
     // (spec D6), bundled with the Classwork ones above into one per student
-    // per 15 minutes. Parents' digest below is unchanged. Never throws.
+    // per 15 minutes. Never throws.
     await enqueueGraded({ school, assessmentIds: cascade.finalIds });
   } catch (error) {
-    logger.error('Publish committed, but preparing notifications failed:', error);
-    return res.status(201).json({
-      status: 'success',
-      data: {
-        batchId,
-        classId,
-        publishedAssessmentIds: cascade.finalIds,
-        cascadedChildIds: cascade.cascadedChildIds,
-        skippedUngradedChildIds: cascade.skippedUngradedChildIds,
-        classworkPublished,
-        emailSummary: {
-          attempted: 0,
-          sent: 0,
-          failed: 0,
-          skippedNoEmail: 0,
-          results: [],
-          notificationError:
-            'Grades were published, but notifications could not be prepared. Publish again to notify parents.',
-        },
-      },
-    });
+    logger.error('Publish committed, but its bookkeeping failed:', error);
   }
-
-  // ── Post-commit email fan-out. Failures here are reported, never fatal. ──
-  const emailSummary = await sendPublishEmails({
-    tasks: tasksWithEmails,
-    batchId,
-    classId,
-    school,
-    userId,
-    batchComment,
-  });
 
   return res.status(201).json({
     status: 'success',
@@ -593,171 +415,34 @@ const publishAssessments = async (req, res) => {
       cascadedChildIds: cascade.cascadedChildIds,
       skippedUngradedChildIds: cascade.skippedUngradedChildIds,
       classworkPublished,
-      emailSummary,
+      delivery: deliveryReceipt(batchId, queued),
+      emailSummary: legacyEmailSummary(queued),
     },
   });
 };
 
-/**
- * Each assessment's top-level line: itself, or the category it sits under
- * (walking up). Returns the line ids and, per line, the columns under it
- * that were asked for (named in the email's audit row too).
- */
-function topLevelLines(assessmentIds, allAssessments) {
-  const byId = new Map(allAssessments.map((a) => [a.assessment_id, a]));
-  const lineIds = [];
-  const alsoListed = new Map();
-  for (const id of assessmentIds) {
-    let a = byId.get(id);
-    const seen = new Set();
-    while (a && a.parent_assessment_id && !seen.has(a.assessment_id)) {
-      seen.add(a.assessment_id);
-      a = byId.get(a.parent_assessment_id);
-    }
-    if (!a) continue;
-    if (!lineIds.includes(a.assessment_id)) lineIds.push(a.assessment_id);
-    if (a.assessment_id !== id) alsoListed.set(a.assessment_id, [...(alsoListed.get(a.assessment_id) || []), id]);
-  }
-  return { lineIds, alsoListed };
+/** What a publish queued: "Emailing N families". */
+function deliveryReceipt(batchId, queued) {
+  return { batchId, families: queued.families, noEmail: queued.noEmail };
 }
 
 /**
- * The parent digest for the gradebook's Publish (its preview, the send and
- * the preview email) of `finalIds`, the cascade's result. Every column it
- * releases is a row with its own score, grouped through its top-level line:
- * a column inside a category published on its own (the category window's
- * "Publish 1 selected") is listed under that category's name, and the
- * running grade counts what parents will see (published columns plus the
- * ones being published now).
+ * The old response's shape for a frontend from before the queue (between the
+ * backend and frontend deploys): every family reads as queued, none as sent.
  */
-function publishDigestTasks(finalIds, allAssessments, scoreRowsByStudent) {
-  const { lineIds, alsoListed } = topLevelLines(finalIds, allAssessments);
-  // A category published itself is named alone in the audit row, as before
-  // (the 4 pm Missing alert reads it); only a child published without its
-  // category is named under the category's line, as Classwork's digest does.
-  const selected = new Set(finalIds);
-  for (const lineId of [...alsoListed.keys()]) if (selected.has(lineId)) alsoListed.delete(lineId);
-  return buildEmailTasks(lineIds, allAssessments, scoreRowsByStudent, { alsoListed, publishing: finalIds });
-}
-
-/**
- * Today's publish digest for a publish made from Classwork (the grading
- * view's Publish, Mark missing, Excuse, a quiz released on submit): the same
- * email the gradebook's Publish sends, for `assessmentIds` (a column under a
- * category is listed under the category's name), to the guardians of
- * `studentIds` only. Built from the committed gradebook, so another student's
- * draft never enters it. After COMMIT; never throws.
- */
-async function sendGradeDigest({ classId, school, userId, batchId, assessmentIds, studentIds }) {
-  const none = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
-  if (!batchId || !studentIds || studentIds.length === 0) return none;
-  try {
-    const wanted = new Set(studentIds);
-    const [{ rows: freshAssessments }, { rows: scoreRows }] = await Promise.all([
-      db.query(publishQueries.selectAllAssessmentsInClass, [classId]),
-      db.query(publishQueries.selectClassScoreRows, [classId]),
-    ]);
-    const byStudent = groupScoreRowsByStudent(scoreRows.filter((r) => wanted.has(r.student_id)));
-    // A column under a category is listed under the category's name (S2).
-    const { lineIds, alsoListed } = topLevelLines(assessmentIds, freshAssessments);
-    const tasks = await resolveRecipients(
-      buildEmailTasks(lineIds, freshAssessments, byStudent, { alsoListed }),
-    );
-    return await sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment: null });
-  } catch (error) {
-    logger.error('Classwork publish committed, but the parent digest failed:', error);
-    return { ...none, notificationError: 'Grades were published, but parents could not be emailed.' };
-  }
-}
-
-/**
- * Class subject, school letterhead and the "Ask <teacher> about this" label
- * for the email; soft-fails to generic copy and no ask links. `askable` is
- * false for a class parents may not start a conversation about (past term).
- */
-async function loadEmailContext(classId, school) {
-  let className = 'your child\'s class';
-  let schoolInfo = null;
-  let teacherName = null;
-  let askable = false;
-  try {
-    const [{ rows: classRows }, { rows: schoolRows }] = await Promise.all([
-      db.query(publishQueries.selectEmailClassContext, [classId]),
-      db.query(schoolQueries.selectSchoolByCode, [school]),
-    ]);
-    if (classRows.length > 0) {
-      className = classRows[0].subject || className;
-      teacherName = classRows[0].teacher_name;
-      askable = Boolean(classRows[0].askable);
-    }
-    if (schoolRows.length > 0) schoolInfo = schoolRows[0];
-  } catch (lookupError) {
-    logger.warn('Could not resolve class/school info for publish email:', lookupError);
-  }
-  return { className, schoolInfo, teacherName, askable };
-}
-
-/**
- * The email's "Speak to <teacher> about this" button, beside View in Parent
- * Portal, when the class allows it: { label, path }. It opens a new message
- * about the first row's item; the parent can pick another item of the class
- * in the window.
- */
-function speakButton(task, classId, { teacherName, askable }) {
-  const [first] = task.lines;
-  if (!askable || !first) return null;
+function legacyEmailSummary(queued) {
   return {
-    label: speakLabel(teacherName, task.lines.length),
-    path: parentAskPath({ studentId: task.studentId, classId, assessmentId: first.assessmentId, about: first.name }),
+    attempted: queued.students.length,
+    sent: 0,
+    failed: 0,
+    skippedNoEmail: queued.noEmail,
+    results: queued.students.map((s) => ({
+      studentId: s.studentId,
+      studentName: s.studentName,
+      status: 'skipped',
+      reason: s.hasEmail ? 'Email queued' : digest.NO_EMAIL,
+    })),
   };
-}
-
-const PORTAL_PATH = '/parent/grades';
-const portalOrigin = () => process.env.FRONTEND_URL || '';
-
-/**
- * How one guardian address opens the portal from its email:
- * - signIn: a parent account linked to the child. Its buttons sign that parent
- *   in on one tap (utils/emailLoginLink).
- * - signup: no account at all. "Create your account" with the address filled
- *   in (signup matches the children by email); "Speak to …" goes there too,
- *   since messaging needs an account.
- * - plain: anything else (a staff account, an archived or unlinked parent, two
- *   accounts differing only by case). The buttons ask for a normal sign-in.
- * `accounts` are selectRecipientAccounts rows.
- */
-function recipientAccess(address, accounts) {
-  const mine = accounts.filter((a) => a.email === address);
-  if (mine.length === 0) return { kind: 'signup' };
-  const [account] = mine;
-  if (mine.length === 1 && account.role === 'PARENT' && account.linked && !account.is_archived) {
-    return { kind: 'signIn', userId: account.user_id };
-  }
-  return { kind: 'plain' };
-}
-
-/** The template's buttons for one address: { portalUrl, speak } or { setupUrl, speak }. */
-function recipientButtons({ access, address, studentId, school, speak }) {
-  if (access.kind === 'signup') {
-    const setupUrl = `${portalOrigin()}/signup/${String(school).toLowerCase()}/parent?email=${encodeURIComponent(address)}`;
-    return { setupUrl, speak: speak && { label: speak.label, url: setupUrl } };
-  }
-  const link = access.kind === 'signIn'
-    ? ((path) => emailLoginUrl({ token: signEmailLoginToken({ userId: access.userId, studentId, email: address }), next: path }))
-    : ((path) => `${portalOrigin()}${path}`);
-  return { portalUrl: link(PORTAL_PATH), speak: speak && { label: speak.label, url: link(speak.path) } };
-}
-
-/** Each address of a task with its access; an address lookup failure falls back to plain links. */
-async function recipientsOf(task) {
-  const addresses = task.emails.map((e) => String(e).trim().toLowerCase());
-  try {
-    const { rows } = await db.query(publishQueries.selectRecipientAccounts, [addresses, task.studentId]);
-    return addresses.map((address) => ({ address, access: recipientAccess(address, rows) }));
-  } catch (error) {
-    logger.warn('Could not look up accounts for the publish email; sending plain links:', error);
-    return addresses.map((address) => ({ address, access: { kind: 'plain' } }));
-  }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -837,110 +522,6 @@ const previewPublishEmail = async (req, res) => {
   }
 };
 
-/**
- * Send one digest per (guardian set, child), sequentially, respecting
- * Resend's rate limit. Every send is wrapped individually and logged to
- * assessment_publication_emails; nothing in here can throw out to the
- * request handler, because the publish is already committed.
- *
- * A guardian with two children in this class receives two emails, one per
- * child — no cross-child data ever shares a template render.
- */
-async function sendPublishEmails({ tasks, batchId, classId, school, userId, batchComment }) {
-  const summary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
-  if (!tasks || tasks.length === 0) return summary;
-
-  const emailContext = await loadEmailContext(classId, school);
-  const { className, schoolInfo } = emailContext;
-  const schoolName = getSchoolName(school);
-  const sender = schoolSender({ school, schoolInfo, role: 'academics' });
-  const resend = getResend();
-
-  const logEmail = async (task, status, errorMessage, addresses = task.emails) => {
-    try {
-      await db.query(publishQueries.insertPublicationEmail, [
-        batchId,
-        task.studentId,
-        userId,
-        JSON.stringify(addresses),
-        task.gradedAssessmentIds,
-        school,
-        status,
-        errorMessage || null,
-      ]);
-    } catch (logError) {
-      logger.error('Failed to write publication email audit row:', logError);
-    }
-  };
-
-  let first = true;
-  for (const task of tasks) {
-    summary.attempted += 1;
-
-    if (task.emails.length === 0) {
-      summary.skippedNoEmail += 1;
-      summary.results.push({
-        studentId: task.studentId,
-        studentName: task.studentName,
-        status: 'skipped',
-        reason: 'No guardian email on file',
-      });
-      await logEmail(task, 'skipped', 'No guardian email on file');
-      continue;
-    }
-
-    // One email per address: each carries its own buttons (a one-tap sign-in
-    // link is for one parent's account only, never a co-recipient's).
-    const speak = speakButton(task, classId, emailContext);
-    const sentTo = [];
-    const failures = [];
-    for (const { address, access } of await recipientsOf(task)) {
-      if (!first) await sleep(EMAIL_RATE_LIMIT_MS);
-      first = false;
-      try {
-        const result = await resend.emails.send({
-          ...sender,
-          to: [address],
-          subject: `${task.studentName} — New Grades Posted (${className})`,
-          html: getAssessmentPublishedEmailHTML({
-            studentName: task.studentName,
-            className,
-            assessments: task.lines,
-            runningGradeLabel: task.runningGradeLabel,
-            batchComment: batchComment || null,
-            schoolName,
-            schoolInfo,
-            ...recipientButtons({ access, address, studentId: task.studentId, school, speak }),
-          }),
-        });
-        if (result.error) throw new Error(result.error.message || 'Email sending failed');
-        sentTo.push(address);
-      } catch (sendError) {
-        logger.error(`Failed to send publish email for ${task.studentName}:`, sendError);
-        failures.push({ address, message: sendError.message });
-      }
-    }
-
-    // The audit names exactly the addresses each outcome covers (the 4 pm
-    // Missing alert reads which address a digest reached).
-    if (sentTo.length > 0) {
-      summary.sent += 1;
-      summary.results.push({ studentId: task.studentId, studentName: task.studentName, status: 'sent', sentTo });
-      await logEmail(task, 'sent', null, sentTo);
-    }
-    if (failures.length > 0) {
-      const error = failures.map((f) => `${f.address}: ${f.message}`).join('; ');
-      if (sentTo.length === 0) {
-        summary.failed += 1;
-        summary.results.push({ studentId: task.studentId, studentName: task.studentName, status: 'failed', error });
-      }
-      await logEmail(task, 'failed', error, failures.map((f) => f.address));
-    }
-  }
-
-  return summary;
-}
-
 // ────────────────────────────────────────────────────────────────────
 // POST /api/assessment-publications/classes/:classId/unpublish
 //
@@ -996,6 +577,9 @@ const unpublishAssessments = async (req, res) => {
       batchId = batchRows[0].batch_id;
 
       await client.query(publishQueries.markUnpublished, [targetIds, batchId]);
+      // Queued emails about these columns alone are never sent (an undo
+      // inside the hold); an email already sent can't be recalled.
+      await digest.cancelUnpublished(client, classId);
       await client.query('COMMIT');
     } catch (txError) {
       await client.query('ROLLBACK');
@@ -1067,29 +651,100 @@ const getPublicationHistory = async (req, res) => {
       limit,
       offset,
     ]);
+    // A publish since the queue: its counts come from its outbox rows (one
+    // per family, with what is still waiting); an older one from its log.
+    const { rows: outboxRows } = rows.length
+      ? await db.query(outboxQueries.selectBySubjects, [digest.SUBJECT_TYPE, rows.map((r) => r.batch_id)])
+      : { rows: [] };
+    const queuedByBatch = new Map();
+    for (const r of outboxRows) {
+      queuedByBatch.set(r.subject_id, [...(queuedByBatch.get(r.subject_id) || []), r]);
+    }
 
     return res.status(200).json({
       status: 'success',
-      data: rows.map((r) => ({
-        batchId: r.batch_id,
-        action: r.action,
-        batchComment: r.batch_comment,
-        studentWarningCount: r.student_warning_count,
-        createdAt: r.created_at,
-        triggeredBy: r.triggered_by
-          ? { userId: r.triggered_by, name: r.triggered_by_name || null }
-          : null,
-        assessments: r.assessments || [],
-        emailSummary: {
-          sent: Number(r.emails_sent),
-          failed: Number(r.emails_failed),
-          skipped: Number(r.emails_skipped),
-        },
-      })),
+      data: rows.map((r) => {
+        const queued = queuedByBatch.get(r.batch_id);
+        const emailSummary = queued
+          ? { ...digest.summarizeDelivery(queued).counts, queued: true }
+          : {
+            pending: 0,
+            sent: Number(r.emails_sent),
+            failed: Number(r.emails_failed),
+            skipped: Number(r.emails_skipped),
+            queued: false,
+          };
+        return {
+          batchId: r.batch_id,
+          action: r.action,
+          batchComment: r.batch_comment,
+          studentWarningCount: r.student_warning_count,
+          createdAt: r.created_at,
+          triggeredBy: r.triggered_by
+            ? { userId: r.triggered_by, name: r.triggered_by_name || null }
+            : null,
+          assessments: r.assessments || [],
+          emailSummary,
+        };
+      }),
     });
   } catch (error) {
     logger.error('Error fetching publication history:', error);
     return res.status(500).json({ status: 'failed', message: 'Error fetching history' });
+  }
+};
+
+/** The publish, or a 404 answered: it must be this class's. */
+async function loadBatch(req, res) {
+  const { classId } = req.class;
+  const { batchId } = req.params;
+  if (!UUID.test(String(batchId || ''))) {
+    res.status(404).json({ status: 'failed', message: 'Publish not found' });
+    return null;
+  }
+  const { rows } = await db.query(publishQueries.selectBatchInClass, [batchId, classId]);
+  if (rows.length === 0) {
+    res.status(404).json({ status: 'failed', message: 'Publish not found' });
+    return null;
+  }
+  return rows[0];
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ────────────────────────────────────────────────────────────────────
+// GET /api/assessment-publications/classes/:classId/batches/:batchId/delivery
+// Each family's "New Grades Posted" email of one publish: waiting, sent,
+// failed (with why) or skipped (with why).
+// ────────────────────────────────────────────────────────────────────
+const getBatchDelivery = async (req, res) => {
+  try {
+    const batch = await loadBatch(req, res);
+    if (!batch) return undefined;
+    return res.status(200).json({ status: 'success', data: { batchId: batch.batch_id, ...(await digest.batchDelivery(batch.batch_id)) } });
+  } catch (error) {
+    logger.error('Error fetching publish delivery:', error);
+    return res.status(500).json({ status: 'failed', message: 'Error fetching email status' });
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────
+// POST /api/assessment-publications/classes/:classId/batches/:batchId/retry
+// Send a publish's failed emails again (to the addresses on file now).
+// ────────────────────────────────────────────────────────────────────
+const retryBatchEmails = async (req, res) => {
+  const { classId, school } = req.class;
+  try {
+    const batch = await loadBatch(req, res);
+    if (!batch) return undefined;
+    const outcome = await digest.retryBatch({ batchId: batch.batch_id, classId, school, userId: req.user.userId });
+    return res.status(200).json({
+      status: 'success',
+      data: { batchId: batch.batch_id, ...outcome, ...(await digest.batchDelivery(batch.batch_id)) },
+    });
+  } catch (error) {
+    logger.error('Error retrying publish emails:', error);
+    return res.status(500).json({ status: 'failed', message: 'Could not retry the emails' });
   }
 };
 
@@ -1101,7 +756,8 @@ module.exports = {
   unpublishAssessments,
   updateAssessmentComment,
   getPublicationHistory,
-  sendGradeDigest,
+  getBatchDelivery,
+  retryBatchEmails,
   // exported for unit testing
   expandCascade,
   countUngradedStudents,

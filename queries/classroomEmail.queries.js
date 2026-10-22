@@ -78,13 +78,24 @@ const MISSING_SINCE = `(CASE WHEN ${GRADE_VISIBLE} THEN sub.published_at ELSE i.
 // `confirmed` Missing it published under a category is matched through the
 // publish batch, which names every column it published. A derived Missing
 // never is: it has no cell, so the email had no row for it (post-Fable I-new).
-const IN_SENT_DIGEST = (student, assessment, email, after, confirmed) => `EXISTS (
+//
+// A digest still queued (email_outbox, inside its hold) counts too for a
+// `confirmed` Missing: it is built from the committed gradebook when sent,
+// so it will list that column for this child. Its payload names every
+// column the publish released (the cascade's children included), which is
+// why a derived Missing never matches it.
+const IN_SENT_DIGEST = (student, assessment, email, after, confirmed) => `(EXISTS (
     SELECT 1 FROM assessment_publication_emails ape
     JOIN assessment_publication_batches apb ON apb.batch_id = ape.batch_id
     WHERE ape.student_id = ${student} AND ape.status = 'sent' AND ape.sent_at >= ${after}
       AND (${assessment} = ANY(ape.assessment_ids) OR (${confirmed} AND ${assessment} = ANY(apb.assessment_ids)))
       AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(ape.email_addresses) ape_to
-                  WHERE LOWER(TRIM(ape_to)) = LOWER(TRIM(${email}))))`;
+                  WHERE LOWER(TRIM(ape_to)) = LOWER(TRIM(${email}))))
+  OR (${confirmed} AND EXISTS (
+    SELECT 1 FROM email_outbox eo
+    WHERE eo.kind = 'grades_digest' AND eo.status = 'pending' AND eo.student_id = ${student}
+      AND LOWER(eo.recipient_email) = LOWER(TRIM(${email})) AND eo.created_at >= ${after}
+      AND eo.payload->'assessmentIds' ? (${assessment})::text)))`;
 
 // A guardian who reads the day's news in the daily summary instead (ruling:
 // no separate missing alert next to it). `np` is their notification_prefs row.

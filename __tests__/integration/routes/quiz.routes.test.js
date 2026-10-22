@@ -13,6 +13,7 @@ jest.mock('resend', () => ({
 const { TINY_PNG } = require('../../helpers/imageFixtures');
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
+const { deliverQueuedEmails } = require('../../helpers/emailOutbox');
 const supabase = require('../../../config/supabaseClient');
 const engine = require('../../../services/analyticsEngine');
 const { getResend } = require('../../../utils/emailUtils');
@@ -413,6 +414,9 @@ describe('Integration: quizzes', () => {
     expect((await get(quizUrl(item.itemId), asAmal)).data.submission.status).toBe('graded');
     // Like any Publish: a batch in the history, the parents' digest, the student's graded email queued.
     expect((await pool.query(`SELECT COUNT(*)::int AS n FROM assessment_publication_batches WHERE class_id = $1`, [sciId])).rows[0].n).toBe(1);
+    // The parents' email is queued with the release, never sent inside the student's request.
+    expect(sent().filter((m) => m.to.includes('mona.haddad@example.com'))).toEqual([]);
+    await deliverQueuedEmails(pool);
     const digest = sent().filter((m) => m.to.includes('mona.haddad@example.com'));
     expect(digest).toHaveLength(1);
     expect(digest[0].html).toContain('3/5');
@@ -449,6 +453,7 @@ describe('Integration: quizzes', () => {
 
     await answer(item.itemId, [{ questionId: questions[0].questionId, answer: { choice: 'b' } }]);
     await submit(item.itemId);
+    await deliverQueuedEmails(pool);
     expect(await actors(amalId)).toEqual({
       published_by: TEACHER_ID, sub_published_by: TEACHER_ID, batch_by: [TEACHER_ID], email_by: [TEACHER_ID],
     });
@@ -457,6 +462,7 @@ describe('Integration: quizzes', () => {
     await pool.query(`UPDATE classwork_items SET created_by = NULL WHERE item_id = $1`, [item.itemId]);
     await pool.query(`UPDATE classes SET teacher_id = $2 WHERE class_id = $1`, [sciId, OTHER_TEACHER_ID]);
     await submit(item.itemId, asBilal);
+    await deliverQueuedEmails(pool);
     const bilal = await actors(bilalId);
     expect(bilal).toMatchObject({ published_by: TEACHER_ID, sub_published_by: OTHER_TEACHER_ID, batch_by: [TEACHER_ID, OTHER_TEACHER_ID] });
   });

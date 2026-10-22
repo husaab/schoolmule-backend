@@ -23,7 +23,7 @@ const q = require('../queries/grading.queries');
 const classworkQueries = require('../queries/classwork.queries');
 const { toItemSummary, httpError, inTransaction } = require('../services/classroom/classworkItems');
 const { publishSubmissions, ensurePublishBatch, afterPublish } = require('../services/classroom/publish');
-const { sendGradeDigest } = require('./assessmentPublish.controller');
+const { enqueueGradeDigest } = require('../services/gradesDigest');
 const { SUBMISSION_BUCKET, SIGNED_URL_TTL } = require('../utils/classworkUpload');
 const { STATUSES } = require('../services/gradeEngine');
 const messagingQueries = require('../queries/messaging.queries');
@@ -436,9 +436,10 @@ const updateSubmission = async (req, res) => {
 /**
  * Publishes in a transaction: `prepare(client, item, audienceIds)` writes any
  * drafts first and returns { studentIds, extra }; then the drafts are
- * published (publishSubmissions). After COMMIT: afterPublish and today's
- * parent digest for the published students. Answers
- * { publishedStudentIds, skipped, assessmentPublished, emailSummary, ...extra }.
+ * published (publishSubmissions) and the published students' parents'
+ * "New Grades Posted" email is queued, in the same transaction. After
+ * COMMIT: afterPublish. Answers
+ * { publishedStudentIds, skipped, assessmentPublished, delivery, ...extra }.
  */
 async function runPublish(req, res, { requested, prepare, errorMessage }) {
   const { itemId } = req.item;
@@ -461,6 +462,11 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
       // Every Classwork publish of a gradebook column is a publish batch:
       // the history shows it and the parent digest is logged against it.
       const batchId = await ensurePublishBatch(client, { item, school, userId, published });
+      const queued = item.assessment_id && published.publishedStudentIds.length > 0
+        ? await enqueueGradeDigest(client, {
+          classId: item.class_id, school, userId, batchId, assessmentIds: [item.assessment_id], studentIds: published.publishedStudentIds,
+        })
+        : null;
       // A listed student holding a grade that was not published again: it is
       // already published and nothing changed since (no second email).
       const notPublished = Array.isArray(targets) ? targets.filter((id) => !published.publishedStudentIds.includes(id)) : [];
@@ -472,10 +478,10 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
       const predating = unpublishedAudience.length
         ? (await client.query(q.selectDraftsPredatingWork, [itemId, unpublishedAudience])).rows.map((r) => r.student_id)
         : [];
-      return { item, audience, published, batchId, unchanged, predating, extra: prepared.extra || {} };
+      return { audience, published, batchId, queued, unchanged, predating, extra: prepared.extra || {} };
     });
 
-    const { item, audience, published, batchId, unchanged, predating, extra } = outcome;
+    const { audience, published, batchId, queued, unchanged, predating, extra } = outcome;
     const publishedSet = new Set(published.publishedStudentIds);
     const audienceSet = new Set(audience);
     const unchangedSet = new Set(unchanged);
@@ -489,21 +495,15 @@ async function runPublish(req, res, { requested, prepare, errorMessage }) {
       .filter((id) => !publishedSet.has(id))
       .map((id) => ({ studentId: id, reason: reasonFor(id) }));
 
-    let emailSummary = { attempted: 0, sent: 0, failed: 0, skippedNoEmail: 0, results: [] };
     if (published.publishedStudentIds.length > 0) {
       await afterPublish({ school, studentIds: published.publishedStudentIds, itemId });
-      if (item.assessment_id) {
-        emailSummary = await sendGradeDigest({
-          classId: item.class_id, school, userId, batchId, assessmentIds: [item.assessment_id], studentIds: published.publishedStudentIds,
-        });
-      }
     }
     return ok(res, {
       publishedStudentIds: published.publishedStudentIds,
       skipped,
       assessmentPublished: published.assessmentPublished,
       ...extra,
-      emailSummary,
+      delivery: queued ? { batchId, families: queued.families, noEmail: queued.noEmail } : null,
     });
   } catch (error) {
     return fail(res, error, errorMessage, { itemId });

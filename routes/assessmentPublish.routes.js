@@ -20,12 +20,16 @@ const {
   unpublishAssessments,
   updateAssessmentComment,
   getPublicationHistory,
+  getBatchDelivery,
+  retryBatchEmails,
 } = require('../controllers/assessmentPublish.controller');
 
 const router = express.Router();
 
 router.get('/classes/:classId', requireClassOwnership, getPublicationState);
 router.get('/classes/:classId/history', requireClassOwnership, getPublicationHistory);
+router.get('/classes/:classId/batches/:batchId/delivery', requireClassOwnership, getBatchDelivery);
+router.post('/classes/:classId/batches/:batchId/retry', requireClassOwnership, retryBatchEmails);
 router.post('/classes/:classId/preview', requireClassOwnership, previewPublish);
 router.post('/classes/:classId/preview-email', requireClassOwnership, previewPublishEmail);
 router.post('/classes/:classId/publish', requireClassOwnership, publishAssessments);

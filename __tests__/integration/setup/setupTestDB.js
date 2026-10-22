@@ -12,6 +12,7 @@ const ALL_TABLES = [
   'quiz_answers',
   'quiz_attempts',
   'quiz_questions',
+  'email_outbox',
   'classroom_email_jobs',
   'notification_prefs',
   'submission_files',
