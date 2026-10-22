@@ -6,7 +6,8 @@
 // use a PNG per combination, rendered ahead of time and hosted as static files.
 
 const STYLES = Object.freeze(['short', 'long', 'hijab', 'kufi', 'beard', 'curly']);
-const SKIN_COUNT = 5;
+// Skin tones are append-only indexes (frontend AVATAR_SKINS); 5 is light pink.
+const SKIN_COUNT = 6;
 const BG_COUNT = 8;
 
 const AVATAR_ERROR = 'Pick a style, skin tone and background';

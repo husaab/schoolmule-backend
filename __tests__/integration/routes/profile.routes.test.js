@@ -99,7 +99,7 @@ describe('Integration: profile (avatar and photo)', () => {
 
     it.each([
       ['an unknown style', { avatar: { style: 'mohawk', skin: 0, bg: 0 } }],
-      ['skin 5', { avatar: { style: 'short', skin: 5, bg: 0 } }],
+      ['skin 6', { avatar: { style: 'short', skin: 6, bg: 0 } }],
       ['background 8', { avatar: { style: 'short', skin: 0, bg: 8 } }],
       ['a string', { avatar: 'short' }],
       ['no avatar key', {}],

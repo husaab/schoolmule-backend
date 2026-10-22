@@ -389,7 +389,7 @@ describe('Integration: class identity, options, archive, student avatar', () => 
 
     it.each([
       ['an unknown style', { avatar: { style: 'mohawk', skin: 0, bg: 0 } }],
-      ['skin 5', { avatar: { style: 'short', skin: 5, bg: 0 } }],
+      ['skin 6', { avatar: { style: 'short', skin: 6, bg: 0 } }],
       ['no avatar key', {}],
     ])('rejects %s with 400', async (_label, body) => {
       const res = await authenticatedRequest('put', `${BASE}/${classId}/students/${studentId}/avatar`, asTeacher).send(body);

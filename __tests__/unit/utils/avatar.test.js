@@ -5,8 +5,13 @@ const {
 describe('avatar: validateAvatar', () => {
   it('lists the six styles in picker order', () => {
     expect(STYLES).toEqual(['short', 'long', 'hijab', 'kufi', 'beard', 'curly']);
-    expect(SKIN_COUNT).toBe(5);
+    expect(SKIN_COUNT).toBe(6);
     expect(BG_COUNT).toBe(8);
+  });
+
+  it('accepts the light pink tone (skin 5), appended after the original five', () => {
+    expect(validateAvatar({ style: 'hijab', skin: 5, bg: 2 })).toEqual({ value: { style: 'hijab', skin: 5, bg: 2 } });
+    expect(avatarPngUrl({ style: 'hijab', skin: 5, bg: 2 })).toMatch(/\/email\/avatars\/hijab-5-2\.png$/);
   });
 
   it('accepts a valid spec', () => {
@@ -33,7 +38,7 @@ describe('avatar: validateAvatar', () => {
   const ERROR = { error: 'Pick a style, skin tone and background' };
   it.each([
     ['an unknown style', { style: 'mohawk', skin: 0, bg: 0 }],
-    ['a skin of 5', { style: 'short', skin: 5, bg: 0 }],
+    ['a skin of 6', { style: 'short', skin: 6, bg: 0 }],
     ['a negative skin', { style: 'short', skin: -1, bg: 0 }],
     ['a background of 8', { style: 'short', skin: 0, bg: 8 }],
     ['a fractional skin', { style: 'short', skin: 1.5, bg: 0 }],
