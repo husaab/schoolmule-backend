@@ -160,7 +160,6 @@ async function noteAdminJoin(conv, req) {
   const user = req.user;
   if (!seesAllThreads(req)) return;
   if (conv.teacherIds.includes(user.userId) || conv.adminParticipantIds.includes(user.userId)) return;
-  await db.query(q.ensureParticipant, [conv.conversationId, user.userId]);
   await persistMessage({
     conversationId: conv.conversationId,
     school: conv.school,
@@ -500,6 +499,7 @@ const getUnreadSummary = async (req, res) => {
         unreadConversations: r?.unread_conversations ?? 0,
         unreadMessages: r?.unread_messages ?? 0,
         needsReply: r?.needs_reply ?? 0,
+        attentionConversations: r?.attention_conversations ?? 0,
         unreadAnnouncements: a?.unread_announcements ?? 0,
       },
     });

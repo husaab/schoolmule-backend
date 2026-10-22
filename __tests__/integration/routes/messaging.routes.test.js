@@ -183,7 +183,7 @@ describe('Integration: Messaging routes', () => {
     expect(jobs.rows.map((j) => j.recipient_id).sort()).toEqual([MOM_ID, DAD_ID, CO_TEACHER_ID].sort());
 
     const unread = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', asDad);
-    expect(unread.body.data).toEqual({ unreadConversations: 1, unreadMessages: 1, needsReply: 1, unreadAnnouncements: 0 });
+    expect(unread.body.data).toEqual({ unreadConversations: 1, unreadMessages: 1, needsReply: 1, attentionConversations: 1, unreadAnnouncements: 0 });
   });
 
   it('refuses a parent on an unpublished assessment but lets the teacher start it, hiding the score from the parent', async () => {
@@ -263,6 +263,46 @@ describe('Integration: Messaging routes', () => {
     const after = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asDad);
     expect(after.body.data.messages[0]).toMatchObject({ body: null, attachments: [] });
     expect(after.body.data.messages[0].deletedAt).not.toBeNull();
+  });
+
+  it('an admin who only opens a thread reads it for themselves without joining it', async () => {
+    const id = (await start(asMom, publishedId, 'Can we talk?')).body.data.conversation.conversationId;
+    expect((await authenticatedRequest('post', `/api/messaging/conversations/${id}/read`, {})).status).toBe(200);
+
+    // The teacher's unread is their own.
+    const teacherList = await authenticatedRequest('get', '/api/messaging/conversations', asTeacher);
+    expect(teacherList.body.data[0]).toMatchObject({ unreadCount: 1, needsReply: true });
+
+    // Reading is not joining: not named in the thread, not emailed, not on the admin's badge.
+    const thread = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asMom);
+    expect(thread.body.data.participants.map((p) => p.userId).sort()).toEqual([MOM_ID, DAD_ID, TEACHER_ID, CO_TEACHER_ID].sort());
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asMom).field('body', 'Anyone?');
+    const jobs = await pool.query(`SELECT 1 FROM message_email_jobs WHERE conversation_id = $1 AND recipient_id = $2`, [id, ADMIN_ID]);
+    expect(jobs.rows).toEqual([]);
+    const badge = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', {});
+    expect(badge.body.data).toMatchObject({ needsReply: 0, attentionConversations: 0 });
+
+    // Writing is: the join line is posted, and the admin is now in the thread.
+    const post = await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, {}).field('body', 'Office here');
+    expect(post.body.data.messages.filter((m) => m.kind === 'system').map((m) => m.body)).toEqual(['Test Admin (Admin) joined the conversation']);
+    expect(post.body.data.participants.map((p) => p.userId)).toContain(ADMIN_ID);
+  });
+
+  it('the badge keeps a thread lit until staff reply, even once read; parents count unread only', async () => {
+    const id = (await start(asMom, publishedId, 'Question')).body.data.conversation.conversationId;
+    const badge = async (who) => (await authenticatedRequest('get', '/api/messaging/conversations/unread-count', who)).body.data;
+
+    expect(await badge(asTeacher)).toMatchObject({ unreadConversations: 1, needsReply: 1, attentionConversations: 1 });
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/read`, asTeacher);
+    expect(await badge(asTeacher)).toMatchObject({ unreadConversations: 0, needsReply: 1, attentionConversations: 1 });
+
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'Answer');
+    expect(await badge(asTeacher)).toMatchObject({ needsReply: 0, attentionConversations: 0 });
+
+    // The parent's side: the teacher's reply is unread until opened, and never nags after that.
+    expect(await badge(asMom)).toMatchObject({ unreadConversations: 1, attentionConversations: 1 });
+    await authenticatedRequest('post', `/api/messaging/conversations/${id}/read`, asMom);
+    expect(await badge(asMom)).toMatchObject({ unreadConversations: 0, needsReply: 1, attentionConversations: 0 });
   });
 
   it('stubs and targets serve the entry points', async () => {

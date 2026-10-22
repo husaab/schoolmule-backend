@@ -39,11 +39,13 @@ const CONVERSATION_ACCESS_SELECT = `
     COALESCE((SELECT ARRAY_AGG(ct.teacher_id) FROM class_teachers ct WHERE ct.class_id = c.class_id), '{}')::uuid[] AS co_teacher_ids,
     COALESCE((SELECT ARRAY_AGG(ps.parent_id) FROM parent_students ps
               WHERE ps.student_id = c.student_id AND ps.parent_id IS NOT NULL), '{}')::uuid[] AS guardian_ids,
-    -- Office staff who joined (messages.all, RBAC): staff participants who
-    -- are not the thread's own teachers. A teacher holding messages.all counts too.
-    COALESCE((SELECT ARRAY_AGG(cp.user_id) FROM conversation_participants cp
-              JOIN users u ON u.user_id = cp.user_id
-              WHERE cp.conversation_id = c.conversation_id
+    -- Office staff who joined (messages.all, RBAC): staff who are not the
+    -- thread's own teachers and have written in it. A teacher holding
+    -- messages.all counts too. Reading joins nothing: opening a thread only
+    -- leaves a read mark in conversation_participants.
+    COALESCE((SELECT ARRAY_AGG(DISTINCT u.user_id) FROM messages wm
+              JOIN users u ON u.user_id = wm.sender_id
+              WHERE wm.conversation_id = c.conversation_id AND wm.kind = 'message'
                 AND u.role::text IN ('ADMIN', 'TEACHER')
                 AND u.user_id IS DISTINCT FROM COALESCE(cl.teacher_id, c.teacher_id)
                 AND NOT EXISTS (SELECT 1 FROM class_teachers ct2 WHERE ct2.class_id = c.class_id AND ct2.teacher_id = u.user_id)
@@ -230,7 +232,7 @@ const messagingQueries = {
                        AND NOT ${GUARDIANS_HIDDEN})
         OR ($3 = 'TEACHER' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)))
         OR ($3 = 'ADMIN' AND (cl.teacher_id = $1 OR c.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = c.class_id AND ct.teacher_id = $1)
-                              OR EXISTS (SELECT 1 FROM conversation_participants cp2 WHERE cp2.conversation_id = c.conversation_id AND cp2.user_id = $1)))
+                              OR EXISTS (SELECT 1 FROM messages wm WHERE wm.conversation_id = c.conversation_id AND wm.sender_id = $1 AND wm.kind = 'message')))
       )
     ),
     per AS (
@@ -246,7 +248,10 @@ const messagingQueries = {
     SELECT
       COUNT(*) FILTER (WHERE unread > 0)::int AS unread_conversations,
       COALESCE(SUM(unread), 0)::int AS unread_messages,
-      COUNT(*) FILTER (WHERE needs_reply)::int AS needs_reply
+      COUNT(*) FILTER (WHERE needs_reply)::int AS needs_reply,
+      -- The sidebar badge: staff threads stay lit until answered, read or not;
+      -- a guardian's only while unread (a teacher's last word is no task).
+      COUNT(*) FILTER (WHERE unread > 0 OR ($3 <> 'PARENT' AND needs_reply))::int AS attention_conversations
     FROM per
   `,
 
@@ -338,8 +343,8 @@ const messagingQueries = {
     WHERE c.conversation_id = $1
     UNION
     SELECT u.user_id, TRIM(CONCAT(u.first_name, ' ', u.last_name)), u.role, NULL, FALSE, u.avatar, u.photo_path
-    FROM conversation_participants cp JOIN users u ON u.user_id = cp.user_id
-    WHERE cp.conversation_id = $1 AND u.role::text IN ('ADMIN', 'TEACHER')
+    FROM messages m JOIN users u ON u.user_id = m.sender_id
+    WHERE m.conversation_id = $1 AND m.kind = 'message' AND u.role::text IN ('ADMIN', 'TEACHER')
   `,
 
   // Score context. $1 assessment_id, $2 student_id
@@ -374,10 +379,6 @@ const messagingQueries = {
     VALUES ($1, $2, $3)
     ON CONFLICT (conversation_id, user_id) DO UPDATE SET muted = EXCLUDED.muted
     RETURNING muted
-  `,
-  ensureParticipant: `
-    INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)
-    ON CONFLICT DO NOTHING
   `,
 
   // $1 message_id, $2 conversation_id

@@ -88,11 +88,11 @@ describe('messaging controller', () => {
 
   it('unread-count folds in unread announcements from the announcement query', async () => {
     makeRouter({
-      'AS unread_conversations': [{ unread_conversations: 2, unread_messages: 5, needs_reply: 1 }],
+      'AS unread_conversations': [{ unread_conversations: 2, unread_messages: 5, needs_reply: 1, attention_conversations: 2 }],
       'AS unread_announcements': [{ unread_announcements: 3 }],
     });
     const res = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', mockParentUser());
-    expect(res.body.data).toEqual({ unreadConversations: 2, unreadMessages: 5, needsReply: 1, unreadAnnouncements: 3 });
+    expect(res.body.data).toEqual({ unreadConversations: 2, unreadMessages: 5, needsReply: 1, attentionConversations: 2, unreadAnnouncements: 3 });
   });
 
   describe('general threads (phase 2)', () => {
@@ -649,7 +649,6 @@ describe('messaging controller', () => {
       expect(inserts).toHaveLength(2);
       expect(inserts[0].params[3]).toBe('system');
       expect(inserts[0].params[4]).toMatch(/joined the conversation/);
-      expect(r.ran('INSERT INTO conversation_participants (conversation_id, user_id) VALUES')).toHaveLength(1);
     });
   });
 
@@ -736,9 +735,9 @@ describe('messaging controller', () => {
     });
 
     it('returns the unread summary', async () => {
-      makeRouter({ 'AS unread_conversations': [{ unread_conversations: 1, unread_messages: 3, needs_reply: 1 }] });
+      makeRouter({ 'AS unread_conversations': [{ unread_conversations: 1, unread_messages: 3, needs_reply: 1, attention_conversations: 1 }] });
       const res = await authenticatedRequest('get', '/api/messaging/conversations/unread-count', mockParentUser());
-      expect(res.body.data).toEqual({ unreadConversations: 1, unreadMessages: 3, needsReply: 1, unreadAnnouncements: 0 });
+      expect(res.body.data).toEqual({ unreadConversations: 1, unreadMessages: 3, needsReply: 1, attentionConversations: 1, unreadAnnouncements: 0 });
     });
 
     it('scopes admin stubs by school and rejects malformed ids with 400', async () => {
