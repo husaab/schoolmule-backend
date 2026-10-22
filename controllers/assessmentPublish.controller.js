@@ -720,7 +720,8 @@ const portalOrigin = () => process.env.FRONTEND_URL || '';
  * - signIn: a parent account linked to the child. Its buttons sign that parent
  *   in on one tap (utils/emailLoginLink).
  * - signup: no account at all. "Create your account" with the address filled
- *   in; signup matches the children by email.
+ *   in (signup matches the children by email); "Speak to …" goes there too,
+ *   since messaging needs an account.
  * - plain: anything else (a staff account, an archived or unlinked parent, two
  *   accounts differing only by case). The buttons ask for a normal sign-in.
  * `accounts` are selectRecipientAccounts rows.
@@ -735,10 +736,11 @@ function recipientAccess(address, accounts) {
   return { kind: 'plain' };
 }
 
-/** The template's buttons for one address: { portalUrl, speak } or { setupUrl }. */
+/** The template's buttons for one address: { portalUrl, speak } or { setupUrl, speak }. */
 function recipientButtons({ access, address, studentId, school, speak }) {
   if (access.kind === 'signup') {
-    return { setupUrl: `${portalOrigin()}/signup/${String(school).toLowerCase()}/parent?email=${encodeURIComponent(address)}` };
+    const setupUrl = `${portalOrigin()}/signup/${String(school).toLowerCase()}/parent?email=${encodeURIComponent(address)}`;
+    return { setupUrl, speak: speak && { label: speak.label, url: setupUrl } };
   }
   const link = access.kind === 'signIn'
     ? ((path) => emailLoginUrl({ token: signEmailLoginToken({ userId: access.userId, studentId, email: address }), next: path }))

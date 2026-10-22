@@ -626,7 +626,8 @@ const currentGrade = (className, runningGradeLabel) =>
  * one row per released item, already formatted by the caller, which owns the
  * grade math. `group` is the category the item sits in. `speak` ({ label, url })
  * adds "Speak to <teacher> about this" beside View in Parent Portal. `setupUrl`
- * is for an address with no account: one "Create your account" button instead.
+ * is for an address with no account: "Create your account" takes the portal
+ * button's place, with "Speak to …" (to the same signup) beside it.
  */
 function getAssessmentPublishedEmailHTML({
   studentName,
@@ -654,7 +655,7 @@ function getAssessmentPublishedEmailHTML({
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
       ...(setupUrl
         ? [
-          button('Create your account', setupUrl),
+          speak ? buttonRow([{ label: 'Create your account', url: setupUrl }, speak]) : button('Create your account', setupUrl),
           finePrint(`You don't have a SchoolMule account yet. Create one with this email address to see all of ${escapeHtml(studentName)}'s grades and message the teachers.`),
         ]
         : [speak ? buttonRow([{ label: 'View in Parent Portal', url: portalUrl }, speak]) : button('View in Parent Portal', portalUrl)]),

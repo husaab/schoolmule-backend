@@ -155,17 +155,22 @@ describe('emailTemplate – every template uses the shared layout', () => {
       expect(render(rows)).not.toContain('Speak to');
     });
 
-    it('give an address with no account one "Create your account" button instead', () => {
+    it('give an address with no account "Create your account", with "Speak to" beside it going to the same signup', () => {
+      const setupUrl = 'https://example.com/signup/alhaadiacademy/parent?email=a%40b.test';
       const html = templates.getAssessmentPublishedEmailHTML({
         ...cases.getAssessmentPublishedEmailHTML,
-        speak: { label: 'Speak to Sara Clarke about this', url: 'https://example.com/s' },
-        setupUrl: 'https://example.com/signup/alhaadiacademy/parent?email=a%40b.test',
+        speak: { label: 'Speak to Sara Clarke about this', url: setupUrl },
+        setupUrl,
       });
-      expect(html).toContain('href="https://example.com/signup/alhaadiacademy/parent?email=a%40b.test"');
+      expect(html.match(/href="https:\/\/example\.com\/signup\/alhaadiacademy\/parent\?email=a%40b\.test"/g)).toHaveLength(2);
       expect(html).toContain('>Create your account</a>');
+      expect(html).toContain('>Speak to Sara Clarke about this</a>');
       expect(html).toContain("You don't have a SchoolMule account yet");
       expect(html).not.toContain('View in Parent Portal');
-      expect(html).not.toContain('Speak to');
+      // Without a Speak button (a past-term class), the one Create button stands alone.
+      const alone = templates.getAssessmentPublishedEmailHTML({ ...cases.getAssessmentPublishedEmailHTML, setupUrl });
+      expect(alone).toContain('>Create your account</a>');
+      expect(alone).not.toContain('Speak to');
     });
 
     it('colour missing work rose', () => {

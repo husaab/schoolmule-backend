@@ -379,12 +379,15 @@ describe('recipientAccess + recipientButtons', () => {
     expect(button.label).toBe(speak.label);
   });
 
-  it('asks an address with no account to create one, with the address filled in', () => {
+  it('asks an address with no account to create one, with the address filled in, and "Speak to" goes there too', () => {
     const access = recipientAccess('new.parent@example.test', [account('sam@example.test')]);
     expect(access).toEqual({ kind: 'signup' });
+    const setupUrl = 'https://schoolmule.test/signup/alhaadiacademy/parent?email=new.parent%40example.test';
     expect(recipientButtons({ access, address: 'new.parent@example.test', studentId: 's1', school: 'ALHAADIACADEMY', speak })).toEqual({
-      setupUrl: 'https://schoolmule.test/signup/alhaadiacademy/parent?email=new.parent%40example.test',
+      setupUrl,
+      speak: { label: speak.label, url: setupUrl },
     });
+    expect(recipientButtons({ access, address: 'new.parent@example.test', studentId: 's1', school: 'ALHAADIACADEMY', speak: null })).toEqual({ setupUrl, speak: null });
   });
 
   it('gives plain links to staff, archived, unlinked and ambiguous accounts', () => {
