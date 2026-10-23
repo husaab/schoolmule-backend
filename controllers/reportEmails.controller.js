@@ -1,15 +1,11 @@
 const db = require('../config/database');
-const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const reportEmailsQueries = require('../queries/reportEmails.queries');
 const progressReportsQueries = require('../queries/progressReports.queries');
 const reportCardQueries = require('../queries/reportCard.queries');
 const studentQueries = require('../queries/student.queries');
-const schoolQueries = require('../queries/school.queries');
-const { getProgressReportEmailHTML, getReportCardEmailHTML } = require('../templates/emailTemplate');
-const { getSchoolName } = require('../utils/schoolUtils');
-const { cleanEmailArray, getResend } = require('../utils/emailUtils');
-const { schoolSender } = require('../services/email/senderIdentity');
+const { cleanEmailArray } = require('../utils/emailUtils');
+const reportEmails = require('../services/reportEmails');
 
 // Helper function to convert snake_case to camelCase
 const toCamelCase = (row) => ({
@@ -29,515 +25,170 @@ const toCamelCase = (row) => ({
   sentByUsername: row.sent_by_username // From joined queries
 });
 
-// Send progress report or report card email
+// A send's request only checks and queues: the emails go out from the email
+// outbox (services/reportEmails.js), started at once, and the page follows
+// the send through GET /runs/:runId. Nothing is sent inside the request.
+
+const REPORT_TYPES = ['progress_report', 'report_card'];
+
+const fail = (res, error, message) => {
+  if (error.expose && error.status) {
+    return res.status(error.status).json({ status: 'error', message: error.message });
+  }
+  logger.error({ err: error }, message);
+  return res.status(500).json({
+    status: 'error',
+    message,
+    error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+  });
+};
+
+const queuedBody = (reportType, term, queued) => ({
+  status: 'queued',
+  runId: queued.runId,
+  reportType,
+  term,
+  summary: { total: queued.total, queued: queued.queued, skipped: queued.skipped },
+});
+
+// POST /api/report-emails/send — one student, to the addresses typed.
 const sendReportEmail = async (req, res) => {
   try {
-    logger.info('Starting sendReportEmail function');
-    
-    const { 
-      reportType, 
-      studentId, 
-      term, 
-      emailAddresses: rawEmailAddresses, 
-      ccAddresses: rawCcAddresses, 
-      customHeader, 
-      customMessage
+    const {
+      reportType,
+      studentId,
+      term,
+      emailAddresses: rawEmailAddresses,
+      ccAddresses: rawCcAddresses,
+      customHeader,
+      customMessage,
     } = req.body;
-
-    // Clean and validate email addresses
     const emailAddresses = cleanEmailArray(rawEmailAddresses);
     const ccAddresses = cleanEmailArray(rawCcAddresses);
 
-    const userId = req.user?.userId;
-    
-    logger.info(`Payload received: ${reportType}, student: ${studentId}, term: ${term}, emails: ${emailAddresses?.length}`);
-
-    // Validation
     if (!reportType || !studentId || !term || !emailAddresses?.length) {
       return res.status(400).json({
         status: 'error',
-        message: 'Missing required fields: reportType, studentId, term, emailAddresses'
+        message: 'Missing required fields: reportType, studentId, term, emailAddresses',
       });
     }
-
-    if (!['progress_report', 'report_card'].includes(reportType)) {
+    if (!REPORT_TYPES.includes(reportType)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid report type. Must be "progress_report" or "report_card"'
+        message: 'Invalid report type. Must be "progress_report" or "report_card"',
       });
     }
 
-    // Get student information
-    logger.info(`Fetching student data for ID: ${studentId}`);
     const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
     // Only the caller's own school's students (another school's reads as missing).
     if (studentRows.length === 0 || String(studentRows[0].school) !== String(req.user.school)) {
-      logger.error(`Student not found: ${studentId}`);
-      return res.status(404).json({
-        status: 'error',
-        message: 'Student not found'
-      });
+      return res.status(404).json({ status: 'error', message: 'Student not found' });
     }
     const student = studentRows[0];
-    logger.info(`Student found: ${student.name}, School: ${student.school}`);
-
-    // Get the report file path and verify it exists
-    let reportQuery, reportTable, storageFolder;
-    if (reportType === 'progress_report') {
-      reportQuery = progressReportsQueries.getProgressReportByStudentAndTerm;
-      storageFolder = 'progress-reports';
-    } else {
-      reportQuery = reportCardQueries.selectGeneratedReportCardsByStudentId;
-      storageFolder = 'report-cards';
-    }
-
+    const reportQuery = reportType === 'progress_report'
+      ? progressReportsQueries.getProgressReportByStudentAndTerm
+      : reportCardQueries.selectGeneratedReportCardsByStudentId;
     const { rows: reportRows } = await db.query(reportQuery, [studentId, term, student.school]);
     if (reportRows.length === 0) {
       return res.status(404).json({
         status: 'error',
-        message: `No ${reportType.replace('_', ' ')} found for student ${student.name} in term ${term}`
+        message: `No ${reportType.replace('_', ' ')} found for student ${student.name} in term ${term}`,
       });
     }
 
-    const report = reportRows[0];
-    const filePath = report.file_path;
-
-    // Get signed URL for the PDF attachment
-    const { data: signedUrlData, error: urlError } = await supabase
-      .storage
-      .from(storageFolder)
-      .createSignedUrl(filePath, 3600); // 1 hour expiry
-
-    if (urlError || !signedUrlData?.signedUrl) {
-      logger.error('Failed to get signed URL:', urlError);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Failed to access report file'
-      });
-    }
-
-    // Download the PDF file to attach to email
-    const pdfResponse = await fetch(signedUrlData.signedUrl);
-    if (!pdfResponse.ok) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'Failed to download report file'
-      });
-    }
-    const pdfBuffer = await pdfResponse.arrayBuffer();
-
-    // Fetch school contact information
-    logger.info(`Fetching school info for: ${student.school}`);
-    let schoolInfo = null;
-    try {
-      const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [student.school]);
-      if (schoolRows.length > 0) {
-        schoolInfo = schoolRows[0];
-        logger.info(`School info found: ${schoolInfo.name}`);
-      } else {
-        logger.warn(`No school info found for: ${student.school}`);
-      }
-    } catch (schoolError) {
-      logger.error('Error fetching school info:', schoolError);
-      // Continue without school info - template will fall back to basic footer
-    }
-
-    // Generate email content
-    const emailData = {
-      studentName: student.name,
-      term,
-      customMessage,
-      schoolName: getSchoolName(student.school),
-      customHeader,
-      schoolInfo
-    };
-
-    const htmlContent = reportType === 'progress_report' 
-      ? getProgressReportEmailHTML(emailData)
-      : getReportCardEmailHTML(emailData);
-
-    const subject = customHeader || `${student.name} — ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
-
-    const resend = getResend();
-
-    // Prepare email payload
-    const emailPayload = {
-      ...schoolSender({ school: student.school, schoolInfo, role: 'academics' }),
-      to: emailAddresses,
-      subject,
-      html: htmlContent,
-      attachments: [
-        {
-          filename: `${student.name}_${term}_${reportType}.pdf`,
-          content: Buffer.from(pdfBuffer)
-        }
-      ]
-    };
-
-    // Add CC addresses if provided
-    if (ccAddresses?.length) {
-      emailPayload.cc = ccAddresses;
-    }
-
-    // Send email
-    logger.info('Sending email with payload:', {
-      from: emailPayload.from,
-      to: emailPayload.to,
-      subject: emailPayload.subject,
-      attachmentCount: emailPayload.attachments?.length || 0
-    });
-    
-    const emailResult = await resend.emails.send(emailPayload);
-    
-    logger.info('Email send result:', emailResult);
-
-    if (emailResult.error) {
-      logger.error('Resend email error:', emailResult.error);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Failed to send email',
-        error: emailResult.error
-      });
-    }
-
-    // Save email record to database
-    const { rows: emailRecordRows } = await db.query(reportEmailsQueries.createReportEmail, [
+    const queued = await reportEmails.queueSend({
+      school: student.school,
+      userId: req.user?.userId,
       reportType,
-      studentId,
       term,
-      userId,
-      JSON.stringify(emailAddresses),
+      studentIds: [studentId],
       customHeader,
       customMessage,
-      filePath,
-      ccAddresses ? JSON.stringify(ccAddresses) : null,
-      student.school
-    ]);
-
-    // Update the report table to mark as emailed
-    const updateQuery = reportType === 'progress_report' 
-      ? progressReportsQueries.updateProgressReportEmailStatus
-      : reportCardQueries.updateReportCardEmailStatus;
-    
-    await db.query(updateQuery, [
-      studentId,
-      term,
-      true, // email_sent
-      new Date().toISOString(), // email_sent_at
-      userId // email_sent_by
-    ]);
-
-    res.json({
-      status: 'success',
-      message: `${reportType === 'progress_report' ? 'Progress report' : 'Report card'} email sent successfully`,
-      data: {
-        id: emailRecordRows[0].id,
-        sentAt: emailRecordRows[0].sent_at,
-        emailId: emailResult.data?.id
-      }
+      ccAddresses,
+      chosen: emailAddresses,
     });
-
+    return res.status(202).json({
+      ...queuedBody(reportType, term, queued),
+      message: `Sending the ${reportType === 'progress_report' ? 'progress report' : 'report card'}`,
+    });
   } catch (error) {
-    logger.error(`Error sending report email: ${error.message}`);
-    logger.error('Full error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to send report email',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    return fail(res, error, 'Failed to send report email');
   }
 };
 
-// Send bulk report emails
+// POST /api/report-emails/send/bulk — many students, to their parents on file.
 const sendBulkReportEmails = async (req, res) => {
-  const startTime = Date.now();
-  
   try {
-    const { 
-      reportType, 
-      studentIds, 
-      term, 
-      bulkConfig // { customHeader, customMessage, ccAddresses }
-    } = req.body;
+    const { reportType, studentIds, term, bulkConfig } = req.body; // bulkConfig: { customHeader, customMessage, ccAddresses }
 
-    const userId = req.user?.userId;
-
-    // Validation
     if (!reportType || !studentIds?.length || !term) {
       return res.status(400).json({
         status: 'error',
-        message: 'Missing required fields: reportType, studentIds, term'
+        message: 'Missing required fields: reportType, studentIds, term',
       });
     }
-
-    if (!['progress_report', 'report_card'].includes(reportType)) {
+    if (!REPORT_TYPES.includes(reportType)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid report type. Must be "progress_report" or "report_card"'
+        message: 'Invalid report type. Must be "progress_report" or "report_card"',
       });
     }
 
-    logger.info(`Starting bulk email for ${studentIds.length} students: ${reportType}, term: ${term}`);
-
-    // Step 1: Batch fetch all student data
-    logger.info('Fetching student data...');
-    const studentQuery = `
-      SELECT student_id, name, school, grade, mother_email, father_email
-      FROM students 
-      WHERE student_id = ANY($1) AND is_archived = false AND school = $2
-    `;
-    const { rows: students } = await db.query(studentQuery, [studentIds, req.user.school]);
-    
-    if (students.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'No students found with provided IDs'
-      });
-    }
-
-    // Get first student's school for shared resources
-    const school = students[0].school;
-
-    // Step 2: Fetch school info once (shared for all emails)
-    logger.info(`Fetching school info for: ${school}`);
-    let schoolInfo = null;
-    try {
-      const { rows: schoolRows } = await db.query(schoolQueries.selectSchoolByCode, [school]);
-      if (schoolRows.length > 0) {
-        schoolInfo = schoolRows[0];
-        logger.info(`School info found: ${schoolInfo.name}`);
-      }
-    } catch (schoolError) {
-      logger.warn('Error fetching school info, continuing without it:', schoolError);
-    }
-
-    // Step 3: Batch fetch all progress reports
-    logger.info('Fetching progress reports...');
-    let reportQuery, storageFolder;
-    if (reportType === 'progress_report') {
-      reportQuery = `
-        SELECT student_id, term, file_path, student_name
-        FROM progress_reports 
-        WHERE student_id = ANY($1) AND term = $2 AND school = $3
-      `;
-      storageFolder = 'progress-reports';
-    } else {
-      reportQuery = `
-        SELECT student_id, term, file_path, student_name
-        FROM report_cards
-        WHERE student_id = ANY($1) AND term = $2 AND school = $3
-      `;
-      storageFolder = 'report-cards';
-    }
-
-    const { rows: reports } = await db.query(reportQuery, [studentIds, term, school]);
-
-    // Step 4: Sender identity (one Resend team for every school)
-    const sender = schoolSender({ school, schoolInfo, role: 'academics' });
-    const resend = getResend();
-    const schoolName = getSchoolName(school);
-
-    // Step 5: Prepare email tasks
-    const emailTasks = [];
-    const results = [];
-
-    for (const student of students) {
-      const report = reports.find(r => r.student_id === student.student_id);
-      
-      if (!report) {
-        results.push({
-          studentId: student.student_id,
-          studentName: student.name,
-          status: 'failed',
-          error: `No ${reportType.replace('_', ' ')} found for term ${term}`
-        });
-        continue;
-      }
-
-      // Get parent emails for this student
-      const rawParentEmails = [];
-      if (student.mother_email) rawParentEmails.push(student.mother_email);
-      if (student.father_email) rawParentEmails.push(student.father_email);
-      
-      const parentEmails = cleanEmailArray(rawParentEmails);
-
-      if (parentEmails.length === 0) {
-        results.push({
-          studentId: student.student_id,
-          studentName: student.name,
-          status: 'failed',
-          error: 'No parent email addresses found'
-        });
-        continue;
-      }
-
-      // Create email task
-      emailTasks.push({
-        student,
-        report,
-        parentEmails,
-        customHeader: bulkConfig?.customHeader,
-        customMessage: bulkConfig?.customMessage,
-        ccAddresses: cleanEmailArray(bulkConfig?.ccAddresses)
-      });
-    }
-
-    logger.info(`Prepared ${emailTasks.length} email tasks`);
-
-    // Step 6: Process emails sequentially to respect rate limits (2 req/sec max)
-    logger.info(`Processing ${emailTasks.length} emails sequentially to respect rate limits`);
-
-    for (const [taskIndex, task] of emailTasks.entries()) {
-      logger.info(`Processing email ${taskIndex + 1}/${emailTasks.length} for ${task.student.name}`);
-
-      try {
-        // Get signed URL for PDF
-        const { data: signedUrlData, error: urlError } = await supabase
-          .storage
-          .from(storageFolder)
-          .createSignedUrl(task.report.file_path, 3600);
-
-        if (urlError || !signedUrlData?.signedUrl) {
-          throw new Error('Failed to get signed URL for report file');
-        }
-
-        // Download PDF
-        const pdfResponse = await fetch(signedUrlData.signedUrl);
-        if (!pdfResponse.ok) {
-          throw new Error('Failed to download report file');
-        }
-        const pdfBuffer = await pdfResponse.arrayBuffer();
-
-        // Generate email content
-        const emailData = {
-          studentName: task.student.name,
-          term,
-          customMessage: task.customMessage,
-          schoolName,
-          customHeader: task.customHeader,
-          schoolInfo
-        };
-
-        const htmlContent = reportType === 'progress_report' 
-          ? getProgressReportEmailHTML(emailData)
-          : getReportCardEmailHTML(emailData);
-
-        const subject = task.customHeader || `${task.student.name} — ${reportType === 'progress_report' ? 'Progress Report' : 'Report Card'} (${term})`;
-
-        // Prepare email payload
-        const emailPayload = {
-          ...sender,
-          to: task.parentEmails,
-          subject,
-          html: htmlContent,
-          attachments: [{
-            filename: `${task.student.name}_${term}_${reportType}.pdf`,
-            content: Buffer.from(pdfBuffer)
-          }]
-        };
-
-        // Add CC if provided
-        if (task.ccAddresses?.length) {
-          emailPayload.cc = task.ccAddresses;
-        }
-
-        // Send email
-        const emailResult = await resend.emails.send(emailPayload);
-
-        if (emailResult.error) {
-          throw new Error(emailResult.error.message || 'Email sending failed');
-        }
-
-        // Save email record to database
-        await db.query(reportEmailsQueries.createReportEmail, [
-          reportType,
-          task.student.student_id,
-          term,
-          userId,
-          JSON.stringify(task.parentEmails),
-          task.customHeader,
-          task.customMessage,
-          task.report.file_path,
-          task.ccAddresses?.length ? JSON.stringify(task.ccAddresses) : null,
-          school
-        ]);
-
-        // Update report table to mark as emailed
-        const updateQuery = reportType === 'progress_report' 
-          ? progressReportsQueries.updateProgressReportEmailStatus
-          : reportCardQueries.updateReportCardEmailStatus;
-        
-        await db.query(updateQuery, [
-          task.student.student_id,
-          term,
-          true,
-          new Date().toISOString(),
-          userId
-        ]);
-
-        results.push({
-          studentId: task.student.student_id,
-          studentName: task.student.name,
-          status: 'success',
-          emailId: emailResult.data?.id,
-          sentTo: task.parentEmails
-        });
-
-        logger.info(`Email sent successfully to ${task.student.name}`);
-
-      } catch (error) {
-        logger.error(`Failed to send email for student ${task.student.name}:`, error);
-        results.push({
-          studentId: task.student.student_id,
-          studentName: task.student.name,
-          status: 'failed',
-          error: error.message
-        });
-      }
-
-      // Rate limiting: Wait 600ms between emails (ensuring < 2 req/sec)
-      if (taskIndex < emailTasks.length - 1) {
-        logger.info('Waiting 600ms before next email to respect rate limits...');
-        await new Promise(resolve => setTimeout(resolve, 600));
-      }
-    }
-
-    // Step 7: Calculate final statistics
-    const endTime = Date.now();
-    const duration = (endTime - startTime) / 1000;
-    
-    const successful = results.filter(r => r.status === 'success');
-    const failed = results.filter(r => r.status === 'failed');
-
-    logger.info(`Bulk email completed: ${successful.length} sent, ${failed.length} failed in ${duration}s`);
-
-    res.json({
-      status: 'completed',
-      term,
+    const queued = await reportEmails.queueSend({
+      school: req.user.school,
+      userId: req.user?.userId,
       reportType,
-      summary: {
-        total: results.length,
-        sent: successful.length,
-        failed: failed.length,
-        duration: `${duration}s`
-      },
-      results: results.map(r => ({
-        studentId: r.studentId,
-        studentName: r.studentName,
-        status: r.status,
-        ...(r.status === 'success' ? { sentTo: r.sentTo } : { error: r.error })
-      }))
+      term,
+      studentIds,
+      customHeader: bulkConfig?.customHeader,
+      customMessage: bulkConfig?.customMessage,
+      ccAddresses: cleanEmailArray(bulkConfig?.ccAddresses),
     });
-
+    logger.info({ runId: queued.runId, reportType, term, ...queued }, 'Report emails queued');
+    return res.status(202).json(queuedBody(reportType, term, queued));
   } catch (error) {
-    logger.error({ err: error }, 'Error in bulk email sending');
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to send bulk emails',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    return fail(res, error, 'Failed to send bulk emails');
   }
 };
+
+// GET /api/report-emails/runs/:runId — one send, student by student.
+const getRun = async (req, res) => {
+  try {
+    const run = UUID.test(String(req.params.runId || '')) ? await reportEmails.runDelivery(req.params.runId, req.user.school) : null;
+    if (!run) return res.status(404).json({ status: 'error', message: 'Send not found' });
+    return res.json({ status: 'success', data: run });
+  } catch (error) {
+    return fail(res, error, 'Failed to load the send');
+  }
+};
+
+// POST /api/report-emails/runs/:runId/retry — send the failed emails again.
+const retryRun = async (req, res) => {
+  try {
+    const outcome = UUID.test(String(req.params.runId || ''))
+      ? await reportEmails.retryRun({ runId: req.params.runId, school: req.user.school, userId: req.user?.userId })
+      : null;
+    if (!outcome) return res.status(404).json({ status: 'error', message: 'Send not found' });
+    const run = await reportEmails.runDelivery(req.params.runId, req.user.school);
+    return res.json({ status: 'success', data: { ...outcome, ...run } });
+  } catch (error) {
+    return fail(res, error, 'Could not retry the emails');
+  }
+};
+
+// GET /api/report-emails/runs?reportType=&term=&limit= — the latest sends.
+const listRuns = async (req, res) => {
+  try {
+    const reportType = REPORT_TYPES.includes(req.query.reportType) ? req.query.reportType : null;
+    const term = typeof req.query.term === 'string' && req.query.term.trim() ? req.query.term.trim() : null;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50);
+    return res.json({ status: 'success', data: await reportEmails.recentRuns({ school: req.user.school, reportType, term, limit }) });
+  } catch (error) {
+    return fail(res, error, 'Failed to load the sends');
+  }
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Get email history for a student
 const getStudentEmailHistory = async (req, res) => {
@@ -600,6 +251,9 @@ const getEmailHistoryByTermAndSchool = async (req, res) => {
 module.exports = {
   sendReportEmail,
   sendBulkReportEmails,
+  getRun,
+  retryRun,
+  listRuns,
   getStudentEmailHistory,
   getEmailHistoryByTermAndSchool
 };

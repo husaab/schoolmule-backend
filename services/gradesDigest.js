@@ -447,49 +447,8 @@ const gradesDigestHandler = {
 // Delivery: what the publish window and the history show
 // ────────────────────────────────────────────────────────────────────
 
-/** A student's state across their addresses: any queued → pending; any failed → failed; any sent → sent. */
-function studentStatus(recipients) {
-  const states = new Set(recipients.map((r) => r.status));
-  if (states.has('pending')) return 'pending';
-  if (states.has('failed')) return 'failed';
-  if (states.has('sent')) return 'sent';
-  return 'skipped';
-}
-
-/**
- * One publish's outbox rows per student: { counts, students }. A student
- * counts once (under studentStatus); `recipients` say what happened to each
- * address.
- */
-function summarizeDelivery(rows) {
-  const byStudent = new Map();
-  for (const r of rows) {
-    let entry = byStudent.get(r.student_id);
-    if (!entry) {
-      entry = { studentId: r.student_id, studentName: r.student_name || null, recipients: [], reason: null };
-      byStudent.set(r.student_id, entry);
-    }
-    if (!r.recipient_email) {
-      entry.reason = r.skip_reason || NO_EMAIL;
-      continue;
-    }
-    entry.recipients.push({
-      email: r.recipient_email,
-      status: r.status,
-      error: r.status === 'failed' ? r.last_error || 'Email failed' : null,
-      reason: r.status === 'skipped' ? r.skip_reason : null,
-      sentAt: r.status === 'sent' ? r.finished_at : null,
-    });
-  }
-  const counts = { pending: 0, sent: 0, failed: 0, skipped: 0 };
-  const students = [...byStudent.values()].map((s) => {
-    const status = studentStatus(s.recipients);
-    counts[status] += 1;
-    const reason = status === 'skipped' ? s.reason || s.recipients.find((r) => r.reason)?.reason || null : null;
-    return { studentId: s.studentId, studentName: s.studentName, status, reason, recipients: s.recipients };
-  });
-  return { counts, students };
-}
+/** One publish's outbox rows per student (services/email/outbox.summarizeDelivery). */
+const summarizeDelivery = (rows) => outbox.summarizeDelivery(rows, { noRecipient: NO_EMAIL });
 
 /** One publish's delivery. */
 async function batchDelivery(batchId, queryable = db) {

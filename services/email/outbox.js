@@ -24,8 +24,9 @@ const { getResend, sendOrThrow } = require('../../utils/emailUtils');
 
 const MAX_ATTEMPTS = 3;
 const DRAIN_LIMIT = 40;
-// Resend allows 10 requests a second per team; every queue in the tick shares it.
-const PAUSE_MS = 600;
+// Resend allows 10 requests a second per team; the tick's queues run one
+// after another, so this loop alone sends: about 3 a second.
+const PAUSE_MS = 300;
 // Postgres: relation does not exist (email_outbox_migration.sql not applied).
 const UNDEFINED_TABLE = '42P01';
 
@@ -35,6 +36,7 @@ const HANDLERS = {
   reply_reminder: () => require('../replyReminders').replyReminderHandler,
   reply_escalation: () => require('../replyReminders').replyEscalationHandler,
   reply_nudge: () => require('../replyReminders').replyNudgeHandler,
+  report_email: () => require('../reportEmails').reportEmailHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).
@@ -202,6 +204,77 @@ async function drainOutbox({ limit = DRAIN_LIMIT, pauseMs = PAUSE_MS, now } = {}
   return handled;
 }
 
+// ── What a send's page shows ───────────────────────────────────────────────
+
+/** A student's state across their addresses: any queued → pending; any failed → failed; any sent → sent. */
+function studentStatus(recipients) {
+  const states = new Set(recipients.map((r) => r.status));
+  if (states.has('pending')) return 'pending';
+  if (states.has('failed')) return 'failed';
+  if (states.has('sent')) return 'sent';
+  return 'skipped';
+}
+
+/**
+ * One subject's rows (selectBySubject) per student: { counts, students }. A
+ * student counts once (under studentStatus); `recipients` say what happened
+ * to each address. A row with no address records why there was nobody to
+ * email (`noRecipient` when it says nothing).
+ */
+function summarizeDelivery(rows, { noRecipient = 'Nobody to email' } = {}) {
+  const byStudent = new Map();
+  for (const r of rows) {
+    let entry = byStudent.get(r.student_id);
+    if (!entry) {
+      entry = { studentId: r.student_id, studentName: r.student_name || null, recipients: [], reason: null };
+      byStudent.set(r.student_id, entry);
+    }
+    if (!r.recipient_email) {
+      entry.reason = r.skip_reason || noRecipient;
+      continue;
+    }
+    entry.recipients.push({
+      email: r.recipient_email,
+      status: r.status,
+      error: r.status === 'failed' ? r.last_error || 'Email failed' : null,
+      reason: r.status === 'skipped' ? r.skip_reason : null,
+      sentAt: r.status === 'sent' ? r.finished_at : null,
+    });
+  }
+  const counts = { pending: 0, sent: 0, failed: 0, skipped: 0 };
+  const students = [...byStudent.values()].map((s) => {
+    const status = studentStatus(s.recipients);
+    counts[status] += 1;
+    const reason = status === 'skipped' ? s.reason || s.recipients.find((r) => r.reason)?.reason || null : null;
+    return { studentId: s.studentId, studentName: s.studentName, status, reason, recipients: s.recipients };
+  });
+  return { counts, students };
+}
+
+// ── Sending now ────────────────────────────────────────────────────────────
+
+// Set by the notifier when its worker starts (services/messageNotifier.js).
+let kickHandler = null;
+
+/** The worker's "run a tick now" (null stops kicks: tests, shutdown). */
+function setKick(handler) {
+  kickHandler = handler;
+}
+
+/**
+ * Starts sending now rather than at the next tick, for emails someone is
+ * watching go out (a report card send). Never throws; a no-op without a
+ * running worker.
+ */
+function kick() {
+  if (!kickHandler) return;
+  try {
+    kickHandler();
+  } catch (error) {
+    logger.warn({ err: error }, 'Starting the email outbox early failed; the next tick sends');
+  }
+}
+
 /** Clears the stand-down (worker start, tests). */
 function resetOutboxState() {
   disabled = null;
@@ -209,6 +282,10 @@ function resetOutboxState() {
 
 module.exports = {
   MAX_ATTEMPTS,
+  DRAIN_LIMIT,
+  summarizeDelivery,
+  setKick,
+  kick,
   enqueue,
   drainOutbox,
   processJob,

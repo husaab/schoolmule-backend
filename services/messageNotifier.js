@@ -519,6 +519,40 @@ async function drainClassroom() {
   }
 }
 
+// A kick that arrived mid-tick: run again once this one ends.
+let kickedWhileDraining = false;
+
+/**
+ * One pass over every queue. Never overlaps itself (a tick or kick that
+ * arrives meanwhile asks for one more pass). When the outbox had more due
+ * than one pass sends (a big report card send), the next pass starts at
+ * once, so its progress bar never stalls for the 30-second interval.
+ */
+async function runTick() {
+  if (draining) {
+    kickedWhileDraining = true;
+    return;
+  }
+  draining = true;
+  kickedWhileDraining = false;
+  let more = false;
+  try {
+    await replyReminderTick();
+    more = (await drainEmailOutbox()) >= outbox.DRAIN_LIMIT;
+    await classroomTick();
+    if (!disabledReason) await remindIfDue();
+    await drainAll();
+    await drainAnnouncements();
+    await drainClassroom();
+  } catch (error) {
+    // Never let a worker error take the process down.
+    logger.error({ err: error }, 'Message notifier tick failed');
+  } finally {
+    draining = false;
+    if ((more || kickedWhileDraining) && timer) setImmediate(() => { void runTick(); });
+  }
+}
+
 function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   if (timer) return;
   disabledReason = null;
@@ -529,25 +563,9 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   replyReminders.resetScheduleState();
   // A restart part-way through the day must not re-run the reminder sweep.
   lastReminderDate = torontoDate();
-  timer = setInterval(async () => {
-    // Skip a tick rather than overlapping runs; the next one picks up anyway.
-    if (draining) return;
-    draining = true;
-    try {
-      await replyReminderTick();
-      await drainEmailOutbox();
-      await classroomTick();
-      if (!disabledReason) await remindIfDue();
-      await drainAll();
-      await drainAnnouncements();
-      await drainClassroom();
-    } catch (error) {
-      // Never let a worker error take the process down.
-      logger.error({ err: error }, 'Message notifier tick failed');
-    } finally {
-      draining = false;
-    }
-  }, intervalMs);
+  timer = setInterval(runTick, intervalMs);
+  // A send someone is watching (report cards) starts a tick now.
+  outbox.setKick(() => { void runTick(); });
   // Don't hold the event loop open on shutdown.
   if (typeof timer.unref === 'function') timer.unref();
   logger.info({ intervalMs }, 'Message notifier started');
@@ -558,6 +576,7 @@ function stopWorker() {
     clearInterval(timer);
     timer = null;
   }
+  outbox.setKick(null);
 }
 
 module.exports = {

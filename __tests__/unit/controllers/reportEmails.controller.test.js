@@ -7,12 +7,6 @@ jest.mock('resend', () => ({
   })),
 }));
 
-// Mock global fetch for PDF download
-global.fetch = jest.fn().mockResolvedValue({
-  ok: true,
-  arrayBuffer: jest.fn().mockResolvedValue(new ArrayBuffer(8)),
-});
-
 const request = require('supertest');
 const db = require('../../__mocks__/config/database');
 const { getApp } = require('../../helpers/testApp');
@@ -22,9 +16,9 @@ const {
   buildStudentRow,
   buildReportEmailRow,
   buildReportCardRow,
-  buildProgressReportRow,
-  buildSchoolRow,
 } = require('../../helpers/factories');
+
+const reportEmails = require('../../../services/reportEmails');
 
 const app = getApp();
 
@@ -115,23 +109,16 @@ describe('Report Emails Controller', () => {
       expect(res.status).toBe(404);
     });
 
-    it('should send report card email successfully', async () => {
+    it('queues a one-student send to the typed addresses and answers at once (nothing is sent in the request)', async () => {
       const token = mockAdminUser();
       const student = buildStudentRow({ school: TEST_SCHOOL });
       const report = buildReportCardRow({ student_id: student.student_id });
-      const emailRecord = buildReportEmailRow();
-      const school = buildSchoolRow();
-
-      // 1. selectStudentById
-      mockQueryResponse([student]);
-      // 2. selectGeneratedReportCardsByStudentId (report query)
-      mockQueryResponse([report]);
-      // 3. selectSchoolByCode (school info)
-      mockQueryResponse([school]);
-      // 4. createReportEmail
-      mockQueryResponse([emailRecord]);
-      // 5. updateReportCardEmailStatus
-      mockQueryResponse([], 1);
+      mockQueryResponse([student]); // selectStudentById
+      mockQueryResponse([report]); // selectGeneratedReportCardsByStudentId
+      const queueSend = jest.spyOn(reportEmails, 'queueSend').mockResolvedValue({
+        runId: '7d4b8c2e-0000-4000-8000-000000000001', total: 1, queued: 1, skipped: 0,
+      });
+      mockResendSend.mockClear();
 
       const res = await request(app)
         .post(url)
@@ -140,57 +127,29 @@ describe('Report Emails Controller', () => {
           reportType: 'report_card',
           studentId: student.student_id,
           term: 'Term 1 2025-2026',
-          emailAddresses: ['parent@test.com'],
+          emailAddresses: ['parent@test.com', ' second@test.com '],
+          ccAddresses: ['office@test.com'],
           customHeader: 'Report Card for Your Child',
           customMessage: 'Please find attached.',
         });
 
-      expect(res.status).toBe(200);
-      expect(res.body.status).toBe('success');
-      expect(res.body.data.id).toBeDefined();
-    });
-
-    it('resolves merge tags in the rendered email and persists the raw body', async () => {
-      const token = mockAdminUser();
-      const student = buildStudentRow({ name: 'Aisha Khan', school: TEST_SCHOOL });
-      const report = buildReportCardRow({ student_id: student.student_id });
-      const emailRecord = buildReportEmailRow();
-      const school = buildSchoolRow();
-
-      mockQueryResponse([student]);       // selectStudentById
-      mockQueryResponse([report]);        // report query
-      mockQueryResponse([school]);        // school info
-      mockQueryResponse([emailRecord]);   // createReportEmail
-      mockQueryResponse([], 1);           // updateReportCardEmailStatus
-
-      mockResendSend.mockClear();
-
-      const rawBody = 'Dear Parent, [Student Name]\'s report for [Term] is attached.';
-      const res = await request(app)
-        .post(url)
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          reportType: 'report_card',
-          studentId: student.student_id,
-          term: 'Final Term',
-          emailAddresses: ['parent@test.com'],
-          customMessage: rawBody,
-        });
-
-      expect(res.status).toBe(200);
-
-      // Rendered email has the tags resolved for this recipient.
-      const sentHtml = mockResendSend.mock.calls[0][0].html;
-      expect(sentHtml).toContain('Aisha Khan');
-      expect(sentHtml).toContain('Final Term');
-      expect(sentHtml).not.toContain('[Student Name]');
-      expect(sentHtml).not.toContain('[Term]');
-
-      // The raw body (with tags) is persisted to report_emails.custom_message.
-      const createCall = db.query.mock.calls.find(
-        ([, params]) => Array.isArray(params) && params.includes(rawBody)
-      );
-      expect(createCall).toBeDefined();
+      expect(res.status).toBe(202);
+      expect(res.body).toMatchObject({
+        status: 'queued', runId: '7d4b8c2e-0000-4000-8000-000000000001', summary: { total: 1, queued: 1, skipped: 0 },
+      });
+      expect(queueSend).toHaveBeenCalledWith(expect.objectContaining({
+        school: TEST_SCHOOL,
+        userId: TEST_ADMIN_USER_ID,
+        reportType: 'report_card',
+        term: 'Term 1 2025-2026',
+        studentIds: [student.student_id],
+        chosen: ['parent@test.com', 'second@test.com'],
+        ccAddresses: ['office@test.com'],
+        customHeader: 'Report Card for Your Child',
+        customMessage: 'Please find attached.',
+      }));
+      expect(mockResendSend).not.toHaveBeenCalled();
+      queueSend.mockRestore();
     });
 
     it('should return 401 without auth token', async () => {

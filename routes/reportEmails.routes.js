@@ -13,6 +13,11 @@ router.post('/send',  reportEmailsController.sendReportEmail);
 // Send bulk report emails
 router.post('/send/bulk', reportEmailsController.sendBulkReportEmails);
 
+// A send's progress, student by student; resend its failed emails; the latest sends
+router.get('/runs', reportEmailsController.listRuns);
+router.get('/runs/:runId', reportEmailsController.getRun);
+router.post('/runs/:runId/retry', reportEmailsController.retryRun);
+
 // Get email history for a specific student
 router.get('/history/student/:studentId',reportEmailsController.getStudentEmailHistory);
 

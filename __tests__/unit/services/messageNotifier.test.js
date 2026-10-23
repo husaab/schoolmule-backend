@@ -359,3 +359,51 @@ describe('classroomTick and drainClassroom (worker tick, T21)', () => {
     await expect(notifier.drainClassroom()).resolves.toBe(0);
   });
 });
+
+describe('the worker pass and the email outbox (report card sends)', () => {
+  const outbox = require('../../../services/email/outbox');
+  let spies = [];
+  beforeEach(() => { db._reset(); makeRouter({}); });
+  afterEach(() => {
+    notifier.stopWorker();
+    spies.forEach((s) => s.mockRestore());
+    spies = [];
+  });
+  const settle = async (until) => {
+    for (let i = 0; i < 200 && !until(); i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  it('a kick runs a pass now; a pass that sent a full batch runs again at once, until the outbox is drained', async () => {
+    const drain = jest.spyOn(outbox, 'drainOutbox')
+      .mockResolvedValueOnce(outbox.DRAIN_LIMIT)
+      .mockResolvedValueOnce(outbox.DRAIN_LIMIT)
+      .mockResolvedValue(3);
+    spies = [drain];
+    notifier.startWorker(60 * 60 * 1000);
+    outbox.kick();
+    await settle(() => drain.mock.calls.length >= 3);
+    // Three passes back to back; the third sent less than a batch, so it stops there.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(drain).toHaveBeenCalledTimes(3);
+  });
+
+  it('a kick during a pass runs one more pass after it; a stopped worker ignores kicks', async () => {
+    let release;
+    const drain = jest.spyOn(outbox, 'drainOutbox')
+      .mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(0); }))
+      .mockResolvedValue(0);
+    spies = [drain];
+    notifier.startWorker(60 * 60 * 1000);
+    outbox.kick();
+    await settle(() => drain.mock.calls.length === 1 && release);
+    outbox.kick(); // mid-pass
+    release();
+    await settle(() => drain.mock.calls.length >= 2);
+    expect(drain).toHaveBeenCalledTimes(2);
+
+    notifier.stopWorker();
+    outbox.kick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(drain).toHaveBeenCalledTimes(2);
+  });
+});

@@ -495,12 +495,12 @@ CREATE TABLE report_emails (
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   term                   TEXT NOT NULL,
   sent_by                UUID REFERENCES users(user_id),
-  email_addresses        TEXT[],
+  email_addresses        JSONB,
   custom_header          TEXT,
   custom_message         TEXT,
   file_path              TEXT,
   sent_at                TIMESTAMPTZ DEFAULT NOW(),
-  cc_addresses           TEXT[],
+  cc_addresses           JSONB,
   school                 school NOT NULL
 );
 
@@ -2103,3 +2103,23 @@ CREATE INDEX IF NOT EXISTS idx_email_outbox_subject ON email_outbox (subject_typ
 -- database/migrations/honorific_gender_migration.sql
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS honorific TEXT CHECK (honorific IS NULL OR honorific IN ('Mr.', 'Ms.', 'Mrs.', 'Dr.'));
 ALTER TABLE students ADD COLUMN IF NOT EXISTS gender    TEXT CHECK (gender IS NULL OR gender IN ('male', 'female'));
+
+-- ============================================================
+-- Report email runs (database/migrations/report_email_runs_migration.sql)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS report_email_runs (
+  run_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school          school NOT NULL,
+  report_type     TEXT NOT NULL CHECK (report_type IN ('progress_report', 'report_card')),
+  term            TEXT NOT NULL,
+  custom_header   TEXT,
+  custom_message  TEXT,
+  cc_addresses    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recipients      TEXT NOT NULL DEFAULT 'guardians' CHECK (recipients IN ('guardians', 'chosen')),
+  student_count   INT NOT NULL DEFAULT 0,
+  created_by      UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE report_emails ADD COLUMN IF NOT EXISTS run_id UUID REFERENCES report_email_runs(run_id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_report_emails_run_student
+  ON report_emails (run_id, student_id) WHERE run_id IS NOT NULL;
