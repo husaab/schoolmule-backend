@@ -32,6 +32,7 @@ const { getSchoolName } = require('../utils/schoolUtils');
 const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
 const { photoUrlsFor } = require('../services/profile/photos');
+const replyReminders = require('../services/replyReminders');
 
 const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -459,9 +460,16 @@ const listConversations = async (req, res) => {
     ]);
 
     let failedSet = new Set();
+    let badges = new Map();
     if (role === 'ADMIN' && rows.length) {
-      const { rows: f } = await db.query(q.selectFailedEmailConversations, [rows.map((r) => r.conversation_id)]);
+      const ids = rows.map((r) => r.conversation_id);
+      const { rows: f } = await db.query(q.selectFailedEmailConversations, [ids]);
       failedSet = new Set(f.map((r) => r.conversation_id));
+      // The reminders' badges are extra: the list loads without them.
+      badges = await replyReminders.badgesFor(ids).catch((error) => {
+        logger.warn({ err: error.message }, 'Reply reminder badges unavailable');
+        return new Map();
+      });
     }
 
     const staff = role !== 'PARENT';
@@ -476,7 +484,12 @@ const listConversations = async (req, res) => {
       ...(staff ? { studentAvatar: r.student_avatar ?? null, studentPhotoUrl: photoOf(r.student_photo_path) } : {}),
       needsReply: needsReplyFor(role, r),
       // The admin inbox names whom each thread is addressed to (a student may write to a co-teacher or homeroom teacher).
-      ...(role === 'ADMIN' ? { emailFailed: failedSet.has(r.conversation_id), addresseeName: r.addressee_name ?? null } : {}),
+      ...(role === 'ADMIN' ? {
+        emailFailed: failedSet.has(r.conversation_id),
+        addresseeName: r.addressee_name ?? null,
+        // Reply reminders sent so far, when the office was told, when the parent was nudged (null: none).
+        replyReminders: badges.get(r.conversation_id) ?? null,
+      } : {}),
     }));
     return res.status(200).json({ status: 'success', data: items });
   } catch (error) {

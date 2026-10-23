@@ -504,7 +504,7 @@ describe('Integration: Student accounts', () => {
     expect(defaults.status).toBe(200);
     expect(defaults.body.data).toEqual({
       enabled: false, loginFromGrade: '1', qrUntilGrade: '3', studentEmailFromGrade: '1',
-      parentsReadPrivateComments: true, summaryDow: 5, parentSummary: false, studentPhotos: false, consentNoticeVersion: '2026-10',
+      parentsReadPrivateComments: true, summaryDow: 5, parentSummary: false, replyReminders: false, parentNudge: false, studentPhotos: false, consentNoticeVersion: '2026-10',
       studentEmailDomains: [], studentSignIn: 'google_or_password',
       updatedAt: null,
     });
@@ -517,7 +517,7 @@ describe('Integration: Student accounts', () => {
     expect(created.status).toBe(200);
     // main's body (no studentEmailDomains / studentSignIn / parentSummary) still saves, keeping the defaults.
     expect(created.body.data).toEqual({
-      ...body, studentEmailDomains: [], studentSignIn: 'google_or_password', parentSummary: false, updatedAt: expect.any(String),
+      ...body, studentEmailDomains: [], studentSignIn: 'google_or_password', parentSummary: false, replyReminders: false, parentNudge: false, updatedAt: expect.any(String),
     });
     const { rows: [row] } = await pool.query(`SELECT * FROM school_classroom_settings WHERE school = 'ALHAADIACADEMY'`);
     expect(row).toMatchObject({ enabled: true, login_from_grade: '2', student_email_from_grade: null, updated_by: ADMIN_ID });

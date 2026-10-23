@@ -2034,6 +2034,9 @@ ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS student_sign_in T
   CHECK (student_sign_in IN ('google_or_password','google_only'));
 -- parent_summary_01: the parents' weekly summary has its own switch.
 ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS parent_summary BOOLEAN NOT NULL DEFAULT FALSE;
+-- reply_reminders_01: chasing unanswered conversations.
+ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS reply_reminders BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE school_classroom_settings ADD COLUMN IF NOT EXISTS parent_nudge BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ============================================================
 -- Student account requests (database/migrations/student_account_requests_01.sql)

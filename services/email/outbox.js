@@ -32,6 +32,9 @@ const UNDEFINED_TABLE = '42P01';
 // Required lazily: a handler module enqueues through this one.
 const HANDLERS = {
   grades_digest: () => require('../gradesDigest').gradesDigestHandler,
+  reply_reminder: () => require('../replyReminders').replyReminderHandler,
+  reply_escalation: () => require('../replyReminders').replyEscalationHandler,
+  reply_nudge: () => require('../replyReminders').replyNudgeHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).

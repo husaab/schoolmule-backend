@@ -171,6 +171,8 @@ describe('PUT /api/admin/classroom-settings', () => {
       parentsReadPrivateComments: false,
       summaryDow: 4,
       parentSummary: false, // the mocked row has no parent_summary
+      replyReminders: false, // nor the reply reminder switches
+      parentNudge: false,
       studentPhotos: true,
       consentNoticeVersion: '2026-11',
       studentEmailDomains: [],

@@ -4,7 +4,9 @@
 // student email, the parents' weekly summary and its day...). One row per
 // school; a school that never saved them gets DEFAULTS with updatedAt null.
 // `enabled` is the student portal (student sign-in and student email);
-// `parentSummary` is the parents' weekly summary, its own switch.
+// `parentSummary` is the parents' weekly summary, its own switch;
+// `replyReminders` and `parentNudge` chase unanswered conversations
+// (services/replyReminders.js).
 
 const db = require('../../config/database');
 const q = require('../../queries/classroomSettings.queries');
@@ -18,6 +20,8 @@ const DEFAULTS = Object.freeze({
   parentsReadPrivateComments: true,
   summaryDow: 5,
   parentSummary: false,
+  replyReminders: false,
+  parentNudge: false,
   studentPhotos: false,
   consentNoticeVersion: '2026-10',
   // The domains of the school's student addresses ([] = no domain checks).
@@ -27,7 +31,7 @@ const DEFAULTS = Object.freeze({
 });
 
 // Keys every PUT must carry. The settings that came later (the two
-// invitation ones, parentSummary) are optional, as is consentNoticeVersion
+// invitation ones, parentSummary, replyReminders, parentNudge) are optional, as is consentNoticeVersion
 // now that it is not shown, so an older body keeps working (they then keep
 // their saved values).
 const REQUIRED_KEYS = [
@@ -51,6 +55,8 @@ const toSettings = (row) => ({
   parentsReadPrivateComments: row.parents_read_private_comments,
   summaryDow: Number(row.summary_dow),
   parentSummary: row.parent_summary === true,
+  replyReminders: row.reply_reminders === true,
+  parentNudge: row.parent_nudge === true,
   studentPhotos: row.student_photos,
   consentNoticeVersion: row.consent_notice_version,
   studentEmailDomains: row.student_email_domains ?? [],
@@ -101,8 +107,11 @@ function validateSettings(body, current = DEFAULTS) {
   if (!Number.isInteger(body.summaryDow) || body.summaryDow < 0 || body.summaryDow > 6) {
     return { error: 'summaryDow must be a whole number from 0 (Sunday) to 6 (Saturday)' };
   }
-  const parentSummary = has(body, 'parentSummary') ? body.parentSummary : (current.parentSummary ?? DEFAULTS.parentSummary);
-  if (typeof parentSummary !== 'boolean') return { error: 'parentSummary must be true or false' };
+  const switches = {};
+  for (const key of ['parentSummary', 'replyReminders', 'parentNudge']) {
+    switches[key] = has(body, key) ? body[key] : (current[key] ?? DEFAULTS[key]);
+    if (typeof switches[key] !== 'boolean') return { error: `${key} must be true or false` };
+  }
   const version = has(body, 'consentNoticeVersion')
     ? (typeof body.consentNoticeVersion === 'string' ? body.consentNoticeVersion.trim() : '')
     : (current.consentNoticeVersion ?? DEFAULTS.consentNoticeVersion);
@@ -128,7 +137,7 @@ function validateSettings(body, current = DEFAULTS) {
       studentEmailFromGrade: body.studentEmailFromGrade,
       parentsReadPrivateComments: body.parentsReadPrivateComments,
       summaryDow: body.summaryDow,
-      parentSummary,
+      ...switches,
       studentPhotos: body.studentPhotos,
       consentNoticeVersion: version,
       studentEmailDomains,
@@ -153,6 +162,8 @@ async function saveSettings(school, value, userId) {
     value.studentEmailDomains,
     value.studentSignIn,
     value.parentSummary,
+    value.replyReminders,
+    value.parentNudge,
   ]);
   return toSettings(rows[0]);
 }
