@@ -147,8 +147,19 @@ const googleSheetsQueries = {
     RETURNING *
   `,
 
+  // A success also clears earlier failures for the same sheet: a failed job is
+  // kept so the UI can explain a stall, and the status shows the newest job,
+  // so a stale failure would otherwise say "Sync failed" after every later
+  // success.
   completeJob: `
-    DELETE FROM sheet_sync_jobs WHERE job_id = $1 RETURNING job_id
+    DELETE FROM sheet_sync_jobs d
+    USING sheet_sync_jobs j
+    WHERE j.job_id = $1
+      AND (d.job_id = j.job_id
+           OR (d.state = 'failed' AND d.kind = j.kind
+               AND d.school IS NOT DISTINCT FROM j.school
+               AND d.form_id IS NOT DISTINCT FROM j.form_id))
+    RETURNING d.job_id
   `,
 
   // Requeue with exponential backoff, or give up once attempts reach the cap

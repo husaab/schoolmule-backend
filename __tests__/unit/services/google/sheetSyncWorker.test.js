@@ -31,6 +31,21 @@ describe('sheetSyncWorker.drainOnce', () => {
     expect(sqlsUsed().some((s) => /DELETE FROM sheet_sync_jobs/.test(s))).toBe(true);
   });
 
+  it('a success also clears earlier failed jobs for the same sheet, so a stale failure stops showing', async () => {
+    mockQueryResponse([job()]);
+    syncForm.mockResolvedValueOnce({ synced: true });
+    mockQueryResponse([{ job_id: 'j1' }, { job_id: 'old-failed' }]); // completeJob
+
+    await worker.drainOnce();
+    const [sql, params] = db.query.mock.calls.find(([q]) => /DELETE FROM sheet_sync_jobs/.test(q));
+    expect(params).toEqual(['j1']);
+    // Only failed jobs for the same target go with it; a live job for it never does.
+    expect(sql).toMatch(/d\.state = 'failed'/);
+    expect(sql).toMatch(/d\.kind = j\.kind/);
+    expect(sql).toMatch(/d\.school IS NOT DISTINCT FROM j\.school/);
+    expect(sql).toMatch(/d\.form_id IS NOT DISTINCT FROM j\.form_id/);
+  });
+
   it('requeues with backoff when the sync fails, keeping the job', async () => {
     mockQueryResponse([job()]);
     syncForm.mockRejectedValueOnce(new Error('Google 503'));
