@@ -1,5 +1,5 @@
 const express = require("express");
-const { registerUser, login, googleSignIn, emailLinkLogin, studentQrLogin, sendVerificationEmail, verifyEmail, approveUserForSchool,
+const { registerUser, login, googleSignIn, appleSignIn, connectApple, emailLinkLogin, studentQrLogin, sendVerificationEmail, verifyEmail, approveUserForSchool,
 getPendingApprovals, resendSchoolApprovalEmail, deleteUserAccount, declineUserForSchool, logout, requestPasswordReset,
 validateResetToken, resetPassword, validateSession, switchView} = require("../controllers/auth.controller");
 const responseParser = require("../utils/responseParser");
@@ -23,6 +23,10 @@ router.post( "/login", loginAccountLimiter, loginLimiter, responseParser(login))
 // Sign in or sign up with Google (code from the Google popup). Per network
 // only: every attempt needs a real Google account, so it can't guess.
 router.post( "/google", loginLimiter, responseParser(googleSignIn));
+// Sign in with Apple from the iOS app (identity token + nonce), and connecting
+// an Apple ID to the signed-in account when Apple hid the email.
+router.post('/apple', loginLimiter, responseParser(appleSignIn));
+router.post('/apple/connect', verifyUser, loginLimiter, responseParser(connectApple));
 
 // One-tap sign-in from a parent email's button (utils/emailLoginLink).
 router.post('/email-link', loginLimiter, responseParser(emailLinkLogin));

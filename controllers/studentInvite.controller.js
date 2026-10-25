@@ -112,7 +112,7 @@ const acceptInvite = async (req) => {
     let google = null;
     let credential;
     if (usingGoogle) {
-      google = await googleSignInService.verifySignInCode(googleCode);
+      google = await googleSignInService.verifySignInCode(googleCode, googleSignInService.nativeFieldsOf(req.body));
       const verdict = acceptGoogleChecks(google, { email: found.user_email }, found.student_email_domains);
       if (verdict) return verdict;
       const { rows: taken } = await db.query(q.selectOtherGoogleUser, [google.sub, found.user_id]);

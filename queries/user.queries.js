@@ -72,6 +72,48 @@ const userQueries = {
       RETURNING *
     `,
 
+    // Sign in with Apple candidates: the account already linked to this Apple
+    // ID, plus every account whose email matches ignoring case. $2 is null
+    // when Apple sent no address (it does only on the first authorization).
+    selectForAppleSignIn: `
+      SELECT user_id, email, username, password, first_name, last_name,
+            school, role, email_token, is_verified, is_verified_school, is_archived,
+            apple_sub, avatar, photo_path, created_at, last_modified_at
+      FROM users
+      WHERE apple_sub = $1 OR ($2::text IS NOT NULL AND lower(email) = lower($2::text))
+    `,
+
+    // First Apple sign-in on an existing account; same rules as linkGoogleAccount.
+    linkAppleAccount: `
+      UPDATE users
+      SET apple_sub = $2,
+          is_verified = true,
+          password = COALESCE($3, password),
+          last_modified_at = NOW()
+      WHERE user_id = $1
+      RETURNING user_id, email, username, password, first_name, last_name,
+            school, role, email_token, is_verified, is_verified_school, is_archived,
+            apple_sub, avatar, photo_path, created_at, last_modified_at
+    `,
+
+    // Signup with Apple: Apple verified the address (possibly a private relay one).
+    createAppleUser: `
+      INSERT INTO users
+        (user_id, email, username, password, first_name, last_name, school, role,
+         apple_sub, is_verified, is_verified_school, created_at, last_modified_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, false, NOW(), NOW())
+      RETURNING *
+    `,
+
+    // A signed-in account connects its Apple ID (Apple hid the email, so
+    // sign-in couldn't match it). Never moves an Apple ID off another account.
+    connectAppleId: `
+      UPDATE users SET apple_sub = $2, last_modified_at = NOW()
+      WHERE user_id = $1 AND (apple_sub IS NULL OR apple_sub = $2)
+        AND NOT EXISTS (SELECT 1 FROM users o WHERE o.apple_sub = $2 AND o.user_id <> $1)
+      RETURNING user_id
+    `,
+
     selectById: `
       SELECT user_id, email, username, password, first_name, last_name, school, role, email_token, is_verified, is_verified_school, is_archived, avatar, photo_path, staff_role_id, created_at, last_modified_at
       FROM users 

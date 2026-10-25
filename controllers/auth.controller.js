@@ -21,6 +21,8 @@ const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { verifyEmailLoginToken } = require('../utils/emailLoginLink');
 const { GoogleSignInError } = googleSignInService;
+const appleSignInService = require('../services/apple/appleSignIn');
+const { AppleSignInError } = appleSignInService;
 const {
   assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, sessionRevoked, MESSAGES: STUDENT_MESSAGES,
 } = require('../services/classroom/studentLogin');
@@ -486,81 +488,92 @@ const studentQrLogin = async (req) => {
   }
 };
 
-const GOOGLE_INTENTS = ['login', 'signup'];
+const SIGN_IN_INTENTS = ['login', 'signup'];
 
-// The existing account a Google identity opens, or null when there is none.
-// An account already linked to this Google account wins; otherwise the email
+// Google and Apple sign-in work the same way: the provider vouches for an
+// account id (its `sub`) and an address. Each provider's id is remembered in
+// its own column, stamped by its own queries.
+const SIGN_IN_PROVIDERS = {
+  google: { name: 'Google', column: 'google_sub', link: userQueries.linkGoogleAccount, create: userQueries.createGoogleUser },
+  apple: { name: 'Apple', column: 'apple_sub', link: userQueries.linkAppleAccount, create: userQueries.createAppleUser },
+};
+
+// The existing account a provider identity opens, or null when there is none.
+// An account already linked to this provider account wins; otherwise the email
 // decides. Throws a verdict when the email can't pick one account safely.
-const matchGoogleAccount = (rows, google) => {
-  const linked = rows.find((r) => r.google_sub === google.sub);
+const matchProviderAccount = (rows, identity, provider) => {
+  const { name, column } = SIGN_IN_PROVIDERS[provider];
+  const linked = rows.find((r) => r[column] === identity.sub);
   if (linked) return linked;
+  if (!identity.email) return null;
 
-  const byEmail = rows.filter((r) => r.email.toLowerCase() === google.email.toLowerCase());
+  const byEmail = rows.filter((r) => r.email.toLowerCase() === identity.email.toLowerCase());
   if (byEmail.length === 0) return null;
 
-  const user = byEmail.length === 1 ? byEmail[0] : byEmail.find((r) => r.email === google.email);
+  const user = byEmail.length === 1 ? byEmail[0] : byEmail.find((r) => r.email === identity.email);
   if (!user) {
     throw { status: 409, message: "More than one account uses this email. Sign in with your email and password instead." };
   }
-  if (user.google_sub) {
-    throw { status: 409, message: "This account is linked to a different Google account. Use that Google account, or sign in with your email and password." };
+  if (user[column]) {
+    throw { status: 409, message: `This account is linked to a different ${name} account. Use that ${name} account, or sign in with your email and password.` };
   }
   return user;
 };
 
-// First Google sign-in on an account: remember the Google account, count
-// Google's check as email verification, and accept a pending invite.
+// First Google or Apple sign-in on an account: remember the provider's id,
+// count its check as email verification, and accept a pending invite.
 //
 // A password set before anyone proved they own the address can't be trusted
-// once Google proves who does: anyone can sign up with someone else's email
-// and wait for the owner to arrive through Google. So an unverified account's
-// password is replaced along with the invite sentinel '!'. A verified
-// account's password was set by the owner and keeps working.
-const linkGoogleAccount = async (user, google) => {
+// once the provider proves who does: anyone can sign up with someone else's
+// email and wait for the owner to arrive through Google. So an unverified
+// account's password is replaced along with the invite sentinel '!'. A
+// verified account's password was set by the owner and keeps working.
+const linkProviderAccount = async (user, identity, provider) => {
+  const { column, link } = SIGN_IN_PROVIDERS[provider];
   const replacePassword = !user.is_verified || user.password === '!';
   // Archived: openSession refuses it; leave the row as it is.
-  if (user.is_archived || (user.google_sub === google.sub && !replacePassword)) return user;
+  if (user.is_archived || (user[column] === identity.sub && !replacePassword)) return user;
 
-  const { rows } = await db.query(userQueries.linkGoogleAccount, [
+  const { rows } = await db.query(link, [
     user.user_id,
-    google.sub,
+    identity.sub,
     replacePassword ? await unusablePasswordHash() : null,
   ]);
   const linked = rows[0];
 
-  // Google just did what the verification link would have done, so send what
-  // the link would have sent.
+  // The provider just did what the verification link would have done, so
+  // send what the link would have sent.
   if (!user.is_verified && !linked.is_verified_school && linked.role !== 'ADMIN') {
     await notifyAccountVerified(linked);
   }
   return linked;
 };
 
-// Google gives names as parts; some accounts carry only `name`, and a few
-// carry no name at all.
-const namesFromGoogle = (google) => {
-  if (google.givenName || google.familyName) return [google.givenName, google.familyName];
-  const [first = '', ...rest] = google.name.trim().split(/\s+/);
-  return [first || google.email.split('@')[0], rest.join(' ')];
+// Names arrive as parts; some Google accounts carry only `name`, Apple gives
+// names only on the first authorization, and a few carry no name at all.
+const namesFromIdentity = (identity) => {
+  if (identity.givenName || identity.familyName) return [identity.givenName, identity.familyName];
+  const [first = '', ...rest] = (identity.name || '').trim().split(/\s+/);
+  return [first || identity.email.split('@')[0], rest.join(' ')];
 };
 
-const createGoogleAccount = async ({ google, school, role }) => {
-  const [firstName, lastName] = namesFromGoogle(google);
+const createProviderAccount = async ({ identity, school, role, provider }) => {
+  const [firstName, lastName] = namesFromIdentity(identity);
   try {
-    const { rows } = await db.query(userQueries.createGoogleUser, [
+    const { rows } = await db.query(SIGN_IN_PROVIDERS[provider].create, [
       uuidv4(),
-      google.email,
+      identity.email,
       [firstName, lastName].filter(Boolean).join(' '),
       await unusablePasswordHash(),
       firstName,
       lastName,
       school,
       role,
-      google.sub,
+      identity.sub,
     ]);
     return rows[0];
   } catch (error) {
-    // Lost a race with another signup for this address or Google account.
+    // Lost a race with another signup for this address or provider account.
     if (error.code === '23505') {
       throw { status: 409, message: "An account with this email already exists. Try signing in instead." };
     }
@@ -570,27 +583,48 @@ const createGoogleAccount = async ({ google, school, role }) => {
   }
 };
 
+// A request's intent, school and role, as a verdict when they don't add up.
+const signInIntentVerdict = ({ intent, school, role }, provider) => {
+  if (!SIGN_IN_INTENTS.includes(intent)) return { status: 400, message: `Unknown ${provider} sign-in request.` };
+  // Same guard as /register: a public signup is only ever a teacher or a parent.
+  if (intent === 'signup' && (!school || !SIGNUP_ROLES.includes(role))) {
+    return { status: 400, message: "Please sign up as a teacher or a parent." };
+  }
+  return null;
+};
+
+// The answer for a provider sign-in that threw: the provider's own retryable
+// error, a verdict passed through, or a logged 500 with `failed` as the message.
+const providerSignInFailure = (error, ProviderError, failed) => {
+  if (error instanceof ProviderError) return { status: 400, message: error.message };
+  const status = Number.isInteger(error.status) ? error.status : 500;
+  if (status >= 500) {
+    logger.error({ err: error }, failed);
+    return { status, message: `${failed} Please try again.` };
+  }
+  return { status, ...(error.code && { code: error.code }), message: error.message };
+};
+
 // POST /api/auth/google { code, intent: 'login'|'signup', school?, role? }
 //
-// `code` comes from Google's sign-in popup. Signing in opens the account the
-// Google identity matches; with no match, login answers 404 GOOGLE_NO_ACCOUNT
-// and signup creates a pending account for `school` as `role`. A signup whose
-// email already has an account simply signs in (`accountCreated: false`).
-// Either way the response is the login payload, gated the same way: pending
-// accounts get a session that only reaches the waiting page.
+// `code` comes from Google's sign-in popup (or, with clientId, redirectUri and
+// codeVerifier, from the mobile app's own OAuth client). Signing in opens the
+// account the Google identity matches; with no match, login answers 404
+// GOOGLE_NO_ACCOUNT and signup creates a pending account for `school` as
+// `role`. A signup whose email already has an account simply signs in
+// (`accountCreated: false`). Either way the response is the login payload,
+// gated the same way: pending accounts get a session that only reaches the
+// waiting page.
 const googleSignIn = async (req) => {
   const { code, intent = 'login', school, role } = req.body ?? {};
   let email = null;
 
   try {
     if (typeof code !== 'string' || !code) throw { status: 400, message: "Missing Google sign-in code." };
-    if (!GOOGLE_INTENTS.includes(intent)) throw { status: 400, message: "Unknown Google sign-in request." };
-    // Same guard as /register: a public signup is only ever a teacher or a parent.
-    if (intent === 'signup' && (!school || !SIGNUP_ROLES.includes(role))) {
-      throw { status: 400, message: "Please sign up as a teacher or a parent." };
-    }
+    const badIntent = signInIntentVerdict({ intent, school, role }, 'Google');
+    if (badIntent) throw badIntent;
 
-    const google = await googleSignInService.verifySignInCode(code);
+    const google = await googleSignInService.verifySignInCode(code, googleSignInService.nativeFieldsOf(req.body));
     email = google.email;
 
     // Matching accounts by email is only safe when Google vouches for it.
@@ -600,7 +634,7 @@ const googleSignIn = async (req) => {
     }
 
     const { rows } = await db.query(userQueries.selectForGoogleSignIn, [google.sub, google.email]);
-    let user = matchGoogleAccount(rows, google);
+    let user = matchProviderAccount(rows, google, 'google');
     let accountCreated = false;
 
     if (user) {
@@ -613,11 +647,11 @@ const googleSignIn = async (req) => {
         if (verdict) throw verdict;
       }
       const wasPending = user.role === 'STUDENT' && user.password === '!';
-      user = await linkGoogleAccount(user, google);
+      user = await linkProviderAccount(user, google, 'google');
       // A pending student's first Google sign-in accepts the invite (R2).
       if (wasPending && !user.is_archived) await recordGoogleAcceptance(user.user_id);
     } else if (intent === 'signup') {
-      user = await createGoogleAccount({ google, school, role });
+      user = await createProviderAccount({ identity: google, school, role, provider: 'google' });
       accountCreated = true;
       await notifyAccountVerified(user);
     } else {
@@ -637,13 +671,119 @@ const googleSignIn = async (req) => {
     session.data.accountCreated = accountCreated;
     return session;
   } catch (error) {
-    if (error instanceof GoogleSignInError) return { status: 400, message: error.message };
-    const status = Number.isInteger(error.status) ? error.status : 500;
-    if (status >= 500) {
-      logger.error({ err: error }, "Google sign-in failed");
-      return { status, message: "Google sign-in failed. Please try again." };
+    return providerSignInFailure(error, GoogleSignInError, 'Google sign-in failed.');
+  }
+};
+
+// A student's first Apple link, as a verdict or null: only a login that is
+// already set up (the invite is how a student starts), at a school that lets
+// students use more than Google, with an address outside the school's Google
+// Workspace student domains (those must come from Google itself).
+const appleStudentVerdict = async (user) => {
+  if (user.password === '!') {
+    return { status: 403, code: 'APPLE_INVITE_PENDING', message: "Set up your account from the invite your school emailed you first. Then you can use Sign in with Apple." };
+  }
+  const { studentEmailDomains = [], studentSignIn } = await getClassroomSettings(user.school);
+  if (studentSignIn === 'google_only') {
+    return { status: 403, code: 'APPLE_NOT_ALLOWED', message: "Your school uses Google to sign in. Use Continue with Google." };
+  }
+  const domain = String(user.email).slice(String(user.email).lastIndexOf('@') + 1).toLowerCase();
+  if (studentEmailDomains.includes(domain)) {
+    return { status: 409, code: 'APPLE_WRONG_DOMAIN', message: `Use your school Google account (${domain}).` };
+  }
+  return null;
+};
+
+const cleanName = (value) => (typeof value === 'string' ? value.trim().slice(0, 100) : '');
+
+// POST /api/auth/apple { identityToken, nonce, intent: 'login'|'signup', school?, role?, givenName?, familyName? }
+//
+// Sign in with Apple from the iOS app; the same rules as /google. The token
+// carries the Apple ID and the verified address (possibly a private relay
+// one); the name comes from the app, which Apple gives it only the first time.
+// With no match, login answers 404 APPLE_NO_ACCOUNT, with `privateEmail` when
+// Apple hid the address: the person signs in with their password once and the
+// app connects the Apple ID (/apple/connect).
+const appleSignIn = async (req) => {
+  const { identityToken, nonce, intent = 'login', school, role, givenName, familyName } = req.body ?? {};
+  let email = null;
+
+  try {
+    const badIntent = signInIntentVerdict({ intent, school, role }, 'Apple');
+    if (badIntent) throw badIntent;
+
+    const apple = await appleSignInService.verifyIdentityToken(identityToken, nonce);
+    email = apple.email;
+    const identity = {
+      sub: apple.sub,
+      // Matching by email is only safe for an address Apple vouches for.
+      email: apple.emailVerified ? apple.email : null,
+      givenName: cleanName(givenName),
+      familyName: cleanName(familyName),
+    };
+
+    const { rows } = await db.query(userQueries.selectForAppleSignIn, [identity.sub, identity.email]);
+    let user = matchProviderAccount(rows, identity, 'apple');
+    let accountCreated = false;
+
+    if (user) {
+      if (user.role === 'STUDENT' && !user.apple_sub) {
+        const verdict = await appleStudentVerdict(user);
+        if (verdict) throw verdict;
+      }
+      user = await linkProviderAccount(user, identity, 'apple');
+    } else if (intent === 'signup' && identity.email) {
+      user = await createProviderAccount({ identity, school, role, provider: 'apple' });
+      accountCreated = true;
+      await notifyAccountVerified(user);
+    } else {
+      recordLogin(req, { email, user: null, outcome: 'unknown_email' });
+      return {
+        status: 404,
+        code: 'APPLE_NO_ACCOUNT',
+        message: "There's no SchoolMule account for this Apple ID.",
+        data: { email: apple.email, privateEmail: apple.privateEmail },
+      };
     }
-    return { status, ...(error.code && { code: error.code }), message: error.message };
+
+    const session = await openSession(req, user, {
+      email: user.email,
+      message: accountCreated ? "Account created" : "User login successful",
+    });
+    session.data.accountCreated = accountCreated;
+    return session;
+  } catch (error) {
+    return providerSignInFailure(error, AppleSignInError, 'Sign in with Apple failed.');
+  }
+};
+
+// POST /api/auth/apple/connect { identityToken, nonce } (signed in)
+//
+// Connects the caller's Apple ID to their account, for the person whose
+// Apple sign-in couldn't be matched (Apple hid their email) and who then
+// signed in with their password. From then on Sign in with Apple opens it.
+const connectApple = async (req) => {
+  const { identityToken, nonce } = req.body ?? {};
+  try {
+    const apple = await appleSignInService.verifyIdentityToken(identityToken, nonce);
+    const { rows: [user] } = await db.query(userQueries.selectById, [req.user.userId]);
+    if (!user || user.is_archived) return { status: 404, message: "We couldn't find your account." };
+    if (user.role === 'STUDENT' && !user.apple_sub) {
+      const verdict = await appleStudentVerdict(user);
+      if (verdict) return verdict;
+    }
+    const { rows } = await db.query(userQueries.connectAppleId, [user.user_id, apple.sub]);
+    if (rows.length === 0) {
+      return user.apple_sub && user.apple_sub !== apple.sub
+        ? { status: 409, code: 'APPLE_OTHER_ID', message: "Your account is already connected to a different Apple ID." }
+        : { status: 409, code: 'APPLE_IN_USE', message: "This Apple ID is already connected to another SchoolMule account." };
+    }
+    return { status: 200, message: "Apple ID connected", data: { connected: true } };
+  } catch (error) {
+    if (error.code === '23505') {
+      return { status: 409, code: 'APPLE_IN_USE', message: "This Apple ID is already connected to another SchoolMule account." };
+    }
+    return providerSignInFailure(error, AppleSignInError, 'Sign in with Apple failed.');
   }
 };
 
@@ -1228,6 +1368,8 @@ module.exports = {
     registerUser,
     login,
     googleSignIn,
+    appleSignIn,
+    connectApple,
     emailLinkLogin,
     studentQrLogin,
     switchView,

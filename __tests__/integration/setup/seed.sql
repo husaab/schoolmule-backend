@@ -52,12 +52,14 @@ CREATE TABLE users (
   last_seen_at           TIMESTAMPTZ,
   last_login_at          TIMESTAMPTZ,
   google_sub             TEXT,
+  apple_sub              TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)
 );
 -- google_sign_in_migration.sql
 CREATE UNIQUE INDEX users_google_sub_key ON users (google_sub) WHERE google_sub IS NOT NULL;
+CREATE UNIQUE INDEX users_apple_sub_key ON users (apple_sub) WHERE apple_sub IS NOT NULL;
 
 -- staff_roles_migration.sql (RBAC)
 CREATE TABLE staff_roles (
