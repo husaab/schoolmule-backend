@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
+const pushEvents = require('../services/push/pushEvents');
 const { can, effectiveRole } = require('../services/access/access');
 
 // RBAC: posting to the whole school, a grade, any class or a custom audience,
@@ -466,12 +467,15 @@ const create = async (req, res) => {
     }
 
     // The post is committed; a queue hiccup must never fail the request.
+    // "Email families" is the author's say on telling people at all: the
+    // app's notifications follow it (they go out now; the emails in 2 minutes).
     if (sendEmail) {
       try {
         await db.query(q.enqueueAnnouncementJobs, [row.announcement_id, EMAIL_DELAY]);
       } catch (error) {
         logger.error('Failed to queue announcement emails:', error);
       }
+      await pushEvents.onAnnouncement(row.announcement_id);
     }
 
     // The new post shows its author (the caller) straight away, picture included.
@@ -611,6 +615,8 @@ const update = async (req, res) => {
         } catch (error) {
           logger.error('Failed to queue announcement emails after an audience change:', error);
         }
+        // Only the people new to the audience: the rest were told already.
+        await pushEvents.onAnnouncement(ann.announcementId);
       }
     }
     const row = fromAccess(ann);

@@ -37,6 +37,7 @@ const { avatarPngUrl } = require('../../utils/avatar');
 const { askFields } = require('../../utils/parentLinks');
 const digest = require('./classroomDigest');
 const templates = require('../../templates/classroomEmailTemplates');
+const pushEvents = require('../push/pushEvents');
 
 const MAX_ATTEMPTS = 3;
 const RATE_LIMIT_MS = 600;
@@ -96,6 +97,8 @@ async function enqueue(label, sql, params, context = {}) {
 async function enqueueNewWork(itemIds, { now = new Date() } = {}) {
   const ids = [...new Set((itemIds || []).filter(Boolean))];
   if (!ids.length) return 0;
+  // The app tells every student who can sign in, emailed or not.
+  await pushEvents.onNewWork(ids, { now });
   return enqueue('new work', q.enqueueNewWork, [ids, iso(now), iso(new Date(now).getTime() + NEW_WORK_DELAY_MS)], { itemIds: ids });
 }
 
@@ -111,6 +114,7 @@ async function enqueueGraded({ school, studentIds = [], assessmentIds = [], now 
   if (!school) return 0;
   const students = [...new Set((studentIds || []).filter(Boolean))];
   const columns = [...new Set((assessmentIds || []).filter(Boolean))];
+  await pushEvents.onGraded({ school, studentIds: students, assessmentIds: columns, now });
   const bucket = digest.gradedBucket(now);
   const tail = [school, bucket.key, iso(bucket.end), iso(bucket.start)];
   let queued = 0;
@@ -120,7 +124,9 @@ async function enqueueGraded({ school, studentIds = [], assessmentIds = [], now 
 }
 
 async function enqueueDueReminders(now, parts) {
-  const { rows } = await db.query(q.enqueueDueReminders, [iso(now), digest.addDays(parts.date, 1)]);
+  const dueDate = digest.addDays(parts.date, 1);
+  await pushEvents.onDueReminders(now, dueDate);
+  const { rows } = await db.query(q.enqueueDueReminders, [iso(now), dueDate]);
   return rows.length;
 }
 
@@ -259,6 +265,11 @@ async function loadPrefs(userId, school) {
 
 const groupBy = (rows, key) => rows.reduce((m, r) => m.set(r[key], [...(m.get(r[key]) || []), r]), new Map());
 
+// "Amina", "Amina and Bilal", "Amina, Bilal and Hana".
+const listNames = (names) => {
+  const n = names.filter(Boolean);
+  return n.length > 1 ? `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}` : n[0] || 'your child';
+};
 const childHeader = (c) => ({
   name: digest.firstName(c.name),
   gradeLabel: digest.gradeLabel(c.grade),
@@ -304,9 +315,6 @@ async function buildMissingAlert(job, recipient, now) {
   const { rows: siblings } = await db.query(q.claimSiblingAlerts, [job.recipient_email, job.job_id]);
   const group = siblings.map((r) => r.job_id);
   const prefs = await loadPrefs(recipient.user_id, job.school);
-  if (!prefs.missingAlerts) return { skip: 'prefs off', group };
-  // The daily summary lists the day's Missing work: no second email beside it.
-  if (prefs.weeklySummary && prefs.summaryFrequency === 'daily') return { skip: 'in daily summary', group };
 
   const pairs = [job, ...siblings].map((j) => j.payload || {}).filter((p) => p.studentId && p.itemId);
   const { rows: children } = await db.query(q.selectGuardianChildren, [recipient.user_id]);
@@ -321,8 +329,20 @@ async function buildMissingAlert(job, recipient, now) {
     .map((c) => ({ ...childHeader(c), items: digest.stillMissing(work.get(c.student_id) || []).map(missingAlertLine) }))
     .filter((c) => c.items.length);
   if (!blocks.length) return { skip: 'nothing new', group };
+  // The app's notification has its own switch, so it goes even when the email doesn't.
+  const count = blocks.reduce((n, c) => n + c.items.length, 0);
+  const push = {
+    category: 'reminders',
+    title: 'Missing work',
+    body: `${count === 1 ? '1 item is' : `${count} items are`} missing for ${listNames(blocks.map((c) => c.name))}.`,
+    path: '/parent/classes',
+  };
+  if (!prefs.missingAlerts) return { skip: 'prefs off', group, push };
+  // The daily summary lists the day's Missing work: no second email beside it.
+  if (prefs.weeklySummary && prefs.summaryFrequency === 'daily') return { skip: 'in daily summary', group, push };
   return {
     group,
+    push,
     render: (school) => templates.missingAlertEmail({
       recipientFirstName: recipient.first_name,
       children: blocks,
@@ -440,7 +460,11 @@ async function processClassroomJob(job, { now = new Date() } = {}) {
 
   const built = await build(job, recipient, now);
   const group = built.group || [];
-  if (built.skip) return skip(built.skip, group);
+  if (built.skip) {
+    // An email switched off can still leave the app's notification to send.
+    if (built.push) await pushEvents.fromEmail(job, built.push);
+    return skip(built.skip, group);
+  }
 
   const school = await schoolOf(job.school);
   const { subject, html } = built.render(school);
@@ -453,6 +477,7 @@ async function processClassroomJob(job, { now = new Date() } = {}) {
   // Resend accepted it: record that first so nothing can send it again.
   await db.query(q.finishJob, [job.job_id, 'sent', null, built.payloadPatch ? JSON.stringify(built.payloadPatch) : null]);
   if (group.length) await db.query(q.finishJobs, [group, 'sent', null]);
+  if (built.push) await pushEvents.fromEmail(job, built.push);
   return 'sent';
 }
 

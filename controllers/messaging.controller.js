@@ -14,6 +14,7 @@ const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
+const pushEvents = require('../services/push/pushEvents');
 const { can, effectiveRole } = require('../services/access/access');
 
 // RBAC: in messaging, "the office" (every thread, the admin inbox, cross-term
@@ -137,8 +138,9 @@ async function persistMessage({ conversationId, school, sender, kind = 'message'
 
 /**
  * Queue a digest email for everyone but the sender, cancel the sender's own
- * pending job (they obviously just read the thread) and mark them read.
- * Never throws: the message is already committed.
+ * pending job (they obviously just read the thread), mark them read, and
+ * push the message to the others' phones. Never throws: the message is
+ * already committed.
  */
 async function queueEmails(conv, senderId) {
   try {
@@ -151,6 +153,8 @@ async function queueEmails(conv, senderId) {
     }
     await db.query(q.cancelPendingJob, [conv.conversationId, senderId]);
     await db.query(q.upsertParticipantRead, [conv.conversationId, senderId]);
+    // The same people's phones hear about it now; the digest follows if it stays unread.
+    await pushEvents.onMessagePosted(conv, senderId, recipients);
   } catch (error) {
     logger.error('Failed to queue message emails:', error);
   }

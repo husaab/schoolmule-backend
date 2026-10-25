@@ -11,21 +11,18 @@ const scopeLabel = ({ scope, grade, class_subject: subject, class_grade: classGr
   return 'Whole school';
 };
 
-/** Where a guardian lands from an email: the Announcements tab with the post opened. */
-const parentLink = (announcementId) =>
-  `${process.env.FRONTEND_URL || ''}/parent/messages?tab=announcements&announcement=${announcementId}`;
+/** Where a guardian lands (email or push): the Announcements tab with the post opened. */
+const parentPath = (announcementId) => `/parent/messages?tab=announcements&announcement=${announcementId}`;
+const parentLink = (announcementId) => `${process.env.FRONTEND_URL || ''}${parentPath(announcementId)}`;
 
 /**
- * Where a student lands from an email: the class Stream with the post opened
- * for a post that belongs to a class (a class post, or chosen students picked
- * in a class Stream: a custom post with its class, M4), otherwise the student
- * home. `ctx` has announcement_id and class_id.
+ * Where a student lands (email or push): the class Stream with the post
+ * opened for a post that belongs to a class (a class post, or chosen students
+ * picked in a class Stream: a custom post with its class, M4), otherwise the
+ * student home. `ctx` has announcement_id and class_id.
  */
-const studentLink = ({ announcement_id: id, class_id: classId }) => {
-  const base = process.env.FRONTEND_URL || '';
-  return classId
-    ? `${base}/student/classes/${classId}?announcement=${id}`
-    : `${base}/student?announcement=${id}`;
-};
+const studentPath = ({ announcement_id: id, class_id: classId }) =>
+  (classId ? `/student/classes/${classId}?announcement=${id}` : `/student?announcement=${id}`);
+const studentLink = (ctx) => `${process.env.FRONTEND_URL || ''}${studentPath(ctx)}`;
 
-module.exports = { scopeLabel, parentLink, studentLink };
+module.exports = { scopeLabel, parentPath, parentLink, studentPath, studentLink };

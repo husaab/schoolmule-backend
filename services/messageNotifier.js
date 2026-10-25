@@ -27,6 +27,8 @@ const scheduler = require('./classroom/scheduler');
 const classroom = require('./classroom/classroomNotifier');
 const outbox = require('./email/outbox');
 const replyReminders = require('./replyReminders');
+const push = require('./push/pushQueue');
+const { threadPath } = require('../utils/appPaths');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -58,10 +60,7 @@ const timeLabel = (d) =>
   });
 
 function threadLink(role, conversationId) {
-  const base = process.env.FRONTEND_URL || '';
-  if (role === 'PARENT') return `${base}/parent/messages?thread=${conversationId}`;
-  if (role === 'STUDENT') return `${base}/student/messages?thread=${conversationId}`;
-  return `${base}/messages?thread=${conversationId}`;
+  return `${process.env.FRONTEND_URL || ''}${threadPath(role, conversationId)}`;
 }
 
 /** "14/20 (70%)" for the facts block, or null when the score must not be shown. */
@@ -537,6 +536,8 @@ async function runTick() {
   kickedWhileDraining = false;
   let more = false;
   try {
+    // Push first: a notification is a second's work and someone is waiting for it.
+    await push.drain();
     await replyReminderTick();
     more = (await drainEmailOutbox()) >= outbox.DRAIN_LIMIT;
     await classroomTick();
@@ -566,6 +567,8 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   timer = setInterval(runTick, intervalMs);
   // A send someone is watching (report cards) starts a tick now.
   outbox.setKick(() => { void runTick(); });
+  // A queued push is sent at once, without waiting for the tick.
+  push.start();
   // Don't hold the event loop open on shutdown.
   if (typeof timer.unref === 'function') timer.unref();
   logger.info({ intervalMs }, 'Message notifier started');
@@ -577,6 +580,7 @@ function stopWorker() {
     timer = null;
   }
   outbox.setKick(null);
+  push.stop();
 }
 
 module.exports = {

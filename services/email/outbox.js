@@ -13,8 +13,10 @@
 // sending it again; a retry that picked up another row is a new email.
 //
 // Handlers: { build(job, siblings, { now }) } → { skip } |
-//   { message, sentContent?, afterSend?() }. `siblings` are the address's
-// other due rows with the same coalesce key, sent in the same email.
+//   { message, sentContent?, afterSend?(), push? }. `siblings` are the
+// address's other due rows with the same coalesce key, sent in the same
+// email. `push` ({ category, title, body, path, userId? }) also tells the
+// recipient's phone once the email is sent (services/push/pushEvents).
 
 const crypto = require('crypto');
 const db = require('../../config/database');
@@ -150,6 +152,8 @@ async function processJob(job, { now = new Date() } = {}) {
         logger.error({ err: error, jobId: job.id, kind: job.kind }, 'Outbox email sent, but its follow-up write failed');
       }
     }
+    // The same news on the recipient's phone (never throws).
+    if (built.push) await require('../push/pushEvents').fromEmail(job, built.push);
     return 'sent';
   } catch (error) {
     error.outboxJobs = all;

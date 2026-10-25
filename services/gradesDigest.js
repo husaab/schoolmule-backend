@@ -430,6 +430,14 @@ const gradesDigestHandler = {
         runningGrade: task.runningGradeLabel,
         batchIds,
       },
+      // A linked parent account's phone, too: never the score, just that there are grades.
+      push: access.kind === 'signIn' ? {
+        userId: access.userId,
+        category: 'grades',
+        title: 'New grades posted',
+        body: `${task.studentName.split(/\s+/)[0]} has new grades in ${context.className}.`,
+        path: PORTAL_PATH,
+      } : null,
       // The per-send log the 4 pm missing alert reads (a family already told
       // about a column is not alerted about it), one row per publish covered.
       afterSend: async () => {

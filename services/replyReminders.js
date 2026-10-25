@@ -74,7 +74,8 @@ let lastRun = {};
 let disabled = null;
 
 const base = () => process.env.FRONTEND_URL || '';
-const staffLink = (id) => `${base()}/messages?thread=${id}`;
+const staffPath = (id) => `/messages?thread=${id}`;
+const staffLink = (id) => `${base()}${staffPath(id)}`;
 const unique = (values) => [...new Set(values)];
 
 /** School days after `from` up to and including `today` ('YYYY-MM-DD' strings). */
@@ -320,9 +321,16 @@ const replyReminderHandler = {
       schoolName,
       schoolInfo,
     });
+    const one = live.length === 1 ? threadView(threads.get(live[0].subject_id), 'family') : null;
     return {
       message: message(job, schoolInfo, email),
       sentContent: { subject: email.subject, conversations: live.map((j) => ({ id: j.subject_id, step: j.payload?.step ?? null })) },
+      push: {
+        category: 'reminders',
+        title: one ? `${one.fromLabel || 'A parent'} is waiting for your reply` : `${live.length} parents are waiting for your reply`,
+        body: one ? [one.studentName, one.title].filter(Boolean).join(' · ') : 'Tap to see the conversations that need a reply.',
+        path: one ? staffPath(live[0].subject_id) : '/messages?view=needsReply',
+      },
     };
   },
 };
@@ -367,6 +375,13 @@ const replyEscalationHandler = {
     return {
       message: message(job, schoolInfo, email),
       sentContent: { subject: email.subject, conversations: live.map((j) => j.subject_id) },
+      // An office address: pushEvents finds its account by address.
+      push: {
+        category: 'reminders',
+        title: live.length === 1 ? 'A parent message has no reply' : `${live.length} parent messages have no reply`,
+        body: 'Tap to see who is waiting in All Messages.',
+        path: '/admin-panel/messages?status=waiting',
+      },
     };
   },
 };
@@ -396,9 +411,17 @@ const replyNudgeHandler = {
       schoolName,
       schoolInfo,
     });
+    const teacher = threadView(threads.get(first.subject_id), 'staff');
     return {
       message: message(job, schoolInfo, email),
       sentContent: { subject: email.subject, conversations: live.map((j) => j.subject_id) },
+      // The app is signed in already: the screen itself, never the email's one-tap link.
+      push: {
+        category: 'reminders',
+        title: live.length === 1 ? `${teacher.fromLabel || 'A teacher'} is waiting to hear from you` : 'Your school is waiting to hear from you',
+        body: live.length === 1 ? [teacher.studentName, teacher.title].filter(Boolean).join(' · ') : `${live.length} messages are waiting for your reply.`,
+        path: next,
+      },
     };
   },
 };
