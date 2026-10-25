@@ -1,14 +1,16 @@
 /*
   controllers/pushDevices.controller.js
   The signed-in person's phones and notification switches for the mobile
-  app's push notifications (/api/profile/push-*). Open to every verified
-  role, like the rest of /api/profile; every query is keyed on the caller.
+  app's push notifications (/api/profile/push-*, and the release at sign-out
+  under /api/auth). Open to every verified role, like the rest of
+  /api/profile; every query is keyed on the caller.
 
   An admin "view as" preview never registers a phone: the preview token is
   read-only (verifyUser refuses its writes) and these refuse it again, so a
   preview can't route someone else's notifications to the admin's device.
 */
 
+const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/push.queries');
@@ -41,20 +43,34 @@ const registerDevice = async (req, res) => {
   }
 };
 
-// POST /api/profile/push-device/remove { token }
-// Signing out: this phone stops getting the caller's notifications. Only the
-// caller's own row goes, so a stale call after someone else signed in on the
-// same phone changes nothing.
-const removeDevice = async (req, res) => {
-  if (req.user.impersonator) return failed(res, 403, PREVIEW_MESSAGE);
+// POST /api/auth/push-device/release { token }, Authorization: the session that just ended
+// Signing out: this phone stops getting that person's notifications. Public
+// (mounted before verifyUser) because the app often calls it with a session
+// that has just expired; the token must still be one we signed, for a person,
+// at most RELEASE_GRACE past its expiry, and it only ever removes that
+// person's own row, so a stale call after someone else signed in on the same
+// phone changes nothing. A preview token never registered a phone.
+const RELEASE_GRACE_SECONDS = 90 * 24 * 60 * 60;
+const releaseDevice = async (req) => {
+  const auth = req.headers.authorization || '';
   const { token } = req.body ?? {};
-  if (typeof token !== 'string' || !token) return failed(res, 400, 'Not a push token');
+  if (typeof token !== 'string' || !token) return { status: 400, message: 'Not a push token' };
+  let session;
   try {
-    await db.query(q.deleteDevice, [req.user.userId, token]);
-    return ok(res, { removed: true });
+    session = jwt.verify(auth.replace(/^Bearer /, ''), process.env.JWT_SECRET, { ignoreExpiration: true });
+  } catch {
+    return { status: 401, message: 'Not signed in' };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (!session.userId || session.impersonator || (session.exp && now - session.exp > RELEASE_GRACE_SECONDS)) {
+    return { status: 401, message: 'Not signed in' };
+  }
+  try {
+    await db.query(q.deleteDevice, [session.userId, token]);
+    return { status: 200, message: 'Released', data: { released: true } };
   } catch (error) {
-    logger.error({ err: error, userId: req.user.userId }, 'Failed to remove a push device');
-    return failed(res, 500, 'Could not turn off notifications');
+    logger.error({ err: error, userId: session.userId }, 'Failed to release a push device');
+    return { status: 500, message: 'Could not turn off notifications' };
   }
 };
 
@@ -102,4 +118,4 @@ const setPreferences = async (req, res) => {
   }
 };
 
-module.exports = { registerDevice, removeDevice, getPreferences, setPreferences };
+module.exports = { registerDevice, releaseDevice, getPreferences, setPreferences };

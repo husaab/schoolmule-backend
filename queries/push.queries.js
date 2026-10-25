@@ -39,6 +39,9 @@ const STUDENT_CAN_SIGN_IN = (userId) => `EXISTS (
     AND ${GRADE_RANK('st.grade::text')} >= ${GRADE_RANK('scs.login_from_grade')})`;
 
 const JOB_COLUMNS = '(kind, category, recipient_id, dedupe_key, title, subtitle, body, path, thread_key, payload, send_after)';
+// A student's published grades (enqueueGraded, enqueueGradedColumns): never the score.
+const GRADED_ROW = `'graded', 'grades', su.user_id, $3::text, 'New grades', NULL,
+           'Your teacher posted new grades. Tap to see them.', '/student/grades', NULL, '{}'::jsonb, $4::timestamptz`;
 
 module.exports = {
   STUDENT_LOGIN_FROM,
@@ -183,8 +186,7 @@ module.exports = {
   enqueueGraded: `
     INSERT INTO push_jobs ${JOB_COLUMNS}
     SELECT DISTINCT ON (su.user_id)
-           'graded', 'grades', su.user_id, $3::text, 'New grades', NULL,
-           'Your teacher posted new grades. Tap to see them.', '/student/grades', NULL, '{}'::jsonb, $4::timestamptz
+           ${GRADED_ROW}
     FROM students s
     ${STUDENT_LOGIN_FROM('s')}
     WHERE s.student_id = ANY($1::uuid[]) AND s.school = $2 AND ${STUDENT_LOGIN_OK('s')}
@@ -197,8 +199,7 @@ module.exports = {
   enqueueGradedColumns: `
     INSERT INTO push_jobs ${JOB_COLUMNS}
     SELECT DISTINCT ON (su.user_id)
-           'graded', 'grades', su.user_id, $3::text, 'New grades', NULL,
-           'Your teacher posted new grades. Tap to see them.', '/student/grades', NULL, '{}'::jsonb, $4::timestamptz
+           ${GRADED_ROW}
     FROM assessments a
     JOIN student_assessments sa ON sa.assessment_id = a.assessment_id
     JOIN students s ON s.student_id = sa.student_id AND s.school = $2

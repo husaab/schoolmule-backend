@@ -104,15 +104,12 @@ async function run(label, sql, params) {
   }
 }
 
-// What a row must still be true of when it is sent, by kind.
-const RECHECKS = {
-  // New work waits 2 minutes; it may have been taken down or rescheduled since.
-  new_work: async (job, now) => {
-    const { itemId, studentId } = job.payload || {};
-    const { rows } = await db.query(q.selectItemVisible, [itemId, studentId, now.toISOString()]);
-    return rows.length ? null : 'not visible';
-  },
-};
+// New work waits 2 minutes; it may have been taken down or rescheduled since.
+async function stillVisible(job, now) {
+  const { itemId, studentId } = job.payload || {};
+  const { rows } = await db.query(q.selectItemVisible, [itemId, studentId, now.toISOString()]);
+  return rows.length > 0;
+}
 
 const messageFor = (job, token) => ({
   to: token,
@@ -180,7 +177,7 @@ async function drainOnce({ limit = DRAIN_LIMIT, now = new Date() } = {}) {
     const reason = !devices.length ? 'no device'
       : devices[0].is_archived ? 'recipient archived'
         : !devices[0][job.category] ? 'switched off'
-          : RECHECKS[job.kind] ? await RECHECKS[job.kind](job, now) : null;
+          : job.kind === 'new_work' && !(await stillVisible(job, now)) ? 'not visible' : null;
     if (reason) skipped.set(reason, [...(skipped.get(reason) || []), job.job_id]);
     else devices.forEach((d) => outgoing.push({ job, token: d.token, message: messageFor(job, d.token) }));
   }

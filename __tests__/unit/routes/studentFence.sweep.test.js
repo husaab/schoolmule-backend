@@ -31,6 +31,7 @@ const UNFENCED_ROUTES = [
   'POST /api/auth/email-link',
   'POST /api/auth/google',                                        // public Google sign-in/up
   'POST /api/auth/apple',                                         // public Sign in with Apple (iOS app)
+  'POST /api/auth/push-device/release',                           // the app's sign-out (session may have just expired)
   'POST /api/auth/student-qr',                                    // public QR-card sign-in, rate limited
   'POST /api/auth/student-invite',                                // public invite check, rate limited
   'POST /api/auth/student-invite/accept',                         // public invite acceptance, rate limited

@@ -33,6 +33,7 @@
 
 const db = require('../config/database');
 const logger = require('../logger');
+const { threadPath } = require('../utils/appPaths');
 const q = require('../queries/replyReminder.queries');
 const schoolQueries = require('../queries/school.queries');
 const outbox = require('./email/outbox');
@@ -74,7 +75,7 @@ let lastRun = {};
 let disabled = null;
 
 const base = () => process.env.FRONTEND_URL || '';
-const staffPath = (id) => `/messages?thread=${id}`;
+const staffPath = (id) => threadPath('TEACHER', id);
 const staffLink = (id) => `${base()}${staffPath(id)}`;
 const unique = (values) => [...new Set(values)];
 
@@ -402,7 +403,7 @@ const replyNudgeHandler = {
     const token = signEmailLoginToken({
       userId: job.recipient_user_id, studentId: threads.get(first.subject_id).student_id, email: job.recipient_email,
     });
-    const next = live.length === 1 ? `/parent/messages?thread=${first.subject_id}` : '/parent/messages';
+    const next = live.length === 1 ? threadPath('PARENT', first.subject_id) : '/parent/messages';
     const { schoolInfo, schoolName } = await schoolContext(job.school);
     const email = parentNudgeEmail({
       firstName: guardians.find((g) => g.user_id === job.recipient_user_id)?.first_name,

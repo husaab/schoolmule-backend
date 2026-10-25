@@ -13,6 +13,8 @@ const { getTestPool } = require('../setup/setupTestDB');
 const q = require('../../../queries/push.queries');
 const pushQueue = require('../../../services/push/pushQueue');
 const pushEvents = require('../../../services/push/pushEvents');
+const jwt = require('jsonwebtoken');
+const request = require('supertest');
 
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
 const MOM_ID = '550e8400-e29b-41d4-a716-446655440002';
@@ -71,6 +73,12 @@ describe('Integration: push notifications', () => {
      VALUES ($1, $2, $3, 'hashed', $4, $5, 'ALHAADIACADEMY', $6, true, true)`,
     [id, email, username, username.split(' ')[0], username.split(' ')[1], role],
   );
+  // A session token as the app holds it; `over` sets exp or impersonator.
+  const sessionFor = (userId, over = {}) => jwt.sign(
+    { userId, role: 'PARENT', isVerified: true, isVerifiedSchool: true, exp: Math.floor(Date.now() / 1000) + 3600, ...over },
+    process.env.JWT_SECRET,
+  );
+  const release = (token) => request(getApp()).post('/api/auth/push-device/release').set('Authorization', `Bearer ${token}`);
   const device = (userId, token) => pool.query(
     "INSERT INTO push_devices (token, user_id, platform) VALUES ($1, $2, 'ios')", [token, userId]);
 
@@ -119,13 +127,35 @@ describe('Integration: push notifications', () => {
       expect(rows[0].user_id).toBe(DAD_ID);
 
       // Mom's stale sign-out call from before changes nothing now.
-      await authenticatedRequest('post', '/api/profile/push-device/remove', asMom).send({ token: MOM_TOKEN });
+      await release(sessionFor(MOM_ID)).send({ token: MOM_TOKEN });
       ({ rows } = await pool.query('SELECT 1 FROM push_devices WHERE token = $1', [MOM_TOKEN]));
       expect(rows).toHaveLength(1);
 
-      await authenticatedRequest('post', '/api/profile/push-device/remove', asDad).send({ token: MOM_TOKEN });
+      await release(sessionFor(DAD_ID)).send({ token: MOM_TOKEN });
       ({ rows } = await pool.query('SELECT 1 FROM push_devices WHERE token = $1', [MOM_TOKEN]));
       expect(rows).toHaveLength(0);
+    });
+
+    it('lets the phone go with a session that has just expired, not one long dead', async () => {
+      await device(MOM_ID, MOM_TOKEN);
+      const expired = sessionFor(MOM_ID, { exp: Math.floor(Date.now() / 1000) - 60 });
+      const res = await release(expired).send({ token: MOM_TOKEN });
+      expect(res.status).toBe(200);
+      const { rows } = await pool.query('SELECT 1 FROM push_devices WHERE token = $1', [MOM_TOKEN]);
+      expect(rows).toHaveLength(0);
+
+      await device(MOM_ID, MOM_TOKEN);
+      const ancient = sessionFor(MOM_ID, { exp: Math.floor(Date.now() / 1000) - 200 * 24 * 60 * 60 });
+      expect((await release(ancient).send({ token: MOM_TOKEN })).status).toBe(401);
+    });
+
+    it('refuses a forged session and an admin preview', async () => {
+      await device(MOM_ID, MOM_TOKEN);
+      const forged = jwt.sign({ userId: MOM_ID, role: 'PARENT' }, 'not-our-secret');
+      expect((await release(forged).send({ token: MOM_TOKEN })).status).toBe(401);
+      expect((await release(sessionFor(MOM_ID, { impersonator: { userId: TEACHER_ID } })).send({ token: MOM_TOKEN })).status).toBe(401);
+      const { rows } = await pool.query('SELECT 1 FROM push_devices WHERE token = $1', [MOM_TOKEN]);
+      expect(rows).toHaveLength(1);
     });
 
     it('refuses something that is not an Expo push token', async () => {

@@ -10,6 +10,7 @@ const { requirePermission } = require('../middleware/access');
 const requireUsers = requirePermission('users');
 const { signupLimiter, loginLimiter, loginAccountLimiter, qrCardLimiter, inviteTokenLimiter, inviteNetworkLimiter, resetTokenLimiter, verificationEmailLimiter, passwordResetLimiter, studentRequestNetworkLimiter, studentRequestAddressLimiter } = require('../middleware/spamProtection');
 const { inspectInvite, acceptInvite } = require('../controllers/studentInvite.controller');
+const { releaseDevice } = require('../controllers/pushDevices.controller');
 const { submit: submitStudentRequest } = require('../controllers/studentRequest.controller');
 
 const router = express.Router();
@@ -27,6 +28,8 @@ router.post( "/google", loginLimiter, responseParser(googleSignIn));
 // an Apple ID to the signed-in account when Apple hid the email.
 router.post('/apple', loginLimiter, responseParser(appleSignIn));
 router.post('/apple/connect', verifyUser, loginLimiter, responseParser(connectApple));
+// The app's sign-out: stop notifying this phone, even with a just-expired session.
+router.post('/push-device/release', loginLimiter, responseParser(releaseDevice));
 
 // One-tap sign-in from a parent email's button (utils/emailLoginLink).
 router.post('/email-link', loginLimiter, responseParser(emailLinkLogin));

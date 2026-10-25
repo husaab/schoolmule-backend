@@ -23,6 +23,7 @@ const db = require('../../config/database');
 const logger = require('../../logger');
 const q = require('../../queries/emailOutbox.queries');
 const { getResend, sendOrThrow } = require('../../utils/emailUtils');
+const pushEvents = require('../push/pushEvents');
 
 const MAX_ATTEMPTS = 3;
 const DRAIN_LIMIT = 40;
@@ -153,7 +154,7 @@ async function processJob(job, { now = new Date() } = {}) {
       }
     }
     // The same news on the recipient's phone (never throws).
-    if (built.push) await require('../push/pushEvents').fromEmail(job, built.push);
+    if (built.push) await pushEvents.fromEmail(job, built.push);
     return 'sent';
   } catch (error) {
     error.outboxJobs = all;

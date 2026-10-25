@@ -24,6 +24,13 @@ jest.mock('../../../services/apple/appleSignIn', () => {
   return { ...actual, verifyIdentityToken: jest.fn() };
 });
 
+// Apple's token endpoints are out of scope too (services/apple/appleTokens.test.js).
+jest.mock('../../../services/apple/appleTokens', () => ({
+  exchangeCode: jest.fn().mockResolvedValue(null),
+  revoke: jest.fn().mockResolvedValue(true),
+  configured: jest.fn(() => true),
+}));
+
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { generateTestToken, TEST_PARENT_USER_ID } = require('../../helpers/mockAuth');
@@ -32,6 +39,7 @@ const db = require('../../__mocks__/config/database');
 const userQueries = require('../../../queries/user.queries');
 const classroomSettingsQueries = require('../../../queries/classroomSettings.queries');
 const { verifyIdentityToken, AppleSignInError } = require('../../../services/apple/appleSignIn');
+const appleTokens = require('../../../services/apple/appleTokens');
 
 const url = '/api/auth/apple';
 const BODY = { identityToken: 'apple-token', nonce: 'raw-nonce-0123456789abcdef' };
@@ -214,7 +222,7 @@ describe('POST /api/auth/apple/connect', () => {
 
   it("stamps the caller's account with the Apple ID", async () => {
     routeQueries(new Map([
-      [userQueries.selectById, [parent]],
+      [userQueries.selectForAppleConnect, [parent]],
       [userQueries.connectAppleId, [{ user_id: parent.user_id }]],
     ]));
     const res = await request(app).post('/api/auth/apple/connect').set('Authorization', auth()).send(BODY);
@@ -223,16 +231,39 @@ describe('POST /api/auth/apple/connect', () => {
   });
 
   it('refuses an Apple ID another account already uses', async () => {
-    routeQueries(new Map([[userQueries.selectById, [parent]], [userQueries.connectAppleId, []]]));
+    routeQueries(new Map([[userQueries.selectForAppleConnect, [parent]], [userQueries.connectAppleId, []]]));
     const res = await request(app).post('/api/auth/apple/connect').set('Authorization', auth()).send(BODY);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('APPLE_IN_USE');
   });
 
   it('refuses when the account already has a different Apple ID', async () => {
-    routeQueries(new Map([[userQueries.selectById, [{ ...parent, apple_sub: 'other' }]], [userQueries.connectAppleId, []]]));
+    routeQueries(new Map([[userQueries.selectForAppleConnect, [{ ...parent, apple_sub: 'other' }]], [userQueries.connectAppleId, []]]));
     const res = await request(app).post('/api/auth/apple/connect').set('Authorization', auth()).send(BODY);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('APPLE_OTHER_ID');
+  });
+});
+
+describe('Sign in with Apple tokens (Apple 5.1.1(v))', () => {
+  it("keeps Apple's refresh token when the app sends the one-time code", async () => {
+    const user = buildUserRow({ role: 'PARENT', email: APPLE.email, apple_sub: APPLE.sub });
+    appleTokens.exchangeCode.mockResolvedValueOnce('encrypted-refresh');
+    routeQueries(new Map([[userQueries.selectForAppleSignIn, [user]]]));
+    const res = await request(app).post(url).send({ ...BODY, authorizationCode: 'one-time-code' });
+    expect(res.status).toBe(200);
+    expect(appleTokens.exchangeCode).toHaveBeenCalledWith('one-time-code');
+    expect(callsTo(userQueries.setAppleRefreshToken)[0][1]).toEqual([user.user_id, 'encrypted-refresh']);
+  });
+
+  it('revokes it when the account is deleted', async () => {
+    routeQueries(new Map([
+      [userQueries.selectAppleRefreshToken, [{ apple_refresh_token: 'encrypted-refresh' }]],
+      [userQueries.deleteUser, [{}]],
+    ]));
+    const token = generateTestToken({ userId: TEST_PARENT_USER_ID, role: 'PARENT' });
+    const res = await request(app).delete('/api/auth/delete-user').set('Authorization', `Bearer ${token}`).send({});
+    expect(res.status).toBe(200);
+    expect(appleTokens.revoke).toHaveBeenCalledWith('encrypted-refresh');
   });
 });

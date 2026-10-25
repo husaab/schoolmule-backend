@@ -53,6 +53,7 @@ CREATE TABLE users (
   last_login_at          TIMESTAMPTZ,
   google_sub             TEXT,
   apple_sub              TEXT,
+  apple_refresh_token    TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT users_duplicate_email_key UNIQUE(email)

@@ -58,6 +58,8 @@ const secretMatches = (secret, hash) => {
 };
 
 // $1 user_id, $2 school. The link is to the ACTIVE year's student row.
+// queries/push.queries.js (STUDENT_LOGIN_FROM / STUDENT_LOGIN_OK) states the
+// same rule in SQL to pick students for push notifications: change both.
 const SIGN_IN_CONTEXT = `
   SELECT scs.enabled, scs.login_from_grade, scs.qr_until_grade,
          sa.consent_at, sa.qr_secret_hash, sa.qr_voided_at, sa.sessions_revoked_at, st.student_id, st.grade

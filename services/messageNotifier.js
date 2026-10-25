@@ -205,7 +205,7 @@ async function processJob(job) {
 /** Build the invite landing link: set a password, then land in the thread. */
 function inviteLink(token, conversationId) {
   const base = process.env.FRONTEND_URL || '';
-  const next = encodeURIComponent(`/parent/messages?thread=${conversationId}`);
+  const next = encodeURIComponent(threadPath('PARENT', conversationId));
   return `${base}/reset-password?token=${token}&invite=1&next=${next}`;
 }
 

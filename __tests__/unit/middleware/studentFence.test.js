@@ -39,7 +39,7 @@ describe('studentFence', () => {
 
     it('is a frozen allowlist of exactly the three student-safe prefixes', () => {
       expect(Object.isFrozen(STUDENT_ALLOWED)).toBe(true);
-      expect([...STUDENT_ALLOWED]).toEqual(['/api/student', '/api/profile', '/api/observe/client-events']);
+      expect([...STUDENT_ALLOWED]).toEqual(['/api/student', '/api/profile', '/api/observe/client-events', '/api/auth/apple/connect']);
     });
   });
 

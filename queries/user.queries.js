@@ -105,6 +105,21 @@ const userQueries = {
       RETURNING *
     `,
 
+    // The caller's account for /auth/apple/connect.
+    selectForAppleConnect: `
+      SELECT user_id, email, password, school, role, is_archived, apple_sub
+      FROM users WHERE user_id = $1
+    `,
+
+    // Apple's refresh token for this account (encrypted), kept so deleting
+    // the account can revoke it (services/apple/appleTokens.js).
+    setAppleRefreshToken: `
+      UPDATE users SET apple_refresh_token = $2 WHERE user_id = $1
+    `,
+    selectAppleRefreshToken: `
+      SELECT apple_refresh_token FROM users WHERE user_id = $1
+    `,
+
     // A signed-in account connects its Apple ID (Apple hid the email, so
     // sign-in couldn't match it). Never moves an Apple ID off another account.
     connectAppleId: `

@@ -19,6 +19,7 @@
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const logger = require('../../logger');
 
 const APPLE_ISSUER = 'https://appleid.apple.com';
 const APPLE_KEYS_URL = 'https://appleid.apple.com/auth/keys';
@@ -45,13 +46,30 @@ async function loadKeys() {
   const res = await fetch(APPLE_KEYS_URL, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`Apple's signing keys answered ${res.status}`);
   const { keys: jwks = [] } = await res.json();
-  keys = new Map(jwks.map((jwk) => [jwk.kid, crypto.createPublicKey({ key: jwk, format: 'jwk' })]));
-  fetchedAt = Date.now();
+  const next = new Map();
+  for (const jwk of jwks) {
+    try {
+      next.set(jwk.kid, crypto.createPublicKey({ key: jwk, format: 'jwk' }));
+    } catch {
+      // One key we can't read doesn't cost us the others.
+    }
+  }
+  keys = next;
 }
 
 async function keyFor(kid) {
   const age = Date.now() - fetchedAt;
-  if (age > KEYS_TTL_MS || (!keys.has(kid) && age > REFETCH_GAP_MS)) await loadKeys();
+  if (age > KEYS_TTL_MS || (!keys.has(kid) && age > REFETCH_GAP_MS)) {
+    try {
+      await loadKeys();
+      fetchedAt = Date.now();
+    } catch (error) {
+      // Apple unreachable: keys we already have still verify; try again in a minute.
+      if (!keys.size) throw error;
+      logger.warn({ err: error.message }, "Couldn't refresh Apple's signing keys; using the cached ones");
+      fetchedAt = Date.now() - KEYS_TTL_MS + REFETCH_GAP_MS;
+    }
+  }
   return keys.get(kid) || null;
 }
 

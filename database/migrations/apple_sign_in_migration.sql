@@ -16,6 +16,11 @@ BEGIN;
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS apple_sub TEXT;
 
+-- Apple's refresh token for the account, encrypted (APPLE_TOKEN_ENC_KEY).
+-- Deleting the account revokes it at Apple, as App Review requires.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS apple_refresh_token TEXT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS users_apple_sub_key
   ON users (apple_sub)
   WHERE apple_sub IS NOT NULL;

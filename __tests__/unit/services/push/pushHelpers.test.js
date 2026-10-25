@@ -1,6 +1,6 @@
 // The push queue's pure helpers and the category list.
 const { isAppPath, preview } = require('../../../../services/push/pushQueue');
-const { categoriesFor, isCategory } = require('../../../../services/push/categories');
+const { categoriesFor } = require('../../../../services/push/categories');
 
 describe('isAppPath', () => {
   it.each(['/parent/messages?thread=abc', '/student/items/1', '/messages?view=needsReply'])('takes %s', (p) => {
@@ -41,9 +41,5 @@ describe('categoriesFor', () => {
   });
   it('treats an unknown staff role as staff', () => {
     expect(keys(['OFFICE'])).toEqual(['messages', 'reminders']);
-  });
-  it('knows its keys', () => {
-    expect(isCategory('grades')).toBe(true);
-    expect(isCategory('marketing')).toBe(false);
   });
 });

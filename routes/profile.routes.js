@@ -20,7 +20,6 @@ router.delete("/photo", controller.deletePhoto);
 
 // The mobile app's push notifications: this phone, and the switches.
 router.put("/push-device", push.registerDevice);
-router.post("/push-device/remove", push.removeDevice);
 router.get("/push-preferences", push.getPreferences);
 router.put("/push-preferences", push.setPreferences);
 

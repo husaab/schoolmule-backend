@@ -492,6 +492,7 @@ describe('DELETE /api/auth/delete-user', () => {
 
   it('deletes the authenticated user\'s own account', async () => {
     const token = mockAdminUser();
+    mockQueryResponse([{ apple_refresh_token: null }]); // no Sign in with Apple token to revoke
     mockQueryResponse([], 1); // rowCount = 1
 
     const res = await request(app)
@@ -514,6 +515,7 @@ describe('DELETE /api/auth/delete-user', () => {
 
   it('lets a pending (school-unverified) signup delete itself from the waiting page', async () => {
     const token = mockUnverifiedSchoolUser();
+    mockQueryResponse([{ apple_refresh_token: null }]);
     mockQueryResponse([], 1);
 
     const res = await request(app)
@@ -528,6 +530,7 @@ describe('DELETE /api/auth/delete-user', () => {
   it('ignores a userId in the body and deletes only the caller', async () => {
     const token = mockAdminUser();
     const db = require('../../__mocks__/config/database');
+    mockQueryResponse([{ apple_refresh_token: null }]);
     mockQueryResponse([], 1);
 
     const res = await request(app)

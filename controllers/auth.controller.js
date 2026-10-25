@@ -22,6 +22,7 @@ const googleSignInService = require('../services/google/googleSignIn');
 const { verifyEmailLoginToken } = require('../utils/emailLoginLink');
 const { GoogleSignInError } = googleSignInService;
 const appleSignInService = require('../services/apple/appleSignIn');
+const appleTokens = require('../services/apple/appleTokens');
 const { AppleSignInError } = appleSignInService;
 const {
   assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, sessionRevoked, MESSAGES: STUDENT_MESSAGES,
@@ -675,7 +676,7 @@ const googleSignIn = async (req) => {
   }
 };
 
-// A student's first Apple link, as a verdict or null: only a login that is
+// Whether a student may use Apple, as a verdict or null: only a login that is
 // already set up (the invite is how a student starts), at a school that lets
 // students use more than Google, with an address outside the school's Google
 // Workspace student domains (those must come from Google itself).
@@ -696,6 +697,17 @@ const appleStudentVerdict = async (user) => {
 
 const cleanName = (value) => (typeof value === 'string' ? value.trim().slice(0, 100) : '');
 
+// Trades the app's one-time authorization code for Apple's refresh token and
+// keeps it, so deleting the account can revoke it. Best effort: a failure is
+// logged and sign-in goes on.
+const keepAppleToken = async (userId, authorizationCode) => {
+  const stored = await appleTokens.exchangeCode(authorizationCode);
+  if (!stored) return;
+  await db.query(userQueries.setAppleRefreshToken, [userId, stored]).catch((error) => {
+    logger.warn({ err: error, userId }, 'Could not save the Sign in with Apple token');
+  });
+};
+
 // POST /api/auth/apple { identityToken, nonce, intent: 'login'|'signup', school?, role?, givenName?, familyName? }
 //
 // Sign in with Apple from the iOS app; the same rules as /google. The token
@@ -705,7 +717,7 @@ const cleanName = (value) => (typeof value === 'string' ? value.trim().slice(0, 
 // Apple hid the address: the person signs in with their password once and the
 // app connects the Apple ID (/apple/connect).
 const appleSignIn = async (req) => {
-  const { identityToken, nonce, intent = 'login', school, role, givenName, familyName } = req.body ?? {};
+  const { identityToken, nonce, authorizationCode, intent = 'login', school, role, givenName, familyName } = req.body ?? {};
   let email = null;
 
   try {
@@ -727,7 +739,9 @@ const appleSignIn = async (req) => {
     let accountCreated = false;
 
     if (user) {
-      if (user.role === 'STUDENT' && !user.apple_sub) {
+      // Every time, not just the first link: a school that has since gone
+      // Google-only, or declared the student's domain, is obeyed.
+      if (user.role === 'STUDENT') {
         const verdict = await appleStudentVerdict(user);
         if (verdict) throw verdict;
       }
@@ -751,24 +765,25 @@ const appleSignIn = async (req) => {
       message: accountCreated ? "Account created" : "User login successful",
     });
     session.data.accountCreated = accountCreated;
+    await keepAppleToken(user.user_id, authorizationCode);
     return session;
   } catch (error) {
     return providerSignInFailure(error, AppleSignInError, 'Sign in with Apple failed.');
   }
 };
 
-// POST /api/auth/apple/connect { identityToken, nonce } (signed in)
+// POST /api/auth/apple/connect { identityToken, nonce, authorizationCode? } (signed in)
 //
 // Connects the caller's Apple ID to their account, for the person whose
 // Apple sign-in couldn't be matched (Apple hid their email) and who then
 // signed in with their password. From then on Sign in with Apple opens it.
 const connectApple = async (req) => {
-  const { identityToken, nonce } = req.body ?? {};
+  const { identityToken, nonce, authorizationCode } = req.body ?? {};
   try {
     const apple = await appleSignInService.verifyIdentityToken(identityToken, nonce);
-    const { rows: [user] } = await db.query(userQueries.selectById, [req.user.userId]);
+    const { rows: [user] } = await db.query(userQueries.selectForAppleConnect, [req.user.userId]);
     if (!user || user.is_archived) return { status: 404, message: "We couldn't find your account." };
-    if (user.role === 'STUDENT' && !user.apple_sub) {
+    if (user.role === 'STUDENT') {
       const verdict = await appleStudentVerdict(user);
       if (verdict) return verdict;
     }
@@ -778,6 +793,7 @@ const connectApple = async (req) => {
         ? { status: 409, code: 'APPLE_OTHER_ID', message: "Your account is already connected to a different Apple ID." }
         : { status: 409, code: 'APPLE_IN_USE', message: "This Apple ID is already connected to another SchoolMule account." };
     }
+    await keepAppleToken(user.user_id, authorizationCode);
     return { status: 200, message: "Apple ID connected", data: { connected: true } };
   } catch (error) {
     if (error.code === '23505') {
@@ -1020,11 +1036,14 @@ const deleteUserAccount = async (req, res) => {
   }
 
   try {
+    const { rows: [apple] } = await db.query(userQueries.selectAppleRefreshToken, [userId]);
     const result = await db.query(userQueries.deleteUser, [userId]);
 
     if (result.rowCount === 0) {
       throw { status: 404, message: "User not found" };
     }
+    // Sign in with Apple: Apple's tokens go with the account (best effort).
+    if (apple?.apple_refresh_token) await appleTokens.revoke(apple.apple_refresh_token);
 
     return res.status(200).json({
       success: true,

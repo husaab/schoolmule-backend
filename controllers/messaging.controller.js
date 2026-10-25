@@ -15,6 +15,7 @@ const supabase = require('../config/supabaseClient');
 const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
 const logger = require('../logger');
 const pushEvents = require('../services/push/pushEvents');
+const { threadPath } = require('../utils/appPaths');
 const { can, effectiveRole } = require('../services/access/access');
 
 // RBAC: in messaging, "the office" (every thread, the admin inbox, cross-term
@@ -180,7 +181,7 @@ const maskEmail = (email) => {
   return `${local.slice(0, 1)}${local.length > 1 ? '…' : ''}@${domain}`;
 };
 const inviteLink = (token, conversationId) =>
-  `${process.env.FRONTEND_URL || ''}/reset-password?token=${token}&invite=1&next=${encodeURIComponent(`/parent/messages?thread=${conversationId}`)}`;
+  `${process.env.FRONTEND_URL || ''}/reset-password?token=${token}&invite=1&next=${encodeURIComponent(threadPath('PARENT', conversationId))}`;
 
 async function sendGuardianInvite({ school, to, recipientFirstName, teacherName, studentName, title, preview, token, conversationId }) {
   let schoolInfo = null;

@@ -96,6 +96,20 @@ describe('Integration: POST /api/auth/apple', () => {
     expect(again.body.data.userId).toBe(userId);
   });
 
+  it('says when the signed-in account already has a different Apple ID', async () => {
+    const userId = await insertUser(pool, { email: 'taken.parent@example.test' });
+    await pool.query("UPDATE users SET apple_sub = 'apple-sub-original' WHERE user_id = $1", [userId]);
+    verifyIdentityToken.mockResolvedValue(identity({ sub: 'apple-sub-other', email: null, emailVerified: false }));
+    const token = jwt.sign(
+      { userId, email: 'taken.parent@example.test', school: 'ALHAADIACADEMY', role: 'PARENT', isVerified: true, isVerifiedSchool: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' },
+    );
+    const res = await request(app).post('/api/auth/apple/connect').set('Authorization', `Bearer ${token}`).send(BODY);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('APPLE_OTHER_ID');
+  });
+
   it('enforces one SchoolMule account per Apple ID', async () => {
     await insertUser(pool, { email: 'apple.first@example.test' });
     await pool.query("UPDATE users SET apple_sub = 'apple-sub-dupe' WHERE email = 'apple.first@example.test'");
