@@ -1,0 +1,3422 @@
+{
+ "_note": "Anonymised from a real two-bell school timetable (2026-27). Teacher names/ids, course ids and group ids are synthetic; slot times, breaks and availability windows are real.",
+ "classGroups": [
+  {
+   "classGroupId": "g-jk",
+   "name": "JK",
+   "sortOrder": -2
+  },
+  {
+   "classGroupId": "g-sk",
+   "name": "SK",
+   "sortOrder": -1
+  },
+  {
+   "classGroupId": "g-grade1",
+   "name": "Grade 1",
+   "sortOrder": 0
+  },
+  {
+   "classGroupId": "g-grade2",
+   "name": "Grade 2",
+   "sortOrder": 1
+  },
+  {
+   "classGroupId": "g-grade3",
+   "name": "Grade 3",
+   "sortOrder": 2
+  },
+  {
+   "classGroupId": "g-grade4",
+   "name": "Grade 4",
+   "sortOrder": 3
+  },
+  {
+   "classGroupId": "g-grade5",
+   "name": "Grade 5",
+   "sortOrder": 4
+  },
+  {
+   "classGroupId": "g-grade6",
+   "name": "Grade 6",
+   "sortOrder": 5
+  },
+  {
+   "classGroupId": "g-grade7",
+   "name": "Grade 7",
+   "sortOrder": 6
+  },
+  {
+   "classGroupId": "g-grade8",
+   "name": "Grade 8",
+   "sortOrder": 7
+  }
+ ],
+ "teachers": [
+  {
+   "teacherId": "t01",
+   "name": "Teacher 1",
+   "allowedDays": [
+    3,
+    5
+   ],
+   "excludedWindows": [
+    {
+     "day": 3,
+     "endMin": 580,
+     "startMin": 535
+    },
+    {
+     "day": 5,
+     "endMin": 580,
+     "startMin": 535
+    }
+   ]
+  },
+  {
+   "teacherId": "t02",
+   "name": "Teacher 2",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t03",
+   "name": "Teacher 3",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t04",
+   "name": "Teacher 4",
+   "allowedDays": [
+    1,
+    3,
+    4
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t05",
+   "name": "Teacher 5",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t06",
+   "name": "Teacher 6",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t07",
+   "name": "Teacher 7",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t08",
+   "name": "Teacher 8",
+   "allowedDays": [
+    1,
+    3
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t09",
+   "name": "Teacher 9",
+   "allowedDays": [
+    2,
+    5
+   ],
+   "excludedWindows": [
+    {
+     "day": 2,
+     "endMin": 535,
+     "startMin": 0
+    },
+    {
+     "day": 2,
+     "endMin": 1440,
+     "startMin": 850
+    },
+    {
+     "day": 5,
+     "endMin": 535,
+     "startMin": 0
+    },
+    {
+     "day": 5,
+     "endMin": 1440,
+     "startMin": 850
+    }
+   ]
+  },
+  {
+   "teacherId": "t10",
+   "name": "Teacher 10",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t11",
+   "name": "Teacher 11",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t12",
+   "name": "Teacher 12",
+   "allowedDays": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "excludedWindows": []
+  },
+  {
+   "teacherId": "t13",
+   "name": "Teacher 13",
+   "allowedDays": [
+    2,
+    4
+   ],
+   "excludedWindows": []
+  }
+ ],
+ "rooms": [],
+ "sessions": [
+  {
+   "courseId": "c060",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c077",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c062",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c053",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c023",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c066",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c078",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Arabic",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c016",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c043",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c058",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Quran",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c100",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c035",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c098",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c092",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c026",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Social Studies",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c055",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Gym",
+   "day": 1,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c080",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Quran",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c061",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c022",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c099",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Arabic",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c064",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Gym",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c004",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Social Studies",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c031",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c084",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Computer Science",
+   "day": 1,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c003",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c032",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Gym",
+   "day": 1,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c069",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c087",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Social Studies",
+   "day": 1,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c006",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Arts/Handwriting",
+   "day": 1,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c025",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Computer Science",
+   "day": 1,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c030",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Arabic",
+   "day": 1,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c097",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Quran",
+   "day": 1,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c018",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c002",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c014",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Islamic Studies",
+   "day": 1,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c047",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c067",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Quran",
+   "day": 1,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c020",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Math",
+   "day": 1,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c059",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Gym",
+   "day": 1,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c052",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Science",
+   "day": 1,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c090",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Math/English",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c070",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Islamic Studies",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c044",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Math/English",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c040",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Gym",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c036",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Social Studies",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c054",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Arabic",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c024",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Computer Science",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c088",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "English",
+   "day": 1,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c060",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c077",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c062",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c053",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c023",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c021",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Islamic Studies",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c012",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "French",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c016",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c043",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c061",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c100",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c099",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Arabic",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c098",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c092",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c068",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Life Skills",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c017",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Islamic Studies",
+   "day": 2,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c082",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Arabic",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c086",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Gym",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c074",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Quran",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c057",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Computer Science",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c094",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "French",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c041",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Art",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c007",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Islamic Studies",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c087",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Social Studies",
+   "day": 2,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c029",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Islamic Studies",
+   "day": 2,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c020",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c031",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Math",
+   "day": 2,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c048",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "French",
+   "day": 2,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c080",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Quran",
+   "day": 2,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c002",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Science",
+   "day": 2,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c079",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Gym",
+   "day": 2,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c047",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c009",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Social Studies",
+   "day": 2,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c076",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Social Studies",
+   "day": 2,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c089",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Social Studies",
+   "day": 2,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c075",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Islamic Studies",
+   "day": 2,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c027",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Arabic",
+   "day": 2,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c028",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "French",
+   "day": 2,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c101",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Science",
+   "day": 2,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c088",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c037",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Gym",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c093",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Arabic",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c096",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Art",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c072",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "French",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c045",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Computer Science",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c008",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Quran",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c069",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "English",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c052",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Science",
+   "day": 2,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c034",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c077",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade2",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c062",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade3",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c053",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade4",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c023",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade5",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c054",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Arabic",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c031",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade7",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c081",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Art",
+   "day": 3,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c060",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade1",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c061",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade2",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c100",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade3",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c097",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c064",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Gym",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c020",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade6",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c069",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade7",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c015",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Arabic",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c046",
+   "sessionIndex": 0,
+   "classGroupId": "g-jk",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c043",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade1",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c071",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Art",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c091",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c099",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade4",
+   "courseName": "Arabic",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c098",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade5",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c008",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c059",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Gym",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c016",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade8",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c067",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c019",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade6",
+   "courseName": "Computer Science",
+   "day": 3,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c031",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade7",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c055",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Gym",
+   "day": 3,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c018",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Science",
+   "day": 3,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c002",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade2",
+   "courseName": "Science",
+   "day": 3,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c022",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade3",
+   "courseName": "Science",
+   "day": 3,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c047",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade4",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c063",
+   "sessionIndex": 0,
+   "classGroupId": "g-sk",
+   "courseName": "French",
+   "day": 3,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c082",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Arabic",
+   "day": 3,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c065",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c014",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Islamic Studies",
+   "day": 3,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c040",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Gym",
+   "day": 3,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c045",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Computer Science",
+   "day": 3,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c092",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade6",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c085",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Quran",
+   "day": 3,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c016",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade8",
+   "courseName": "Math",
+   "day": 3,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c010",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Islamic Studies",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c083",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "Math/English",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c051",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "French",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c038",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Art",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c027",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Arabic",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c032",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Gym",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t01",
+   "roomId": null
+  },
+  {
+   "courseId": "c101",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Science",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c088",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade8",
+   "courseName": "English",
+   "day": 3,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c060",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade1",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c077",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade2",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c062",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade3",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c035",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Science",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c023",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade5",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c028",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "French",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c007",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Islamic Studies",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c015",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Arabic",
+   "day": 4,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c082",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade1",
+   "courseName": "Arabic",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c061",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade2",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c100",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade3",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c053",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade4",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c029",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Islamic Studies",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c092",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade6",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c073",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade7",
+   "courseName": "Art",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c095",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Quran",
+   "day": 4,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c049",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Computer Science",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c093",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Arabic",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c079",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Gym",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c047",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade4",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c003",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Science",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c020",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade6",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c012",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "French",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c005",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade8",
+   "courseName": "Life Skills",
+   "day": 4,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c094",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "French",
+   "day": 4,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c021",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Islamic Studies",
+   "day": 4,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c024",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Computer Science",
+   "day": 4,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c088",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade8",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c037",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade1",
+   "courseName": "Gym",
+   "day": 4,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c076",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Social Studies",
+   "day": 4,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c074",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Quran",
+   "day": 4,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c033",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade4",
+   "courseName": "Social Studies",
+   "day": 4,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c043",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade1",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c086",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Gym",
+   "day": 4,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c089",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Social Studies",
+   "day": 4,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c075",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Islamic Studies",
+   "day": 4,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c098",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade5",
+   "courseName": "Math",
+   "day": 4,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c066",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Science",
+   "day": 4,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c078",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Arabic",
+   "day": 4,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c048",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "French",
+   "day": 4,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c009",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Social Studies",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c058",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Quran",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c030",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Arabic",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c072",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "French",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t13",
+   "roomId": null
+  },
+  {
+   "courseId": "c036",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade5",
+   "courseName": "Social Studies",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c019",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Computer Science",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c069",
+   "sessionIndex": 3,
+   "classGroupId": "g-grade7",
+   "courseName": "English",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c017",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Islamic Studies",
+   "day": 4,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t09",
+   "roomId": null
+  },
+  {
+   "courseId": "c060",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade1",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c039",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade2",
+   "courseName": "French",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c062",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade3",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c053",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade4",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c023",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade5",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c066",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade6",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c031",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade7",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c015",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade8",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 535,
+   "endMin": 580,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c043",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade1",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c077",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade2",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c100",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade3",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c035",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade4",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c098",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade5",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c054",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade6",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c085",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c052",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade8",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c056",
+   "sessionIndex": 0,
+   "classGroupId": "g-sk",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 595,
+   "endMin": 640,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c037",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "Gym",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c093",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade2",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c001",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade3",
+   "courseName": "Computer Science",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c057",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Computer Science",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c067",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade5",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c004",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade6",
+   "courseName": "Social Studies",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c101",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade7",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c088",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade8",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c050",
+   "sessionIndex": 0,
+   "classGroupId": "g-jk",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 640,
+   "endMin": 685,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c027",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade5",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c092",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade6",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c026",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade7",
+   "courseName": "Social Studies",
+   "day": 5,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c095",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 695,
+   "endMin": 740,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c018",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade1",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c061",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade2",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c079",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade3",
+   "courseName": "Gym",
+   "day": 5,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c033",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade4",
+   "courseName": "Social Studies",
+   "day": 5,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c042",
+   "sessionIndex": 0,
+   "classGroupId": "g-sk",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 720,
+   "endMin": 765,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c006",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade1",
+   "courseName": "Arts/Handwriting",
+   "day": 5,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t07",
+   "roomId": null
+  },
+  {
+   "courseId": "c086",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade2",
+   "courseName": "Gym",
+   "day": 5,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c030",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade3",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c097",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade4",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 765,
+   "endMin": 810,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c013",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade5",
+   "courseName": "Art",
+   "day": 5,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c020",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade6",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t11",
+   "roomId": null
+  },
+  {
+   "courseId": "c069",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade7",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c016",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade8",
+   "courseName": "Math",
+   "day": 5,
+   "startMin": 775,
+   "endMin": 820,
+   "teacherId": "t05",
+   "roomId": null
+  },
+  {
+   "courseId": "c011",
+   "sessionIndex": 0,
+   "classGroupId": "g-grade1",
+   "courseName": "French",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t08",
+   "roomId": null
+  },
+  {
+   "courseId": "c070",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade2",
+   "courseName": "Islamic Studies",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t03",
+   "roomId": null
+  },
+  {
+   "courseId": "c022",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade3",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t10",
+   "roomId": null
+  },
+  {
+   "courseId": "c047",
+   "sessionIndex": 4,
+   "classGroupId": "g-grade4",
+   "courseName": "English",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t06",
+   "roomId": null
+  },
+  {
+   "courseId": "c003",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade5",
+   "courseName": "Science",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t04",
+   "roomId": null
+  },
+  {
+   "courseId": "c008",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade6",
+   "courseName": "Quran",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t12",
+   "roomId": null
+  },
+  {
+   "courseId": "c078",
+   "sessionIndex": 2,
+   "classGroupId": "g-grade7",
+   "courseName": "Arabic",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t02",
+   "roomId": null
+  },
+  {
+   "courseId": "c084",
+   "sessionIndex": 1,
+   "classGroupId": "g-grade8",
+   "courseName": "Computer Science",
+   "day": 5,
+   "startMin": 850,
+   "endMin": 895,
+   "teacherId": "t11",
+   "roomId": null
+  }
+ ],
+ "fixedBlocks": [
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 1,
+   "startMin": 535,
+   "endMin": 640
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 1,
+   "startMin": 535,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [],
+   "label": "Snack",
+   "dayOfWeek": 1,
+   "startMin": 580,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 1,
+   "startMin": 640,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 1,
+   "startMin": 685,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Lunch (Grade 1-4)",
+   "dayOfWeek": 1,
+   "startMin": 685,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Snack 2 (Grade 5-8)",
+   "dayOfWeek": 1,
+   "startMin": 685,
+   "endMin": 695
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Lunch (Grade 5-8)",
+   "dayOfWeek": 1,
+   "startMin": 740,
+   "endMin": 775
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 1,
+   "startMin": 765,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Snack 2 (Grade 1-4)",
+   "dayOfWeek": 1,
+   "startMin": 810,
+   "endMin": 820
+  },
+  {
+   "classGroupIds": [],
+   "label": "Salat",
+   "dayOfWeek": 1,
+   "startMin": 820,
+   "endMin": 850
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 2,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 2,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [],
+   "label": "Snack",
+   "dayOfWeek": 2,
+   "startMin": 580,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Lunch (Grade 1-4)",
+   "dayOfWeek": 2,
+   "startMin": 685,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Snack 2 (Grade 5-8)",
+   "dayOfWeek": 2,
+   "startMin": 685,
+   "endMin": 695
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Lunch (Grade 5-8)",
+   "dayOfWeek": 2,
+   "startMin": 740,
+   "endMin": 775
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Snack 2 (Grade 1-4)",
+   "dayOfWeek": 2,
+   "startMin": 810,
+   "endMin": 820
+  },
+  {
+   "classGroupIds": [],
+   "label": "Salat",
+   "dayOfWeek": 2,
+   "startMin": 820,
+   "endMin": 850
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 3,
+   "startMin": 535,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 3,
+   "startMin": 535,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [],
+   "label": "Snack",
+   "dayOfWeek": 3,
+   "startMin": 580,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 3,
+   "startMin": 640,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Lunch (Grade 1-4)",
+   "dayOfWeek": 3,
+   "startMin": 685,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Snack 2 (Grade 5-8)",
+   "dayOfWeek": 3,
+   "startMin": 685,
+   "endMin": 695
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Lunch (Grade 5-8)",
+   "dayOfWeek": 3,
+   "startMin": 740,
+   "endMin": 775
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 3,
+   "startMin": 765,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Snack 2 (Grade 1-4)",
+   "dayOfWeek": 3,
+   "startMin": 810,
+   "endMin": 820
+  },
+  {
+   "classGroupIds": [],
+   "label": "Salat",
+   "dayOfWeek": 3,
+   "startMin": 820,
+   "endMin": 850
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 4,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 4,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [],
+   "label": "Snack",
+   "dayOfWeek": 4,
+   "startMin": 580,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Lunch (Grade 1-4)",
+   "dayOfWeek": 4,
+   "startMin": 685,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Snack 2 (Grade 5-8)",
+   "dayOfWeek": 4,
+   "startMin": 685,
+   "endMin": 695
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Lunch (Grade 5-8)",
+   "dayOfWeek": 4,
+   "startMin": 740,
+   "endMin": 775
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Snack 2 (Grade 1-4)",
+   "dayOfWeek": 4,
+   "startMin": 810,
+   "endMin": 820
+  },
+  {
+   "classGroupIds": [],
+   "label": "Salat",
+   "dayOfWeek": 4,
+   "startMin": 820,
+   "endMin": 850
+  },
+  {
+   "classGroupIds": [
+    "g-jk"
+   ],
+   "label": "JK not in session",
+   "dayOfWeek": 5,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [
+    "g-sk"
+   ],
+   "label": "SK not in session",
+   "dayOfWeek": 5,
+   "startMin": 535,
+   "endMin": 900
+  },
+  {
+   "classGroupIds": [],
+   "label": "Snack",
+   "dayOfWeek": 5,
+   "startMin": 580,
+   "endMin": 595
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Lunch (Grade 1-4)",
+   "dayOfWeek": 5,
+   "startMin": 685,
+   "endMin": 720
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Snack 2 (Grade 5-8)",
+   "dayOfWeek": 5,
+   "startMin": 685,
+   "endMin": 695
+  },
+  {
+   "classGroupIds": [
+    "g-grade5",
+    "g-grade6",
+    "g-grade7",
+    "g-grade8"
+   ],
+   "label": "Lunch (Grade 5-8)",
+   "dayOfWeek": 5,
+   "startMin": 740,
+   "endMin": 775
+  },
+  {
+   "classGroupIds": [
+    "g-grade1",
+    "g-grade2",
+    "g-grade3",
+    "g-grade4"
+   ],
+   "label": "Snack 2 (Grade 1-4)",
+   "dayOfWeek": 5,
+   "startMin": 810,
+   "endMin": 820
+  },
+  {
+   "classGroupIds": [],
+   "label": "Salat",
+   "dayOfWeek": 5,
+   "startMin": 820,
+   "endMin": 850
+  }
+ ],
+ "dayTemplates": [
+  {
+   "dayOfWeek": 1,
+   "fillableRanges": [
+    {
+     "endMin": 900,
+     "startMin": 535
+    }
+   ]
+  },
+  {
+   "dayOfWeek": 2,
+   "fillableRanges": [
+    {
+     "endMin": 900,
+     "startMin": 535
+    }
+   ]
+  },
+  {
+   "dayOfWeek": 3,
+   "fillableRanges": [
+    {
+     "endMin": 900,
+     "startMin": 535
+    }
+   ]
+  },
+  {
+   "dayOfWeek": 4,
+   "fillableRanges": [
+    {
+     "endMin": 900,
+     "startMin": 535
+    }
+   ]
+  },
+  {
+   "dayOfWeek": 5,
+   "fillableRanges": [
+    {
+     "endMin": 900,
+     "startMin": 535
+    }
+   ]
+  }
+ ]
+}

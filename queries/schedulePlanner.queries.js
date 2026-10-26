@@ -246,14 +246,23 @@ const deleteFixedBlock = `
   DELETE FROM planner_fixed_blocks WHERE fixed_block_id = $1 AND school = $2 RETURNING *
 `;
 
+const deleteFixedBlocksBySchoolYear = `
+  DELETE FROM planner_fixed_blocks WHERE school = $1 AND school_year_id = $2
+`;
+
 const selectFixedBlockById = `
   SELECT * FROM planner_fixed_blocks WHERE fixed_block_id = $1 AND school = $2
 `;
 
 // ─── Schedules (drafts + published) ──────────────────────────────────────
 
+// Schools are all in Ontario; go-live dates and effective dates are local days.
+const TORONTO_TODAY = `(NOW() AT TIME ZONE 'America/Toronto')::date`;
+
 const selectSchedulesBySchool = `
-  SELECT schedule_id, school, name, status, share_token, published_at, created_at, updated_at
+  SELECT schedule_id, school, name, status, share_token, published_at, created_at, updated_at,
+         source_schedule_id, go_live_on, go_live_status, go_live_error, effective_from, effective_to,
+         (bell_times IS NOT NULL) AS has_bell_times
   FROM planner_schedules
   WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
   ORDER BY updated_at DESC
@@ -280,18 +289,96 @@ const deleteSchedule = `
   DELETE FROM planner_schedules WHERE schedule_id = $1 AND school = $2 RETURNING *
 `;
 
+// ─── Copy with new times + go-live dates ─────────────────────────────────
+
+const insertRetimedSchedule = `
+  INSERT INTO planner_schedules
+    (school, school_id, name, sessions, bell_times, source_schedule_id, go_live_on, go_live_status, school_year_id)
+  VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7::date,
+          CASE WHEN $7::date IS NULL THEN NULL ELSE 'pending' END, $8)
+  RETURNING *
+`;
+
+// Setting a date (again) also clears a failed attempt, which is the Retry.
+const setScheduleGoLive = `
+  UPDATE planner_schedules
+  SET go_live_on = $3::date,
+      go_live_status = CASE WHEN $3::date IS NULL THEN NULL ELSE 'pending' END,
+      go_live_attempts = 0, go_live_error = NULL, updated_at = NOW()
+  WHERE schedule_id = $1 AND school = $2 AND status = 'draft'
+  RETURNING *
+`;
+
+// A worker that died mid-publish leaves 'running'; hand the row back.
+const resetStaleGoLive = `
+  UPDATE planner_schedules
+  SET go_live_status = 'pending', updated_at = NOW()
+  WHERE go_live_status = 'running' AND updated_at < NOW() - INTERVAL '15 minutes'
+`;
+
+const claimDueGoLive = `
+  UPDATE planner_schedules ps
+  SET go_live_status = 'running', go_live_attempts = ps.go_live_attempts + 1, updated_at = NOW()
+  WHERE ps.schedule_id IN (
+    SELECT schedule_id FROM planner_schedules
+    WHERE go_live_status = 'pending' AND status = 'draft' AND go_live_on <= ${TORONTO_TODAY}
+    ORDER BY go_live_on
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+  )
+  RETURNING schedule_id, school, school_year_id, name, go_live_on, go_live_attempts
+`;
+
+// The day a draft is set to replace the live schedule, if one is.
+const selectPendingGoLive = `
+  SELECT to_char(go_live_on, 'YYYY-MM-DD') AS go_live_on
+  FROM planner_schedules
+  WHERE school = $1 AND ($2::uuid IS NULL OR school_year_id = $2)
+    AND go_live_status IN ('pending', 'running')
+  LIMIT 1
+`;
+
+const recordGoLiveFailure = `
+  UPDATE planner_schedules
+  SET go_live_status = $2, go_live_error = $3, updated_at = NOW()
+  WHERE schedule_id = $1
+`;
+
 // ─── Publish + materialized sessions ─────────────────────────────────────
 
+// Publishing one school's schedules is serialized (Publish button vs. the
+// go-live worker).
+const lockPlannerPublish = `SELECT pg_advisory_xact_lock(hashtext('planner_publish:' || $1::text))`;
+
+const selectScheduleForUpdate = `
+  SELECT * FROM planner_schedules WHERE schedule_id = $1 AND school = $2 FOR UPDATE
+`;
+
+const selectSchoolId = `SELECT school_id FROM schools WHERE school_code = $1`;
+
+// $3 = the schedule being published, which stays published (a republish).
+// $4 = the live bell times: the replaced schedule keeps them, so publishing it
+// again later restores them. Its finished go-live is history (effective_*),
+// so a new one can be set.
 const demotePublishedSchedules = `
   UPDATE planner_schedules
-  SET status = 'draft', updated_at = NOW()
-  WHERE school = $1 AND school_year_id = $2 AND status = 'published'
+  SET status = 'draft', updated_at = NOW(), bell_times = $4::jsonb,
+      effective_to = GREATEST(${TORONTO_TODAY} - 1, COALESCE(effective_from, ${TORONTO_TODAY} - 1)),
+      go_live_on = NULL, go_live_status = NULL, go_live_attempts = 0, go_live_error = NULL
+  WHERE school = $1 AND school_year_id = $2 AND status = 'published' AND schedule_id <> $3
   RETURNING schedule_id
 `;
 
+// Once live, the year's config is this schedule's bell times, so its own
+// copy is cleared (bellTimes.js). A pending go-live is done either way.
 const markSchedulePublished = `
   UPDATE planner_schedules
-  SET status = 'published', published_at = NOW(), updated_at = NOW()
+  SET effective_from = CASE WHEN status = 'published' THEN COALESCE(effective_from, ${TORONTO_TODAY})
+                            ELSE ${TORONTO_TODAY} END,
+      status = 'published', published_at = NOW(), updated_at = NOW(),
+      effective_to = NULL, bell_times = NULL,
+      go_live_status = CASE WHEN go_live_on IS NULL THEN NULL ELSE 'done' END,
+      go_live_error = NULL
   WHERE schedule_id = $1 AND school = $2
   RETURNING *
 `;
@@ -348,6 +435,10 @@ const deleteFixedBlocksForSchedule = `
   DELETE FROM planner_schedule_fixed_blocks WHERE schedule_id = $1
 `;
 
+const selectFixedBlocksForSchedule = `
+  SELECT * FROM planner_schedule_fixed_blocks WHERE schedule_id = $1 ORDER BY day_of_week, start_min
+`;
+
 const insertScheduleFixedBlock = `
   INSERT INTO planner_schedule_fixed_blocks
     (schedule_id, school, school_id, class_group_ids, label,
@@ -357,8 +448,15 @@ const insertScheduleFixedBlock = `
 
 // The single published schedule for a school/year, readable by any verified
 // user — the teacher surfaces need its name/published_at, not its config.
+// replaced_another: this schedule took over mid-year from another (winter
+// bell times), so its calendar starts the day it went live.
 const selectPublishedSchedule = `
-  SELECT schedule_id, name, published_at
+  SELECT schedule_id, name, published_at, to_char(effective_from, 'YYYY-MM-DD') AS effective_from,
+         EXISTS (
+           SELECT 1 FROM planner_schedules o
+           WHERE o.school = planner_schedules.school AND o.school_year_id = planner_schedules.school_year_id
+             AND o.schedule_id <> planner_schedules.schedule_id AND o.effective_to IS NOT NULL
+         ) AS replaced_another
   FROM planner_schedules
   WHERE school = $1 AND status = 'published'
     AND ($2::uuid IS NULL OR school_year_id = $2)
@@ -406,6 +504,7 @@ module.exports = {
   insertFixedBlock,
   updateFixedBlock,
   deleteFixedBlock,
+  deleteFixedBlocksBySchoolYear,
   selectPeriodRulesBySchool,
   selectPeriodRuleById,
   insertPeriodRule,
@@ -416,6 +515,15 @@ module.exports = {
   insertSchedule,
   updateSchedule,
   deleteSchedule,
+  insertRetimedSchedule,
+  setScheduleGoLive,
+  resetStaleGoLive,
+  claimDueGoLive,
+  recordGoLiveFailure,
+  selectPendingGoLive,
+  lockPlannerPublish,
+  selectScheduleForUpdate,
+  selectSchoolId,
   demotePublishedSchedules,
   markSchedulePublished,
   deleteSessionsForSchedule,
@@ -425,6 +533,7 @@ module.exports = {
   selectPublicSchedule,
   selectSessionsForSchedule,
   deleteFixedBlocksForSchedule,
+  selectFixedBlocksForSchedule,
   insertScheduleFixedBlock,
   selectPublishedSchedule,
   selectMyFixedBlocks,

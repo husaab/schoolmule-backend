@@ -201,6 +201,7 @@ if (require.main === module) {
   // started on import would leave timers running across the whole suite.
   require("./services/google/sheetSyncWorker").startWorker();
   require("./services/finance/financeSyncWorker").startWorker();
+  require("./services/schedulePlanner/goLiveWorker").startWorker();
   require("./services/messageNotifier").startWorker();
   require("./services/observe/eventBuffer").start();
   require("./services/observe/retentionWorker").startWorker();

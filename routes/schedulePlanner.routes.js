@@ -63,6 +63,10 @@ router.get('/schedules/:scheduleId', controller.getSchedule);
 router.patch('/schedules/:scheduleId', controller.updateSchedule);
 router.delete('/schedules/:scheduleId', controller.deleteSchedule);
 router.post('/schedules/:scheduleId/publish', controller.publishSchedule);
+// Copy with new times (seasonal bell times) and scheduled go-live.
+router.get('/schedules/:scheduleId/retime', controller.getRetimeModel);
+router.post('/schedules/:scheduleId/retime', controller.retimeSchedule);
+router.put('/schedules/:scheduleId/go-live', controller.setScheduleGoLive);
 router.get('/schedules/:scheduleId/pdf', controller.getSchedulePdf);
 
 module.exports = router;

@@ -9,6 +9,14 @@ const logger = require('../logger');
 const { runSolverInWorker } = require('../services/scheduleSolver/run');
 const { sendScheduleExport } = require('../services/scheduleExport');
 const { DAY_LABELS } = require('../templates/scheduleTemplate');
+const { publishScheduleTx, PublishError } = require('../services/schedulePlanner/publishTx');
+const { bellTimesOf } = require('../services/schedulePlanner/bellTimes');
+const {
+  buildRetimeModel,
+  previewRetime,
+  summarizePreview,
+  RetimeInputError,
+} = require('../services/scheduleRetime');
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -732,6 +740,13 @@ const deletePeriodRule = async (req, res) => {
 
 // ─── Generate ────────────────────────────────────────────────────────────
 
+// pg hands DATE columns back as local-midnight Dates; the API sends "YYYY-MM-DD".
+const dayString = (value) => {
+  if (value == null) return null;
+  if (value instanceof Date) return isoDate(value);
+  return String(value).slice(0, 10);
+};
+
 const mapScheduleSummary = (row) => ({
   scheduleId: row.schedule_id,
   school: row.school,
@@ -741,6 +756,13 @@ const mapScheduleSummary = (row) => ({
   publishedAt: row.published_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  sourceScheduleId: row.source_schedule_id ?? null,
+  hasOwnBellTimes: row.has_bell_times ?? row.bell_times != null,
+  goLiveOn: dayString(row.go_live_on),
+  goLiveStatus: row.go_live_status ?? null,
+  goLiveError: row.go_live_error ?? null,
+  effectiveFrom: dayString(row.effective_from),
+  effectiveTo: dayString(row.effective_to),
 });
 
 const mapSchedule = (row) => ({
@@ -748,6 +770,7 @@ const mapSchedule = (row) => ({
   sessions: row.sessions,
   diagnostics: row.diagnostics,
   configSnapshot: row.config_snapshot,
+  bellTimes: row.bell_times ?? null,
 });
 
 // Loads the school's planner config and builds the solver input JSON.
@@ -971,92 +994,142 @@ const mapMaterializedSession = (row) => ({
   endMin: row.end_min,
 });
 
-// POST /schedules/:scheduleId/publish — one transaction: demote the current
-// published schedule, promote this one, rebuild the materialized session rows
-// (resolving teacher user links and display names from the planner config).
+// POST /schedules/:scheduleId/publish — see services/schedulePlanner/publishTx.js.
 const publishSchedule = async (req, res) => {
-  const { scheduleId } = req.params;
-  const school = req.user.school;
   const client = await db.connect();
   try {
-    const { rows: scheduleRows } = await client.query(q.selectScheduleById, [scheduleId, school]);
-    if (scheduleRows.length === 0) {
-      client.release();
-      return fail(res, 404, 'Schedule not found');
-    }
-    const schedule = scheduleRows[0];
-    const sessions = schedule.sessions || [];
-    if (sessions.length === 0) {
-      client.release();
-      return fail(res, 400, 'Cannot publish an empty schedule');
-    }
-
-    const yearId = req.schoolYear.schoolYearId;
-    const [teachersQ, groupsQ, roomsQ, blocksQ] = await Promise.all([
-      client.query(q.selectTeachersBySchool, [school, yearId]),
-      client.query(q.selectClassGroupsBySchool, [school, yearId]),
-      client.query(q.selectRoomsBySchool, [school, yearId]),
-      client.query(q.selectFixedBlocksBySchool, [school, yearId]),
-    ]);
-    const teacherById = new Map(teachersQ.rows.map((r) => [r.planner_teacher_id, r]));
-    const groupById = new Map(groupsQ.rows.map((r) => [r.class_group_id, r]));
-    const roomById = new Map(roomsQ.rows.map((r) => [r.room_id, r]));
-    const schoolId = await resolveSchoolId(school);
-
-    await client.query('BEGIN');
-    const { rows: demoted } = await client.query(q.demotePublishedSchedules, [school, yearId]);
-    for (const row of demoted) {
-      await client.query(q.deleteSessionsForSchedule, [row.schedule_id]);
-      await client.query(q.deleteFixedBlocksForSchedule, [row.schedule_id]);
-    }
-    const { rows: published } = await client.query(q.markSchedulePublished, [scheduleId, school]);
-    await client.query(q.deleteSessionsForSchedule, [scheduleId]);
-    for (const s of sessions) {
-      const teacher = teacherById.get(s.teacherId);
-      const group = groupById.get(s.classGroupId);
-      const room = s.roomId ? roomById.get(s.roomId) : null;
-      await client.query(q.insertScheduleSession, [
-        scheduleId,
-        school,
-        schoolId,
-        group ? s.classGroupId : null,
-        group?.name || 'Unknown class',
-        s.courseName || 'Course',
-        teacher ? s.teacherId : null,
-        teacher?.user_id || null,
-        teacher?.display_name || 'Unknown teacher',
-        room?.name || null,
-        s.day,
-        s.startMin,
-        s.endMin,
-        yearId,
-      ]);
-    }
-    // Breaks are snapshotted too: teachers read them from here, not from the
-    // admin-only planner_fixed_blocks config.
-    await client.query(q.deleteFixedBlocksForSchedule, [scheduleId]);
-    for (const b of blocksQ.rows) {
-      await client.query(q.insertScheduleFixedBlock, [
-        scheduleId,
-        school,
-        schoolId,
-        JSON.stringify(b.class_group_ids || []),
-        b.label,
-        b.day_of_week,
-        b.start_min,
-        b.end_min,
-        yearId,
-      ]);
-    }
-    await client.query('COMMIT');
-    return ok(res, mapSchedule(published[0]));
+    const row = await publishScheduleTx(client, { scheduleId: req.params.scheduleId, school: req.user.school });
+    return ok(res, mapSchedule(row));
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (error instanceof PublishError) return fail(res, error.status, error.message);
     return handleError(res, error, 'publishing schedule');
   } finally {
     client.release();
   }
 };
+
+// ─── Copy with new times ─────────────────────────────────────────────────
+// Keep a timetable, change its bell times (daylight saving). The rules live
+// in services/scheduleRetime; these handlers load the source and save.
+
+const torontoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+
+/** A real calendar day as YYYY-MM-DD (not 2026-02-30). */
+const isDay = (v) => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+};
+
+/** Why a go-live date can't be used, or null. null itself means "no date". */
+const goLiveDateError = (goLiveOn) => {
+  if (goLiveOn === null) return null;
+  if (!isDay(goLiveOn)) return 'goLiveOn must be a date like 2026-11-02';
+  if (goLiveOn < torontoToday()) return 'Pick a go-live date from today onward';
+  return null;
+};
+
+async function loadRetimeSource(school, scheduleId) {
+  const { rows } = await db.query(q.selectScheduleById, [scheduleId, school]);
+  const schedule = rows[0];
+  if (!schedule) return null;
+  const yearId = schedule.school_year_id;
+  const [groupsQ, teachersQ, roomsQ, bellTimes] = await Promise.all([
+    db.query(q.selectClassGroupsBySchool, [school, yearId]),
+    db.query(q.selectTeachersBySchool, [school, yearId]),
+    db.query(q.selectRoomsBySchool, [school, yearId]),
+    bellTimesOf(db, schedule),
+  ]);
+  return {
+    schedule,
+    source: {
+      sessions: schedule.sessions || [],
+      classGroups: groupsQ.rows.map((r) => ({ classGroupId: r.class_group_id, name: r.name, sortOrder: r.sort_order })),
+      teachers: teachersQ.rows.map((r) => ({
+        teacherId: r.planner_teacher_id,
+        name: r.display_name,
+        allowedDays: r.allowed_days,
+        excludedWindows: r.excluded_windows,
+      })),
+      rooms: roomsQ.rows.map((r) => ({ roomId: r.room_id, name: r.name })),
+      fixedBlocks: bellTimes.fixedBlocks,
+      dayTemplates: bellTimes.dayTemplates,
+    },
+  };
+}
+
+const GO_LIVE_TAKEN = 'Another schedule is already set to go live this year. Remove its go-live date first.';
+
+// GET /schedules/:scheduleId/retime — the bells and rows to edit.
+const getRetimeModel = async (req, res) => {
+  try {
+    const loaded = await loadRetimeSource(req.user.school, req.params.scheduleId);
+    if (!loaded) return fail(res, 404, 'Schedule not found');
+    return ok(res, { schedule: mapScheduleSummary(loaded.schedule), ...buildRetimeModel(loaded.source) });
+  } catch (error) {
+    return handleError(res, error, 'loading bell times');
+  }
+};
+
+// POST /schedules/:scheduleId/retime — { edits, name, goLiveOn, dryRun }.
+// dryRun returns the preview (moves + checks) and writes nothing; otherwise
+// the same preview is recomputed here and saved as a new draft.
+const retimeSchedule = async (req, res) => {
+  const { edits = {}, name, goLiveOn = null, dryRun = false } = req.body || {};
+  const dateError = goLiveDateError(goLiveOn);
+  if (dateError) return fail(res, 400, dateError);
+  if (name !== undefined && (typeof name !== 'string' || name.trim().length > 255)) {
+    return fail(res, 400, 'name must be text of 255 characters or fewer');
+  }
+  try {
+    const loaded = await loadRetimeSource(req.user.school, req.params.scheduleId);
+    if (!loaded) return fail(res, 404, 'Schedule not found');
+    let preview;
+    try {
+      preview = previewRetime(loaded.source, edits);
+    } catch (error) {
+      if (error instanceof RetimeInputError) return fail(res, 400, error.message);
+      throw error;
+    }
+    if (dryRun) return ok(res, summarizePreview(preview));
+
+    const schoolId = await resolveSchoolId(req.user.school);
+    const { rows } = await db.query(q.insertRetimedSchedule, [
+      req.user.school,
+      schoolId,
+      name?.trim() || `${loaded.schedule.name} (new times)`,
+      JSON.stringify(preview.sessions),
+      JSON.stringify(preview.bellTimes),
+      loaded.schedule.schedule_id,
+      goLiveOn,
+      loaded.schedule.school_year_id,
+    ]);
+    return ok(res, { schedule: mapSchedule(rows[0]), preview: summarizePreview(preview) }, 201);
+  } catch (error) {
+    if (error.code === UNIQUE_VIOLATION) return fail(res, 409, GO_LIVE_TAKEN);
+    return handleError(res, error, 'copying schedule with new times');
+  }
+};
+
+// PUT /schedules/:scheduleId/go-live — { goLiveOn: 'YYYY-MM-DD' | null }.
+// Sets, moves, retries (same date again) or removes a draft's go-live date.
+const setScheduleGoLive = async (req, res) => {
+  const { goLiveOn = null } = req.body || {};
+  const dateError = goLiveDateError(goLiveOn);
+  if (dateError) return fail(res, 400, dateError);
+  try {
+    const { rows: existing } = await db.query(q.selectScheduleById, [req.params.scheduleId, req.user.school]);
+    if (existing.length === 0) return fail(res, 404, 'Schedule not found');
+    if (existing[0].status === 'published') return fail(res, 409, 'This schedule is already live');
+    const { rows } = await db.query(q.setScheduleGoLive, [req.params.scheduleId, req.user.school, goLiveOn]);
+    if (rows.length === 0) return fail(res, 409, 'This schedule is already live');
+    return ok(res, mapScheduleSummary(rows[0]));
+  } catch (error) {
+    if (error.code === UNIQUE_VIOLATION) return fail(res, 409, GO_LIVE_TAKEN);
+    return handleError(res, error, 'setting go-live date');
+  }
+};
+
 
 // GET /schedules/:scheduleId/pdf?classGroupId=&teacherId=&view=class|teacher|day&format=pdf|png|docx
 // teacherId narrows the teacher view to a single staff member; without it the
@@ -1270,6 +1343,7 @@ const sendPublishedSchedule = async (req, res, { mine }) => {
             scheduleId: published.schedule_id,
             name: published.name,
             publishedAt: published.published_at,
+            effectiveFrom: published.effective_from,
           }
         : null,
       weekStart: isoDate(monday),
@@ -1373,8 +1447,10 @@ const getMyScheduleIcs = async (req, res) => {
   try {
     const school = req.user.school;
     const yearId = req.schoolYear?.schoolYearId || null;
-    const [sessionsQ, yearQ] = await Promise.all([
+    const [sessionsQ, publishedQ, pendingQ, yearQ] = await Promise.all([
       db.query(q.selectMySessions, [req.user.userId, school, yearId]),
+      db.query(q.selectPublishedSchedule, [school, yearId]),
+      db.query(q.selectPendingGoLive, [school, yearId]),
       yearId
         ? db.query(
             'SELECT label, start_date, end_date FROM school_years WHERE school_year_id = $1',
@@ -1394,8 +1470,24 @@ const getMyScheduleIcs = async (req, res) => {
       return fail(res, 400, 'No school year is configured, so the recurrence cannot be bounded');
     }
 
+    // Bound the recurrence by when this schedule is live: from the day it went
+    // live (winter bell times start mid-year), to the day before a draft is
+    // set to replace it.
+    const localDay = (ymd) => {
+      const [y, m, d] = ymd.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    };
     const yearStart = new Date(year.start_date);
     const yearEnd = new Date(year.end_date);
+    const published = publishedQ.rows[0];
+    const liveFrom = published?.replaced_another ? published.effective_from : null;
+    if (liveFrom && localDay(liveFrom) > yearStart) yearStart.setTime(localDay(liveFrom).getTime());
+    const replacedOn = pendingQ.rows[0]?.go_live_on;
+    if (replacedOn) {
+      const lastDay = localDay(replacedOn);
+      lastDay.setDate(lastDay.getDate() - 1);
+      if (lastDay < yearEnd) yearEnd.setTime(lastDay.getTime());
+    }
     const closedDates = expandClosureDates(
       await selectClosures(school, yearId, isoDate(yearStart), isoDate(yearEnd))
     );
@@ -1490,6 +1582,9 @@ module.exports = {
   updateSchedule,
   deleteSchedule,
   publishSchedule,
+  getRetimeModel,
+  retimeSchedule,
+  setScheduleGoLive,
   getMySchedule,
   getSchoolSchedule,
   getMySchedulePdf,

@@ -1013,6 +1013,24 @@ CREATE TABLE IF NOT EXISTS planner_schedule_fixed_blocks (
 );
 CREATE INDEX IF NOT EXISTS idx_psfb_schedule ON planner_schedule_fixed_blocks(schedule_id);
 
+-- ─── Schedule Planner v8 (from schedule_planner_v8_bell_times_migration.sql) ─
+
+ALTER TABLE planner_schedules
+  ADD COLUMN IF NOT EXISTS bell_times JSONB,
+  ADD COLUMN IF NOT EXISTS source_schedule_id UUID
+    REFERENCES planner_schedules(schedule_id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS go_live_on DATE,
+  ADD COLUMN IF NOT EXISTS go_live_status VARCHAR(16)
+    CHECK (go_live_status IN ('pending', 'running', 'done', 'failed')),
+  ADD COLUMN IF NOT EXISTS go_live_attempts SMALLINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS go_live_error TEXT,
+  ADD COLUMN IF NOT EXISTS effective_from DATE,
+  ADD COLUMN IF NOT EXISTS effective_to DATE;
+CREATE INDEX IF NOT EXISTS idx_planner_schedules_go_live
+  ON planner_schedules (go_live_on) WHERE go_live_status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_planner_go_live_per_school_year
+  ON planner_schedules (school, school_year_id) WHERE go_live_status IN ('pending', 'running');
+
 -- ─── Assessment Publishing (from assessment_publish_migration.sql) ─────
 
 ALTER TABLE assessments ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT FALSE;
