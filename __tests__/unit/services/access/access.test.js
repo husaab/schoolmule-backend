@@ -66,10 +66,17 @@ describe('ensureAccess', () => {
     expect(store.fetchAccessRow).toHaveBeenCalledTimes(1);
   });
 
-  it('never reads the database for a parent or student view', async () => {
-    await ensureAccess(reqFor({ role: 'PARENT' }));
-    await ensureAccess(reqFor({ role: 'STUDENT' }));
-    expect(store.fetchAccessRow).not.toHaveBeenCalled();
+  it('gives a parent or student view no permissions, whatever the row says', async () => {
+    const parent = await ensureAccess(reqFor({ role: 'PARENT' }));
+    const student = await ensureAccess(reqFor({ role: 'STUDENT' }));
+    expect(parent.isStaffView).toBe(false);
+    expect(student.isStaffView).toBe(false);
+  });
+
+  it("ends an archived (or deleted) parent's or student's session too", async () => {
+    archive('u1');
+    await expect(ensureAccess(reqFor({ role: 'PARENT' }))).rejects.toBeInstanceOf(AccessRevokedError);
+    await expect(ensureAccess(reqFor({ role: 'STUDENT' }))).rejects.toBeInstanceOf(AccessRevokedError);
   });
 
   it('revokes an archived account at once', async () => {

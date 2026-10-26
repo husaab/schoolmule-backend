@@ -116,8 +116,49 @@ const userQueries = {
     setAppleRefreshToken: `
       UPDATE users SET apple_refresh_token = $2 WHERE user_id = $1
     `,
-    selectAppleRefreshToken: `
-      SELECT apple_refresh_token FROM users WHERE user_id = $1
+    // Account deletion (services/account/eraseAccount.js): what to clean up
+    // afterwards, read under a row lock.
+    selectForErase: `
+      SELECT user_id, email, photo_path, apple_refresh_token FROM users WHERE user_id = $1 FOR UPDATE
+    `,
+    // What was only the person's, removed before the row is scrubbed. Each
+    // takes $1 user_id. Queued email by address goes too (eraseQueuedEmailByAddress).
+    eraseSteps: [
+      'DELETE FROM push_devices WHERE user_id = $1',
+      'DELETE FROM push_preferences WHERE user_id = $1',
+      "DELETE FROM push_jobs WHERE recipient_id = $1 AND status = 'pending'",
+      'DELETE FROM notification_prefs WHERE user_id = $1',
+      'DELETE FROM password_reset_tokens WHERE user_id = $1',
+      'DELETE FROM student_views WHERE owner_user_id = $1',
+      "DELETE FROM message_email_jobs WHERE recipient_id = $1 AND status = 'pending'",
+      "DELETE FROM announcement_email_jobs WHERE recipient_id = $1 AND status = 'pending'",
+      "DELETE FROM classroom_email_jobs WHERE recipient_id = $1 AND status = 'pending'",
+      "UPDATE email_outbox SET status = 'skipped', skip_reason = 'account deleted', finished_at = NOW() WHERE recipient_user_id = $1 AND status = 'pending'",
+      // A guardian leaves their children's records; the school keeps the contact on file.
+      'UPDATE parent_students SET parent_id = NULL WHERE parent_id = $1',
+      // A student's sign-in leaves their school record, so the school can invite them again.
+      'DELETE FROM student_account_links WHERE user_id = $1',
+      'DELETE FROM student_accounts WHERE user_id = $1',
+    ],
+    // $1 the account's address (rows queued before it had an account).
+    eraseQueuedEmailByAddress: `
+      UPDATE email_outbox SET status = 'skipped', skip_reason = 'account deleted', finished_at = NOW()
+      WHERE lower(recipient_email) = lower($1) AND status = 'pending'
+    `,
+
+    // Everything that identifies or reaches the person, scrubbed; archived so
+    // every session ends. The address is unique and on the reserved .invalid
+    // domain, so it can never sign in or be mailed. $2 an unusable password hash.
+    eraseUser: `
+      UPDATE users SET
+        email = 'deleted-' || user_id::text || '@deleted.schoolmule.invalid',
+        username = 'Deleted user', first_name = 'Deleted', last_name = 'user',
+        password = $2, email_token = NULL, school_token = NULL,
+        google_sub = NULL, apple_sub = NULL, apple_refresh_token = NULL,
+        avatar = NULL, photo_path = NULL, honorific = NULL, staff_title = NULL,
+        is_archived = TRUE, archived_at = COALESCE(archived_at, NOW()), archived_by = user_id,
+        last_modified_at = NOW()
+      WHERE user_id = $1
     `,
 
     // A signed-in account connects its Apple ID (Apple hid the email, so

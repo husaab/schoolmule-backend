@@ -42,6 +42,7 @@ CREATE TABLE users (
   school                 school NOT NULL,
   role                   role NOT NULL,
   email_token            UUID,
+  school_token           UUID,
   is_verified            BOOLEAN DEFAULT FALSE,
   is_verified_school     BOOLEAN DEFAULT FALSE,
   is_archived            BOOLEAN NOT NULL DEFAULT FALSE,
@@ -2184,3 +2185,17 @@ CREATE TABLE IF NOT EXISTS push_tickets (
 CREATE INDEX IF NOT EXISTS push_tickets_created_idx ON push_tickets (created_at);
 
 
+
+-- Saved student views (prod table; mirrored for account deletion, which removes a person's own views)
+CREATE TABLE IF NOT EXISTS student_views (
+  view_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school         school NOT NULL,
+  owner_user_id  UUID REFERENCES users(user_id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  description    TEXT NOT NULL DEFAULT '',
+  is_shared      BOOLEAN NOT NULL DEFAULT FALSE,
+  is_system      BOOLEAN NOT NULL DEFAULT FALSE,
+  criteria       JSONB NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

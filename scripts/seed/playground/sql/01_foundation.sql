@@ -627,6 +627,17 @@ SELECT v.link_id::uuid, v.student_id::uuid, v.parent_id::uuid, v.name, v.email, 
   ('2a2a4563-d5eb-459f-7475-bc02f457dd09', '013fc889-4d06-a47a-1f85-f03f0a88205d', '02d20319-a9bd-ae37-4232-816a73d87b74', 'Zeina Diallo', 'zeina.diallo@playground.test', '647-555-0134', 'Mother', NULL, NULL, NULL)
   ) v(link_id, student_id, parent_id, name, email, phone, relation, last_seen, invited_at, invited_by);
 
+-- An account for App Store and Google Play reviewers to delete from Settings
+-- (Delete Account): a guardian of Lina, so the parent portal has a child.
+-- A reseed brings it back.
+INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, created_at)
+SELECT '1ae775d6-5b9b-ba57-dcb2-688678839cb1'::uuid, 'reviewer@playground.test', 'Riley Reviewer', pw.hash, 'Riley', 'Reviewer', 'PLAYGROUND', 'PARENT', TRUE, TRUE,
+       now() - interval '3 days'
+  FROM pw;
+INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, parent_name, parent_email, relation, school, created_at)
+VALUES ('16e34e73-dcb1-e8a0-c2cd-d38b56dcbcc2'::uuid, '1815be2c-69ee-e380-33d8-4b51a6200ee9'::uuid, '1ae775d6-5b9b-ba57-dcb2-688678839cb1'::uuid, 'Riley Reviewer', 'reviewer@playground.test',
+        'Guardian', 'PLAYGROUND', now() - interval '3 days');
+
 -- ── Student logins: Grade 5 all active; Grades 6–8 mostly active, some invited ─
 CREATE TEMP TABLE seed_logins ON COMMIT DROP AS
 SELECT v.user_id::uuid, v.student_id::uuid, v.state, v.email FROM (VALUES

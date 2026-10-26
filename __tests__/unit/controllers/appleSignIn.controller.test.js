@@ -256,14 +256,4 @@ describe('Sign in with Apple tokens (Apple 5.1.1(v))', () => {
     expect(callsTo(userQueries.setAppleRefreshToken)[0][1]).toEqual([user.user_id, 'encrypted-refresh']);
   });
 
-  it('revokes it when the account is deleted', async () => {
-    routeQueries(new Map([
-      [userQueries.selectAppleRefreshToken, [{ apple_refresh_token: 'encrypted-refresh' }]],
-      [userQueries.deleteUser, [{}]],
-    ]));
-    const token = generateTestToken({ userId: TEST_PARENT_USER_ID, role: 'PARENT' });
-    const res = await request(app).delete('/api/auth/delete-user').set('Authorization', `Bearer ${token}`).send({});
-    expect(res.status).toBe(200);
-    expect(appleTokens.revoke).toHaveBeenCalledWith('encrypted-refresh');
-  });
 });

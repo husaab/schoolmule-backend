@@ -23,6 +23,7 @@ const { verifyEmailLoginToken } = require('../utils/emailLoginLink');
 const { GoogleSignInError } = googleSignInService;
 const appleSignInService = require('../services/apple/appleSignIn');
 const appleTokens = require('../services/apple/appleTokens');
+const { eraseAccount } = require('../services/account/eraseAccount');
 const { AppleSignInError } = appleSignInService;
 const {
   assertStudentCanSignIn, parseQrToken, secretMatches, qrCardFingerprint, qrCardLive, sessionRevoked, MESSAGES: STUDENT_MESSAGES,
@@ -1025,6 +1026,9 @@ const resendSchoolApprovalEmail = async (req, res) => {
   }
 };
 
+// DELETE /api/auth/delete-user: the caller deletes their own account. Erased,
+// not deleted (services/account/eraseAccount.js): the person goes, the
+// school's records stay.
 const deleteUserAccount = async (req, res) => {
   // Self-service only: the account to delete comes from the verified token, never
   // from the request body. Trusting a body-supplied userId here would let any
@@ -1036,24 +1040,19 @@ const deleteUserAccount = async (req, res) => {
   }
 
   try {
-    const { rows: [apple] } = await db.query(userQueries.selectAppleRefreshToken, [userId]);
-    const result = await db.query(userQueries.deleteUser, [userId]);
-
-    if (result.rowCount === 0) {
-      throw { status: 404, message: "User not found" };
+    const erased = await eraseAccount(userId, await unusablePasswordHash());
+    if (!erased) {
+      return res.status(404).json({ success: false, message: "User not found" });
     }
-    // Sign in with Apple: Apple's tokens go with the account (best effort).
-    if (apple?.apple_refresh_token) await appleTokens.revoke(apple.apple_refresh_token);
-
     return res.status(200).json({
       success: true,
       message: "User account deleted",
     });
   } catch (error) {
     logger.error({ err: error }, "Failed to delete user account");
-    return res.status(error.status || 500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message || "Failed to delete user",
+      message: "Failed to delete user",
     });
   }
 };

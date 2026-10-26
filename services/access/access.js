@@ -65,6 +65,10 @@ async function ensureAccess(req) {
   if (req.access) return req.access;
   if (!req.user || !req.user.userId) throw new AccessRevokedError();
   if (NON_STAFF_VIEWS.has(req.user.role)) {
+    // A parent or student holds no permissions, but an archived (or deleted
+    // and erased) account's session still ends here, as a staff one does.
+    const row = await store.fetchAccessRow(req.user);
+    if (row?.is_archived) throw new AccessRevokedError();
     req.access = buildAccess(null, req.user.role);
     return req.access;
   }

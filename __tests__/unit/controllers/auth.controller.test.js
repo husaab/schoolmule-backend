@@ -18,6 +18,10 @@ jest.mock('uuid', () => ({
 
 // The legacy approve/decline routes delegate to the approvals service, which
 // runs real transactions. Unit-test the controller's adapter only.
+// Deleting an account erases it (services/account/eraseAccount.js, which has
+// its own integration test); here only the route around it.
+jest.mock('../../../services/account/eraseAccount', () => ({ eraseAccount: jest.fn().mockResolvedValue(true) }));
+
 jest.mock('../../../services/approvalActions', () => {
   const actual = jest.requireActual('../../../services/approvalActions');
   const notFound = (userId) => {
@@ -492,7 +496,6 @@ describe('DELETE /api/auth/delete-user', () => {
 
   it('deletes the authenticated user\'s own account', async () => {
     const token = mockAdminUser();
-    mockQueryResponse([{ apple_refresh_token: null }]); // no Sign in with Apple token to revoke
     mockQueryResponse([], 1); // rowCount = 1
 
     const res = await request(app)
@@ -515,7 +518,6 @@ describe('DELETE /api/auth/delete-user', () => {
 
   it('lets a pending (school-unverified) signup delete itself from the waiting page', async () => {
     const token = mockUnverifiedSchoolUser();
-    mockQueryResponse([{ apple_refresh_token: null }]);
     mockQueryResponse([], 1);
 
     const res = await request(app)
@@ -529,9 +531,8 @@ describe('DELETE /api/auth/delete-user', () => {
 
   it('ignores a userId in the body and deletes only the caller', async () => {
     const token = mockAdminUser();
-    const db = require('../../__mocks__/config/database');
-    mockQueryResponse([{ apple_refresh_token: null }]);
-    mockQueryResponse([], 1);
+    const { eraseAccount } = require('../../../services/account/eraseAccount');
+    eraseAccount.mockClear();
 
     const res = await request(app)
       .delete(url)
@@ -539,16 +540,15 @@ describe('DELETE /api/auth/delete-user', () => {
       .send({ userId: 'someone-elses-account' });
 
     expect(res.status).toBe(200);
-    // The delete must be scoped to the token's user, never the body's.
-    const deleteCall = db.query.mock.calls.find((c) => /DELETE FROM users/i.test(c[0]));
-    expect(deleteCall).toBeDefined();
-    expect(deleteCall[1]).toEqual([TEST_ADMIN_USER_ID]);
-    expect(deleteCall[1]).not.toContain('someone-elses-account');
+    // The erase must be scoped to the token's user, never the body's.
+    expect(eraseAccount).toHaveBeenCalledTimes(1);
+    expect(eraseAccount.mock.calls[0][0]).toBe(TEST_ADMIN_USER_ID);
   });
 
   it('returns 404 when user not found', async () => {
     const token = mockAdminUser();
-    mockQueryResponse([], 0); // rowCount = 0
+    const { eraseAccount } = require('../../../services/account/eraseAccount');
+    eraseAccount.mockResolvedValueOnce(false);
 
     const res = await request(app)
       .delete(url)

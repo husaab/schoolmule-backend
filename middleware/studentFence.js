@@ -10,6 +10,7 @@ const STUDENT_ALLOWED = Object.freeze([
   '/api/profile',                // the caller's own avatar and photo
   '/api/observe/client-events',  // browser error reports (tokenOnly mount)
   '/api/auth/apple/connect',     // linking the caller's own Apple ID (keyed on req.user)
+  '/api/auth/delete-user',       // deleting the caller's own account (keyed on req.user)
 ]);
 
 const pathOf = (req) => {
@@ -19,8 +20,9 @@ const pathOf = (req) => {
 };
 // Matched exactly, not as a prefix: the beacon router answers only POST /, so
 // anything below it would fall through to the /api/observe owner console; and
-// of /api/auth's signed-in routes a student needs only the Apple connect.
-const EXACT_ONLY = new Set(['/api/observe/client-events', '/api/auth/apple/connect']);
+// of /api/auth's signed-in routes a student needs only the Apple connect and
+// deleting their own account.
+const EXACT_ONLY = new Set(['/api/observe/client-events', '/api/auth/apple/connect', '/api/auth/delete-user']);
 
 const underPrefix = (path, prefix) => path === prefix || path.startsWith(`${prefix}/`);
 const isStudentAllowed = (path) =>

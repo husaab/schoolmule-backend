@@ -331,12 +331,19 @@ describe('verifyUser: the student fence', () => {
     expect(res.body.code).toBe('STUDENT_FORBIDDEN');
   });
 
-  it('tokenOnly fences students too (e.g. DELETE /api/auth/delete-user)', () => {
+  it('tokenOnly fences students too (e.g. a staff path mounted tokenOnly)', () => {
     const { res, next } = run(sign({ role: 'STUDENT' }), {
-      method: 'DELETE', originalUrl: '/api/auth/delete-user', verifier: verifyUser.tokenOnly,
+      method: 'POST', originalUrl: '/api/auth/approve-school', verifier: verifyUser.tokenOnly,
     });
     expect(next).not.toHaveBeenCalled();
     expect(res.body.code).toBe('STUDENT_FORBIDDEN');
+  });
+
+  it('tokenOnly lets a STUDENT token delete its own account (App Store 5.1.1(v))', () => {
+    const { next } = run(sign({ role: 'STUDENT' }), {
+      method: 'DELETE', originalUrl: '/api/auth/delete-user', verifier: verifyUser.tokenOnly,
+    });
+    expect(next).toHaveBeenCalled();
   });
 
   it('tokenOnly lets a STUDENT token post client error reports', () => {

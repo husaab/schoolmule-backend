@@ -366,6 +366,8 @@ for (const s of students.filter((x) => x.login)) {
     json(s.avatar), "pg_temp.at(DATE '2026-09-15', '09:00')", s.login === 'active' ? `now() - interval '${1 + Math.floor(rand() * 72)} hours'` : 'NULL',
     s.login === 'invited' ? 'TRUE' : 'FALSE']);
 }
+// The store reviewers' deletable account (foundation, after the guardians).
+const REVIEWER = sid('user:reviewer');
 const pendingRows = C.PENDING_SIGNUPS.map((p) => [lit(sid(`user:${p.key}`)), lit(`${slug(p.first)}.${slug(p.last)}@${C.DOMAIN}`), lit(`${p.first} ${p.last}`), lit(p.first), lit(p.last), lit(p.role), p.daysAgo]);
 
 const staffDirRows = staff.map((s) => {
@@ -502,6 +504,17 @@ SELECT v.link_id::uuid, v.student_id::uuid, v.parent_id::uuid, v.name, v.email, 
   FROM (VALUES
 ${values(guardianRows)}
   ) v(link_id, student_id, parent_id, name, email, phone, relation, last_seen, invited_at, invited_by);
+
+-- An account for App Store and Google Play reviewers to delete from Settings
+-- (Delete Account): a guardian of Lina, so the parent portal has a child.
+-- A reseed brings it back.
+INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, created_at)
+SELECT ${lit(REVIEWER)}::uuid, ${lit(`reviewer@${C.DOMAIN}`)}, 'Riley Reviewer', pw.hash, 'Riley', 'Reviewer', 'PLAYGROUND', 'PARENT', TRUE, TRUE,
+       now() - interval '3 days'
+  FROM pw;
+INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, parent_name, parent_email, relation, school, created_at)
+VALUES (${lit(sid('link:reviewer'))}::uuid, ${lit(lina.id)}::uuid, ${lit(REVIEWER)}::uuid, 'Riley Reviewer', ${lit(`reviewer@${C.DOMAIN}`)},
+        'Guardian', 'PLAYGROUND', now() - interval '3 days');
 
 -- ── Student logins: Grade 5 all active; Grades 6–8 mostly active, some invited ─
 CREATE TEMP TABLE seed_logins ON COMMIT DROP AS
