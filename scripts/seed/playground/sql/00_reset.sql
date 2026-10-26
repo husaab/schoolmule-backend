@@ -13,7 +13,8 @@ CREATE OR REPLACE FUNCTION pg_temp.sid(k text) RETURNS uuid LANGUAGE sql IMMUTAB
 -- accounts on @playground.test. Other years and other accounts are never touched.
 CREATE TEMP TABLE y ON COMMIT DROP AS
 SELECT school_year_id FROM school_years WHERE school = 'PLAYGROUND' AND label = '2026-2027';
-CREATE TEMP TABLE su ON COMMIT DROP AS SELECT user_id FROM users WHERE school = 'PLAYGROUND' AND (email LIKE '%@playground.test' OR email LIKE '%.playground.test');
+CREATE TEMP TABLE su ON COMMIT DROP AS SELECT user_id FROM users WHERE school = 'PLAYGROUND'
+  AND (email LIKE '%@playground.test' OR email LIKE '%.playground.test' OR email LIKE 'deleted-%@deleted.schoolmule.invalid');
 CREATE TEMP TABLE ys ON COMMIT DROP AS SELECT student_id FROM students WHERE school_year_id IN (SELECT * FROM y);
 
 DELETE FROM conversations WHERE school = 'PLAYGROUND' AND (student_id IN (SELECT * FROM ys) OR created_by IN (SELECT * FROM su));

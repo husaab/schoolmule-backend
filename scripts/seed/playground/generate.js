@@ -288,7 +288,11 @@ COMMIT;
   return sql.length;
 };
 
-const SEED_USERS = `SELECT user_id FROM users WHERE school = 'PLAYGROUND' AND (email LIKE '%@${C.DOMAIN}' OR email LIKE '%.${C.DOMAIN}')`;
+// Seeded accounts, and PLAYGROUND accounts someone deleted (Delete Account
+// erases rather than removes, moving the address to deleted.schoolmule.invalid):
+// a reseed must clear those too, or the reviewer's fixed id collides.
+const SEED_USERS = `SELECT user_id FROM users WHERE school = 'PLAYGROUND'
+  AND (email LIKE '%@${C.DOMAIN}' OR email LIKE '%.${C.DOMAIN}' OR email LIKE 'deleted-%@deleted.schoolmule.invalid')`;
 
 // ── 00 reset ────────────────────────────────────────────────────────────────
 const reset = `

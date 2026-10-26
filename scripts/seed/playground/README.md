@@ -19,6 +19,8 @@ Password for every seeded login: **`Playground2026!`**
 
 Other logins on the same password, for when you need another view:
 
+- `reviewer@playground.test` (Riley Reviewer, a guardian of Lina) is for App Store and Google Play reviewers to delete from Settings → Delete Account. Deleting erases it (the address becomes `deleted-…@deleted.schoolmule.invalid`); the next reseed clears that and brings it back.
+
 - `yusuf.rahman@playground.test` is the Vice Principal (ADMIN), who also teaches Grade 7 Math.
 - `huda.saleem@playground.test` is the Office Manager (ADMIN with the "Office Staff" role, so no grades and no finance).
 - `karim.haddad@playground.test` is Adam's father, a second guardian on the same children.
