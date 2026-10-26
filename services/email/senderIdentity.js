@@ -75,8 +75,8 @@ function schoolSender({ school, schoolInfo, role = 'academics', extraReplyTo = [
  *
  * @param {string} [role='no-reply'] local part on the platform domain
  * Replies go to PLATFORM_REPLY_TO, or to SUPPORT_EMAIL when it isn't set.
- * SUPPORT_EMAIL is also the inbox the contact form sends to, so the two can
- * differ.
+ * SUPPORT_EMAIL is also the support-ticket inbox and gets a blind copy of every
+ * contact-form message, so the two can differ.
  *
  * @param {{ replyTo?: string|string[] }} [opts] override the reply address (e.g. the contact-form visitor)
  */

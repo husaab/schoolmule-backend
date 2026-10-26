@@ -4,6 +4,10 @@ const { getContactEmailHTML, getTicketEmailHTML } = require('../templates/emailT
 const { getResend, sendOrThrow } = require('../utils/emailUtils');
 const { platformSender } = require('../services/email/senderIdentity');
 
+// The website's contact form goes to the address the website shows, with a
+// blind copy to the support inbox (SUPPORT_EMAIL) so it reaches the founder too.
+const CONTACT_INBOX = 'info@schoolmule.ca';
+
 async function sendContactEmail(req, res) {
   const { name, email, message } = req.body;
   if (!name || !email || !message) {
@@ -11,12 +15,14 @@ async function sendContactEmail(req, res) {
   }
 
   const html = getContactEmailHTML({ name, email, message });
+  const copy = process.env.SUPPORT_EMAIL;
 
   try {
-    // Reply-To is the visitor, so a reply from the support inbox goes straight back to them.
+    // Reply-To is the visitor, so a reply from either inbox goes straight back to them.
     await sendOrThrow(getResend(), {
       ...platformSender('contact', { replyTo: email }),
-      to: process.env.SUPPORT_EMAIL,
+      to: CONTACT_INBOX,
+      bcc: copy && copy.toLowerCase() !== CONTACT_INBOX ? copy : undefined,
       subject: `School Mule Contact Form: ${name}`,
       html
     });

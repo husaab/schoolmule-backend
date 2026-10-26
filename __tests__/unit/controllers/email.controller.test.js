@@ -20,7 +20,9 @@ describe('Email Controller', () => {
   describe('POST /api/email/contact', () => {
     const url = '/api/email/contact';
 
-    it('should send a contact email successfully', async () => {
+    // One request: the form's rate limit allows only a few per test file.
+    it('sends to the website inbox with a blind copy to SUPPORT_EMAIL', async () => {
+      mockSend.mockClear();
       const res = await request(app)
         .post(url)
         .send({
@@ -32,6 +34,12 @@ describe('Email Controller', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.message).toBe('Contact email sent');
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const payload = mockSend.mock.calls[0][0];
+      expect(payload.to).toBe('info@schoolmule.ca');
+      expect(payload.bcc).toBe(process.env.SUPPORT_EMAIL);
+      expect(payload.replyTo).toEqual(['john@example.com']);
     });
 
     it('should return 400 when name is missing', async () => {
