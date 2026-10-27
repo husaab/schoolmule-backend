@@ -7,7 +7,7 @@
 // guardian email writes one `assessment_publication_emails` row.
 
 const { inCurrentTerm } = require('./termScope');
-const { PERSON_NAME } = require('./personName');
+const { PERSON_NAME, PERSON_FIRST_NAME } = require('./personName');
 
 const assessmentPublishQueries = {
   // ────────────────────────────────────────────────────────────
@@ -121,9 +121,9 @@ const assessmentPublishQueries = {
   `,
 
   /**
-   * The email's class line and its "Ask <teacher> about this" links: the
-   * subject, the lead teacher's account name (classes.teacher_name can be
-   * stale), and whether parents can start a conversation about the class:
+   * The email's class line and its "Speak to <teacher> about this" button:
+   * the subject, the lead teacher's salutation and first name from their
+   * account ("Ms. Doha"; classes.teacher_name can be stale), and whether parents can start a conversation about the class:
    * it sits in the active school year (what the parent portal shows) and in
    * that year's current term, the same rule as messaging
    * (termScope.inCurrentTerm; no active term filters nothing).
@@ -132,7 +132,7 @@ const assessmentPublishQueries = {
   selectEmailClassContext: `
     SELECT
       cl.subject,
-      NULLIF(${PERSON_NAME('u')}, '') AS teacher_name,
+      NULLIF(${PERSON_FIRST_NAME('u')}, '') AS teacher_name,
       (cl.school_year_id IS NULL OR COALESCE(sy.is_active, FALSE))
         AND ${inCurrentTerm('cl', 't.term_id', 't.name')} AS askable
     FROM classes AS cl

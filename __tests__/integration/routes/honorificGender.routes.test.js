@@ -58,9 +58,14 @@ describe('Integration: staff titles and student gender', () => {
       await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
     });
 
-    it('puts the title before the full name in the grade email', async () => {
-      const { rows: [ctx] } = await pool.query(publishQueries.selectEmailClassContext, [classId]);
-      expect(ctx.teacher_name).toBe('Ms. Doha Teacher');
+    it('names the teacher by title and first name in the grade email', async () => {
+      const ctx = async () => (await pool.query(publishQueries.selectEmailClassContext, [classId])).rows[0];
+      expect((await ctx()).teacher_name).toBe('Ms. Doha');
+      await pool.query('UPDATE users SET honorific = NULL WHERE user_id = $1', [TEACHER_ID]);
+      expect((await ctx()).teacher_name).toBe('Doha');
+      // With no first name the title isn't left on its own.
+      await pool.query(`UPDATE users SET honorific = 'Ms.', first_name = '' WHERE user_id = $1`, [TEACHER_ID]);
+      expect((await ctx()).teacher_name).toBe('Ms. Teacher');
     });
 
     it('uses the titled account name in the parent pickers, not the stored copy', async () => {

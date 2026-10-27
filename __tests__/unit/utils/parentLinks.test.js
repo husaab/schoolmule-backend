@@ -29,8 +29,8 @@ describe('askFields', () => {
 
 describe('speakLabel', () => {
   it('names the teacher, and says "these grades" for several', () => {
-    expect(speakLabel('Sara Clarke')).toBe('Speak to Sara Clarke about this');
-    expect(speakLabel('Sara Clarke', 3)).toBe('Speak to Sara Clarke about these grades');
+    expect(speakLabel('Ms. Sara')).toBe('Speak to Ms. Sara about this');
+    expect(speakLabel('Ms. Sara', 3)).toBe('Speak to Ms. Sara about these grades');
     expect(speakLabel(null)).toBe('Speak to the teacher about this');
   });
 });

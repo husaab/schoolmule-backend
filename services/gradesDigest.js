@@ -233,7 +233,7 @@ function publishDigestTasks(finalIds, allAssessments, scoreRowsByStudent) {
 }
 
 /**
- * Class subject, school letterhead and the "Ask <teacher> about this" label
+ * Class subject, school letterhead and the "Speak to <teacher> about this" name
  * for the email; soft-fails to generic copy and no ask links. `askable` is
  * false for a class parents may not start a conversation about (past term).
  */
