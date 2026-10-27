@@ -41,6 +41,12 @@ describe('POST /api/observe/client-events', () => {
     expect(res.status).toBe(204);
     expect(buffer.push).toHaveBeenCalledWith('client_events', expect.objectContaining({ kind: 'redirect_loop', user_id: TEST_ADMIN_USER_ID, role: 'PARENT' }));
   });
+  it("accepts the app's push_tap trace", async () => {
+    const res = await authenticatedRequest('post', '/api/observe/client-events', mockParentUser())
+      .send({ events: [{ kind: 'push_tap', message: 'received {"path":"/classes"}', page: '/dashboard' }] });
+    expect(res.status).toBe(204);
+    expect(buffer.push).toHaveBeenCalledWith('client_events', expect.objectContaining({ kind: 'push_tap', page: '/dashboard' }));
+  });
   it('still rejects an unknown kind from an unverified account', async () => {
     const res = await authenticatedRequest('post', '/api/observe/client-events', mockUnverifiedUser()).send({ events: [{ kind: 'nope', message: 'x' }] });
     expect(res.status).toBe(400);

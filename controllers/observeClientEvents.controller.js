@@ -4,7 +4,8 @@
 const buffer = require('../services/observe/eventBuffer');
 const { fingerprint } = require('../services/observe/fingerprint');
 
-const KINDS = new Set(['js_error', 'unhandled_rejection', 'api_failure', 'render_error', 'redirect_loop']);
+// push_tap: the app's trace of a tapped notification (what arrived, what it opened).
+const KINDS = new Set(['js_error', 'unhandled_rejection', 'api_failure', 'render_error', 'redirect_loop', 'push_tap']);
 const MAX_EVENTS = 20;
 const clip = (v, n) => (typeof v === 'string' ? v.slice(0, n) : null);
 // client_events.status is a SMALLINT; anything that isn't an HTTP status is dropped.
