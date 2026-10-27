@@ -48,9 +48,11 @@ module.exports = {
     ORDER BY c.grade, c.subject, s.name, a.sort_order NULLS FIRST
   `,
 
-  // $1 class_id, $2 student_id
+  // Locks the enrolment for the save's transaction, so two saves for one
+  // student run one after the other (each deletes then inserts that
+  // student's rows). $1 class_id, $2 student_id
   selectEnrolment: `
-    SELECT 1 FROM class_students WHERE class_id = $1 AND student_id = $2
+    SELECT 1 FROM class_students WHERE class_id = $1 AND student_id = $2 FOR UPDATE
   `,
 
   // Which of these ids are columns of the class. $1 class_id, $2 uuid[]

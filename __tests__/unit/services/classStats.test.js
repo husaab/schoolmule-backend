@@ -138,8 +138,19 @@ describe('getStudentClassBreakdown (parent and student portals)', () => {
   const matrix = engine.buildMatrixFromRows(classRows({ s3: { stats_left_out_class: true } }), 't1');
 
   it('shows the left-out student and a classmate the same counted average', () => {
-    const left = engine.getStudentClassBreakdown(matrix, 's3').classes[0];
-    const peer = engine.getStudentClassBreakdown(matrix, 's1').classes[0];
+    // Five counted classmates, so the floor (MIN_STUDENTS_FOR_AVERAGE) is met.
+    const bigger = engine.buildMatrixFromRows(
+      [
+        ...classRows({ s3: { stats_left_out_class: true } }),
+        ...['s4', 's5', 's6'].flatMap((id) => [
+          row({ student_id: id, assessment_id: 'a1', score: 75 }),
+          row({ student_id: id, assessment_id: 'a2', assessment_name: 'Quiz 2', score: 85 }),
+        ]),
+      ],
+      't1',
+    );
+    const left = engine.getStudentClassBreakdown(bigger, 's3').classes[0];
+    const peer = engine.getStudentClassBreakdown(bigger, 's1').classes[0];
     expect(left.classAvg).toBe(80);
     expect(peer.classAvg).toBe(80);
     expect(left.finalPct).toBe(25);
@@ -149,6 +160,16 @@ describe('getStudentClassBreakdown (parent and student portals)', () => {
   it('never tells a family who is left out', () => {
     const json = JSON.stringify(engine.getStudentClassBreakdown(matrix, 's3'));
     expect(json).not.toMatch(/leftOut|stats_left_out|classAvgAll/);
+  });
+
+  it('floors the parent portal average while anyone is left out', () => {
+    // 2 counted students: below MIN_STUDENTS_FOR_AVERAGE, so no class or column average.
+    const left = engine.getStudentClassBreakdown(matrix, 's1').classes[0];
+    expect(left.classAvg).toBeNull();
+    expect(left.assessmentScores.every((sc) => sc.classAvgPct === null)).toBe(true);
+    // With nobody left out the parent portal keeps today's unfloored averages.
+    const open = engine.getStudentClassBreakdown(engine.buildMatrixFromRows(classRows(), 't1'), 's1').classes[0];
+    expect(open.classAvg).toBeCloseTo(61.7, 1);
   });
 
   it('floors the classroom average on the counted head count', () => {

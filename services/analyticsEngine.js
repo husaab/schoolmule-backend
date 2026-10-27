@@ -305,9 +305,11 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
     const stu = cls.students.get(studentId);
     const scoreLookup = buildScoreLookup(stu.rows);
     const byId = new Map(cls.assessments.map((a) => [a.assessment_id, a]));
-    // Which averages show (MIN_STUDENTS_FOR_AVERAGE): see the rule above.
+    // Which averages show (MIN_STUDENTS_FOR_AVERAGE): see the rule above. An
+    // average a teacher left students out of is floored too, so leaving out
+    // most of a small class can't turn it into one classmate's mark.
     const partial = classroom ? null : partlyPublished(cls);
-    const floored = (id) => (classroom ? true : partial.has(id));
+    const floored = (id) => (classroom ? true : partial.has(id) || classStats.leftOutCount(cls, id) > 0);
     const shows = !classroom || Boolean(cls.showClassAverage);
     const classAvgByAssessment = new Map();
     if (shows) {
@@ -319,7 +321,7 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
     // Mean of the counted students' finalPcts (null-skip aware). Every family,
     // the left-out student's included, sees this same counted figure.
     const peerPcts = classStats.classPcts(cls, classStats.POOL.COUNTED);
-    const classFloored = classroom || partial.size > 0;
+    const classFloored = classroom || partial.size > 0 || classStats.leftOutCount(cls) > 0;
     const showClassAvg = shows && peerPcts.length > 0 && (!classFloored || peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE);
 
     classes.push({
