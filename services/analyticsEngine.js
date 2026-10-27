@@ -21,6 +21,7 @@ const db = require('../config/database');
 const q = require('../queries/analytics.queries');
 const stats = require('../utils/statsUtils');
 const gradeEngine = require('./gradeEngine');
+const classStats = require('./classStats');
 const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, cellState } = gradeEngine;
 
 const ENGINE_NAME = 'graded_only';
@@ -174,6 +175,9 @@ function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = 
   for (const cls of classes.values()) {
     delete cls._assessmentIds;
     if (publishedOnly) prunePublishedOnly(cls);
+    // Who the class's statistics leave out (stu.leftOut). Never copied onto
+    // the cross-class records below, so family payloads can't carry it.
+    classStats.attachLeftOut(cls);
     for (const stu of cls.students.values()) {
       const result = computeGrade(cls.assessments, stu.rows);
       stu.finalPct = result.pct;
@@ -228,9 +232,11 @@ function buildMatrixFromRows(rows, termId, _engine, { publishedOnly = false } = 
 /**
  * Class-wide average per assessment, so a parent can read a mark against the
  * room: the mean of peers' score/max for leaves, and of peers' graded rollups
- * for categories. Excluded and ungraded peers are skipped. Runs over the
- * class's current rows, so on a published-only matrix unpublished peers can't
- * leak in. Keyed by assessment_id; missing when nobody is graded.
+ * for categories. Excluded and ungraded peers are skipped, and so are students
+ * the teacher left out of the class's statistics (services/classStats.js).
+ * Runs over the class's current rows, so on a published-only matrix
+ * unpublished peers can't leak in. Keyed by assessment_id; missing when
+ * nobody is graded.
  */
 function classAveragesByAssessment(cls) {
   const averages = new Map();
@@ -240,25 +246,7 @@ function classAveragesByAssessment(cls) {
 
 /** classAveragesByAssessment with each average's head count: id -> { avg, n }. */
 function classAverageStats(cls) {
-  const sums = new Map();
-  const add = (id, pct) => {
-    const s = sums.get(id) || { total: 0, n: 0 };
-    s.total += pct;
-    s.n += 1;
-    sums.set(id, s);
-  };
-
-  for (const stu of cls.students.values()) {
-    const lookup = buildScoreLookup(stu.rows);
-    for (const a of cls.assessments) {
-      const r = computeAssessmentForStudent(a, cls.assessments, lookup);
-      if (r.isCounted) add(a.assessment_id, r.pct);
-    }
-  }
-
-  const out = new Map();
-  for (const [id, { total, n }] of sums) out.set(id, { avg: stats.round1(total / n), n });
-  return out;
+  return classStats.assessmentAverages(cls, classStats.POOL.COUNTED);
 }
 
 /**
@@ -328,8 +316,9 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
       }
     }
 
-    // Mean of the class's non-null finalPcts (null-skip aware).
-    const peerPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
+    // Mean of the counted students' finalPcts (null-skip aware). Every family,
+    // the left-out student's included, sees this same counted figure.
+    const peerPcts = classStats.classPcts(cls, classStats.POOL.COUNTED);
     const classFloored = classroom || partial.size > 0;
     const showClassAvg = shows && peerPcts.length > 0 && (!classFloored || peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE);
 

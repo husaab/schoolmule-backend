@@ -390,6 +390,22 @@ CREATE TABLE student_assessments (
   PRIMARY KEY (student_id, assessment_id)
 );
 
+-- Left out of the class's pooled statistics (whole class when assessment_id is NULL).
+CREATE TABLE class_stats_exclusions (
+  exclusion_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  class_id               UUID NOT NULL,
+  student_id             UUID NOT NULL,
+  assessment_id          UUID REFERENCES assessments(assessment_id) ON DELETE CASCADE,
+  note                   TEXT,
+  created_by             UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (class_id, student_id) REFERENCES class_students(class_id, student_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX class_stats_exclusions_whole_class
+  ON class_stats_exclusions (class_id, student_id) WHERE assessment_id IS NULL;
+CREATE UNIQUE INDEX class_stats_exclusions_per_assessment
+  ON class_stats_exclusions (class_id, student_id, assessment_id) WHERE assessment_id IS NOT NULL;
+
 CREATE TABLE student_excluded_assessments (
   student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   class_id               UUID NOT NULL REFERENCES classes(class_id) ON DELETE CASCADE,

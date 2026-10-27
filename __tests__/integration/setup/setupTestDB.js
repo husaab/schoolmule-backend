@@ -91,6 +91,7 @@ const ALL_TABLES = [
   'progress_report_feedback',
   'report_cards',
   'report_card_feedback',
+  'class_stats_exclusions',
   'student_excluded_assessments',
   'student_assessments',
   'class_attendance',

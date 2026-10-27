@@ -2,6 +2,7 @@
 
 const db = require("../config/database");
 const classQueries = require("../queries/class.queries");
+const statsExclusionQueries = require("../queries/classStatsExclusions.queries");
 const bulkQueries = require("../queries/bulk.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
@@ -902,6 +903,8 @@ const duplicateClass = async (req, res) => {
         studentIds,
       ]);
       studentsCopied = studentIds.length;
+      // Students left out of the whole class's statistics stay left out.
+      await client.query(statsExclusionQueries.copyWholeClassToClass, [sourceClassId, newClass.class_id]);
     }
 
     // 6) Copy additional teacher assignments

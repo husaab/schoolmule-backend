@@ -9,14 +9,9 @@
 // number comes from the cached analytics matrix, i.e. the one grade engine.
 
 const engine = require('./analyticsEngine');
+const classStats = require('./classStats');
 const { cellState } = require('./gradeEngine');
 const stats = require('../utils/statsUtils');
-
-/** Mean of a class's non-null finalPcts (null-skip aware). */
-function classAvgPct(cls) {
-  const pcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
-  return pcts.length ? stats.round1(stats.mean(pcts)) : null;
-}
 
 /**
  * Returns the detail payload, or null when the student has no classes in
@@ -35,7 +30,8 @@ async function buildStudentTermDetail(school, studentId, termId, { compareTerm =
 
   const overallAvg = engine.overallAvgForStudent(cross);
 
-  // Percentile within the student's grade cohort (overall averages).
+  // Percentile within the student's grade cohort (overall averages). A
+  // roll-up above the class, so it counts every student.
   const cohortPcts = [];
   for (const other of matrix.students.values()) {
     if (other.gradeLevel !== cross.gradeLevel) continue;
@@ -44,20 +40,23 @@ async function buildStudentTermDetail(school, studentId, termId, { compareTerm =
   }
 
   // Per-class breakdown with percentile within each class + missing work.
+  // Class figures are the counted pool; a student left out of a class is
+  // not ranked in it (staff surfaces only, so leftOut can ride along).
   const classes = [];
   const missingWork = [];
   for (const enrolled of cross.classes) {
     const cls = matrix.classes.get(enrolled.classId);
     const stu = cls.students.get(studentId);
-    const classPcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
 
     classes.push({
       classId: cls.classId,
       subject: cls.subject,
       teacherName: cls.teacherName,
       finalPct: stats.round1(stu.finalPct),
-      classAvg: classAvgPct(cls),
-      percentileInClass: stats.round1(stats.percentileRank(stu.finalPct, classPcts)),
+      classAvg: classStats.classAverage(cls, classStats.POOL.COUNTED),
+      classAvgAll: classStats.classAverage(cls, classStats.POOL.EVERYONE),
+      percentileInClass: classStats.rankInClass(cls).get(studentId).percentile,
+      leftOut: Boolean(stu.leftOut?.wholeClass),
       coverage: stu.coverage,
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,

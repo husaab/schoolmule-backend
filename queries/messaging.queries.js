@@ -349,15 +349,26 @@ const messagingQueries = {
   `,
 
   // Score context. $1 assessment_id, $2 student_id
+  // class_avg_pct follows the grade engine's pool for one column: enrolled,
+  // unarchived students with evidence, minus anyone the teacher left out of
+  // the class's statistics or of this column (or of its category).
   selectAssessmentContext: `
     SELECT a.assessment_id, a.name, a.date, a.weight_points, a.max_score, a.is_published, a.parent_comment, a.published_at,
            sa.score,
            sa.status,
            (SELECT ROUND(AVG(CASE WHEN x.status = 'missing' THEN 0 ELSE x.score / NULLIF(a.max_score, 0) * 100 END)::numeric, 1)
               FROM student_assessments x
+              JOIN class_students xcs ON xcs.class_id = a.class_id AND xcs.student_id = x.student_id
+              JOIN students xs ON xs.student_id = x.student_id AND xs.is_archived = FALSE
               WHERE x.assessment_id = a.assessment_id
                 AND x.status <> 'excused'
-                AND (x.score IS NOT NULL OR x.status = 'missing')) AS class_avg_pct
+                AND (x.score IS NOT NULL OR x.status = 'missing')
+                AND NOT EXISTS (
+                  SELECT 1 FROM class_stats_exclusions e
+                  WHERE e.class_id = a.class_id
+                    AND e.student_id = x.student_id
+                    AND (e.assessment_id IS NULL OR e.assessment_id IN (a.assessment_id, a.parent_assessment_id))
+                )) AS class_avg_pct
     FROM assessments a
     LEFT JOIN student_assessments sa ON sa.assessment_id = a.assessment_id AND sa.student_id = $2
     WHERE a.assessment_id = $1

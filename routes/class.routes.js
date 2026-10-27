@@ -5,6 +5,7 @@ const { getAllClasses, getClassById, getClassesByGrade, getClassesByTeacher, cre
   updateClass, deleteClass, getStudentsInClass, getAssessmentsByClass, addStudentToClass, bulkEnrollStudentsToClass,
   removeStudentFromClass, bulkUnenrollStudentsFromClass, getClassesByTeacherId, duplicateClass,
   addTeacherToClass, removeTeacherFromClass } = require("../controllers/class.controller");
+const statsExclusions = require("../controllers/classStatsExclusions.controller");
 
 const { requireStaffAccess } = require("../middleware/access");
 const requireClassOwnership = require("../middleware/requireClassOwnership");
@@ -41,6 +42,11 @@ router.patch("/:id", managesClass("id"), updateClass);
 router.delete("/:id", managesClass("id"), deleteClass);
 
 router.get("/:classId/assessments", requireClassOwnership, getAssessmentsByClass);
+
+// Who counts in the class's statistics: gradebook access (teachers of it, or classes.all).
+router.get("/:classId/stats-exclusions", requireClassOwnership, statsExclusions.list);
+router.put("/:classId/stats-exclusions/:studentId", requireClassOwnership, statsExclusions.put);
+router.delete("/:classId/stats-exclusions/:studentId", requireClassOwnership, statsExclusions.remove);
 
 router.get("/:classId/students", readsRoster, getStudentsInClass);
 // 2) Enroll a student

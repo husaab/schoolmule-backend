@@ -419,3 +419,67 @@ describe('GET /api/analytics/classes-health', () => {
     expect(res.status).toBe(500);
   });
 });
+
+// ─── Students left out of a class's statistics ──────────────────
+describe('students left out of class statistics', () => {
+  // Alice 85, Bob 65, Cara 25 (left out of the whole class).
+  const rows = [
+    ...sampleRows,
+    matrixRow({ student_id: 's3', student_name: 'Cara', score: 25, stats_left_out_class: true }),
+  ];
+
+  it('class detail: counted stats, the figure with everyone beside them, and Cara not ranked', async () => {
+    mockQueryResponse(rows);
+
+    const res = await request(app).get('/api/analytics/class/c1').set(authHeader()).query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    const d = res.body.data;
+    expect(d.summary.stats).toMatchObject({ count: 2, avg: 75 });
+    expect(d.summary).toMatchObject({ avgAll: 58.3, medianAll: 65, leftOutCount: 1 });
+    expect(d.students.map((s) => [s.studentName, s.finalPct, s.rank, s.leftOut])).toEqual([
+      ['Alice', 85, 1, false],
+      ['Bob', 65, 2, false],
+      ['Cara', 25, null, true],
+    ]);
+    expect(d.students[2].percentileInClass).toBeNull();
+    expect(d.assessments[0]).toMatchObject({ avgAll: 58.3, leftOutCount: 1, completionRate: 1 });
+    expect(d.assessments[0].stats.avg).toBe(75);
+  });
+
+  it('overview: the class row is counted, the subject and school figures count everyone', async () => {
+    mockQueryResponse(rows);
+    mockQueryResponse([{ term_id: 't1', name: 'Term 1', is_active: true }]);
+
+    const res = await request(app).get('/api/analytics/overview').set(authHeader()).query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    const math = res.body.data.bySubject[0];
+    expect(math.classes[0]).toMatchObject({ classAvg: 75, classAvgAll: 58.3, leftOutCount: 1, studentCount: 3 });
+    expect(math.stats.avg).toBe(58.3);
+    expect(res.body.data.school.stats.avg).toBe(58.3);
+  });
+
+  it('classes health: counted average with the figure with everyone', async () => {
+    mockQueryResponse(rows);
+
+    const res = await request(app).get('/api/analytics/classes-health').set(authHeader()).query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.classes[0]).toMatchObject({ classAvg: 75, classMedian: 75, classAvgAll: 58.3, leftOutCount: 1 });
+  });
+
+  it("student detail: Cara's own grade, the counted class average, and not ranked", async () => {
+    mockQueryResponse(rows); // matrix
+    mockQueryResponse([]); // attendance
+
+    const res = await request(app).get('/api/analytics/student/s3').set(authHeader()).query({ termId: 't1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.classes[0]).toMatchObject({
+      finalPct: 25, classAvg: 75, classAvgAll: 58.3, percentileInClass: null, leftOut: true,
+    });
+    // The grade cohort counts everyone: Cara is below both classmates.
+    expect(res.body.data.overall.percentileInGrade).toBe(0);
+  });
+});

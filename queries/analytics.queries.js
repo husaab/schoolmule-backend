@@ -43,7 +43,10 @@ const analyticsQueries = {
       (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
-      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+      -- Left out of the class's pooled statistics (services/classStats.js).
+      (xc.exclusion_id IS NOT NULL) AS stats_left_out_class,
+      (xa.exclusion_id IS NOT NULL) AS stats_left_out_assessment
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
@@ -57,6 +60,15 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- At most one row each (partial unique indexes), so no row is duplicated.
+    LEFT JOIN class_stats_exclusions AS xc
+      ON xc.class_id   = cs.class_id
+     AND xc.student_id = cs.student_id
+     AND xc.assessment_id IS NULL
+    LEFT JOIN class_stats_exclusions AS xa
+      ON xa.class_id      = cs.class_id
+     AND xa.student_id    = cs.student_id
+     AND xa.assessment_id = a.assessment_id
     -- An assignment or quiz fills the column (at most one item per column):
     -- its grades can be published one student at a time (spec D3).
     LEFT JOIN classwork_items AS ti
@@ -102,7 +114,10 @@ const analyticsQueries = {
       (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
-      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+      -- Left out of the class's pooled statistics (services/classStats.js).
+      (xc.exclusion_id IS NOT NULL) AS stats_left_out_class,
+      (xa.exclusion_id IS NOT NULL) AS stats_left_out_assessment
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
@@ -116,6 +131,15 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- At most one row each (partial unique indexes), so no row is duplicated.
+    LEFT JOIN class_stats_exclusions AS xc
+      ON xc.class_id   = cs.class_id
+     AND xc.student_id = cs.student_id
+     AND xc.assessment_id IS NULL
+    LEFT JOIN class_stats_exclusions AS xa
+      ON xa.class_id      = cs.class_id
+     AND xa.student_id    = cs.student_id
+     AND xa.assessment_id = a.assessment_id
     -- An assignment or quiz fills the column (at most one item per column):
     -- its grades can be published one student at a time (spec D3).
     LEFT JOIN classwork_items AS ti
@@ -160,7 +184,10 @@ const analyticsQueries = {
       (ti.item_id IS NOT NULL) AS is_turn_in,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
-      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+      -- Left out of the class's pooled statistics (services/classStats.js).
+      (xc.exclusion_id IS NOT NULL) AS stats_left_out_class,
+      (xa.exclusion_id IS NOT NULL) AS stats_left_out_assessment
     FROM class_students AS cs
     JOIN classes AS c
       ON c.class_id = cs.class_id
@@ -174,6 +201,15 @@ const analyticsQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id    = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    -- At most one row each (partial unique indexes), so no row is duplicated.
+    LEFT JOIN class_stats_exclusions AS xc
+      ON xc.class_id   = cs.class_id
+     AND xc.student_id = cs.student_id
+     AND xc.assessment_id IS NULL
+    LEFT JOIN class_stats_exclusions AS xa
+      ON xa.class_id      = cs.class_id
+     AND xa.student_id    = cs.student_id
+     AND xa.assessment_id = a.assessment_id
     -- An assignment or quiz fills the column (at most one item per column):
     -- its grades can be published one student at a time (spec D3).
     LEFT JOIN classwork_items AS ti

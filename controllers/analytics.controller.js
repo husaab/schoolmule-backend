@@ -11,8 +11,11 @@ const logger = require('../logger');
 const { can } = require('../services/access/access');
 const engine = require('../services/analyticsEngine');
 const { buildStudentTermDetail } = require('../services/studentTermDetail');
-const { computeAssessmentForStudent, buildScoreLookup, cellState } = require('../services/gradeEngine');
+const { cellState } = require('../services/gradeEngine');
+const classStats = require('../services/classStats');
 const stats = require('../utils/statsUtils');
+
+const { COUNTED, EVERYONE } = classStats.POOL;
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -47,16 +50,17 @@ function groupStudentsByGrade(matrix) {
   return byGrade;
 }
 
-/** Per-class average: mean of student finalPcts (null-skip aware). */
-function classAvgPct(cls) {
-  const pcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
-  return pcts.length ? stats.round1(stats.mean(pcts)) : null;
-}
-
-/** Per-class median of student finalPcts (null-skip aware). */
-function classMedianPct(cls) {
-  const pcts = [...cls.students.values()].map((s) => s.finalPct).filter((p) => p != null);
-  return pcts.length ? stats.round1(stats.median(pcts)) : null;
+/**
+ * A class's own figures (the counted pool), plus what staff see beside them:
+ * the average with everyone in it and how many students are left out.
+ */
+function classFigures(cls) {
+  return {
+    classAvg: classStats.classAverage(cls, COUNTED),
+    classMedian: classStats.classMedian(cls, COUNTED),
+    classAvgAll: classStats.classAverage(cls, EVERYONE),
+    leftOutCount: classStats.leftOutCount(cls),
+  };
 }
 
 /** Shape the byGrade section of the overview response. */
@@ -83,19 +87,16 @@ function buildBySubject(matrix) {
     const subject = cls.subject || 'Unspecified';
     if (!bySubject.has(subject)) bySubject.set(subject, { classes: [], studentPcts: [] });
     const entry = bySubject.get(subject);
-    const avg = classAvgPct(cls);
     entry.classes.push({
       classId: cls.classId,
       grade: cls.grade,
       teacherName: cls.teacherName,
       studentCount: cls.students.size,
-      classAvg: avg,
-      classMedian: classMedianPct(cls),
+      ...classFigures(cls),
       termId: cls.termId,
     });
-    for (const stu of cls.students.values()) {
-      if (stu.finalPct != null) entry.studentPcts.push(stu.finalPct);
-    }
+    // The subject's own figures count every student (roll-up).
+    entry.studentPcts.push(...classStats.everyonePcts(cls));
   }
 
   const out = [];
@@ -128,9 +129,7 @@ function buildTermDiff(currentMatrix, compareMatrix) {
     for (const cls of matrix.classes.values()) {
       const subject = cls.subject || 'Unspecified';
       if (!map.has(subject)) map.set(subject, []);
-      for (const stu of cls.students.values()) {
-        if (stu.finalPct != null) map.get(subject).push(stu.finalPct);
-      }
+      map.get(subject).push(...classStats.everyonePcts(cls));
     }
     const out = new Map();
     for (const [subject, pcts] of map.entries()) {
@@ -221,27 +220,20 @@ function classWorkStatus(cls) {
   return { assessmentCount: leaves.length, ungradedAssessments, unpublishedGraded, lastGradedDate };
 }
 
-/** Per-assessment stats for a class (avg/median/completion/anomaly). */
+/**
+ * Per-assessment stats for a class (avg/median/completion/anomaly), over the
+ * counted pool, with the average including everyone beside it for staff.
+ */
 function buildAssessmentStats(cls) {
+  const counted = classStats.assessmentPools(cls, COUNTED);
+  const everyone = classStats.assessmentPools(cls, EVERYONE);
   const out = [];
   for (const a of cls.assessments) {
     if (a.parent_assessment_id) continue; // top-level only in the stats table
 
-    const pcts = [];
-    let gradedCount = 0;
-    let eligibleCount = 0;
-    for (const stu of cls.students.values()) {
-      const r = computeAssessmentForStudent(a, cls.assessments, buildScoreLookup(stu.rows));
-      if (r.state === 'excused') continue;
-      eligibleCount += 1;
-      if (r.isCounted) {
-        pcts.push(r.pct);
-        gradedCount += 1;
-      }
-    }
-
+    const { pcts, eligible } = counted.get(a.assessment_id);
     const summary = stats.summarize(pcts);
-    const completionRate = eligibleCount > 0 ? Math.round((gradedCount / eligibleCount) * 1000) / 1000 : 0;
+    const completionRate = eligible > 0 ? Math.round((pcts.length / eligible) * 1000) / 1000 : 0;
     out.push({
       assessmentId: a.assessment_id,
       name: a.name,
@@ -251,6 +243,8 @@ function buildAssessmentStats(cls) {
       completionRate,
       stats: summary,
       histogram: stats.histogram(pcts),
+      avgAll: stats.round1(stats.mean(everyone.get(a.assessment_id).pcts)),
+      leftOutCount: classStats.leftOutCount(cls, a.assessment_id),
       // Heuristic anomaly flag: very low class average or very high spread.
       isAnomalous: summary != null && (summary.avg < 50 || summary.stdDev > 25),
     });
@@ -338,18 +332,21 @@ const getClassDetail = async (req, res) => {
     }
 
     // Student rows: finalPct + rank + percentile + raw per-assessment scores.
-    const studentList = [...cls.students.values()];
-    const classPcts = studentList.map((s) => s.finalPct).filter((p) => p != null);
-    const ranked = studentList
-      .slice()
-      .sort((a, b) => (b.finalPct ?? -1) - (a.finalPct ?? -1));
+    // Everyone is listed with their own grade; rank and percentile are over
+    // the counted pool, so a student left out of the class has neither.
+    const classPcts = classStats.classPcts(cls, COUNTED);
+    const everyonePcts = classStats.everyonePcts(cls);
+    const ranks = classStats.rankInClass(cls);
+    const ranked = [...cls.students.values()].sort((a, b) => (b.finalPct ?? -1) - (a.finalPct ?? -1));
 
-    const students = ranked.map((stu, idx) => ({
+    const students = ranked.map((stu) => ({
       studentId: stu.studentId,
       studentName: stu.studentName,
       finalPct: stats.round1(stu.finalPct),
-      rank: stu.finalPct != null ? idx + 1 : null,
-      percentileInClass: stats.round1(stats.percentileRank(stu.finalPct, classPcts)),
+      rank: ranks.get(stu.studentId).rank,
+      percentileInClass: ranks.get(stu.studentId).percentile,
+      leftOut: Boolean(stu.leftOut?.wholeClass),
+      leftOutAssessmentIds: stu.leftOut ? [...stu.leftOut.assessmentIds] : [],
       coverage: stu.coverage,
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,
@@ -381,7 +378,13 @@ const getClassDetail = async (req, res) => {
         teacherName: cls.teacherName,
         termId,
         engine: eng,
-        summary: { stats: stats.summarize(classPcts), histogram: stats.histogram(classPcts) },
+        summary: {
+          stats: stats.summarize(classPcts),
+          histogram: stats.histogram(classPcts),
+          avgAll: stats.round1(stats.mean(everyonePcts)),
+          medianAll: stats.round1(stats.median(everyonePcts)),
+          leftOutCount: classStats.leftOutCount(cls),
+        },
         students,
         assessments,
         trend,
@@ -488,8 +491,7 @@ const getClassesHealth = async (req, res) => {
         teacherName: cls.teacherName,
         termId: cls.termId,
         studentCount: students.length,
-        classAvg: classAvgPct(cls),
-        classMedian: classMedianPct(cls),
+        ...classFigures(cls),
         missingCount: students.reduce((sum, s) => sum + s.missingCount, 0),
         notYetGradedCount: students.reduce((sum, s) => sum + (s.notYetGradedCount || 0), 0),
         studentIds: students.map((s) => s.studentId),
@@ -574,8 +576,9 @@ const getTermComparison = async (req, res) => {
         byTerm.set(cls.termId, term);
       }
       term.classIds.push(cls.classId);
+      // The course's own figures: the counted pool, like the class page.
       for (const stu of cls.students.values()) {
-        if (stu.finalPct != null) term.pcts.push(stu.finalPct);
+        if (stu.finalPct != null && classStats.inPool(stu, COUNTED)) term.pcts.push(stu.finalPct);
         let rec = studentMap.get(stu.studentId);
         if (!rec) {
           rec = { studentId: stu.studentId, studentName: stu.studentName, byTerm: {} };
