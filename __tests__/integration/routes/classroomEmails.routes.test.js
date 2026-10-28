@@ -1005,7 +1005,7 @@ describe('Integration: classroom emails', () => {
     expect(rows.every((r) => r.status === 'sent' && r.sent_at && r.attempts === 1)).toBe(true);
 
     const toAmal = sent().find((m) => m.to[0] === 'amal.haddad@example.com');
-    expect(toAmal.from).toBe('"Al Haadi Academy" <alhaadiacademy@test.com>');
+    expect(toAmal.from).toBe('"Al Haadi Academy" <messages@test.com>');
     expect(toAmal.replyTo).toEqual(['office@example.org']); // the office, never the teacher
     expect(toAmal.subject).toBe('New assignment in Science: Plant cell diagram');
     const body = text(toAmal.html);

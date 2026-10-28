@@ -6,7 +6,6 @@ const alHaadi = (over = {}) => ({
   slug: 'al-haadi-academy',
   email: 'office@example.org',
   email_sending_domain: null,
-  email_sender_local: null,
   email_reply_to: [],
   ...over,
 });
@@ -29,10 +28,12 @@ describe('senderIdentity', () => {
   });
 
   describe('schoolSender', () => {
-    it('sends from the platform domain under the school name when no domain is verified', () => {
+    it('sends from the platform role address under the school name when no domain is verified', () => {
       const s = schoolSender({ school: 'ALHAADIACADEMY', schoolInfo: alHaadi() });
-      expect(s.from).toBe('"Al Haadi Academy" <alhaadiacademy@schoolmule.ca>');
-      expect(senderAddress(s.from)).toBe('alhaadiacademy@schoolmule.ca');
+      expect(s.from).toBe('"Al Haadi Academy" <academics@schoolmule.ca>');
+      expect(senderAddress(s.from)).toBe('academics@schoolmule.ca');
+      expect(schoolSender({ school: 'ALHAADIACADEMY', schoolInfo: alHaadi(), role: 'messages' }).from)
+        .toBe('"Al Haadi Academy" <messages@schoolmule.ca>');
     });
 
     it('prepends extraReplyTo addresses, deduped and validated, ahead of the office list', () => {
@@ -47,11 +48,11 @@ describe('senderIdentity', () => {
       expect(schoolSender({ school: 'X', schoolInfo: alHaadi(), role: 'messages' }).replyTo).toEqual(['office@example.org']);
     });
 
-    it('derives the local part from the slug, or the override when set', () => {
-      expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ slug: 'maple-grove-2' }) }).from)
-        .toBe('"Al Haadi Academy" <maplegrove2@schoolmule.ca>');
+    it('shares one address across schools: the slug and email_sender_local no longer shape it', () => {
+      expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ name: 'Maple Grove', slug: 'maple-grove-2' }) }).from)
+        .toBe('"Maple Grove" <academics@schoolmule.ca>');
       expect(schoolSender({ school: 'X', schoolInfo: alHaadi({ email_sender_local: 'Al.Haadi' }) }).from)
-        .toBe('"Al Haadi Academy" <alhaadi@schoolmule.ca>');
+        .toBe('"Al Haadi Academy" <academics@schoolmule.ca>');
     });
 
     it('uses role@domain when the school has a verified sending domain', () => {
@@ -84,7 +85,7 @@ describe('senderIdentity', () => {
 
     it('falls back to the display name and platform domain when the school lookup failed', () => {
       const s = schoolSender({ school: 'ALHAADIACADEMY', schoolInfo: null });
-      expect(s.from).toBe('"Al Haadi Academy" <alhaadiacademy@schoolmule.ca>');
+      expect(s.from).toBe('"Al Haadi Academy" <academics@schoolmule.ca>');
       expect(s.replyTo).toBeUndefined();
     });
 
@@ -95,12 +96,12 @@ describe('senderIdentity', () => {
 
     it('strips characters that could break the From header out of the school name', () => {
       const s = schoolSender({ school: 'X', schoolInfo: alHaadi({ name: 'Evil "School" <x@y.z>\\' }) });
-      expect(s.from).toBe('"Evil School x@y.z" <alhaadiacademy@schoolmule.ca>');
+      expect(s.from).toBe('"Evil School x@y.z" <academics@schoolmule.ca>');
     });
 
     it('honours MAIL_DOMAIN for the platform domain', () => {
       process.env.MAIL_DOMAIN = 'test.com';
-      expect(senderAddress(schoolSender({ school: 'X', schoolInfo: alHaadi() }).from)).toBe('alhaadiacademy@test.com');
+      expect(senderAddress(schoolSender({ school: 'X', schoolInfo: alHaadi() }).from)).toBe('academics@test.com');
     });
   });
 

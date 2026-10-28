@@ -252,7 +252,7 @@ describe('school sender settings', () => {
     expect(res.body.data.emailSendingDomain).toBeNull();
     expect(res.body.data.emailReplyTo).toEqual(['admin@school.example']);
     // MAIL_DOMAIN is test.com in unit tests
-    expect(res.body.data.emailAddresses).toEqual({ academics: 'alhaadiacademy@test.com', messages: 'alhaadiacademy@test.com' });
+    expect(res.body.data.emailAddresses).toEqual({ academics: 'academics@test.com', messages: 'messages@test.com' });
   });
 
   it('uses role addresses on a verified school domain', async () => {

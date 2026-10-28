@@ -17,7 +17,6 @@ const schoolQueries = {
       academic_year_start_date,
       academic_year_end_date,
       email_sending_domain,
-      email_sender_local,
       email_reply_to,
       created_at,
       last_updated_at
@@ -42,7 +41,6 @@ const schoolQueries = {
       academic_year_start_date,
       academic_year_end_date,
       email_sending_domain,
-      email_sender_local,
       email_reply_to,
       created_at,
       last_updated_at
@@ -67,7 +65,6 @@ const schoolQueries = {
       academic_year_start_date,
       academic_year_end_date,
       email_sending_domain,
-      email_sender_local,
       email_reply_to,
       created_at,
       last_updated_at

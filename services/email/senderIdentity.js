@@ -7,10 +7,13 @@
 //
 //   platformSender('verify')  -> SchoolMule <verify@schoolmule.ca>, replies to
 //                                PLATFORM_REPLY_TO (else SUPPORT_EMAIL, the support inbox)
-//   schoolSender(...)         -> "Al Haadi Academy" <academics@alhaadiacademy.ca>
-//                                when the school has a verified sending domain,
-//                                otherwise "Al Haadi Academy" <alhaadiacademy@schoolmule.ca>;
+//   schoolSender(...)         -> "Al Haadi Academy" <academics@schoolmule.ca> (or messages@),
+//                                one shared address per role for every school, so a single
+//                                Google alias gives them all the SchoolMule profile photo;
 //                                replies go to the school's reply-to list + contact email.
+//                                A school with email_sending_domain set sends from
+//                                academics@<that domain> instead (cleared for every school
+//                                by email_sender_platform_only.sql).
 //
 // One Resend team holds every domain (schoolmule.ca plus any school's own
 // verified domain), so the sender identity never implies a different API key.
@@ -20,7 +23,7 @@ const { cleanEmailArray } = require('../../utils/emailUtils');
 
 const PLATFORM_NAME = 'SchoolMule';
 
-// Role local-parts a school with its own verified domain sends from.
+// Role local-parts a school sends from, on the platform domain or its own.
 const SCHOOL_ROLES = new Set(['academics', 'messages']);
 
 const platformDomain = () => process.env.MAIL_DOMAIN || 'schoolmule.ca';
@@ -33,12 +36,6 @@ const formatAddress = (name, address) => {
   return safe ? `"${safe}" <${address}>` : address;
 };
 
-// "al-haadi-academy" -> "alhaadiacademy". Falls back to the enum code.
-const derivedLocal = (row, school) =>
-  String(row.email_sender_local || row.slug || row.school_code || school || 'school')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '') || 'school';
-
 // Only well-formed addresses may become a Reply-To; a bad one would make Resend reject the whole send.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validAddresses = (list) => Array.from(new Set(cleanEmailArray(list).map((e) => e.toLowerCase()).filter((e) => EMAIL_RE.test(e))));
@@ -50,7 +47,7 @@ const validAddresses = (list) => Array.from(new Set(cleanEmailArray(list).map((e
  * @param {string} p.school          school enum code, e.g. 'ALHAADIACADEMY'
  * @param {object|null} [p.schoolInfo] the schools row (selectSchoolByCode); null when the
  *                                   lookup failed, in which case the platform address is used
- * @param {'academics'|'messages'} [p.role='academics'] local part on a verified school domain
+ * @param {'academics'|'messages'} [p.role='academics'] local part of the From address
  * @param {string[]} [p.extraReplyTo] addresses that go BEFORE the school's list (the teacher who
  *                                   wrote an announcement); validated and deduped like the rest
  * @returns {{ from: string, replyTo: string[]|undefined }} spread straight into a Resend payload
@@ -60,9 +57,7 @@ function schoolSender({ school, schoolInfo, role = 'academics', extraReplyTo = [
   const row = schoolInfo || { school_code: school };
   const name = row.name || getSchoolName(school || row.school_code || '');
 
-  const address = row.email_sending_domain
-    ? `${role}@${row.email_sending_domain}`
-    : `${derivedLocal(row, school)}@${platformDomain()}`;
+  const address = `${role}@${row.email_sending_domain || platformDomain()}`;
 
   const replyTo = validAddresses([...extraReplyTo, ...(row.email_reply_to || []), row.email]);
 
