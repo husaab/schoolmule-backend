@@ -435,6 +435,44 @@ describe('Progress Reports Controller', () => {
     });
   });
 
+  // A student with no classes in the term is a skip the caller is told
+  // about, not a server fault: a warning, never an error (errors feed the
+  // Observe alerts).
+  describe('a student with no classes in the term', () => {
+    const logger = require('../../../logger');
+    const notEnrolled = () => {
+      const { mockQueryResponse: q } = require('../../helpers/mockDb');
+      q([buildStudentRow({ student_id: 's1', grade: '5', homeroom_teacher_id: null })]); // the student
+      q([]); // homeroom teacher
+      q([{ term_id: 't1', name: 'Term 1' }]); // the term
+      q([]); // classes in the term: none
+    };
+
+    it('POST /generate answers 422 with the reason', async () => {
+      const warn = jest.spyOn(logger, 'warn');
+      const error = jest.spyOn(logger, 'error');
+      require('../../helpers/mockDb').mockQueryResponse([{ student_id: 's1', school: 'ALHAADIACADEMY', taught: true }]);
+      notEnrolled();
+      const res = await request(app).post('/api/progress-reports/generate').set('Authorization', `Bearer ${mockAdminUser()}`).send({ studentId: 's1', term: 'Term 1' });
+      expect(res.status).toBe(422);
+      expect(res.body.message).toBe('Student not enrolled in any classes for Term 1');
+      expect(warn).toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it('POST /generate/bulk lists it as failed and only warns', async () => {
+      const warn = jest.spyOn(logger, 'warn');
+      const error = jest.spyOn(logger, 'error');
+      require('../../helpers/mockDb').mockQueryResponse([{ student_id: 's1', school: 'ALHAADIACADEMY', taught: true }]);
+      notEnrolled();
+      const res = await request(app).post('/api/progress-reports/generate/bulk').set('Authorization', `Bearer ${mockAdminUser()}`).send({ studentIds: ['s1'], term: 'Term 1' });
+      expect(res.status).toBe(200);
+      expect(res.body.failed).toEqual([{ studentId: 's1', error: 'Student not enrolled in any classes for Term 1' }]);
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ studentId: 's1' }), expect.stringContaining('Skipped'));
+      expect(error).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── POST /api/progress-reports/generate/bulk ──────────────────
   describe('POST /generate/bulk', () => {
     const url = '/api/progress-reports/generate/bulk';

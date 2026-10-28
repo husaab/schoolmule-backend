@@ -311,6 +311,17 @@ const getProgressReportsByTermAndSchool = async (req, res) => {
   }
 };
 
+// A report that can't be made from the data as it stands (no classes in the
+// term, no such term): the caller is told why. Logged as a warning, not an
+// error, so a bulk run over a class doesn't look like an outage to Observe.
+class ReportSkip extends Error {
+  constructor(message, status = 422) {
+    super(message);
+    this.name = 'ReportSkip';
+    this.status = status;
+  }
+}
+
 // Generate single progress report
 const generateProgressReport = async (req, res) => {
   try {
@@ -331,6 +342,10 @@ const generateProgressReport = async (req, res) => {
       data: result
     });
   } catch (error) {
+    if (error instanceof ReportSkip) {
+      logger.warn({ reason: error.message }, 'Progress report not generated');
+      return res.status(error.status).json({ status: 'error', message: error.message });
+    }
     logger.error('Error generating progress report:', error);
     res.status(500).json({
       status: 'error',
@@ -366,7 +381,8 @@ const generateProgressReportsBulk = async (req, res) => {
           const result = await generateSingleProgressReport(studentId, term, { browser });
           successes.push({ studentId, message: 'Progress report generated successfully', data: result });
         } catch (error) {
-          logger.error({ err: error, studentId, term }, 'Failed to generate progress report');
+          if (error instanceof ReportSkip) logger.warn({ studentId, term, reason: error.message }, 'Skipped a progress report');
+          else logger.error({ err: error, studentId, term }, 'Failed to generate progress report');
           failures.push({ studentId, error: error.message || 'Unknown error' });
         }
       }
@@ -397,7 +413,7 @@ const generateSingleProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student information
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) {
-    throw new Error('Student not found');
+    throw new ReportSkip('Student not found', 404);
   }
   const student = studentRows[0];
 
@@ -424,7 +440,7 @@ const generateSingleProgressReport = async (studentId, term, opts = {}) => {
   // habits) that belong to the term being generated — never a mix of terms.
   const { rows: termRows } = await db.query(termQueries.selectTermByNameAndSchool, [term, student.school]);
   if (termRows.length === 0) {
-    throw new Error(`Term "${term}" not found for school`);
+    throw new ReportSkip(`Term "${term}" not found for school`);
   }
   const termId = termRows[0].term_id;
 
@@ -439,7 +455,7 @@ const generateSingleProgressReport = async (studentId, term, opts = {}) => {
   `, [studentId, termId]);
 
   if (classRows.length === 0) {
-    throw new Error(`Student not enrolled in any classes for ${term}`);
+    throw new ReportSkip(`Student not enrolled in any classes for ${term}`);
   }
 
   // 5. Get progress report feedback for each class
