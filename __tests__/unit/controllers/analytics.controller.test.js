@@ -1,7 +1,7 @@
 const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, mockTeacherUser, mockParentUser } = require('../../helpers/mockAuth');
-const { mockQueryResponse, mockQueryError } = require('../../helpers/mockDb');
+const { mockQueryResponse, mockMatrixRows, mockQueryError } = require('../../helpers/mockDb');
 const engine = require('../../../services/analyticsEngine');
 
 let app;
@@ -51,7 +51,7 @@ describe('GET /api/analytics/overview', () => {
   const url = '/api/analytics/overview';
 
   it('returns overview data with grade and subject roll-ups', async () => {
-    mockQueryResponse(sampleRows); // matrix
+    mockMatrixRows(sampleRows); // matrix
     mockQueryResponse([{ term_id: 't1', name: 'Term 1', is_active: true }]); // terms
 
     const res = await request(app).get(url).set(authHeader()).query({ termId: 't1' });
@@ -68,8 +68,8 @@ describe('GET /api/analytics/overview', () => {
   });
 
   it('includes termDiff when compareTerm is provided', async () => {
-    mockQueryResponse(sampleRows); // current matrix
-    mockQueryResponse([matrixRow({ term_id: 't0', score: 70 })]); // compare matrix
+    mockMatrixRows(sampleRows); // current matrix
+    mockMatrixRows([matrixRow({ term_id: 't0', score: 70 })]); // compare matrix
     mockQueryResponse([]); // terms
 
     const res = await request(app)
@@ -95,7 +95,7 @@ describe('GET /api/analytics/overview', () => {
   });
 
   it('ignores a legacy engine selector instead of rejecting it', async () => {
-    mockQueryResponse(sampleRows); // matrix
+    mockMatrixRows(sampleRows); // matrix
     mockQueryResponse([{ term_id: 't1', name: 'Term 1', is_active: true }]); // terms
     const res = await request(app)
       .get(url)
@@ -118,7 +118,7 @@ describe('GET /api/analytics/overview', () => {
   });
 
   it('allows teachers (school-wide access)', async () => {
-    mockQueryResponse(sampleRows);
+    mockMatrixRows(sampleRows);
     mockQueryResponse([]);
     const res = await request(app)
       .get(url)
@@ -131,7 +131,7 @@ describe('GET /api/analytics/overview', () => {
 // ─── GET /api/analytics/class/:classId ──────────────────────────
 describe('GET /api/analytics/class/:classId', () => {
   it('returns class detail with rankings and assessment stats', async () => {
-    mockQueryResponse(sampleRows); // matrix (termId provided, no class lookup)
+    mockMatrixRows(sampleRows); // matrix (termId provided, no class lookup)
 
     const res = await request(app)
       .get('/api/analytics/class/c1')
@@ -151,7 +151,7 @@ describe('GET /api/analytics/class/:classId', () => {
 
   it('resolves the term when termId is omitted', async () => {
     mockQueryResponse([{ term_id: 't1', subject: 'Math', grade: '5', teacher_name: 'Ms. Test' }]); // selectTermIdForClass
-    mockQueryResponse(sampleRows); // matrix
+    mockMatrixRows(sampleRows); // matrix
 
     const res = await request(app).get('/api/analytics/class/c1').set(authHeader());
     expect(res.status).toBe(200);
@@ -159,7 +159,7 @@ describe('GET /api/analytics/class/:classId', () => {
   });
 
   it('404s for a class not in the matrix', async () => {
-    mockQueryResponse(sampleRows);
+    mockMatrixRows(sampleRows);
     const res = await request(app)
       .get('/api/analytics/class/nope')
       .set(authHeader())
@@ -198,7 +198,7 @@ describe('GET /api/analytics/student/:studentId', () => {
         weight_points: 50,
       }),
     ];
-    mockQueryResponse(rows); // matrix
+    mockMatrixRows(rows); // matrix
     mockQueryResponse([
       { student_id: 's1', present_days: 48, total_days: 50, attendance_pct: '96.0' },
     ]); // attendance
@@ -220,9 +220,9 @@ describe('GET /api/analytics/student/:studentId', () => {
   });
 
   it('includes termTrajectory when compareTerm is provided', async () => {
-    mockQueryResponse(sampleRows); // current matrix
+    mockMatrixRows(sampleRows); // current matrix
     mockQueryResponse([]); // attendance
-    mockQueryResponse([matrixRow({ term_id: 't0', score: 75 })]); // compare matrix
+    mockMatrixRows([matrixRow({ term_id: 't0', score: 75 })]); // compare matrix
 
     const res = await request(app)
       .get('/api/analytics/student/s1')
@@ -243,7 +243,7 @@ describe('GET /api/analytics/student/:studentId', () => {
   });
 
   it('404s for an unknown student', async () => {
-    mockQueryResponse(sampleRows);
+    mockMatrixRows(sampleRows);
     mockQueryResponse([]);
     const res = await request(app)
       .get('/api/analytics/student/nope')
@@ -266,7 +266,7 @@ describe('GET /api/analytics/student/:studentId', () => {
 // ─── GET /api/analytics/snapshot ────────────────────────────────
 describe('GET /api/analytics/snapshot', () => {
   it('returns the compact AI snapshot', async () => {
-    mockQueryResponse(sampleRows); // matrix
+    mockMatrixRows(sampleRows); // matrix
     mockQueryResponse([]); // attendance
 
     const res = await request(app)
@@ -292,9 +292,9 @@ describe('GET /api/analytics/term-comparison', () => {
 
   it('aligns a student across two terms with a delta', async () => {
     // Same student (s1) in Math Grade 5 across t1 (80) and t2 (90).
-    mockQueryResponse([
+    mockMatrixRows([
       matrixRow({ class_id: 'c1', term_id: 't1', subject: 'Math', class_grade: '5', student_id: 's1', student_name: 'Alice', score: 80 }),
-      matrixRow({ class_id: 'c2', term_id: 't2', subject: 'Math', class_grade: '5', student_id: 's1', student_name: 'Alice', score: 90 }),
+      matrixRow({ class_id: 'c2', term_id: 't2', subject: 'Math', class_grade: '5', student_id: 's1', student_name: 'Alice', assessment_id: 'a2', score: 90 }),
     ]) // all-terms matrix
     mockQueryResponse([
       { term_id: 't1', name: 'Term 1' },
@@ -322,7 +322,7 @@ describe('GET /api/analytics/term-comparison', () => {
   })
 
   it('404s when no classes match', async () => {
-    mockQueryResponse([matrixRow({ subject: 'Math', class_grade: '5' })])
+    mockMatrixRows([matrixRow({ subject: 'Math', class_grade: '5' })])
     mockQueryResponse([{ term_id: 't1', name: 'Term 1' }])
     const res = await request(app).get(url).set(authHeader()).query({ subject: 'Science', grade: '9' })
     expect(res.status).toBe(404)
@@ -359,7 +359,7 @@ describe('GET /api/analytics/classes-health', () => {
   ];
 
   it('gives admins every class with work-status roll-ups', async () => {
-    mockQueryResponse(healthRows); // matrix
+    mockMatrixRows(healthRows); // matrix
 
     const res = await request(app).get(url).set(authHeader()).query({ termId: 't1' });
 
@@ -387,7 +387,7 @@ describe('GET /api/analytics/classes-health', () => {
   });
 
   it('limits teachers to the classes they own or co-teach', async () => {
-    mockQueryResponse(healthRows); // matrix
+    mockMatrixRows(healthRows); // matrix
     mockQueryResponse([{ class_id: 'c2' }]); // teacher's class ids
 
     const res = await request(app)
@@ -429,7 +429,7 @@ describe('students left out of class statistics', () => {
   ];
 
   it('class detail: counted stats, the figure with everyone beside them, and Cara not ranked', async () => {
-    mockQueryResponse(rows);
+    mockMatrixRows(rows);
 
     const res = await request(app).get('/api/analytics/class/c1').set(authHeader()).query({ termId: 't1' });
 
@@ -448,7 +448,7 @@ describe('students left out of class statistics', () => {
   });
 
   it('overview: the class row is counted, the subject and school figures count everyone', async () => {
-    mockQueryResponse(rows);
+    mockMatrixRows(rows);
     mockQueryResponse([{ term_id: 't1', name: 'Term 1', is_active: true }]);
 
     const res = await request(app).get('/api/analytics/overview').set(authHeader()).query({ termId: 't1' });
@@ -461,7 +461,7 @@ describe('students left out of class statistics', () => {
   });
 
   it('classes health: counted average with the figure with everyone', async () => {
-    mockQueryResponse(rows);
+    mockMatrixRows(rows);
 
     const res = await request(app).get('/api/analytics/classes-health').set(authHeader()).query({ termId: 't1' });
 
@@ -470,7 +470,7 @@ describe('students left out of class statistics', () => {
   });
 
   it("student detail: Cara's own grade, the counted class average, and not ranked", async () => {
-    mockQueryResponse(rows); // matrix
+    mockMatrixRows(rows); // matrix
     mockQueryResponse([]); // attendance
 
     const res = await request(app).get('/api/analytics/student/s3').set(authHeader()).query({ termId: 't1' });

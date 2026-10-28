@@ -2,6 +2,7 @@ const request = require('supertest');
 const { getApp } = require('../../helpers/testApp');
 const { mockAdminUser, mockTeacherUser, mockParentUser } = require('../../helpers/mockAuth');
 const db = require('../../__mocks__/config/database');
+const { splitMatrixRows, matrixReadOf } = require('../../helpers/mockDb');
 const engine = require('../../../services/analyticsEngine');
 const q = require('../../../queries/studentOverview.queries');
 const analyticsQueries = require('../../../queries/analytics.queries');
@@ -87,12 +88,14 @@ const MATRIX = {
 };
 
 /** Answer db.query by SQL identity, so Promise.all ordering never matters. */
-function routeQueries({ student = studentRow(), overrides = {} } = {}) {
+function routeQueries({ student = studentRow(), overrides = {}, matrix = MATRIX } = {}) {
   db.query.mockImplementation(async (sql, params) => {
     if (typeof sql === 'string' && sql.includes('FROM school_years')) {
       return { rows: [{ school_year_id: YEAR_ID, school: 'ALHAADIACADEMY', is_active: true, label: '2025-2026' }] };
     }
     if (overrides[sql]) return { rows: overrides[sql] };
+    const read = matrixReadOf(sql);
+    if (read?.scope === 'term') return { rows: splitMatrixRows(matrix[params[1]] || [])[read.part] };
     switch (sql) {
       case q.selectStudent: return { rows: student ? [student] : [] };
       case q.selectTerms: return { rows: TERMS };
@@ -118,7 +121,6 @@ function routeQueries({ student = studentRow(), overrides = {} } = {}) {
         { class_id: 'c1', subject: 'Math', teacher_name: 'Ms. Test', term: 'Term 1', work_habits: 'G', behavior: 'E', comment: 'Steady work.' },
       ] };
       case progressReportQueries.getStudentProgressReportFeedback: return { rows: [] };
-      case analyticsQueries.selectAnalyticsMatrix: return { rows: MATRIX[params[1]] || [] };
       case analyticsQueries.selectAttendanceForTerm: return { rows: [
         { student_id: STUDENT_ID, present_days: 2, total_days: 2, attendance_pct: '100.0' },
       ] };
@@ -127,7 +129,8 @@ function routeQueries({ student = studentRow(), overrides = {} } = {}) {
   });
 }
 
-const matrixCalls = () => db.query.mock.calls.filter(([sql]) => sql === analyticsQueries.selectAnalyticsMatrix);
+// One per matrix read: each read runs the classes query once.
+const matrixCalls = () => db.query.mock.calls.filter(([sql]) => sql === analyticsQueries.selectMatrixClasses.term);
 
 describe('GET /api/students/:id/overview', () => {
   const url = `/api/students/${STUDENT_ID}/overview`;
@@ -236,7 +239,7 @@ describe('GET /api/students/:id/grades', () => {
   });
 
   it('returns a null detail when the student has nothing graded that term', async () => {
-    routeQueries({ overrides: { [analyticsQueries.selectAnalyticsMatrix]: [] } });
+    routeQueries({ matrix: {} });
     const res = await request(app).get(url).set(asAdmin());
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ termId: 't2', detail: null });

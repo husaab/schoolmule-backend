@@ -3,15 +3,17 @@
 // Orchestration layer for the teacher analytics feature.
 //
 // Design:
-//   - ONE school-wide query (selectAnalyticsMatrix) per (school, term),
-//     grouped in JS into a matrix of classes -> students -> score rows.
+//   - The matrix rows for a school's term (services/analyticsMatrix.js reads
+//     them narrow), grouped in JS into classes -> students -> score rows.
+//     Family surfaces (studentIds) read only the classes their children sit
+//     in, classmates included, so every average matches the school-wide one.
 //   - Every (student, class) % comes from services/gradeEngine.js — the one
 //     engine the gradebook, report cards, parent portal and emails share.
 //     A blank cell carries no weight, "missing" counts as 0, "excused" is
 //     ignored, and a student with no evidence has a null pct (never 0).
-//   - 5-minute in-memory cache per (school, term, publishedOnly). Scores
-//     change during the school day, so this is deliberately much shorter
-//     than the dashboard's 24h grade cache.
+//   - 5-minute in-memory cache per (school, term, publishedOnly, studentIds).
+//     Scores change during the school day, so this is deliberately much
+//     shorter than the dashboard's 24h grade cache.
 //
 // `engine` parameters are still accepted everywhere for backwards
 // compatibility with older clients but are ignored; responses report
@@ -22,6 +24,7 @@ const q = require('../queries/analytics.queries');
 const stats = require('../utils/statsUtils');
 const gradeEngine = require('./gradeEngine');
 const classStats = require('./classStats');
+const { loadMatrixRows } = require('./analyticsMatrix');
 const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, cellState } = gradeEngine;
 
 const ENGINE_NAME = 'graded_only';
@@ -33,7 +36,10 @@ const DEFAULT_ENGINE = ENGINE_NAME;
 // overall average then spans the whole year.
 const ALL_TERMS = 'all';
 
-const matrixCache = new Map(); // key `${school}:${termId}:${engine}` -> { matrix, timestamp }
+// key (matrixKey) -> { promise, timestamp }. The promise goes in before the
+// read finishes, so requests that arrive together (a parent's dashboard asks
+// for its summary, grades, feed and weekly summary at once) share one read.
+const matrixCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 function normalizeEngine() {
@@ -400,28 +406,56 @@ function overallAvgForStudent(crossRecord) {
   return pcts.reduce((s, p) => s + p, 0) / pcts.length;
 }
 
+/** `${school}:${termId}:all|pub`, then `:${sorted student ids}` for a family's matrix. */
+function matrixKey(school, termId, publishedOnly, studentIds) {
+  const key = `${school}:${termId}:${publishedOnly ? 'pub' : 'all'}`;
+  return studentIds ? `${key}:${studentIds.join(',')}` : key;
+}
+
+function readMatrixRows(school, termId, studentIds) {
+  if (studentIds) {
+    if (studentIds.length === 0) return Promise.resolve([]);
+    return loadMatrixRows('students', [school, termId === ALL_TERMS ? null : termId, studentIds]);
+  }
+  return termId === ALL_TERMS
+    ? loadMatrixRows('allTerms', [school])
+    : loadMatrixRows('term', [school, termId]);
+}
+
 /**
  * Fetch (or reuse cached) analytics matrix for a school + term + engine.
  *
- * publishedOnly (parent portal only) restricts the matrix to assessments
+ * publishedOnly (family surfaces) restricts the matrix to assessments
  * teachers have published, and is cached separately from the full matrix
  * so the two never bleed into each other.
+ *
+ * studentIds (family surfaces) reads only the classes those students sit in,
+ * with all their classmates: everything one child's grades, class averages
+ * and missing work need, about a tenth of the school. Other students in that
+ * matrix carry only those classes, so read only the given students.
  */
-async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = false } = {}) {
+async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = false, studentIds = null } = {}) {
   const eng = normalizeEngine(engine);
-  const key = `${school}:${termId}:${publishedOnly ? 'pub' : 'all'}`;
+  const ids = studentIds ? [...new Set(studentIds)].sort() : null;
+  const key = matrixKey(school, termId, publishedOnly, ids);
+  const now = Date.now();
   const cached = matrixCache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.matrix;
+  if (cached && now - cached.timestamp < CACHE_TTL) {
+    return cached.promise;
   }
 
-  const { rows } =
-    termId === ALL_TERMS
-      ? await db.query(q.selectAnalyticsMatrixAllTerms, [school])
-      : await db.query(q.selectAnalyticsMatrix, [school, termId]);
-  const matrix = buildMatrixFromRows(rows, termId, eng, { publishedOnly });
-  matrixCache.set(key, { matrix, timestamp: Date.now() });
-  return matrix;
+  for (const [k, entry] of matrixCache) {
+    if (now - entry.timestamp >= CACHE_TTL) matrixCache.delete(k);
+  }
+  const promise = readMatrixRows(school, termId, ids).then((rows) =>
+    buildMatrixFromRows(rows, termId, eng, { publishedOnly }));
+  const entry = { promise, timestamp: now };
+  matrixCache.set(key, entry);
+  // A failed read is never cached; the next request reads again.
+  promise.catch(() => {
+    if (matrixCache.get(key) === entry) matrixCache.delete(key);
+  });
+  return promise;
 }
 
 /**
@@ -433,7 +467,7 @@ async function buildAnalyticsMatrix(school, termId, engine, { publishedOnly = fa
  * @returns {Promise<Map<string, number>>} assessment_id -> average pct (1 dp)
  */
 async function classAssessmentAverages(classId, { publishedOnly = false } = {}) {
-  const { rows } = await db.query(q.selectClassAnalyticsMatrix, [classId]);
+  const rows = await loadMatrixRows('class', [classId]);
   const matrix = buildMatrixFromRows(rows, null, ENGINE_NAME, { publishedOnly });
   const cls = matrix.classes.get(classId);
   return cls ? classAveragesByAssessment(cls) : new Map();
@@ -501,14 +535,10 @@ async function buildAiSnapshot(school, termId, engine) {
 }
 
 function invalidateCache(school, termId) {
-  if (school && termId) {
-    // Both variants: the parent portal has its own published-only matrix.
-    matrixCache.delete(`${school}:${termId}:all`);
-    matrixCache.delete(`${school}:${termId}:pub`);
-    return;
-  }
+  // Every variant: the full matrix, the published-only one and each family's.
+  const prefix = !school ? '' : termId ? `${school}:${termId}:` : `${school}:`;
   for (const key of matrixCache.keys()) {
-    if (!school || key.startsWith(`${school}:`)) matrixCache.delete(key);
+    if (key.startsWith(prefix)) matrixCache.delete(key);
   }
 }
 

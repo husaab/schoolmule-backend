@@ -1,6 +1,10 @@
 const engine = require('../../../services/analyticsEngine');
+const q = require('../../../queries/analytics.queries');
 const db = require('../../__mocks__/config/database');
-const { mockQueryResponse } = require('../../helpers/mockDb');
+const { mockQueryResponse, mockMatrixRows, mockQueryError } = require('../../helpers/mockDb');
+
+/** Matrix reads so far for a scope: each runs the classes query once. */
+const matrixReads = (scope = 'term') => db.query.mock.calls.filter(([sql]) => sql === q.selectMatrixClasses[scope]);
 
 // Build one flat matrix row (shape of selectAnalyticsMatrix output).
 function matrixRow(overrides = {}) {
@@ -134,24 +138,98 @@ describe('countWorkStatus', () => {
 
 describe('buildAnalyticsMatrix caching', () => {
   it('caches per (school, term) regardless of legacy engine arg, and invalidates correctly', async () => {
-    mockQueryResponse([matrixRow()]);
+    mockMatrixRows([matrixRow()]);
     const first = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
     const second = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_zero');
     expect(second).toBe(first); // same cache entry: the engine arg is ignored
-    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(matrixReads()).toHaveLength(1);
+    expect(matrixReads()[0][1]).toEqual(['SCH', 't1']);
 
     // Invalidate school -> re-fetch
     engine.invalidateCache('SCH');
-    mockQueryResponse([matrixRow()]);
+    mockMatrixRows([matrixRow()]);
     const third = await engine.buildAnalyticsMatrix('SCH', 't1');
     expect(third).not.toBe(first);
-    expect(db.query).toHaveBeenCalledTimes(2);
+    expect(matrixReads()).toHaveLength(2);
+  });
+
+  it('shares one read between requests that arrive together', async () => {
+    mockMatrixRows([matrixRow()]);
+    const [a, b, c] = await Promise.all([
+      engine.buildAnalyticsMatrix('SCH', 't1'),
+      engine.buildAnalyticsMatrix('SCH', 't1'),
+      engine.buildAnalyticsMatrix('SCH', 't1'),
+    ]);
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+    expect(matrixReads()).toHaveLength(1);
+  });
+
+  it('never caches a failed read', async () => {
+    mockQueryError('connection reset'); // the first of the read's queries
+    await expect(engine.buildAnalyticsMatrix('SCH', 't1')).rejects.toThrow('connection reset');
+
+    mockMatrixRows([matrixRow()]);
+    const matrix = await engine.buildAnalyticsMatrix('SCH', 't1');
+    expect(matrix.students.get('s1').classes[0].finalPct).toBeCloseTo(80);
+    expect(matrixReads()).toHaveLength(2);
+  });
+});
+
+describe('a family\'s matrix (studentIds)', () => {
+  it('reads only the classes the students sit in, keyed by the set of students', async () => {
+    mockMatrixRows([matrixRow(), matrixRow({ student_id: 's2', student_name: 'Bea', score: 60 })]);
+    const first = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s2', 's1', 's2'] });
+    const second = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s1', 's2'] });
+
+    expect(second).toBe(first); // same students in any order share the entry
+    expect(matrixReads('students')).toHaveLength(1);
+    expect(matrixReads('students')[0][1]).toEqual(['SCH', 't1', ['s1', 's2']]);
+    expect(matrixReads('term')).toHaveLength(0);
+    // Classmates still count toward the class average.
+    expect(engine.getStudentClassBreakdown(first, 's1').classes[0].classAvg).toBeCloseTo(70);
+  });
+
+  it('is cached apart from the school-wide matrix and from other families', async () => {
+    mockMatrixRows([matrixRow()]);
+    const school = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true });
+    mockMatrixRows([matrixRow()]);
+    const family = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s1'] });
+    mockMatrixRows([matrixRow({ student_id: 's2' })]);
+    const other = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s2'] });
+
+    expect(family).not.toBe(school);
+    expect(other).not.toBe(family);
+    expect(matrixReads('term')).toHaveLength(1);
+    expect(matrixReads('students')).toHaveLength(2);
+  });
+
+  it('reads every term with a null term for ALL_TERMS', async () => {
+    mockMatrixRows([matrixRow()]);
+    await engine.buildAnalyticsMatrix('SCH', engine.ALL_TERMS, null, { studentIds: ['s1'] });
+    expect(matrixReads('students')[0][1]).toEqual(['SCH', null, ['s1']]);
+  });
+
+  it('reads nothing for no students', async () => {
+    const matrix = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: [] });
+    expect(matrix.students.size).toBe(0);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it('is cleared with its school and term', async () => {
+    mockMatrixRows([matrixRow()]);
+    const before = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s1'] });
+    engine.invalidateCache('SCH', 't1');
+    mockMatrixRows([matrixRow()]);
+    const after = await engine.buildAnalyticsMatrix('SCH', 't1', null, { publishedOnly: true, studentIds: ['s1'] });
+    expect(after).not.toBe(before);
+    expect(matrixReads('students')).toHaveLength(2);
   });
 });
 
 describe('ALL_TERMS combined mode', () => {
   it('merges classes from multiple terms into one matrix', async () => {
-    mockQueryResponse([
+    mockMatrixRows([
       matrixRow({ term_id: 't1', score: 80 }),
       matrixRow({ term_id: 't2', class_id: 'c2', subject: 'Math', assessment_id: 'a9', score: 60 }),
     ]);
@@ -160,8 +238,9 @@ describe('ALL_TERMS combined mode', () => {
     const cross = matrix.students.get('s1');
     expect(cross.classes).toHaveLength(2);
     expect(engine.overallAvgForStudent(cross)).toBeCloseTo(70);
-    // The all-terms variant must use the school-only query (1 param)
-    expect(db.query.mock.calls[0][1]).toEqual(['SCH']);
+    // The all-terms variant must use the school-only queries (1 param)
+    expect(matrixReads('allTerms')).toHaveLength(1);
+    expect(matrixReads('allTerms')[0][1]).toEqual(['SCH']);
   });
 
   it('uses the all-terms attendance query', async () => {
@@ -176,8 +255,8 @@ describe('ALL_TERMS combined mode', () => {
 
 describe('buildAiSnapshot', () => {
   it('returns compact per-student records with attendance and lowest subject', async () => {
-    // matrix query
-    mockQueryResponse([
+    // matrix queries
+    mockMatrixRows([
       matrixRow({ score: 90 }),
       matrixRow({ class_id: 'c2', subject: 'Science', assessment_id: 'a9', score: 40 }),
     ]);
@@ -486,28 +565,38 @@ describe('getStudentClassBreakdown', () => {
 });
 
 describe('invalidateCache with the publishedOnly key', () => {
-  it('clears both the full and published-only variants by exact key', async () => {
-    mockQueryResponse([matrixRow()]);
+  it('clears both the full and published-only variants of the term', async () => {
+    mockMatrixRows([matrixRow()]);
     const full = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
-    mockQueryResponse([matrixRow()]);
+    mockMatrixRows([matrixRow()]);
     const parentView = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip', {
       publishedOnly: true,
     });
-    expect(db.query).toHaveBeenCalledTimes(2); // separate cache entries
+    expect(matrixReads()).toHaveLength(2); // separate cache entries
 
-    // The exact-match branch must know about the :pub/:all suffix — a bare
-    // 3-part key would silently match nothing and leave both entries stale.
+    // The term branch must know about the :pub/:all suffix — a bare 3-part
+    // key would silently match nothing and leave both entries stale.
     engine.invalidateCache('SCH', 't1', 'null_skip');
 
-    mockQueryResponse([matrixRow()]);
+    mockMatrixRows([matrixRow()]);
     const refetchedFull = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip');
-    mockQueryResponse([matrixRow()]);
+    mockMatrixRows([matrixRow()]);
     const refetchedParent = await engine.buildAnalyticsMatrix('SCH', 't1', 'null_skip', {
       publishedOnly: true,
     });
 
     expect(refetchedFull).not.toBe(full);
     expect(refetchedParent).not.toBe(parentView);
-    expect(db.query).toHaveBeenCalledTimes(4);
+    expect(matrixReads()).toHaveLength(4);
+  });
+
+  it('leaves other terms and schools alone', async () => {
+    mockMatrixRows([matrixRow()]);
+    const t2 = await engine.buildAnalyticsMatrix('SCH', 't2');
+    mockMatrixRows([matrixRow()]);
+    const otherSchool = await engine.buildAnalyticsMatrix('SCH2', 't1');
+    engine.invalidateCache('SCH', 't1');
+    expect(await engine.buildAnalyticsMatrix('SCH', 't2')).toBe(t2);
+    expect(await engine.buildAnalyticsMatrix('SCH2', 't1')).toBe(otherSchool);
   });
 });

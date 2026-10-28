@@ -109,6 +109,7 @@ async function gatherWeekFacts({ school, studentId, termId, engineName, weekStar
   if (termId) {
     const matrix = await engine.buildAnalyticsMatrix(school, termId, engineName, {
       publishedOnly: true,
+      studentIds: [studentId],
     });
     breakdown = engine.getStudentClassBreakdown(matrix, studentId);
   }

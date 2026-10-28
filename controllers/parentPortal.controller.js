@@ -29,8 +29,9 @@ const { resolveTerm } = require('../services/classroom/resolveTerm');
 // excluded from their averages entirely — the matrix is pruned before the
 // grade engine runs, so finalPct is genuinely recomputed over the published
 // subset rather than display-filtered. Teacher-facing consumers of the same
-// engine pass nothing and are unaffected.
-const PARENT_VIEW = { publishedOnly: true };
+// engine pass nothing and are unaffected. The matrix holds only the classes
+// the parent's children sit in (studentIds), never the whole school.
+const parentView = (studentIds) => ({ publishedOnly: true, studentIds });
 
 /** Sum per-class coverage counts into one { assessed, graded, missing, excused, blank, total }. */
 function sumCoverage(classes) {
@@ -105,7 +106,7 @@ const getSummary = async (req, res) => {
     let attendance = new Map();
     if (termId) {
       [matrix, attendance] = await Promise.all([
-        engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW),
+        engine.buildAnalyticsMatrix(school, termId, eng, parentView(children.map((c) => c.student_id))),
         engine.getAttendanceMap(school, termId),
       ]);
     }
@@ -187,7 +188,7 @@ const getStudentGrades = async (req, res) => {
     }
 
     const [matrix, attendance] = await Promise.all([
-      engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW),
+      engine.buildAnalyticsMatrix(school, termId, eng, parentView([studentId])),
       engine.getAttendanceMap(school, termId),
     ]);
 
@@ -409,7 +410,7 @@ const getRecentPublications = async (req, res) => {
     }
 
     const lastSeenByStudent = new Map(seenRows.map((r) => [r.student_id, r.last_seen_at]));
-    const matrix = await engine.buildAnalyticsMatrix(school, termId, eng, PARENT_VIEW);
+    const matrix = await engine.buildAnalyticsMatrix(school, termId, eng, parentView(children.map((c) => c.student_id)));
 
     const items = [];
     for (const child of children) {

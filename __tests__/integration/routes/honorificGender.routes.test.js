@@ -10,7 +10,7 @@ const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
 const publishQueries = require('../../../queries/assessmentPublish.queries');
 const messagingQueries = require('../../../queries/messaging.queries');
-const analyticsQueries = require('../../../queries/analytics.queries');
+const { loadMatrixRows } = require('../../../services/analyticsMatrix');
 
 const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEACHER_ID = '770e8400-e29b-41d4-a716-446655440001';
@@ -81,7 +81,7 @@ describe('Integration: staff titles and student gender', () => {
       );
       await pool.query('UPDATE classes SET term_id = $1 WHERE class_id = $2', [term.term_id, classId]);
       await pool.query(`INSERT INTO assessments (class_id, name, weight_points, max_score) VALUES ($1, 'Quiz', 10, 10)`, [classId]);
-      const matrix = () => pool.query(analyticsQueries.selectAnalyticsMatrix, ['ALHAADIACADEMY', term.term_id]);
+      const matrix = async () => ({ rows: await loadMatrixRows('term', ['ALHAADIACADEMY', term.term_id]) });
       expect((await matrix()).rows[0].teacher_name).toBe('Ms. Doha Teacher');
       // With no account behind the class, the stored copy is what there is.
       await pool.query('UPDATE classes SET teacher_id = $1 WHERE class_id = $2', [ADMIN_ID, classId]);

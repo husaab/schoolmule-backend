@@ -132,7 +132,8 @@ async function buildChildGrades({ studentId, school, req }) {
   if (!student || student.school !== school || !base.usesMarks || !termId) return base;
 
   const [matrix, { rows: classRows }] = await Promise.all([
-    engine.buildAnalyticsMatrix(school, termId, engine.normalizeEngine(), PUBLISHED_ONLY),
+    // Only the classes the child sits in (with their classmates, for averages).
+    engine.buildAnalyticsMatrix(school, termId, engine.normalizeEngine(), { ...PUBLISHED_ONLY, studentIds: [studentId] }),
     db.query(q.selectGradeClasses, [studentId, school, termId === engine.ALL_TERMS ? null : termId]),
   ]);
   // The Classroom average rule: shown by the class and at least 5 counted scores.

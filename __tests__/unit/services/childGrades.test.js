@@ -92,7 +92,8 @@ describe('buildChildGrades', () => {
   it('asks the engine for the published-only matrix, so an unpublished assessment never appears or counts', async () => {
     const grades = await buildChildGrades({ studentId: AMAL, school: SCHOOL, req: req() });
 
-    expect(engine.buildAnalyticsMatrix).toHaveBeenCalledWith(SCHOOL, TERM_ID, 'graded_only', { publishedOnly: true });
+    // Only the child's classes (with their classmates), never the whole school.
+    expect(engine.buildAnalyticsMatrix).toHaveBeenCalledWith(SCHOOL, TERM_ID, 'graded_only', { publishedOnly: true, studentIds: [AMAL] });
     expect(grades).toMatchObject({ studentId: AMAL, usesMarks: true, termId: TERM_ID, terms: [{ termId: TERM_ID, name: 'Term 1', isActive: true }] });
     const [math] = grades.classes;
     expect(math.items.map((i) => i.title)).toEqual(['Quiz 1']);
