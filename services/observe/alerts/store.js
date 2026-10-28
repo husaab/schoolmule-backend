@@ -8,12 +8,18 @@
 // about a database outage must not depend on that database.
 //
 // The worker tells the store whether this tick may touch the database
-// (setDbAvailable); a call that fails anyway flips it to memory too.
+// (setDbAvailable); a call that can't reach it flips it to memory too. A
+// call the database refuses (a constraint, bad data) is not an outage: that
+// row is dropped or merged and everything else carries on.
 const db = require('../../../config/database');
 const logger = require('../../../logger');
 const q = require('../../../queries/observeAlerts.queries');
+const { owesRecovery, owesSummary, mergeIncidents } = require('./engine');
+const { withTimeout } = require('./withTimeout');
 
 const UNDEFINED_TABLE = '42P01';
+const UNIQUE_VIOLATION = '23505';
+const DB_TIMEOUT_MS = 10 * 1000;
 const MAX_QUEUED_LOGS = 200;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -25,6 +31,7 @@ const dirty = new Set();        // incident ids changed while the database was a
 let queuedLogs = [];            // notification rows not yet written
 let sentEmails = [];            // send times, this process (the hourly cap)
 let overrides = {};             // last known rule overrides
+let strayOpen = null;           // an open incident from memory the database already had one for
 
 const ms = (v) => (v ? new Date(v).getTime() : null);
 const at = (v) => (v === null || v === undefined ? null : new Date(v));
@@ -57,27 +64,37 @@ const rowParams = (i) => [
   JSON.stringify(i.rules), JSON.stringify(i.stats),
 ];
 
-function lostDb(err, what) {
-  if (err && err.code === UNDEFINED_TABLE) {
-    missing = true;
-    return;
-  }
-  dbAvailable = false;
-  logger.warn({ observe: true, err: err && err.message }, `Alerts: ${what} failed; carrying on from memory`);
-}
+// Integrity (23) and data (22) errors: the database is up and said no.
+const refused = (err) => Boolean(err && typeof err.code === 'string' && /^2[23]/.test(err.code));
 
 /**
- * Runs `fn` against the database if it's usable this tick; null otherwise.
+ * Runs `fn` against the database (10 s at most) if it's usable this tick.
+ * @returns {Promise<{ ok: true, value: any } | { ok: false, refused?: Error }>}
  * `force` tries anyway: a console request has just used the database.
  */
-async function viaDb(what, fn, { force = false } = {}) {
-  if ((!dbAvailable && !force) || missing) return null;
+async function runDb(what, fn, { force = false } = {}) {
+  if ((!dbAvailable && !force) || missing) return { ok: false };
   try {
-    return await fn();
+    return { ok: true, value: await withTimeout(fn(), DB_TIMEOUT_MS, what) };
   } catch (err) {
-    lostDb(err, what);
-    return null;
+    if (err && err.code === UNDEFINED_TABLE) {
+      missing = true;
+      return { ok: false };
+    }
+    if (refused(err)) {
+      logger.warn({ observe: true, err: err.message, code: err.code }, `Alerts: ${what} refused`);
+      return { ok: false, refused: err };
+    }
+    dbAvailable = false;
+    logger.warn({ observe: true, err: err && err.message }, `Alerts: ${what} failed; carrying on from memory`);
+    return { ok: false };
   }
+}
+
+/** runDb for callers that only need the value (null when it didn't run). */
+async function viaDb(what, fn, opts) {
+  const r = await runDb(what, fn, opts);
+  return r.ok ? r.value : null;
 }
 
 function setDbAvailable(ok) {
@@ -86,11 +103,8 @@ function setDbAvailable(ok) {
 
 const isMissing = () => missing;
 
-/** The resolved incidents that still owe an email. */
-const owedOf = (list, now) =>
-  list.filter((i) => now - i.resolvedAt < 24 * HOUR_MS && (
-    (i.notifiedAt && !i.recoveredNotifiedAt && i.tier !== 'info') || (!i.notifiedAt && !i.summarizedAt)
-  ));
+/** The resolved incidents (last 24 hours) that still owe an email. */
+const owedOf = (list, now) => list.filter((i) => now - i.resolvedAt < 24 * HOUR_MS && (owesRecovery(i) || owesSummary(i)));
 
 /** What the engine needs this tick: { open, lastResolved, owed }. */
 function current(now) {
@@ -102,20 +116,24 @@ function current(now) {
  * A no-op (memory stays as it is) when the database isn't usable.
  */
 async function sync() {
-  if (dirty.size) {
-    for (const inc of [open, ...recent].filter((i) => i && dirty.has(i.id))) {
-      const ok = await viaDb('writing back an incident', () => db.query(q.upsertIncident, rowParams(inc)));
-      if (ok === null) return;
-      dirty.delete(inc.id);
-    }
+  // Resolved ones first: the open one may have replaced one of them, and the
+  // database allows a single open incident.
+  for (const inc of [...recent, open].filter((i) => i && dirty.has(i.id))) {
+    const r = await runDb('writing back an incident', () => db.query(q.upsertIncident, rowParams(inc)));
+    if (!r.ok && !r.refused) return;
+    dirty.delete(inc.id);
+    // Opened here while the database was away, but it already has one open
+    // (ours from before a restart, or another replica's): fold into that.
+    if (r.refused && r.refused.code === UNIQUE_VIOLATION && inc.status === 'open') strayOpen = inc;
   }
   if (queuedLogs.length) {
     const pending = queuedLogs;
     queuedLogs = [];
-    for (const row of pending) {
-      const ok = await viaDb('writing the notification log', () => db.query(q.insertNotification, row));
-      if (ok === null) {
-        queuedLogs = [...pending.slice(pending.indexOf(row)), ...queuedLogs].slice(-MAX_QUEUED_LOGS);
+    for (let i = 0; i < pending.length; i += 1) {
+      const r = await runDb('writing the notification log', () => db.query(q.insertNotification, pending[i]));
+      // A refused row (its incident was deleted meanwhile) is dropped.
+      if (!r.ok && !r.refused) {
+        queuedLogs = [...pending.slice(i), ...queuedLogs].slice(-MAX_QUEUED_LOGS);
         return;
       }
     }
@@ -125,6 +143,14 @@ async function sync() {
   const rows = res.rows.map(fromRow);
   open = rows.find((i) => i.status === 'open') || null;
   recent = rows.filter((i) => i.status === 'resolved').sort((a, b) => b.resolvedAt - a.resolvedAt);
+  if (strayOpen) {
+    const stray = strayOpen;
+    strayOpen = null;
+    // The other one may have resolved meanwhile; then ours is written next tick.
+    open = open ? mergeIncidents(open, stray) : stray;
+    dirty.add(open.id);
+    logger.warn({ observe: true, kept: open.id, merged: stray.id }, 'Alerts: merged an incident opened while the database was away');
+  }
 }
 
 /** Saves the engine's new view of the open incident and/or a just-resolved one. */
@@ -182,7 +208,8 @@ const CLAIMS = {
 /**
  * Claims the right to send `kind` for an incident. Only one replica gets it
  * while the database answers; without it, this process decides alone.
- * @returns {Promise<{ release: () => Promise<void> } | null>} null when someone else has it
+ * @returns {Promise<{ subject: string, release: () => Promise<void> } | null>}
+ *   the thread's subject and a way to hand the claim back; null when someone else has it
  */
 async function claim(kind, inc, now, subject) {
   const spec = CLAIMS[kind];
@@ -242,10 +269,13 @@ async function emailsLastHour(now) {
   return Math.max(sentEmails.length, res ? res.rows[0].n : 0);
 }
 
+/** alert_rule_overrides rows keyed by rule id (also used by the console). */
+const overridesFromRows = (rows) => Object.fromEntries(rows.map((r) => [r.rule_id, r]));
+
 /** Rule overrides keyed by rule id; the last known set when the database is away. */
 async function loadOverrides() {
   const res = await viaDb('loading rule settings', () => db.query(q.overrides));
-  if (res) overrides = Object.fromEntries(res.rows.map((r) => [r.rule_id, r]));
+  if (res) overrides = overridesFromRows(res.rows);
   return overrides;
 }
 
@@ -272,6 +302,7 @@ function reset() {
   queuedLogs = [];
   sentEmails = [];
   overrides = {};
+  strayOpen = null;
 }
 
 module.exports = {
@@ -289,7 +320,6 @@ module.exports = {
   recordBoot,
   prune,
   fromRow,
+  overridesFromRows,
   reset,
-  // Read by the console's status endpoint.
-  peekOpen: () => open,
 };

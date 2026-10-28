@@ -19,11 +19,14 @@ const {
 const store = require('./store');
 const ownerPush = require('./ownerPush');
 const { TIME_ZONE } = require('./engine');
+const { withTimeout } = require('./withTimeout');
 
 const TIER_LABEL = { critical: 'Critical', warning: 'Warning', info: 'Notice' };
 // Pushed: the moments worth a buzz. Reminders and summaries are email only.
 const PUSHED = new Set(['opened', 'escalated', 'reopened', 'recovered', 'test']);
 const MAX_BACKOFF_MS = 10 * 60 * 1000;
+// Resend's SDK has no timeout of its own; a hung send must not freeze the tick.
+const SEND_TIMEOUT_MS = 15 * 1000;
 
 const maxPerHour = () => Number(process.env.ALERT_MAX_EMAILS_PER_HOUR) || 6;
 const appUrl = () => (process.env.FRONTEND_URL || 'https://schoolmule.ca').replace(/\/+$/, '');
@@ -51,8 +54,9 @@ function fmtDuration(msTotal) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
-const incidentUrl = (inc) => `${appUrl()}/observe/alerts?incident=${encodeURIComponent(inc.id)}`;
+// The app and the web open the same path (pushes carry it as is).
 const appPath = (inc) => `/observe/alerts?incident=${encodeURIComponent(inc.id)}`;
+const incidentUrl = (inc) => `${appUrl()}${appPath(inc)}`;
 
 function railwayUrl() {
   const { RAILWAY_PROJECT_ID: p, RAILWAY_SERVICE_ID: s, RAILWAY_ENVIRONMENT_ID: e } = process.env;
@@ -104,7 +108,7 @@ function footerFor(inc) {
 /** { subject, html, push } for one incident email. */
 function buildIncidentEmail(kind, inc, now) {
   const subject = inc.subject || subjectFor(inc);
-  const firstSummary = Object.values(inc.rules).sort((a, b) => b.lastAt - a.lastAt)[0]?.summary || '';
+  const latestSummary = Object.values(inc.rules).sort((a, b) => b.lastAt - a.lastAt)[0]?.summary || '';
   const open = fmtDuration(now - inc.openedAt);
   const head = {
     opened: inc.title,
@@ -126,7 +130,7 @@ function buildIncidentEmail(kind, inc, now) {
   const html = renderEmail({
     brand: SCHOOLMULE_BRAND,
     heading: head,
-    preheader: firstSummary,
+    preheader: latestSummary,
     content: [
       intro,
       facts(ruleList(inc)),
@@ -138,9 +142,9 @@ function buildIncidentEmail(kind, inc, now) {
   });
 
   const push = {
-    opened: { title: `${TIER_LABEL[inc.tier]}: ${inc.title}`, body: firstSummary },
-    escalated: { title: `Critical: ${inc.title}`, body: firstSummary },
-    reopened: { title: `Back: ${inc.title}`, body: firstSummary },
+    opened: { title: `${TIER_LABEL[inc.tier]}: ${inc.title}`, body: latestSummary },
+    escalated: { title: `Critical: ${inc.title}`, body: latestSummary },
+    reopened: { title: `Back: ${inc.title}`, body: latestSummary },
     recovered: { title: `Recovered: ${inc.title}`, body: `After ${fmtDuration((inc.resolvedAt || now) - inc.openedAt)}.` },
   }[kind];
 
@@ -199,7 +203,7 @@ async function sendEmail({ subject, html, threadOf }) {
   const to = recipients();
   if (!to.length) throw new Error('No alert recipients: set PLATFORM_OWNER_EMAILS or ALERT_EMAILS');
   const headers = threadOf ? { 'In-Reply-To': threadId(threadOf), References: threadId(threadOf) } : undefined;
-  await sendOrThrow(getResend(), { ...platformSender('alerts'), to, subject, html, ...(headers ? { headers } : {}) });
+  await withTimeout(sendOrThrow(getResend(), { ...platformSender('alerts'), to, subject, html, ...(headers ? { headers } : {}) }), SEND_TIMEOUT_MS, 'Sending the alert email');
   return to.length;
 }
 
@@ -233,15 +237,16 @@ async function deliver(item, now = Date.now()) {
     const claimed = await store.claimSummary(item.incidents, now);
     if (!claimed.incidents.length) return 'claimed-elsewhere';
     const email = buildSummaryEmail(claimed.incidents);
+    let n;
     try {
-      const n = await sendEmail(email);
-      backoff.delete(key);
-      await store.logNotification({ channel: 'email', kind: 'summary', ok: true, recipients: n, subject: email.subject, now });
-      return 'sent';
+      n = await sendEmail(email);
     } catch (err) {
       await claimed.release();
       return fail(key, item, email.subject, null, err, now);
     }
+    backoff.delete(key);
+    await store.logNotification({ channel: 'email', kind: 'summary', ok: true, recipients: n, subject: email.subject, now });
+    return 'sent';
   }
 
   const inc = item.incident;
@@ -250,18 +255,21 @@ async function deliver(item, now = Date.now()) {
   if (!claim) return 'claimed-elsewhere';
   // The thread's subject is whatever the first email used.
   const subject = item.kind === 'opened' ? claim.subject : `Re: ${claim.subject}`;
+  // Only the send is inside the try: anything after a sent email must not
+  // hand the claim back, or the email would go out twice.
+  let n;
   try {
-    const n = await sendEmail({ subject, html: email.html, threadOf: inc });
-    backoff.delete(key);
-    await store.logNotification({ incidentId: inc.id, channel: 'email', kind: item.kind, ok: true, recipients: n, subject, now });
-    if (PUSHED.has(item.kind)) await pushOnce(key, item.kind, inc, email.push, now);
-    return 'sent';
+    n = await sendEmail({ subject, html: email.html, threadOf: inc });
   } catch (err) {
     await claim.release();
     // Email down is exactly when the phone matters: push anyway (once).
     if (PUSHED.has(item.kind)) await pushOnce(key, item.kind, inc, email.push, now);
     return fail(key, item, subject, inc, err, now);
   }
+  backoff.delete(key);
+  await store.logNotification({ incidentId: inc.id, channel: 'email', kind: item.kind, ok: true, recipients: n, subject, now });
+  if (PUSHED.has(item.kind)) await pushOnce(key, item.kind, inc, email.push, now);
+  return 'sent';
 }
 
 async function fail(key, item, subject, inc, err, now) {
@@ -303,4 +311,4 @@ function reset() {
   lastCapLogAt = 0;
 }
 
-module.exports = { deliver, sendTest, recipients, buildIncidentEmail, buildSummaryEmail, fmtDuration, reset };
+module.exports = { deliver, sendTest, recipients, maxPerHour, buildIncidentEmail, fmtDuration, reset };

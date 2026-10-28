@@ -106,6 +106,51 @@ describe('the database is down', () => {
   });
 });
 
+describe('the database answers but refuses', () => {
+  it('after a restart mid-outage, folds the new incident into the one the database still has open', async () => {
+    store.setDbAvailable(false);
+    const mine = incident({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });
+    await store.save({ open: mine, resolved: null });
+    store.setDbAvailable(true);
+    const dup = Object.assign(new Error('duplicate key value violates unique constraint "alert_incidents_one_open"'), { code: '23505' });
+    const theirs = { incident_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', status: 'open', tier: 'warning', title: 'Slow responses', subject: 's', opened_at: new Date(NOW - 3600e3), last_trip_at: new Date(NOW - 600e3), resolved_at: null, reopen_count: 0, notified_at: new Date(NOW - 3600e3), notified_tier: 'warning', last_reminder_at: null, reopen_pending: false, recovered_notified_at: null, summarized_at: null, rules: { slow_responses: { name: 'Slow responses', tier: 'warning', firstAt: NOW - 3600e3, lastAt: NOW - 600e3, peak: 2500, summary: 'slow' } }, stats: {} };
+    db.query.mockRejectedValueOnce(dup); // writing ours back
+    db.query.mockResolvedValueOnce({ rows: [theirs] }); // reload
+    await store.sync();
+    const { open } = store.current(NOW);
+    expect(open.id).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+    expect(open.tier).toBe('critical');
+    expect(Object.keys(open.rules).sort()).toEqual(['db_unreachable', 'slow_responses']);
+    // Still on the database: the merged one is written on the next sync.
+    db.query.mockResolvedValueOnce({ rowCount: 1 }).mockResolvedValueOnce({ rows: [] });
+    await store.sync();
+    expect(db.query.mock.calls.at(-2)[0]).toMatch(/INSERT INTO alert_incidents/);
+    expect(db.query.mock.calls.at(-2)[1][0]).toBe('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  });
+
+  it('a refused log row (its incident was deleted) is dropped instead of blocking the queue', async () => {
+    store.setDbAvailable(false);
+    await store.logNotification({ incidentId: 'gone', channel: 'email', kind: 'opened', ok: true, now: NOW });
+    await store.logNotification({ channel: 'email', kind: 'test', ok: true, now: NOW });
+    store.setDbAvailable(true);
+    db.query.mockRejectedValueOnce(Object.assign(new Error('violates foreign key constraint'), { code: '23503' }));
+    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    db.query.mockResolvedValueOnce({ rows: [] });
+    await store.sync();
+    expect(db.query.mock.calls.map((c) => c[0].trim().split(/\s+/).slice(0, 3).join(' '))).toEqual([
+      'INSERT INTO alert_notifications', 'INSERT INTO alert_notifications', 'SELECT incident_id, status,',
+    ]);
+  });
+});
+
+describe('withTimeout', () => {
+  it('rejects a promise that never settles', async () => {
+    const { withTimeout } = require('../../../../../services/observe/alerts/withTimeout');
+    await expect(withTimeout(new Promise(() => {}), 20, 'Sending')).rejects.toThrow('Sending timed out');
+    await expect(withTimeout(Promise.resolve(7), 20, 'x')).resolves.toBe(7);
+  });
+});
+
 describe('delivery', () => {
   it('pushes once even when the email fails, and backs off before retrying', async () => {
     db.query.mockResolvedValueOnce({ rows: [{ token: 'ExponentPushToken[a]' }] });

@@ -9,18 +9,15 @@ const db = require('../../../config/database');
 const logger = require('../../../logger');
 const { sendBatch } = require('../../push/expoClient');
 const { ownerEmails } = require('../../../middleware/requirePlatformOwner');
+const q = require('../../../queries/observeAlerts.queries');
+const pushQueries = require('../../../queries/push.queries');
+const { withTimeout } = require('./withTimeout');
 
 const REFRESH_MS = 10 * 60 * 1000;
 // Android shows a push only on a channel the app has created. 'reminders' is
 // high priority in every build; switch to 'alerts' once an Android build with
 // that channel is out (ALERT_PUSH_CHANNEL=alerts).
 const channelId = () => process.env.ALERT_PUSH_CHANNEL || 'reminders';
-
-const OWNER_TOKENS = `
-  SELECT d.token FROM push_devices d
-  JOIN users u ON u.user_id = d.user_id
-  WHERE LOWER(u.email) = ANY($1::text[]) AND COALESCE(u.is_archived, FALSE) = FALSE`;
-const FORGET_TOKENS = `DELETE FROM push_devices WHERE token = ANY($1::text[])`;
 
 let tokens = [];
 let refreshedAt = 0;
@@ -37,7 +34,7 @@ async function refresh(now = Date.now(), { force = false } = {}) {
     return tokens;
   }
   try {
-    const { rows } = await db.query(OWNER_TOKENS, [emails]);
+    const { rows } = await withTimeout(db.query(q.ownerPushTokens, [emails]), 10 * 1000, 'Loading owner push tokens');
     tokens = rows.map((r) => r.token);
     refreshedAt = now;
   } catch (err) {
@@ -64,12 +61,13 @@ async function send({ title, body, path, kind }) {
   }));
   try {
     const tickets = await sendBatch(messages);
+    // Same rule as services/push/pushQueue.js: Expo says the phone is gone.
     const gone = tickets
       .map((t, i) => (t.status === 'error' && t.details && t.details.error === 'DeviceNotRegistered' ? messages[i].to : null))
       .filter(Boolean);
     if (gone.length) {
       tokens = tokens.filter((t) => !gone.includes(t));
-      db.query(FORGET_TOKENS, [gone]).catch(() => {});
+      db.query(pushQueries.deleteTokens, [gone]).catch(() => {});
     }
     return { sent: tickets.filter((t) => t.status === 'ok').length, devices: messages.length };
   } catch (err) {

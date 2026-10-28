@@ -1735,10 +1735,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_one_open ON alert_incidents ((
 CREATE INDEX IF NOT EXISTS alert_incidents_opened_idx ON alert_incidents (opened_at DESC);
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 
--- Every email and push attempt. Also the ledger behind the hourly email cap.
+-- Every email and push attempt. Also the ledger behind the hourly email cap,
+-- so deleting an incident from the console keeps its rows (incident_id NULL).
 CREATE TABLE IF NOT EXISTS alert_notifications (
   notification_id BIGSERIAL PRIMARY KEY,
-  incident_id     UUID REFERENCES alert_incidents(incident_id) ON DELETE CASCADE,  -- NULL for tests and summaries
+  incident_id     UUID REFERENCES alert_incidents(incident_id) ON DELETE SET NULL,  -- NULL for tests, summaries, deleted incidents
   ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   channel         TEXT NOT NULL CHECK (channel IN ('email', 'push')),
   kind            TEXT NOT NULL CHECK (kind IN ('opened', 'escalated', 'reminder', 'reopened', 'recovered', 'summary', 'test')),

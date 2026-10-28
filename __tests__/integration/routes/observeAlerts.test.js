@@ -213,7 +213,8 @@ describe('Integration: Observe alerts', () => {
       await pool.query(`UPDATE alert_incidents SET status = 'resolved', resolved_at = NOW()`);
       expect((await authenticatedRequest('delete', `/api/observe/alerts/incidents/${id}`, ownerToken())).status).toBe(200);
       expect((await pool.query('SELECT 1 FROM alert_incidents')).rows).toHaveLength(0);
-      expect((await pool.query('SELECT 1 FROM alert_notifications')).rows).toHaveLength(0);
+      // Its sends stay in the hourly-cap ledger, detached from the incident.
+      expect((await pool.query('SELECT incident_id FROM alert_notifications')).rows).toEqual([{ incident_id: null }]);
     });
 
     it('changes, mutes and resets a rule', async () => {
@@ -235,6 +236,11 @@ describe('Integration: Observe alerts', () => {
       const live = await authenticatedRequest('patch', '/api/observe/alerts/rules/high_cpu', ownerToken()).send({ mode: 'live' });
       expect(live.body.data.rule.mode).toBe('live');
 
+      // Back to the defaults by hand: no override row left.
+      const unmute = await authenticatedRequest('patch', '/api/observe/alerts/rules/errors_burst', ownerToken()).send({ params: { serverErrors: 5 }, mutedUntil: null });
+      expect(unmute.body.data.rule.customized).toBe(false);
+      await authenticatedRequest('patch', '/api/observe/alerts/rules/errors_burst', ownerToken()).send({ params: { serverErrors: 9 } });
+
       const reset = await authenticatedRequest('delete', '/api/observe/alerts/rules/errors_burst/settings', ownerToken());
       expect(reset.status).toBe(200);
       expect(reset.body.data.rule).toMatchObject({ customized: false, mutedUntil: null });
@@ -249,6 +255,9 @@ describe('Integration: Observe alerts', () => {
       expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ to: ['owner@test.com'], subject: '[SchoolMule] Test alert' }));
       const log = await pool.query('SELECT kind, ok FROM alert_notifications');
       expect(log.rows).toEqual([{ kind: 'test', ok: true }]);
+      // Test sends don't use up the hourly cap.
+      const status = await authenticatedRequest('get', '/api/observe/alerts/status', ownerToken());
+      expect(status.body.data.emailsLastHour).toBe(0);
     });
   });
 });

@@ -212,6 +212,21 @@ describe('tiers and quiet hours', () => {
     expect(s.due).toEqual([{ kind: 'summary', incidents: [expect.objectContaining({ tier: 'warning' })] }]);
   });
 
+  it('a warning that recovers overnight sends its recovery email at 7 am, not at night', () => {
+    let s = fresh();
+    const evening = Date.parse('2026-10-28T01:30:00Z'); // 9:30 pm
+    for (let i = 0; i < 25; i += 1) signals.noteClientError(evening - i * 1000);
+    healthy(evening - 20 * MIN);
+    s = tick(s, evening);
+    s = sent(s, 'opened', evening);
+    healthy(night);
+    s = tick(s, night);
+    expect(s.event).toBe('resolved');
+    expect(s.due).toEqual([]);
+    s = tick(s, morning);
+    expect(s.due.map((d) => d.kind)).toEqual(['recovered']);
+  });
+
   it('escalates a notified warning when a critical rule joins it', () => {
     let s = fresh();
     const noon = Date.parse('2026-10-28T16:00:00Z');
@@ -301,6 +316,23 @@ describe('overrides', () => {
   });
 });
 
+describe('mergeIncidents', () => {
+  it('folds an incident opened while the database was away into the one it had open', () => {
+    const kept = { ...engine.newIncident('kept', OCT21_2202), tier: 'warning', title: 'Slow responses', notifiedAt: OCT21_2202, notifiedTier: 'warning', subject: 'kept thread',
+      rules: { slow_responses: { name: 'Slow responses', tier: 'warning', firstAt: OCT21_2202, lastAt: OCT21_2202, peak: 2500, summary: 'slow' } },
+      stats: { failedRequests: 3, loggedErrors: 1, people: ['a'], peakErrors5m: 3, topErrors: [{ fingerprint: 'f', message: 'm', count: 2 }], countedThrough: 10 } };
+    const extra = { ...engine.newIncident('extra', OCT21_2202 + MIN), tier: 'critical', lastTripAt: OCT21_2202 + 5 * MIN,
+      rules: { db_unreachable: { name: 'Database unreachable', tier: 'critical', firstAt: OCT21_2202 + MIN, lastAt: OCT21_2202 + 5 * MIN, peak: 6, summary: 'down' } },
+      stats: { failedRequests: 40, loggedErrors: 50, people: ['a', 'b'], peakErrors5m: 30, topErrors: [{ fingerprint: 'f', message: 'm', count: 5 }], countedThrough: 20 } };
+    const m = engine.mergeIncidents(kept, extra);
+    expect(m).toMatchObject({ id: 'kept', tier: 'critical', title: 'Database unreachable', subject: 'kept thread', notifiedTier: 'warning', lastTripAt: OCT21_2202 + 5 * MIN });
+    expect(Object.keys(m.rules).sort()).toEqual(['db_unreachable', 'slow_responses']);
+    expect(m.stats).toMatchObject({ failedRequests: 43, loggedErrors: 51, people: ['a', 'b'], peakErrors5m: 30, topErrors: [{ fingerprint: 'f', message: 'm', count: 7 }], countedThrough: 20 });
+    // Notified as a warning, now critical: the next tick escalates.
+    expect(engine.dueNotifications({ open: m, owed: [], now: OCT21_2202 + 6 * MIN, quiet: true }).map((d) => d.kind)).toEqual(['escalated']);
+  });
+});
+
 describe('validatePatch', () => {
   const now = OCT27_1130;
   const burst = RULE_BY_ID.get('errors_burst');
@@ -319,6 +351,9 @@ describe('validatePatch', () => {
     [{ mutedUntil: new Date(now - 1000).toISOString() }, 'in the future'],
     [{ colour: 'red' }, 'Unknown field'],
     [{}, 'Nothing to change'],
+    [{ params: {} }, 'Nothing to change'],
+    [{ params: { serverErrors: true } }, 'must be a number'],
+    [{ params: { serverErrors: [5] } }, 'must be a number'],
   ])('rejects %j on a locked rule', (body, message) => {
     const r = validatePatch(burst, body, now);
     expect(r.ok).toBe(false);

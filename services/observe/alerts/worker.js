@@ -23,9 +23,14 @@ const DEFAULT_TICK_MS = 30 * 1000;
 const RAILWAY_EVERY = 2;   // ticks: about once a minute
 const SLOW_EVERY = 5;      // ticks: about every 2.5 minutes
 const PRUNE_EVERY_MS = 24 * 60 * 60 * 1000;
+// Every await in a tick has its own timeout; this is the backstop if one
+// still hangs, so alerting can't stop for good.
+const STUCK_TICK_MS = 2 * 60 * 1000;
 
 let timer = null;
 let running = false;
+let runningSince = 0;
+let tickSeq = 0; // a stuck tick that finishes late must not clear a newer one's flag
 let tickCount = 0;
 let startedAt = null;
 let pending = {};
@@ -48,7 +53,7 @@ async function runOnce(now = Date.now()) {
   const { dropped } = eventBuffer.stats();
   if (lastDropped !== null && dropped > lastDropped) signals.noteDropped(dropped - lastDropped, now);
   lastDropped = dropped;
-  if (tickCount % RAILWAY_EVERY === 1) signals.setRailway(await railway.getLatest(now), now);
+  if (tickCount % RAILWAY_EVERY === 1) signals.setRailway(await railway.getLatest(now), now); // 10 s fetch timeout
 
   store.setDbAvailable(dbCheck.ok);
   if (dbCheck.ok) {
@@ -103,8 +108,13 @@ function startWorker(intervalMs = Number(process.env.ALERT_TICK_MS) || DEFAULT_T
   startedAt = Date.now();
   signals.startVitals();
   const tick = async () => {
-    if (running) return;
+    if (running) {
+      if (Date.now() - runningSince < STUCK_TICK_MS) return;
+      logger.error({ observe: true, stuckForMs: Date.now() - runningSince }, 'Alerts worker tick stuck; starting a new one');
+    }
     running = true;
+    runningSince = Date.now();
+    const seq = ++tickSeq;
     try {
       const result = await runOnce();
       if (result && result.missing) {
@@ -116,7 +126,7 @@ function startWorker(intervalMs = Number(process.env.ALERT_TICK_MS) || DEFAULT_T
       // counts it alerts on.
       logger.error({ observe: true, err }, 'Alerts worker tick failed');
     } finally {
-      running = false;
+      if (seq === tickSeq) running = false;
     }
   };
   timer = setInterval(tick, intervalMs);

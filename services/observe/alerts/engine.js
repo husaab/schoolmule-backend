@@ -201,33 +201,81 @@ function advanceIncident({ open, lastResolved, results, snapshot, now, newId }) 
   return { open: accumulate(incident, snapshot, now), resolved: null, event: 'opened' };
 }
 
+/** A resolved incident whose thread hasn't been told it recovered (notices never are). */
+const owesRecovery = (inc) => Boolean(inc.notifiedAt && !inc.recoveredNotifiedAt && inc.tier !== 'info')
+/** One that was never emailed (held overnight, or every send failed): it goes in the summary. */
+const owesSummary = (inc) => !inc.notifiedAt && !inc.summarizedAt
+
 /**
- * Emails due now. `owed` is resolved incidents that still owe one (a
- * recovery email, or a place in the morning summary).
+ * Emails due now. `owed` is resolved incidents that still owe one (see
+ * owesRecovery / owesSummary). Only critical incidents email during quiet
+ * hours; a warning's recovery or comeback waits for 7 am like the rest.
  * @returns {Array<{ kind: string, incident?: object, incidents?: object[] }>}
  */
-function dueNotifications({ open, owed = [], now, quiet }) {
+function dueNotifications({ open, owed, now, quiet }) {
   const due = [];
   if (open) {
     const critical = open.tier === 'critical';
+    const mayEmail = critical || !quiet;
     if (!open.notifiedAt) {
-      if (critical || !quiet) due.push({ kind: 'opened', incident: open });
+      if (mayEmail) due.push({ kind: 'opened', incident: open });
     } else if (open.reopenPending && open.tier !== 'info') {
-      due.push({ kind: 'reopened', incident: open });
+      if (mayEmail) due.push({ kind: 'reopened', incident: open });
     } else if (critical && open.notifiedTier !== 'critical') {
       due.push({ kind: 'escalated', incident: open });
-    } else if (open.tier !== 'info' && (critical || !quiet) && now - (open.lastReminderAt ?? open.notifiedAt) >= REMIND_EVERY_MS) {
+    } else if (open.tier !== 'info' && mayEmail && now - (open.lastReminderAt ?? open.notifiedAt) >= REMIND_EVERY_MS) {
       due.push({ kind: 'reminder', incident: open });
     }
   }
   for (const inc of owed) {
-    if (inc.notifiedAt && !inc.recoveredNotifiedAt && inc.tier !== 'info') due.push({ kind: 'recovered', incident: inc });
+    if (owesRecovery(inc) && (inc.tier === 'critical' || !quiet)) due.push({ kind: 'recovered', incident: inc });
   }
-  const unsent = owed.filter((inc) => !inc.notifiedAt && !inc.summarizedAt);
+  const unsent = owed.filter(owesSummary);
   if (unsent.length && (!quiet || unsent.some((inc) => inc.tier === 'critical'))) {
     due.push({ kind: 'summary', incidents: unsent });
   }
   return due;
+}
+
+/**
+ * Folds an incident this process opened while the database was away into
+ * the one the database already had open (another replica's, or ours from
+ * before a restart), so the outage stays one incident.
+ */
+function mergeIncidents(kept, extra) {
+  const rules = { ...kept.rules };
+  for (const [id, r] of Object.entries(extra.rules)) {
+    const prev = rules[id];
+    rules[id] = prev
+      ? { ...prev, firstAt: Math.min(prev.firstAt, r.firstAt), lastAt: Math.max(prev.lastAt, r.lastAt), peak: Math.max(prev.peak, r.peak), summary: r.lastAt >= prev.lastAt ? r.summary : prev.summary }
+      : r;
+  }
+  const a = kept.stats || {};
+  const b = extra.stats || {};
+  const errors = new Map((a.topErrors || []).map((e) => [e.fingerprint, { ...e }]));
+  for (const e of b.topErrors || []) {
+    const hit = errors.get(e.fingerprint);
+    if (hit) hit.count += e.count;
+    else errors.set(e.fingerprint, { ...e });
+  }
+  return {
+    ...kept,
+    rules,
+    tier: highestTier(rules),
+    title: titleOf(rules),
+    lastTripAt: Math.max(kept.lastTripAt, extra.lastTripAt),
+    notifiedAt: kept.notifiedAt ?? extra.notifiedAt,
+    notifiedTier: kept.notifiedTier ?? extra.notifiedTier,
+    subject: kept.subject ?? extra.subject,
+    stats: {
+      failedRequests: (a.failedRequests || 0) + (b.failedRequests || 0),
+      loggedErrors: (a.loggedErrors || 0) + (b.loggedErrors || 0),
+      people: [...new Set([...(a.people || []), ...(b.people || [])])].slice(0, MAX_PEOPLE),
+      peakErrors5m: Math.max(a.peakErrors5m || 0, b.peakErrors5m || 0),
+      topErrors: [...errors.values()].sort((x, y) => y.count - x.count).slice(0, MAX_TOP_ERRORS),
+      countedThrough: Math.max(a.countedThrough ?? -Infinity, b.countedThrough ?? -Infinity),
+    },
+  };
 }
 
 /** Tripped rules (live, watch-only or muted) due a row in alert_rule_trips. */
@@ -240,13 +288,12 @@ function tripsToRecord(results, lastRecorded, now) {
 module.exports = {
   isQuietHours,
   evaluateRules,
-  isHealthy,
   advanceIncident,
   dueNotifications,
+  owesRecovery,
+  owesSummary,
+  mergeIncidents,
   tripsToRecord,
   newIncident,
-  RECOVER_AFTER_MS,
-  REOPEN_WITHIN_MS,
-  REMIND_EVERY_MS,
   TIME_ZONE,
 };

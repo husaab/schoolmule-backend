@@ -63,7 +63,7 @@ const notificationOut = (n) => ({
 
 async function loadOverrides() {
   const { rows } = await db.query(q.overrides);
-  return Object.fromEntries(rows.map((r) => [r.rule_id, r]));
+  return store.overridesFromRows(rows);
 }
 
 function ruleOut(rule, override, { current, lastTrip, trips }) {
@@ -131,7 +131,7 @@ const getStatus = async (req, res) => {
         db: last ? last.db : null,
         selfCheck: last ? last.selfCheck : null,
         emailsLastHour: emails.rows[0].n,
-        emailCap: Number(process.env.ALERT_MAX_EMAILS_PER_HOUR) || 6,
+        emailCap: notifier.maxPerHour(),
         recipients: notifier.recipients().length,
         pushDevices: ownerPush.tokenCount(),
         firing: open ? incidentOut(open) : null,
@@ -216,14 +216,15 @@ const updateRule = async (req, res) => {
     const enabled = change.enabled !== undefined ? change.enabled : existing.enabled ?? null;
     const mode = change.mode !== undefined ? change.mode : existing.mode ?? null;
     const mutedUntil = change.mutedUntil !== undefined ? change.mutedUntil : existing.muted_until ?? null;
-    await db.query(q.upsertOverride, [
-      rule.id,
-      enabled === true ? null : enabled,
-      mode === (rule.defaultMode || 'live') ? null : mode,
-      Object.keys(params).length ? JSON.stringify(params) : null,
+    const row = {
+      enabled: enabled === true ? null : enabled,
+      mode: mode === (rule.defaultMode || 'live') ? null : mode,
+      params: Object.keys(params).length ? JSON.stringify(params) : null,
       mutedUntil,
-      req.user.email,
-    ]);
+    };
+    // Everything back at its default: no override, so the rule isn't "customized".
+    if (Object.values(row).every((v) => v === null)) await db.query(q.deleteOverride, [rule.id]);
+    else await db.query(q.upsertOverride, [rule.id, row.enabled, row.mode, row.params, row.mutedUntil, req.user.email]);
     logger.info({ ruleId: rule.id, change, by: req.user.email }, 'Alert rule changed');
     const [out] = await rulesPayload(rule.id);
     return res.json({ status: 'success', data: { rule: out } });

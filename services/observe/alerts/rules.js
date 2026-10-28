@@ -133,7 +133,8 @@ const RULES = [
     source: 'Boot log + Railway',
     window: '10 min',
     params: {
-      boots: { label: 'Restarts', unit: 'starts', default: 3, min: 2, max: 50 },
+      // Each deploy is a start too; 5 in 10 minutes is past a burst of pushes.
+      boots: { label: 'Restarts', unit: 'starts', default: 5, min: 2, max: 50 },
     },
     evaluate(s, p) {
       const boots = fresh(s.slow, SLOW_STALE_MS, s.now) && Number.isInteger(s.slow.boots10m) ? s.slow.boots10m : null;
@@ -412,8 +413,8 @@ function validatePatch(rule, body, now = Date.now()) {
     for (const [k, raw] of Object.entries(body.params)) {
       const d = rule.params[k];
       if (!d) return { ok: false, error: `${rule.name} has no setting called ${k}` };
-      const n = Number(raw);
-      if (raw === '' || raw === null || !Number.isFinite(n)) return { ok: false, error: `${d.label} must be a number` };
+      const n = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
+      if (!Number.isFinite(n)) return { ok: false, error: `${d.label} must be a number` };
       if (n < d.min || n > d.max) return { ok: false, error: `${d.label} must be between ${d.min} and ${d.max}` };
       value.params[k] = n;
     }
@@ -439,8 +440,9 @@ function validatePatch(rule, body, now = Date.now()) {
       value.mutedUntil = new Date(t).toISOString();
     }
   }
+  if (value.params && !Object.keys(value.params).length) delete value.params;
   if (!Object.keys(value).length) return { ok: false, error: 'Nothing to change' };
   return { ok: true, value };
 }
 
-module.exports = { RULES, RULE_BY_ID, TIERS, tierRank, effective, defaultParams, validatePatch, windowOf, total, p95Of };
+module.exports = { RULES, RULE_BY_ID, tierRank, effective, validatePatch, windowOf, total, p95Of };

@@ -30,8 +30,12 @@ module.exports = {
       notified_tier = COALESCE(EXCLUDED.notified_tier, alert_incidents.notified_tier),
       last_reminder_at = GREATEST(alert_incidents.last_reminder_at, EXCLUDED.last_reminder_at),
       summarized_at = COALESCE(alert_incidents.summarized_at, EXCLUDED.summarized_at),
-      reopen_pending = EXCLUDED.reopen_pending,
-      recovered_notified_at = EXCLUDED.recovered_notified_at,
+      -- Reopening clears these; otherwise a stale copy must not undo a send
+      -- another replica made in the meantime.
+      reopen_pending = CASE WHEN EXCLUDED.status = 'open' AND EXCLUDED.reopen_count > alert_incidents.reopen_count
+        THEN EXCLUDED.reopen_pending ELSE alert_incidents.reopen_pending AND EXCLUDED.reopen_pending END,
+      recovered_notified_at = CASE WHEN EXCLUDED.status = 'open' THEN NULL
+        ELSE COALESCE(alert_incidents.recovered_notified_at, EXCLUDED.recovered_notified_at) END,
       rules = EXCLUDED.rules,
       stats = EXCLUDED.stats,
       updated_at = NOW()`,
@@ -79,7 +83,8 @@ module.exports = {
     INSERT INTO alert_notifications (incident_id, ts, channel, kind, ok, recipients, subject, error)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 
-  emailsSince: `SELECT COUNT(*)::int AS n FROM alert_notifications WHERE channel = 'email' AND ok AND ts > $1`,
+  // The hourly cap: test sends don't count against it.
+  emailsSince: `SELECT COUNT(*)::int AS n FROM alert_notifications WHERE channel = 'email' AND ok AND kind <> 'test' AND ts > $1`,
 
   overrides: `SELECT rule_id, enabled, mode, params, muted_until FROM alert_rule_overrides`,
   upsertOverride: `
@@ -141,5 +146,11 @@ module.exports = {
   deleteResolvedIncident: `DELETE FROM alert_incidents WHERE incident_id = $1 AND status = 'resolved' RETURNING incident_id`,
   recentSummaries: `
     SELECT ts, channel, kind, ok, recipients, subject, error FROM alert_notifications
-    WHERE incident_id IS NULL AND ts >= $1 ORDER BY ts DESC LIMIT 50`,
+    WHERE incident_id IS NULL AND kind IN ('test', 'summary') AND ts >= $1 ORDER BY ts DESC LIMIT 50`,
+
+  // The platform owners' phones (services/observe/alerts/ownerPush.js).
+  ownerPushTokens: `
+    SELECT d.token FROM push_devices d
+    JOIN users u ON u.user_id = d.user_id
+    WHERE LOWER(u.email) = ANY($1::text[]) AND COALESCE(u.is_archived, FALSE) = FALSE`,
 };

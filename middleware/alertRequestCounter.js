@@ -2,7 +2,9 @@
 // signed in or not. request_events only sees signed-in traffic, and a broken
 // sign-in or signup page must still raise an alert. Mounted early in
 // server.js; the user is read when the response finishes, by which time
-// verifyUser has run.
+// verifyUser has run. It times responses itself rather than sharing
+// observeRequest's: that one starts after verifyUser and writes to Postgres,
+// and this one must do neither.
 const signals = require('../services/observe/alerts/signals');
 
 // The worker's own health check every 30 s, and the browser's error beacons
