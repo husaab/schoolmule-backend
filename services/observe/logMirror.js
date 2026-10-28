@@ -6,6 +6,7 @@ const buffer = require('./eventBuffer');
 const requestContext = require('./requestContext');
 const { fingerprint } = require('./fingerprint');
 const { routeFor } = require('./routeTemplate');
+const alertSignals = require('./alerts/signals');
 
 const AUTO_HTTP_ERR = /^failed with status code \d+$/;
 
@@ -39,6 +40,9 @@ function onLogLine(line) {
     const base = typeof obj.msg === 'string' && obj.msg ? obj.msg : (err && err.message) || 'Unknown error';
     const message = err && err.message && err.message !== base ? `${base}: ${err.message}` : base;
     const route = ctx && ctx.req ? routeFor(ctx.req) : obj.url || null;
+    const fp = fingerprint(route, message);
+    // Counted for alerts first: the row below is lost if the database is down.
+    alertSignals.noteLoggedError({ fingerprint: fp, message });
     buffer.push('error_events', {
       source: obj.source === 'process' ? 'process' : 'server',
       request_id: (ctx && ctx.requestId) || obj.reqId || null,
@@ -47,7 +51,7 @@ function onLogLine(line) {
       route,
       message: String(message).slice(0, 1000),
       stack: err && typeof err.stack === 'string' ? err.stack.slice(0, 2000) : null,
-      fingerprint: fingerprint(route, message),
+      fingerprint: fp,
       context: obj.statusCode ? { statusCode: obj.statusCode } : null,
     });
     return true;

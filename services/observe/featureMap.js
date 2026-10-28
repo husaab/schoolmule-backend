@@ -44,6 +44,7 @@ const FEATURES = [
   ['/api/schools', 'School setup'],
   ['/api/school-assets', 'School setup'],
   ['/api/calendar-events', 'School setup'],
+  ['/api/observe/alerts', 'Observe: alerts'],
   ['/api/observe', 'Observe'],
   ['/api/health', 'Health'],
 ];

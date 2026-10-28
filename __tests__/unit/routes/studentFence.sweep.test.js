@@ -55,7 +55,7 @@ const UNFENCED_ROUTES = [
 const NON_ROUTER_MOUNTS = ['/api/finance/families/import']; // larger JSON body limit
 // Path-less app.use(...) calls in server.js (global middleware, not routes).
 const GLOBAL_MIDDLEWARE = [
-  'cors(corsOptions)', 'express.json()', 'globalLimiter', 'httpLogger',
+  'cors(corsOptions)', 'express.json()', 'globalLimiter', 'httpLogger', 'alertRequestCounter',
   'verifyUser', 'observeRequest', 'attachAccess', 'parentApiGate', 'resolveSchoolYear', 'errorHandler',
 ];
 

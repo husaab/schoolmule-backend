@@ -5,6 +5,9 @@ const logger = require("../logger");
 const httpLogger = pinoHttp({
   logger,
 
+  // The alert worker checks /api/health every 30 s; that isn't news.
+  autoLogging: { ignore: (req) => req.headers["x-alert-self-check"] === "1" },
+
   genReqId: (req, res) => {
     const existing = req.headers["x-request-id"];
     const id = existing || crypto.randomUUID();

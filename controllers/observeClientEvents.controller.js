@@ -3,6 +3,7 @@
 // the body is small, validated and truncated, then handed to the buffer.
 const buffer = require('../services/observe/eventBuffer');
 const { fingerprint } = require('../services/observe/fingerprint');
+const alertSignals = require('../services/observe/alerts/signals');
 
 // push_tap: the app's trace of a tapped notification (what arrived, what it opened).
 const KINDS = new Set(['js_error', 'unhandled_rejection', 'api_failure', 'render_error', 'redirect_loop', 'push_tap']);
@@ -29,6 +30,8 @@ const postClientEvents = (req, res) => {
   for (const e of events) {
     const page = clip(e.page, 300);
     const message = clip(e.message, 500);
+    // A tapped notification is a trace, not an error.
+    if (e.kind !== 'push_tap') alertSignals.noteClientError();
     buffer.push('client_events', {
       user_id: user.userId || null,
       school: user.school || null,

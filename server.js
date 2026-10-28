@@ -54,6 +54,8 @@ const profileRoutes = require("./routes/profile.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
+const observeAlertsRoutes = require("./routes/observeAlerts.routes");
+const alertRequestCounter = require("./middleware/alertRequestCounter");
 const observeClientEventsRoutes = require("./routes/observeClientEvents.routes");
 const healthRoutes = require("./routes/health.routes");
 const observeRequest = require("./middleware/observeRequest");
@@ -102,6 +104,8 @@ app.use(express.json());
 // every request: a school's users share one public IP (final review I3).
 app.use(globalLimiter);
 app.use(httpLogger);
+// Counts every response for Observe alerts, signed in or not (ALERTS_ENABLED only).
+app.use(alertRequestCounter);
 
 app.use("/api/health", healthRoutes);
 app.use("/api/auth", authRoutes);
@@ -128,6 +132,7 @@ app.use(observeRequest);
 app.use(attachAccess);
 app.use(parentApiGate);
 // Owner-gated console. Cross-school by design: mounted before resolveSchoolYear.
+app.use("/api/observe/alerts", requirePlatformOwner, observeAlertsRoutes);
 app.use("/api/observe", requirePlatformOwner, observeRoutes);
 
 app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no year context
@@ -205,6 +210,9 @@ if (require.main === module) {
   require("./services/messageNotifier").startWorker();
   require("./services/observe/eventBuffer").start();
   require("./services/observe/retentionWorker").startWorker();
+  // Emails and pushes the owner when production misbehaves. Only where
+  // ALERTS_ENABLED=true (Railway): a local backend uses the prod database.
+  require("./services/observe/alerts/worker").startWorker();
 
   // A crash should leave a trace in error_events before Railway restarts us.
   process.on("unhandledRejection", (reason) => {

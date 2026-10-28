@@ -76,11 +76,17 @@ async function fetchInfra(window) {
   };
 }
 
-async function getInfra(window) {
-  if (!process.env.RAILWAY_TOKEN) return { available: false, reason: 'RAILWAY_TOKEN is not set' };
+function configError() {
+  if (!process.env.RAILWAY_TOKEN) return 'RAILWAY_TOKEN is not set';
   if (!process.env.RAILWAY_PROJECT_ID || !process.env.RAILWAY_ENVIRONMENT_ID || !process.env.RAILWAY_SERVICE_ID) {
-    return { available: false, reason: 'RAILWAY_PROJECT_ID / RAILWAY_ENVIRONMENT_ID / RAILWAY_SERVICE_ID must be set' };
+    return 'RAILWAY_PROJECT_ID / RAILWAY_ENVIRONMENT_ID / RAILWAY_SERVICE_ID must be set';
   }
+  return null;
+}
+
+async function getInfra(window) {
+  const reason = configError();
+  if (reason) return { available: false, reason };
   const hit = cache.get(window.key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.data;
   try {
@@ -92,4 +98,37 @@ async function getInfra(window) {
   }
 }
 
-module.exports = { getInfra, _resetCache: () => cache.clear(), MEASUREMENTS };
+const LATEST_KEY = 'alerts-latest';
+const LATEST_CACHE_MS = 50 * 1000;
+
+/**
+ * The newest CPU and memory sample and the latest deploy, for the alert
+ * worker (services/observe/alerts): the last 10 minutes at 60 s samples,
+ * cached apart from the console's windows.
+ * @returns {Promise<{ available: boolean, cpu?: number|null, memoryGb?: number|null, asOf?: string|null, deploy?: object|null, reason?: string }>}
+ */
+async function getLatest(now = Date.now()) {
+  const reason = configError();
+  if (reason) return { available: false, reason };
+  const hit = cache.get(LATEST_KEY);
+  if (hit && now - hit.at < LATEST_CACHE_MS) return hit.data;
+  try {
+    const data = await fetchInfra({ key: '1h', from: new Date(now - 10 * 60 * 1000), to: new Date(now) });
+    const last = (series) => (series.length ? series[series.length - 1] : null);
+    const cpu = last(data.cpu);
+    const memory = last(data.memoryGb);
+    const latest = {
+      available: true,
+      cpu: cpu ? cpu.value : null,
+      memoryGb: memory ? memory.value : null,
+      asOf: cpu ? cpu.ts : null,
+      deploy: data.deployments[0] || null,
+    };
+    cache.set(LATEST_KEY, { at: now, data: latest });
+    return latest;
+  } catch (err) {
+    return { available: false, reason: err.message || 'Railway request failed' };
+  }
+}
+
+module.exports = { getInfra, getLatest, _resetCache: () => cache.clear(), MEASUREMENTS };

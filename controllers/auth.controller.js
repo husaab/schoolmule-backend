@@ -17,6 +17,7 @@ const { getActiveTermForSchool, getSchoolYearContext, getRolesForUser } = requir
 const { getResend, sendOrThrow, sendSafely } = require('../utils/emailUtils');
 const { platformSender } = require('../services/email/senderIdentity');
 const observeBuffer = require('../services/observe/eventBuffer');
+const alertSignals = require('../services/observe/alerts/signals');
 const { isPlatformOwner } = require('../middleware/requirePlatformOwner');
 const googleSignInService = require('../services/google/googleSignIn');
 const { verifyEmailLoginToken } = require('../utils/emailLoginLink');
@@ -134,8 +135,13 @@ const matchAccountByEmail = (rows, typed) => {
   return exact ? { user: exact } : { user: null, ambiguous: true };
 };
 
+// Sign-ins that failed because the person couldn't prove who they are: what
+// a password-guessing spike looks like. An archived or blocked account isn't.
+const GUESS_OUTCOMES = new Set(['bad_password', 'unknown_email', 'ambiguous_email', 'qr_invalid', 'email_link_invalid', 'email_link_refused']);
+
 // Every sign-in attempt, however it ends, becomes a login_events row.
 const recordLogin = (req, { email, user, outcome }) => {
+  if (GUESS_OUTCOMES.has(outcome)) alertSignals.noteLoginFailure(email);
   observeBuffer.push('login_events', {
     email: String(email || '').trim().toLowerCase(),
     user_id: user ? user.user_id : null,
