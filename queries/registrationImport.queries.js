@@ -173,8 +173,17 @@ const registrationImportQueries = {
     WHERE student_id = $1
   `,
 
-  // School-scoped delete: an imported student can only be removed by the
-  // school that owns it.
+  // Undo import's "delete the student too": soft, like every student delete
+  // (student.queries softDeleteStudent). $1 student_id, $2 school, $3 deleted_by
+  softDeleteStudentScoped: `
+    UPDATE students
+    SET is_archived = TRUE, deleted_at = NOW(), deleted_by = $3, last_modified_at = NOW()
+    WHERE student_id = $1 AND school = $2
+    RETURNING student_id
+  `,
+
+  // Rolls back a student this same import transaction just inserted (another
+  // import claimed the submission first): never a student anyone has used.
   deleteStudentScoped: `
     DELETE FROM students
     WHERE student_id = $1 AND school = $2

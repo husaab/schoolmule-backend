@@ -5,6 +5,8 @@ const {
   updateStudent, 
   createStudent, 
   deleteStudent,
+  getDeletedStudents,
+  restoreStudent,
   getArchivedStudents,
   archiveStudent,
   unarchiveStudent,
@@ -33,6 +35,8 @@ const managesStudents = requirePermission("students");
 router.get("/", readsRoster, getAllStudents);
 router.get("/archived", readsRoster, getArchivedStudents);
 router.get("/all", readsRoster, getAllStudentsWithArchived);
+// Recently deleted: whoever may delete may see and restore.
+router.get("/deleted", managesStudents, getDeletedStudents);
 router.get("/:id", readsRoster, getStudentById);
 // The staff student profile (/students/[id]).
 router.get("/:id/overview", managesStudents, getStudentOverview);
@@ -42,5 +46,6 @@ router.post("/", managesStudents, createStudent);
 router.delete("/:id", managesStudents, deleteStudent);
 router.post("/:id/archive", managesStudents, archiveStudent);
 router.post("/:id/unarchive", managesStudents, unarchiveStudent);
+router.post("/:id/restore", managesStudents, restoreStudent);
 
 module.exports = router;

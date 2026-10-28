@@ -147,19 +147,72 @@ describe('Integration: Student Routes', () => {
     });
   });
 
-  describe('DELETE /api/students/:id', () => {
-    it('deletes a student', async () => {
-      const insertResult = await pool.query(
-        `INSERT INTO students (name, school, grade) VALUES ('Alice', 'ALHAADIACADEMY', '3') RETURNING student_id`
+  describe('DELETE /api/students/:id (soft)', () => {
+    const insertStudent = async (name = 'Alice') =>
+      (await pool.query(
+        `INSERT INTO students (name, school, grade, school_year_id) VALUES ($1, 'ALHAADIACADEMY', '3', $2) RETURNING student_id`,
+        [name, activeYearId]
+      )).rows[0].student_id;
+
+    it('hides an enrolled student everywhere but keeps every record', async () => {
+      const studentId = await insertStudent();
+      const { rows: [klass] } = await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id)
+         VALUES ('ALHAADIACADEMY', '3', 'Math', 'Admin User', $1, $2) RETURNING class_id`,
+        [TEST_USER_ID, activeYearId]
       );
-      const studentId = insertResult.rows[0].student_id;
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [klass.class_id, studentId]);
 
       const res = await authenticatedRequest('delete', `/api/students/${studentId}`);
-
       expect(res.status).toBe(200);
 
-      const dbResult = await pool.query('SELECT * FROM students WHERE student_id = $1', [studentId]);
-      expect(dbResult.rows).toHaveLength(0);
+      // Kept in students_all, marked deleted; gone from the students view.
+      const { rows: [row] } = await pool.query('SELECT is_archived, deleted_at, deleted_by FROM students_all WHERE student_id = $1', [studentId]);
+      expect(row.is_archived).toBe(true);
+      expect(row.deleted_at).not.toBeNull();
+      expect(row.deleted_by).toBe(TEST_USER_ID);
+      expect((await pool.query('SELECT 1 FROM class_students WHERE student_id = $1', [studentId])).rows).toHaveLength(1);
+      expect((await pool.query('SELECT 1 FROM students WHERE student_id = $1', [studentId])).rows).toHaveLength(0);
+      // So any roster that joins students drops them, with no filter of its own.
+      expect((await pool.query('SELECT 1 FROM class_students cs JOIN students s USING (student_id) WHERE cs.class_id = $1', [klass.class_id])).rows).toHaveLength(0);
+
+      // Not in the list, not in Archived, not by id; in Recently deleted.
+      const ids = (body) => body.data.map((s) => s.studentId);
+      expect(ids((await authenticatedRequest('get', '/api/students')).body)).not.toContain(studentId);
+      expect(ids((await authenticatedRequest('get', '/api/students/archived')).body)).not.toContain(studentId);
+      expect(ids((await authenticatedRequest('get', '/api/students/all')).body)).not.toContain(studentId);
+      expect((await authenticatedRequest('get', `/api/students/${studentId}`)).status).toBe(404);
+      const deleted = await authenticatedRequest('get', '/api/students/deleted');
+      expect(deleted.status).toBe(200);
+      expect(deleted.body.data).toEqual([expect.objectContaining({ studentId, name: 'Alice', wasArchived: false, deletedByName: 'Admin User' })]);
+
+      // Deleting again is a 404, not a second deletion; unarchive, edit and the
+      // profile can't reach a deleted student either (only restore can).
+      expect((await authenticatedRequest('delete', `/api/students/${studentId}`)).status).toBe(404);
+      expect((await authenticatedRequest('post', `/api/students/${studentId}/unarchive`)).status).toBe(404);
+      expect((await authenticatedRequest('patch', `/api/students/${studentId}`).send({ name: 'Back door' })).status).toBe(404);
+      expect((await authenticatedRequest('get', `/api/students/${studentId}/overview`)).status).toBe(404);
+      expect((await pool.query('SELECT is_archived, name FROM students_all WHERE student_id = $1', [studentId])).rows[0]).toEqual({ is_archived: true, name: 'Alice' });
+    });
+
+    it('restores a student to where they were', async () => {
+      const active = await insertStudent('Bea');
+      const archived = await insertStudent('Cal');
+      await authenticatedRequest('post', `/api/students/${archived}/archive`);
+      await authenticatedRequest('delete', `/api/students/${active}`);
+      await authenticatedRequest('delete', `/api/students/${archived}`);
+
+      const back = await authenticatedRequest('post', `/api/students/${active}/restore`);
+      expect(back.status).toBe(200);
+      expect(back.body.data.isArchived).toBe(false);
+      const backToArchive = await authenticatedRequest('post', `/api/students/${archived}/restore`);
+      expect(backToArchive.body.data.isArchived).toBe(true);
+
+      const ids = (body) => body.data.map((s) => s.studentId);
+      expect(ids((await authenticatedRequest('get', '/api/students')).body)).toContain(active);
+      expect(ids((await authenticatedRequest('get', '/api/students/archived')).body)).toContain(archived);
+      expect((await authenticatedRequest('get', '/api/students/deleted')).body.data).toEqual([]);
+      expect((await authenticatedRequest('post', `/api/students/${active}/restore`)).status).toBe(404);
     });
 
     it('returns 404 for non-existent student', async () => {

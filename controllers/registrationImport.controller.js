@@ -290,6 +290,7 @@ const undoImport = async (req, res) => {
       school: req.user.school,
       deleteStudent: req.body?.deleteStudent === true,
       target,
+      userId: req.user.userId,
     });
     if (!result.ok) {
       const code = result.code === 'NOT_FOUND' ? 404 : 400;

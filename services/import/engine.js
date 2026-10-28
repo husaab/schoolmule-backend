@@ -287,7 +287,7 @@ async function runExecute(db, {
  * delete, so an unchecked delete would silently take attendance, grades and
  * report card feedback with it.
  */
-async function runUndo(db, { submissionId, school, deleteStudent, target }) {
+async function runUndo(db, { submissionId, school, deleteStudent, target, userId = null }) {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -311,7 +311,7 @@ async function runUndo(db, { submissionId, school, deleteStudent, target }) {
 
     let studentDeleted = false;
     if (deleteStudent && blockedBy.length === 0) {
-      const { rows: deleted } = await client.query(importQueries.deleteStudentScoped, [studentId, school]);
+      const { rows: deleted } = await client.query(importQueries.softDeleteStudentScoped, [studentId, school, userId]);
       studentDeleted = deleted.length > 0;
     }
 

@@ -198,9 +198,43 @@ const studentQueries = {
 
   // DELETE /students/:id
   //  $1 = student_id, $2 = school
-  deleteStudentById: `
-    DELETE FROM students
+  // Delete is soft: `students` is a view of students_all without deleted
+  // rows (student_soft_delete_migration.sql), so a deleted student drops out
+  // of every query at once while every record stays. Archived too, so a
+  // restore lands where they were. $1 student_id, $2 school, $3 deleted_by
+  softDeleteStudent: `
+    UPDATE students
+    SET is_archived = TRUE, deleted_at = NOW(), deleted_by = $3, last_modified_at = NOW()
     WHERE student_id = $1 AND school = $2
+    RETURNING student_id
+  `,
+
+  // Back to where they were before: archived if they had been archived.
+  restoreStudent: `
+    UPDATE students_all
+    SET deleted_at = NULL, deleted_by = NULL, is_archived = (archived_at IS NOT NULL), last_modified_at = NOW()
+    WHERE student_id = $1 AND school = $2 AND deleted_at IS NOT NULL
+    RETURNING student_id, name, is_archived
+  `,
+
+  // Recently deleted: $1 school, $2 school_year_id
+  selectDeletedStudentsBySchool: `
+    SELECT
+      s.student_id,
+      s.name,
+      s.grade,
+      s.oen,
+      s.homeroom_teacher_id,
+      s.archived_at,
+      s.deleted_at,
+      s.deleted_by,
+      TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS deleted_by_name,
+      ${studentAvatarSql('s')},
+      ${studentPhotoSql('s')}
+    FROM students_all s
+    LEFT JOIN users u ON u.user_id = s.deleted_by
+    WHERE s.school = $1 AND s.school_year_id = $2 AND s.deleted_at IS NOT NULL
+    ORDER BY s.deleted_at DESC
   `,
 
   selectStudentsByGrade: `

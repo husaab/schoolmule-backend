@@ -249,7 +249,10 @@ CREATE TABLE students (
   archived_at            TIMESTAMPTZ,
   archived_by            UUID REFERENCES users(user_id),
   school_year_id         UUID REFERENCES school_years(school_year_id),
-  previous_student_id    UUID REFERENCES students(student_id)
+  previous_student_id    UUID REFERENCES students(student_id),
+  -- Soft delete (student_soft_delete_migration.sql)
+  deleted_at             TIMESTAMPTZ,
+  deleted_by             UUID REFERENCES users(user_id) ON DELETE SET NULL
 );
 
 CREATE INDEX idx_students_source_submission
@@ -2312,3 +2315,11 @@ CREATE TABLE IF NOT EXISTS student_views (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Student soft delete (student_soft_delete_migration.sql): the table is
+-- students_all and `students` is a view of the rows that aren't deleted. Last,
+-- so every foreign key above was created against the table.
+ALTER TABLE students RENAME TO students_all;
+CREATE INDEX IF NOT EXISTS students_deleted_idx ON students_all (school, school_year_id, deleted_at DESC) WHERE deleted_at IS NOT NULL;
+CREATE VIEW students WITH (security_invoker = true) AS
+  SELECT * FROM students_all WHERE deleted_at IS NULL;

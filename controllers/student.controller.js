@@ -302,15 +302,18 @@ const updateStudent = async (req, res) => {
   }
 };
 
+// Delete is soft: the student disappears everywhere, including the Archived
+// tab, but every record is kept and Recently deleted can restore them.
+// Nothing erases a student for good.
 const deleteStudent = async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await db.query(studentQueries.deleteStudentById, [id, req.user.school]);
+    const result = await db.query(studentQueries.softDeleteStudent, [id, req.user.school, req.user.userId]);
     if (result.rowCount === 0) {
       return res.status(404).json({ status: "failed", message: `Student with id ${id} not found` });
     }
 
-    logger.info(`Student ${id} deleted`);
+    logger.info({ studentId: id, by: req.user.userId }, 'Student deleted (kept, restorable)');
     return res.status(200).json({ status: "success", message: "Student deleted successfully" });
   } catch (error) {
     logger.error(error);
@@ -334,6 +337,56 @@ const getArchivedStudents = async (req, res) => {
   } catch (error) {
     logger.error(error);
     return res.status(500).json({ status: "failed", message: "Error fetching archived students" });
+  }
+};
+
+// Recently deleted: this year's deleted students, newest first.
+const getDeletedStudents = async (req, res) => {
+  try {
+    const school = req.user.school;
+    const schoolYearId = req.schoolYear?.schoolYearId || null;
+    const { rows } = await db.query(studentQueries.selectDeletedStudentsBySchool, [school, schoolYearId]);
+    const withPhotos = await withStudentPhotos(rows, school);
+    return res.status(200).json({
+      status: "success",
+      data: withPhotos.map((s) => ({
+        studentId: s.student_id,
+        name: s.name,
+        grade: s.grade,
+        oen: s.oen,
+        homeroomTeacherId: s.homeroom_teacher_id,
+        wasArchived: s.archived_at != null,
+        deletedAt: s.deleted_at,
+        deletedBy: s.deleted_by,
+        deletedByName: s.deleted_by_name || null,
+        avatar: s.avatar,
+        photoUrl: s.photo_url ?? null,
+      })),
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Error fetching deleted students");
+    return res.status(500).json({ status: "failed", message: "Error fetching deleted students" });
+  }
+};
+
+// Restore a deleted student: back to the active list, or to Archived if
+// they had been archived before.
+const restoreStudent = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { rows } = await db.query(studentQueries.restoreStudent, [id, req.user.school]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: "failed", message: "This student isn't in Recently deleted" });
+    }
+    logger.info({ studentId: id, by: req.user.userId }, 'Student restored');
+    return res.status(200).json({
+      status: "success",
+      message: rows[0].is_archived ? `${rows[0].name} is back in Archived` : `${rows[0].name} is back`,
+      data: { studentId: rows[0].student_id, isArchived: rows[0].is_archived },
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Error restoring student");
+    return res.status(500).json({ status: "failed", message: "Error restoring student" });
   }
 };
 
@@ -435,6 +488,8 @@ module.exports = {
   createStudent,
   updateStudent,
   deleteStudent,
+  getDeletedStudents,
+  restoreStudent,
   getArchivedStudents,
   archiveStudent,
   unarchiveStudent,
