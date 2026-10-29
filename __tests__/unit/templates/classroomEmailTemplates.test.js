@@ -100,6 +100,17 @@ describe('gradedEmail', () => {
     expect(t.gradedEmail({ ...school, recipientFirstName: 'Yasmin', grades: [grade('Plant cell diagram')], link: 'x' }).subject)
       .toBe('Graded: Plant cell diagram');
   });
+
+  it("shows each grade's assessment date under its title, when it has one", () => {
+    const { html } = t.gradedEmail({
+      ...school, recipientFirstName: 'Yasmin',
+      grades: [grade('Plant cell diagram', { dateLabel: 'Wed, Oct 21' }), grade('Fractions practice', { feedback: null })],
+      link: 'x',
+    });
+    const body = text(html);
+    expect(body).toContain('Plant cell diagram · Science Wed, Oct 21 8/10');
+    expect(body).toContain('Fractions practice · Science 8/10');
+  });
 });
 
 describe('missingAlertEmail', () => {
@@ -241,6 +252,17 @@ describe('weeklySummaryEmail', () => {
     expect(body.indexOf('Arabic 2 new grades')).toBeLessThan(body.indexOf('Science 1 new grade'));
     expect(body).not.toContain('· Arabic');
     expect(body.match(/Arabic/g)).toHaveLength(1);
+  });
+
+  it('shows a new grade\'s assessment date under its title, before the feedback', () => {
+    const { html } = t.weeklySummaryEmail({
+      ...base,
+      children: [{
+        ...children[0],
+        grades: [{ title: 'Plant cell diagram', subject: 'Science', dateLabel: 'Tue, Oct 13', scoreLabel: '8/10', feedback: 'Great labels.', teacherName: 'Ziad Teacher' }],
+      }],
+    });
+    expect(text(html)).toContain('Plant cell diagram Tue, Oct 13 "Great labels." Ziad Teacher 8/10');
   });
 
   it('to a parent with no account: a link to set one up instead of the portal, and no way to turn it off', () => {

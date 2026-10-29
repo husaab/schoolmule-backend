@@ -37,7 +37,7 @@ const scoreRow = (assessmentId, score, isExcluded = false) => ({
 // One row of the parent email: a released column with its own score; a column
 // inside a category carries the category's name as `group`.
 const line = (assessmentId, name, scoreLabel, pctLabel, extra = {}) => ({
-  assessmentId, name, group: null, scoreLabel, pctLabel, isMissing: false, comment: null, ...extra,
+  assessmentId, name, group: null, dateLabel: null, scoreLabel, pctLabel, isMissing: false, comment: null, ...extra,
 });
 
 describe('expandCascade', () => {
@@ -159,6 +159,13 @@ describe('buildEmailTasks', () => {
     const scores = new Map([student('s1', 'Alice', [scoreRow('q1', 18)])]);
     const tasks = buildEmailTasks(['q1'], [commented], scores);
     expect(tasks[0].lines[0].comment).toBe('Great recovery.');
+  });
+
+  it("labels each line with its assessment date, and leaves it out when the teacher set none", () => {
+    const dated = { ...quiz, date: '2026-10-13' };
+    const scores = new Map([student('s1', 'Alice', [scoreRow('q1', 18), scoreRow('t1', 40)])]);
+    const [task] = buildEmailTasks(['q1', 't1'], [dated, test], scores);
+    expect(task.lines.map((l) => l.dateLabel)).toEqual(['Tue, Oct 13', null]);
   });
 
   it('marks work flagged missing as Missing, at 0%', () => {

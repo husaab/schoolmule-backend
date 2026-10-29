@@ -589,8 +589,8 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
   });
 }
 
-// The graded assessments table: category, name and the teacher's note on the
-// left; score and percentage on the right (rose when missing).
+// The graded assessments table: category, name, date and the teacher's note on
+// the left; score and percentage on the right (rose when missing).
 function gradeRowsTable(assessments) {
   const cell = `font-family:${FONT_BODY};padding:12px 0;border-top:1px solid ${COLORS.divider};vertical-align:top;`;
   const rows = assessments
@@ -602,6 +602,7 @@ function gradeRowsTable(assessments) {
       <td style="${cell}${last}">
         ${a.group ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;line-height:1.4;color:${COLORS.muted};margin:0 0 2px;">${escapeHtml(a.group)}</div>` : ''}
         <div style="font-size:15px;font-weight:500;line-height:1.4;color:${COLORS.heading};">${escapeHtml(a.name)}</div>
+        ${a.dateLabel ? `<div style="font-size:13px;line-height:1.4;color:${COLORS.muted};margin-top:2px;">${escapeHtml(a.dateLabel)}</div>` : ''}
         ${a.comment ? `<div style="font-size:13px;line-height:1.5;color:${COLORS.muted};margin-top:2px;">${multiline(a.comment)}</div>` : ''}
       </td>
       <td align="right" style="${cell}${last}padding-left:16px;text-align:right;white-space:nowrap;">
@@ -622,9 +623,10 @@ const currentGrade = (className, runningGradeLabel) =>
 /**
  * "New grades posted" digest — one per guardian per child per publish batch.
  *
- * assessments: [{ name, group?, scoreLabel, pctLabel, isMissing?, comment? }],
+ * assessments: [{ name, group?, dateLabel?, scoreLabel, pctLabel, isMissing?, comment? }],
  * one row per released item, already formatted by the caller, which owns the
- * grade math. `group` is the category the item sits in. `speak` ({ label, url })
+ * grade math. `group` is the category the item sits in; `dateLabel` its
+ * assessment date ('Tue, Oct 13'), left out when the teacher set none. `speak` ({ label, url })
  * adds "Speak to <teacher> about this" beside View in Parent Portal. `setupUrl`
  * is for an address with no account: "Create your account" takes the portal
  * button's place, with "Speak to …" (to the same signup) beside it.

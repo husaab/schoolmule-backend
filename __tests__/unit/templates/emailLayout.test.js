@@ -143,6 +143,15 @@ describe('emailTemplate – every template uses the shared layout', () => {
       expect(html).toContain('>95%</div>');
     });
 
+    it('show the assessment date under the name, and nothing when there is none', () => {
+      const html = render([
+        { name: 'Spelling 4', group: 'Spelling', dateLabel: 'Tue, Oct 13', scoreLabel: '9/10', pctLabel: '90%' },
+        { name: 'Undated <quiz>', scoreLabel: '8/10', pctLabel: '80%' },
+      ]);
+      expect(html).toMatch(/>Spelling 4<\/div>\s*<div[^>]*>Tue, Oct 13<\/div>/);
+      expect(html).toMatch(/>Undated &lt;quiz&gt;<\/div>\s*<\/td>/);
+    });
+
     it('add "Speak to <teacher> about this" beside View in Parent Portal when the sender gives one', () => {
       const url = 'https://example.com/parent/messages?tab=conversations&ask=s1&askClass=c1&askAssessment=a1';
       const rows = [{ name: 'Quiz 1', scoreLabel: '9/10', pctLabel: '90%' }];

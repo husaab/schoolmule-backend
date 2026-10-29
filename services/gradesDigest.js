@@ -27,6 +27,7 @@ const { schoolSender } = require('./email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const outbox = require('./email/outbox');
 const outboxQueries = require('../queries/emailOutbox.queries');
+const { dayLabel } = require('./classroom/classroomDigest');
 const {
   computeAssessmentForStudent,
   buildScoreLookup,
@@ -65,8 +66,9 @@ function groupScoreRowsByStudent(rows) {
 
 /**
  * One released column's row in the email: its own score, labelled with its
- * category (`group`) when it sits inside one. `assessmentId` lets the sender
- * link the row to a conversation about it.
+ * category (`group`) when it sits inside one, and its date ('Tue, Oct 13')
+ * when the teacher set one. `assessmentId` lets the sender link the row to a
+ * conversation about it.
  */
 function formatAssessmentLine(assessment, result, { group = null, comment = assessment.parent_comment || null } = {}) {
   const isMissing = result.state === 'missing';
@@ -74,6 +76,7 @@ function formatAssessmentLine(assessment, result, { group = null, comment = asse
     assessmentId: assessment.assessment_id,
     name: assessment.name,
     group,
+    dateLabel: assessment.date ? dayLabel(assessment.date) : null,
     scoreLabel: isMissing ? 'Missing' : `${result.earned}/${result.max}`,
     pctLabel: `${Math.round(result.pct * 10) / 10}%`,
     isMissing,
@@ -426,7 +429,7 @@ const gradesDigestHandler = {
       },
       sentContent: {
         subject,
-        lines: task.lines.map((l) => ({ name: l.name, group: l.group, score: l.scoreLabel, pct: l.pctLabel })),
+        lines: task.lines.map((l) => ({ name: l.name, group: l.group, date: l.dateLabel, score: l.scoreLabel, pct: l.pctLabel })),
         runningGrade: task.runningGradeLabel,
         batchIds,
       },

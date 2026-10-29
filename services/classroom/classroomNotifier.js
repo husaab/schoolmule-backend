@@ -239,6 +239,7 @@ async function buildGraded(job, recipient, now) {
       grades: rows.map((r) => ({
         title: r.title || 'Untitled',
         subject: r.subject,
+        dateLabel: r.date ? digest.dayLabel(r.date) : null,
         scoreLabel: digest.scoreLabel({ score: r.score, maxScore: r.max_score, status: r.status }),
         feedback: r.feedback,
         teacherName: r.teacher_name,
@@ -379,6 +380,7 @@ async function buildSummary(job, recipient, now) {
       grades: sections.grades.map((r) => ({
         title: r.title || 'Untitled',
         subject: r.subject,
+        dateLabel: r.date ? digest.dayLabel(r.date) : null,
         scoreLabel: digest.scoreLabel({ score: r.score, maxScore: r.max_score, status: r.status }),
         feedback: r.feedback,
         teacherName: r.teacher_name,

@@ -51,13 +51,17 @@ const splitRow = (left, right, { last = false } = {}) => `
     </tr>
   </table>`;
 
-/** A grade: title · subject with the score on the right, then quoted feedback and the teacher. */
+/** The assessment's date ('Tue, Oct 13') in a muted line under its title, or nothing. */
+const dateLine = (dateLabel) =>
+  (dateLabel ? `<div style="margin-top:2px;font-size:13px;line-height:1.4;color:${COLORS.muted};">${escapeHtml(dateLabel)}</div>` : '');
+
+/** A grade: title · subject (and its date) with the score on the right, then quoted feedback and the teacher. */
 function gradeBox(g) {
   const score = g.scoreLabel ? `<strong style="font-weight:600;color:${COLORS.heading};">${escapeHtml(g.scoreLabel)}</strong>` : '';
   const head = `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
-        <td style="font-family:${FONT_BODY};font-size:15px;line-height:1.5;color:${COLORS.text};">${workLine(g.title, g.subject)}</td>
+        <td style="font-family:${FONT_BODY};font-size:15px;line-height:1.5;color:${COLORS.text};">${workLine(g.title, g.subject)}${dateLine(g.dateLabel)}</td>
         <td align="right" style="padding-left:12px;white-space:nowrap;font-family:${FONT_BODY};font-size:15px;">${score}</td>
       </tr>
     </table>`;
@@ -70,7 +74,7 @@ function gradeBox(g) {
 /**
  * A summary's new grades, one card per subject (in name order): the subject
  * and how many are new on top, then a compact row per grade (title, score,
- * and the teacher's quoted feedback under it).
+ * and its date and the teacher's quoted feedback under it).
  */
 function gradesBySubject(grades) {
   const bySubject = new Map();
@@ -89,7 +93,7 @@ function gradesBySubject(grades) {
           : '';
         return `
         <tr>
-          <td style="padding:9px 0;${rule}${cell}color:${COLORS.text};vertical-align:top;">${escapeHtml(g.title)}${feedback}</td>
+          <td style="padding:9px 0;${rule}${cell}color:${COLORS.text};vertical-align:top;">${escapeHtml(g.title)}${dateLine(g.dateLabel)}${feedback}</td>
           <td align="right" style="padding:9px 0 9px 12px;${rule}${cell}white-space:nowrap;vertical-align:top;font-weight:600;color:${COLORS.heading};">${escapeHtml(g.scoreLabel || '')}</td>
         </tr>`;
       }).join('');

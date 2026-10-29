@@ -46,6 +46,7 @@ const assessmentPublishQueries = {
       assessment_id,
       class_id,
       name,
+      TO_CHAR(date, 'YYYY-MM-DD') AS date,
       is_parent,
       parent_assessment_id,
       weight_points,

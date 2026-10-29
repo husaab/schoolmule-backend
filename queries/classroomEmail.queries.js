@@ -444,6 +444,7 @@ const classroomEmailQueries = {
     SELECT g.* FROM (
       SELECT sub.submission_id::text AS key_id, ${PUBLISHED_KEY('sub.published_at')} AS published_key, sub.published_at,
              i.item_id, i.kind, COALESCE(a.name, i.title) AS title, c.subject, a.max_score,
+             TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
              CASE WHEN ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')} THEN sub.feedback END AS feedback,
@@ -467,6 +468,7 @@ const classroomEmailQueries = {
       UNION ALL
       SELECT 'col:' || a.assessment_id::text, ${PUBLISHED_KEY('a.published_at')}, a.published_at,
              i.item_id, i.kind, COALESCE(a.name, i.title), c.subject, a.max_score,
+             TO_CHAR(a.date, 'YYYY-MM-DD'),
              sa.score, sa.status, NULL::text,
              ${TEACHER_NAME('pb', 'tu')},
              ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}

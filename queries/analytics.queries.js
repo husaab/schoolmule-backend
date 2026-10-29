@@ -75,7 +75,7 @@ const analyticsQueries = {
       a.max_score,
       a.is_parent,
       a.parent_assessment_id,
-      a.date                  AS assessment_date,
+      TO_CHAR(a.date, 'YYYY-MM-DD') AS assessment_date,
       a.sort_order,
       a.is_published,
       a.parent_comment,
