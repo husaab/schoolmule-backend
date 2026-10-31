@@ -3,6 +3,9 @@
  * Generates HTML content for student progress reports
  */
 
+const { formatCommentHTML } = require('../utils/commentFormatter');
+const { escapeHtml } = require('./agendaBaseTemplate');
+
 const getProgressReportHTML = (data) => {
   const { schoolInfo, student, term, progressData, generatedDate, schoolAssets } = data;
 
@@ -442,14 +445,14 @@ const getProgressReportHTML = (data) => {
                     ${subject.coreStandards ? `
                     <div class="standards-section">
                         <div class="standards-label">Core Standards Progress:</div>
-                        <div class="standards-value">${subject.coreStandards}</div>
+                        <div class="standards-value">${escapeHtml(subject.coreStandards)}</div>
                     </div>
                     ` : ''}
                     
                     ${subject.comment ? `
                     <div class="comment-section">
                         <div class="comment-label">Teacher Comments:</div>
-                        <div class="comment-text">${subject.comment}</div>
+                        <div class="comment-text">${formatCommentHTML(subject.comment)}</div>
                     </div>
                     ` : ''}
                 </div>

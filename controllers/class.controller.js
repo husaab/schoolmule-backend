@@ -428,6 +428,7 @@ const getStudentsInClass = async (req, res) => {
         school:            s.school,
         grade:             s.grade,
         oen:               s.oen,
+        gender:            s.gender ?? null,
         mother: {
           name:  s.mother_name,
           email: s.mother_email,

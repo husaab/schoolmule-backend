@@ -263,6 +263,24 @@ describe('Integration: Class Routes', () => {
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0].name).toBe('Alice Smith');
     });
+
+    it("includes each student's gender (null when not recorded)", async () => {
+      const termId = await seedTerm();
+      const cls = await seedClass(termId);
+      const aliceId = await seedStudent('Alice Smith', '5');
+      const bobId = await seedStudent('Bob Jones', '5');
+      await pool.query(`UPDATE students SET gender = 'female' WHERE student_id = $1`, [aliceId]);
+      await pool.query(
+        'INSERT INTO class_students (class_id, student_id) VALUES ($1, $2), ($1, $3)',
+        [cls.class_id, aliceId, bobId]
+      );
+
+      const res = await authenticatedRequest('get', `/api/classes/${cls.class_id}/students`);
+
+      expect(res.status).toBe(200);
+      const byName = Object.fromEntries(res.body.data.map((s) => [s.name, s.gender]));
+      expect(byName).toEqual({ 'Alice Smith': 'female', 'Bob Jones': null });
+    });
   });
 
   describe('DELETE /api/classes/:classId/students/:studentId (unenroll)', () => {

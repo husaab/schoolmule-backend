@@ -210,6 +210,7 @@ const classQueries = {
       s.school,
       s.grade,
       s.oen,
+      s.gender,
       s.mother_name,
       s.mother_email,
       s.mother_number,
