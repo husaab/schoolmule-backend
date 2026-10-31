@@ -4,6 +4,7 @@ const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const studentQueries = require("../queries/student.queries");
 const classQueries = require("../queries/class.queries");
 const termQueries = require("../queries/term.queries");
+const { parseReportDate } = require('../services/kindergartenProgressReport');
 const logger = require("../logger");
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
@@ -334,7 +335,11 @@ const generateProgressReport = async (req, res) => {
       });
     }
 
-    const result = await generateSingleProgressReport(studentId, term);
+    // Printed on JK/SK progress reports; other grades don't print a date.
+    const { reportDate, error: dateError } = parseReportDate(req.body);
+    if (dateError) return res.status(400).json({ status: 'error', message: dateError });
+
+    const result = await generateSingleProgressReport(studentId, term, { reportDate });
     
     res.json({
       status: 'success',
@@ -367,6 +372,10 @@ const generateProgressReportsBulk = async (req, res) => {
       });
     }
 
+    // Printed on JK/SK progress reports; other grades don't print a date.
+    const { reportDate, error: dateError } = parseReportDate(req.body);
+    if (dateError) return res.status(400).json({ status: 'error', message: dateError });
+
     const successes = [];
     const failures = [];
 
@@ -378,7 +387,7 @@ const generateProgressReportsBulk = async (req, res) => {
 
       for (const studentId of studentIds) {
         try {
-          const result = await generateSingleProgressReport(studentId, term, { browser });
+          const result = await generateSingleProgressReport(studentId, term, { browser, reportDate });
           successes.push({ studentId, message: 'Progress report generated successfully', data: result });
         } catch (error) {
           if (error instanceof ReportSkip) logger.warn({ studentId, term, reason: error.message }, 'Skipped a progress report');
@@ -409,6 +418,7 @@ const generateProgressReportsBulk = async (req, res) => {
 // Helper function to generate a single progress report.
 // opts.browser — a shared Puppeteer browser to reuse (bulk flows pass one so
 // the whole batch pays a single Chromium launch); omit it for a one-off report.
+// opts.reportDate — YYYY-MM-DD printed on JK/SK progress reports (null: today).
 const generateSingleProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student information
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);

@@ -1,311 +1,238 @@
 /**
- * Al Haadi Academy - JK (Junior Kindergarten) Progress Report Card Template
- * Generates HTML for the mid-year progress report with D/B/I/N scale
+ * Al Haadi Academy — Junior Kindergarten Progress Report Card.
+ *
+ * A copy of the school's own Google Docs template ("Dalia Al-hussaini JK
+ * PROGRESS REPORT CARD 2025-2026.pdf"): A4, Mulish, black-ruled tables.
+ *   Page 1   the yellow banner, the pink student grid, the green "Learning
+ *            Skills" key.
+ *   Then     one table per skill section, each with its own colour and icon
+ *            (unknown sections get a neutral colour and no icon).
+ *   Last     "Teacher's Comments" (academic achievement, socio-emotional
+ *            development), signatures, the date and the school stamp.
+ *   Every page: the logo top right and the school's address footer.
  */
 
-const getAlHaadiProgressReportJKHTML = (data) => {
-  const { schoolInfo, schoolAssets, student, domains, ratingMap, generatedDate } = data;
-  const { name, grade, oen, homeroomTeacher, teacherAssistant, daysOfAbsence } = student;
+const { assetDataUri, mulishFontFaces, escapeHtml, formatLongDate, schoolYearWording, contactLine } = require('./printKit');
 
-  const gradeLabel = 'Junior Kindergarten';
+const LEGEND = [
+  ['D - Developing:', 'Children can apply the skill or concept correctly.'],
+  ['B - Beginning:', 'Children show some understanding. Reminders, hints, or support may be needed.'],
+  ['I - Improvement needed:', 'Children are experiencing difficulty with the concept or skill. Assistance at home is needed.'],
+  ['N - Not Assessed:', 'Not assessed at this time'],
+];
 
-  const domainSections = domains.map(domain => {
-    const skillRows = domain.skills.map(skill => {
-      const rating = ratingMap[skill.skillId] || '';
-      return `
-        <tr>
-          <td class="skill-name">${skill.name}</td>
-          <td class="rating-cell">${rating}</td>
-        </tr>
-      `;
-    }).join('');
+// Section colours and icons from the paper template, by section name.
+const SECTION_STYLES = {
+  'language and communication skills': { color: '#c9daf8', icon: 'language.png' },
+  'social skills': { color: '#d9ead3' },
+  'emotional development': { color: '#e6b8af', icon: 'emotional.png' },
+  'reading and writing skills': { color: '#fce5cd', icon: 'reading-writing.png' },
+  'colours and shapes': { color: '#ead1dc', icon: 'colours-shapes.png' },
+  'colors and shapes': { color: '#ead1dc', icon: 'colours-shapes.png' },
+  numbers: { color: '#cfe2f3', icon: 'numbers.png' },
+  'fine motor skills': { color: '#d9d2e9', icon: 'fine-motor.png' },
+  'gross motor skills': { color: '#d0e0e3', icon: 'gross-motor.png' },
+  'cognitive development': { color: '#fce5cd', icon: 'cognitive.png' },
+  arabic: { color: '#e6b8af', icon: 'arabic.png', wideIcon: true },
+  'islamic studies': { color: '#d9ead3', icon: 'islamic-studies.png' },
+};
+const FALLBACK_COLORS = ['#c9daf8', '#d9ead3', '#fce5cd', '#ead1dc', '#cfe2f3', '#d9d2e9'];
 
-    return `
-      <div class="domain-section">
-        <table class="domain-table">
-          <thead>
-            <tr>
-              <th class="domain-header" colspan="2">${domain.name}</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${skillRows}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }).join('');
+const PINK = '#f4cccc';
+const GREEN = '#b6d7a8';
+const NAVY = '#17407a';
+const LINK_BLUE = '#1155cc';
 
-  return `
-<!DOCTYPE html>
+function sectionStyle(name, index) {
+  const key = String(name || '').trim().toLowerCase().replace(/:$/, '');
+  return SECTION_STYLES[key] || { color: FALLBACK_COLORS[index % FALLBACK_COLORS.length] };
+}
+
+function sectionHtml(domain, index, ratingMap) {
+  const style = sectionStyle(domain.name, index);
+  const icon = style.icon
+    ? `<img class="icon${style.wideIcon ? ' wide' : ''}" src="${assetDataUri(`alhaadi-kindergarten/${style.icon}`)}" alt="" />`
+    : '';
+  const rows = domain.skills
+    .map(
+      (skill) => `<tr>
+        <td class="skill">${escapeHtml(skill.name)}</td>
+        <td class="rating">${escapeHtml(ratingMap[skill.skillId] || '')}</td>
+      </tr>`
+    )
+    .join('');
+  return `<table class="grid section">
+    <colgroup><col style="width: 79%" /><col style="width: 21%" /></colgroup>
+    <tr class="section-head" style="background: ${style.color};">
+      <td><span class="name">${escapeHtml(domain.name)}</span>${icon}</td><td></td>
+    </tr>
+    ${rows}
+  </table>`;
+}
+
+function commentBlock(title, text) {
+  const body = String(text || '').trim();
+  return `<div class="comment-title">${escapeHtml(title)}</div>
+    <div class="comment-text">${escapeHtml(body)}</div>`;
+}
+
+function headerTemplate(logoDataUri) {
+  if (!logoDataUri) return '';
+  return `<div style="width: 100%; box-sizing: border-box; padding: 9pt 25pt 0; text-align: right;">
+    <img src="${logoDataUri}" style="height: 34pt; max-width: 110pt; object-fit: contain;" />
+  </div>`;
+}
+
+function footerTemplate(schoolInfo, yearFull) {
+  return `<style>${mulishFontFaces([700])}</style>
+  <div style="width: 100%; box-sizing: border-box; padding: 0 51pt 0 37pt; display: flex; justify-content: space-between; align-items: flex-start;
+              font-family: 'Mulish', sans-serif; font-size: 8pt; font-weight: 700; line-height: 1.7; color: ${NAVY}; -webkit-print-color-adjust: exact;">
+    <div>
+      <div>${escapeHtml(schoolInfo.name || '')}</div>
+      <div>${contactLine(schoolInfo, `color: ${LINK_BLUE}; text-decoration: underline;`)}</div>
+      ${yearFull ? `<div>${escapeHtml(yearFull)} All Rights Reserved</div>` : ''}
+    </div>
+    <div><span class="pageNumber"></span></div>
+  </div>`;
+}
+
+/**
+ * @param {object} data
+ * @param {object} data.schoolInfo         { name, address, phone, email }
+ * @param {string|null} data.logoDataUri   the school logo, inlined (page header)
+ * @param {string|null} data.principalSignatureDataUri  inlined too
+ * @param {string|null} data.schoolStampDataUri         inlined too
+ * @param {object} data.student            { name, oen, teacherName, teacherAssistant, daysAbsent }
+ * @param {Array}  data.domains            [{ domainId, name, skills: [{ skillId, name }] }]
+ * @param {object} data.ratingMap          skillId → rating
+ * @param {object} data.comments           { academic_achievement, socio_emotional }
+ * @param {string} data.reportDate         YYYY-MM-DD
+ * @param {string|null} data.schoolYearLabel  e.g. "2025-2026"
+ * @returns {{ html: string, pdfOptions: object }}
+ */
+function renderAlHaadiProgressReportJK(data) {
+  const {
+    schoolInfo, logoDataUri, principalSignatureDataUri, schoolStampDataUri,
+    student, domains, ratingMap = {}, comments = {}, reportDate, schoolYearLabel,
+  } = data;
+  const year = schoolYearWording(schoolYearLabel);
+  const dateLabel = formatLongDate(reportDate).toUpperCase();
+  const ta = String(student.teacherAssistant || '').trim();
+
+  const legendRows = LEGEND.map(([term, text]) => `<div><strong>${term}</strong> ${text}</div>`).join('');
+  const sections = domains.map((d, i) => sectionHtml(d, i, ratingMap)).join('');
+
+  const principalSignature = principalSignatureDataUri ? `<img src="${principalSignatureDataUri}" alt="" />` : '';
+  const stamp = schoolStampDataUri ? `<div class="stamp"><img src="${schoolStampDataUri}" alt="" /></div>` : '';
+
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Progress Report - ${name}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+<meta charset="UTF-8" />
+<title>JK Progress Report - ${escapeHtml(student.name)}</title>
+<style>
+  ${mulishFontFaces([400, 600, 700, 800])}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #fff; }
+  body { font-family: 'Mulish', sans-serif; color: #000; font-size: 10.5pt; line-height: 1.3;
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-    body {
-      font-family: 'Georgia', 'Cambria', serif;
-      font-size: 11pt;
-      color: #333;
-      background: #fff;
-      line-height: 1.4;
-      padding: 15px;
-    }
+  table.grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  table.grid td { border: 1px solid #000; }
 
-    .corner-logo {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      width: 100px;
-      height: auto;
-      object-fit: contain;
-      z-index: 1000;
-    }
+  .banner { border: 1px solid #000; }
+  .banner img { display: block; width: 100%; height: auto; }
 
-    .container {
-      max-width: 210mm;
-      margin: 0 auto;
-      position: relative;
-    }
+  table.info { margin-top: 18pt; background: ${PINK}; }
+  table.info td { text-align: center; vertical-align: top; font-weight: 600; font-size: 10pt; line-height: 1.45; padding: 6pt 4pt; }
+  table.info tr.first td { height: 40pt; }
+  table.info tr.second td { height: 54pt; }
 
-    /* Title Banner */
-    .title-banner {
-      border: 2px solid #333;
-      padding: 20px;
-      text-align: center;
-      margin-bottom: 20px;
-    }
+  table.legend { margin-top: 24pt; background: ${GREEN}; }
+  table.legend td { vertical-align: top; padding: 3pt 4pt; }
+  table.legend td.label { font-weight: 600; font-size: 10pt; line-height: 1.35; }
+  table.legend td.terms { font-size: 9.5pt; line-height: 1.4; }
+  table.legend td.terms strong { font-size: 10.5pt; font-weight: 700; }
 
-    .title-banner h1 {
-      font-size: 24px;
-      font-weight: bold;
-      color: #333;
-    }
+  table.section { margin-top: 28pt; break-inside: avoid; page-break-inside: avoid; }
+  table.section tr { break-inside: avoid; page-break-inside: avoid; }
+  table.section tr.section-head td { height: 32pt; vertical-align: middle; padding: 0 5pt; }
+  table.section tr.section-head .name { font-weight: 700; font-size: 11pt; vertical-align: middle; }
+  table.section tr.section-head .icon { height: 22pt; width: auto; vertical-align: middle; margin-left: 16pt; }
+  table.section tr.section-head .icon.wide { height: 18pt; }
+  table.section td.skill { height: 25pt; vertical-align: middle; padding: 0 5pt; font-size: 10.5pt; }
+  table.section td.rating { text-align: center; vertical-align: middle; font-weight: 600; font-size: 10.5pt; }
 
-    /* Student Info Table */
-    .info-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 20px;
-      border: 1px solid #333;
-    }
+  .comments-page { break-before: page; page-break-before: always; }
+  .comments { border: 1px solid #000; min-height: 430pt; padding: 8pt 5pt 14pt; }
+  .comments h2 { font-size: 10pt; font-weight: 700; margin-bottom: 12pt; }
+  .comment-title { font-size: 10pt; text-decoration: underline; margin-bottom: 12pt; }
+  .comment-text { font-size: 12pt; line-height: 1.45; white-space: pre-wrap; margin-bottom: 14pt; }
 
-    .info-table td {
-      padding: 8px 12px;
-      border: 1px solid #333;
-      font-size: 11pt;
-    }
-
-    .info-table .info-label {
-      font-weight: bold;
-      color: #333;
-    }
-
-    .info-table .info-value {
-      color: #333;
-    }
-
-    .info-table .pink-row td {
-      background-color: #f8d7da;
-    }
-
-    /* Legend */
-    .legend-box {
-      border: 1px solid #333;
-      margin-bottom: 25px;
-      overflow: hidden;
-    }
-
-    .legend-header {
-      background-color: #d4edda;
-      padding: 8px 12px;
-      font-weight: bold;
-      font-size: 12pt;
-      border-bottom: 1px solid #333;
-    }
-
-    .legend-content {
-      padding: 10px 12px;
-    }
-
-    .legend-item {
-      margin-bottom: 6px;
-      font-size: 10.5pt;
-    }
-
-    .legend-item strong {
-      display: inline;
-    }
-
-    /* Domain Sections */
-    .domain-section {
-      margin-bottom: 20px;
-      page-break-inside: avoid;
-    }
-
-    .domain-table {
-      width: 100%;
-      border-collapse: collapse;
-      border: 1px solid #333;
-    }
-
-    .domain-header {
-      background-color: #d4edda;
-      padding: 8px 12px;
-      font-weight: bold;
-      font-size: 12pt;
-      text-align: left;
-      border: 1px solid #333;
-    }
-
-    .domain-table tbody tr:nth-child(even) {
-      background-color: #f8f9fa;
-    }
-
-    .skill-name {
-      padding: 6px 12px;
-      border: 1px solid #ccc;
-      font-size: 10.5pt;
-      width: 75%;
-    }
-
-    .rating-cell {
-      padding: 6px 12px;
-      border: 1px solid #ccc;
-      text-align: center;
-      font-weight: bold;
-      font-size: 12pt;
-      width: 25%;
-      background-color: #d6e4f0;
-    }
-
-    /* Footer */
-    .footer {
-      margin-top: 30px;
-      padding-top: 15px;
-      border-top: 1px solid #ccc;
-      page-break-inside: avoid;
-    }
-
-    .footer-signatures {
-      display: flex;
-      justify-content: space-around;
-      align-items: flex-end;
-      margin-bottom: 15px;
-      min-height: 70px;
-    }
-
-    .signature-block {
-      text-align: center;
-      min-width: 150px;
-    }
-
-    .signature-image {
-      max-height: 50px;
-      max-width: 120px;
-      object-fit: contain;
-      margin-bottom: 5px;
-    }
-
-    .stamp-image {
-      max-height: 60px;
-      max-width: 60px;
-      object-fit: contain;
-    }
-
-    .signature-line {
-      border-top: 1px solid #333;
-      padding-top: 5px;
-      font-size: 9pt;
-      color: #666;
-      margin-top: 8px;
-    }
-
-    .footer-info {
-      text-align: center;
-      font-size: 9pt;
-      color: #666;
-      margin-top: 15px;
-    }
-
-    @page { size: A4; margin: 18mm; }
-
-    @media print {
-      body { margin: 0; padding: 0; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      .corner-logo { position: absolute !important; top: 0 !important; right: 0 !important; width: 100px !important; }
-      .domain-section { page-break-inside: avoid; }
-      .footer { page-break-inside: avoid; }
-    }
-  </style>
+  .signoff { break-inside: avoid; page-break-inside: avoid; margin-top: 22pt; }
+  .signoff .row { display: flex; align-items: center; min-height: 40pt; }
+  .signoff .cell { width: 50%; display: flex; align-items: center; gap: 12pt; font-weight: 700; font-size: 10.5pt; }
+  .signoff .sig { width: 90pt; height: 34pt; display: flex; align-items: center; justify-content: center; }
+  .signoff .sig img { max-width: 90pt; max-height: 34pt; object-fit: contain; }
+  .stamp { text-align: center; margin-top: 8pt; }
+  .stamp img { width: 96pt; height: 96pt; object-fit: contain; }
+</style>
 </head>
 <body>
-  ${schoolAssets?.logoUrl ? `<img src="${schoolAssets.logoUrl}" alt="School Logo" class="corner-logo" />` : ''}
+  <div class="banner"><img src="${assetDataUri('alhaadi-kindergarten/jk-banner.jpg')}" alt="Junior Kindergarten Progress Report Card" /></div>
 
-  <div class="container">
-    <!-- Title -->
-    <div class="title-banner">
-      <h1>${gradeLabel} Progress Report Card</h1>
+  <table class="grid info">
+    <colgroup><col style="width: 43.4%" /><col style="width: 21.3%" /><col style="width: 35.3%" /></colgroup>
+    <tr class="first">
+      <td>Name of Student:<br />${escapeHtml(student.name)}</td>
+      <td colspan="2">Teacher: ${escapeHtml(student.teacherName || '')}${ta ? `<br />Teacher Assistant: ${escapeHtml(ta)}` : ''}</td>
+    </tr>
+    <tr class="second">
+      <td>Days of absence<br />${escapeHtml(student.daysAbsent ?? 0)}</td>
+      <td>School<br />${escapeHtml(schoolInfo.name || '')}</td>
+      <td>OEN:<br />${escapeHtml(student.oen || '')}</td>
+    </tr>
+  </table>
+
+  <table class="grid legend">
+    <colgroup><col style="width: 11%" /><col style="width: 89%" /></colgroup>
+    <tr><td class="label">Learning Skills</td><td class="terms">${legendRows}</td></tr>
+  </table>
+
+  ${sections}
+
+  <div class="comments-page">
+    <div class="comments">
+      <h2>Teacher's Comments:</h2>
+      ${commentBlock('Academic achievement:', comments.academic_achievement)}
+      ${commentBlock('Socio-emotional development:', comments.socio_emotional)}
     </div>
 
-    <!-- Student Info -->
-    <table class="info-table">
-      <tr>
-        <td class="info-label">Name of Student:</td>
-        <td class="info-value">${name}</td>
-        <td class="info-label">Teacher: ${homeroomTeacher}</td>
-      </tr>
-      ${teacherAssistant ? `
-      <tr>
-        <td colspan="2"></td>
-        <td class="info-label">Teacher Assistant: ${teacherAssistant}</td>
-      </tr>
-      ` : ''}
-      <tr class="pink-row">
-        <td><span class="info-label">Days of absence</span><br/>${daysOfAbsence}</td>
-        <td><span class="info-label">School</span><br/>${schoolInfo.name || 'Al Haadi Academy'}</td>
-        <td><span class="info-label">OEN:</span><br/>${oen || 'N/A'}</td>
-      </tr>
-    </table>
-
-    <!-- Legend -->
-    <div class="legend-box">
-      <div class="legend-header">Learning Skills</div>
-      <div class="legend-content">
-        <div class="legend-item"><strong>D - Developing:</strong> Children can apply the skill or concept correctly.</div>
-        <div class="legend-item"><strong>B - Beginning:</strong> Children show some understanding. Reminders, hints, or support is necessary.</div>
-        <div class="legend-item"><strong>I - Improvement needed:</strong> Children are experiencing difficulty with the concept or skill. Assistance at home is needed.</div>
-        <div class="legend-item"><strong>N - Not Assessed:</strong> Not assessed at this time</div>
+    <div class="signoff">
+      <div class="row">
+        <div class="cell">Teacher's Signature: <span class="sig"></span></div>
+        <div class="cell">${ta ? `Teacher Assistant's Signature: <span class="sig"></span>` : ''}</div>
       </div>
-    </div>
-
-    <!-- Skill Domains -->
-    ${domainSections}
-
-    <!-- Footer -->
-    <div class="footer">
-      ${schoolAssets?.principalSignatureUrl || schoolAssets?.schoolStampUrl ? `
-      <div class="footer-signatures">
-        <div class="signature-block">
-          ${schoolAssets.principalSignatureUrl ? `<img src="${schoolAssets.principalSignatureUrl}" alt="Principal Signature" class="signature-image" />` : ''}
-          <div class="signature-line">Principal's Signature</div>
-        </div>
-        <div class="signature-block">
-          ${schoolAssets.schoolStampUrl ? `<img src="${schoolAssets.schoolStampUrl}" alt="School Stamp" class="stamp-image" />` : ''}
-          <div class="signature-line">School Stamp</div>
-        </div>
+      <div class="row">
+        <div class="cell">Principal's Signature: <span class="sig">${principalSignature}</span></div>
+        <div class="cell">Date: ${escapeHtml(dateLabel)}</div>
       </div>
-      ` : ''}
-      <div class="footer-info">
-        <div>Created on ${generatedDate}</div>
-      </div>
+      ${stamp}
     </div>
   </div>
 </body>
-</html>
-  `;
-};
+</html>`;
 
-module.exports = { getAlHaadiProgressReportJKHTML };
+  return {
+    html,
+    pdfOptions: {
+      format: 'A4',
+      // Puppeteer takes px/in/cm/mm, not pt: 62pt, 80pt, 36pt.
+      margin: { top: '0.86in', bottom: '1.11in', left: '0.5in', right: '0.5in' },
+      headerTemplate: headerTemplate(logoDataUri),
+      footerTemplate: footerTemplate(schoolInfo, year.full),
+    },
+  };
+}
+
+module.exports = { renderAlHaadiProgressReportJK, sectionStyle };

@@ -7,7 +7,9 @@ const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const logger = require("../logger");
-const { getAlHaadiProgressReportSKHTML } = require('../templates/alHaadiProgressReportSKTemplate');
+const { renderAlHaadiProgressReportSK } = require('../templates/alHaadiProgressReportSKTemplate');
+const { fetchImageDataUri } = require('../templates/printKit');
+const { loadProgressReportContext, parseReportDate } = require('../services/kindergartenProgressReport');
 const { getAlHaadiReportCardSKHTML } = require('../templates/alHaadiReportCardSKTemplate');
 
 // ============================================================
@@ -47,7 +49,7 @@ async function fetchSchoolData(schoolCode) {
   try {
     const code = schoolCode.replace(/\s+/g, '').toUpperCase();
     const { rows: schoolRows } = await db.query(
-      `SELECT school_id, name, address, phone, email FROM schools WHERE school_code = $1`,
+      `SELECT school_id, name, address, phone, email, timezone FROM schools WHERE school_code = $1`,
       [code]
     );
     if (schoolRows.length > 0) {
@@ -466,80 +468,69 @@ const generateSingleSKProgressReport = async (studentId, term, opts = {}) => {
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];
 
-  // 2. Get homeroom teacher
-  const { rows: teacherRows } = await db.query(
-    `SELECT username FROM users WHERE user_id = $1`,
-    [student.homeroom_teacher_id]
-  );
-  const homeroomTeacher = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
-
-  // 3. Get teacher assistant
-  const { rows: taRows } = await db.query(skQueries.getTeacherAssistant, [studentId, term]);
-  const teacherAssistant = taRows.length > 0 ? taRows[0].teacher_assistant_name : null;
-
-  // 4. Get days of absence
-  let daysOfAbsence = 0;
-  try {
-    const { rows: attendanceRows } = await db.query(
-      `SELECT COUNT(*) as days_absent FROM general_attendance WHERE student_id = $1 AND status = 'ABSENT'`,
-      [studentId]
-    );
-    daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
-  } catch (err) { /* fallback to 0 */ }
-
-  // 5. Get school info + assets
+  // 2. School info + assets, then the report's date, school year, days absent
+  // and teacher (services/kindergartenProgressReport.js)
   const { schoolInfo, schoolAssets } = await fetchSchoolData(student.school);
+  const context = await loadProgressReportContext(student, {
+    reportDate: opts.reportDate || null,
+    timezone: schoolInfo.timezone,
+  });
 
-  // 6. Get subjects + standards
+  // 3. Subjects + standards
   const { rows: subjectRows } = await db.query(
     skQueries.getSubjectsByDocumentType,
     ['progress_report', student.school]
   );
   const subjects = nestSubjectsAndStandards(subjectRows);
 
-  // 7. Get assessments (ratings)
+  // 4. Ratings: standardId -> rating
   const { rows: assessmentRows } = await db.query(
     skQueries.getStandardAssessmentsForStudent,
     [studentId, term, 'progress_report']
   );
-  // Build standardId -> rating map
   const ratingMap = {};
   for (const row of assessmentRows) {
     ratingMap[row.standard_id] = row.rating;
   }
 
-  // 8. Get subject comments
+  // 5. "Strengths/Next Steps" comments: section_type -> comment (the rows of
+  // SK_PROGRESS_COMMENT_ROWS in the template)
   const { rows: commentRows } = await db.query(
-    skQueries.getSubjectCommentsForStudent,
+    skQueries.getProgressReportCommentsForStudent,
     [studentId, term]
   );
-  const commentMap = {};
+  const comments = {};
   for (const row of commentRows) {
-    commentMap[row.subject_id] = row.comment;
+    comments[row.section_type] = row.comment;
   }
 
-  // 9. Generate HTML
-  const htmlContent = getAlHaadiProgressReportSKHTML({
+  // 6. HTML + page furniture
+  // Images inlined: a URL that fails to load would print a broken-image icon.
+  const [logoDataUri, principalSignatureDataUri] = await Promise.all([
+    fetchImageDataUri(schoolAssets.logoUrl),
+    fetchImageDataUri(schoolAssets.principalSignatureUrl),
+  ]);
+  const { html: htmlContent, pdfOptions } = renderAlHaadiProgressReportSK({
     schoolInfo,
-    schoolAssets,
+    logoDataUri,
+    principalSignatureDataUri,
     student: {
       name: student.name,
-      grade: student.grade,
       oen: student.oen,
-      homeroomTeacher,
-      teacherAssistant,
-      daysOfAbsence
+      teacherName: context.teacherName,
+      daysAbsent: context.daysAbsent,
     },
     subjects,
     ratingMap,
-    commentMap,
-    generatedDate: new Date().toLocaleDateString('en-CA')
+    comments,
+    reportDate: context.reportDate,
+    schoolYearLabel: context.schoolYearLabel,
   });
 
-  // 10. Generate PDF (reuse the batch's browser when provided)
-  const pdfBuffer = await createPDFBuffer(htmlContent, { browser: opts.browser });
+  // 7. Generate PDF (reuse the batch's browser when provided)
+  const pdfBuffer = await createPDFBuffer(htmlContent, { ...pdfOptions, browser: opts.browser });
 
-  // 11. Upload to Supabase
+  // 8. Upload to Supabase
   const schoolFolder = student.school.replace(/\s+/g, '').toUpperCase();
   const fileName = `${schoolFolder}/${student.name.replace(/\s+/g, '_')}_${term.replace(/\s+/g, '_')}_sk_progress_report.pdf`;
 
@@ -552,7 +543,7 @@ const generateSingleSKProgressReport = async (studentId, term, opts = {}) => {
     throw new Error('Upload to storage failed');
   }
 
-  // 12. Save record
+  // 9. Save record
   await db.query(progressReportsQueries.createProgressReport, [
     studentId, term, student.name, student.grade, fileName, student.school
   ]);
@@ -680,8 +671,10 @@ const generateProgressReport = async (req, res) => {
     if (!studentId || !term) {
       return res.status(400).json({ status: 'error', message: 'studentId and term are required' });
     }
+    const { reportDate, error: dateError } = parseReportDate(req.body);
+    if (dateError) return res.status(400).json({ status: 'error', message: dateError });
 
-    const result = await generateSingleSKProgressReport(studentId, term);
+    const result = await generateSingleSKProgressReport(studentId, term, { reportDate });
     res.json({ status: 'success', message: 'SK progress report generated', data: result });
   } catch (error) {
     logger.error('Error generating SK progress report:', error);
@@ -699,6 +692,8 @@ const generateProgressReportsBulk = async (req, res) => {
     if (!studentIds || !Array.isArray(studentIds) || !term) {
       return res.status(400).json({ status: 'error', message: 'studentIds array and term are required' });
     }
+    const { reportDate, error: dateError } = parseReportDate(req.body);
+    if (dateError) return res.status(400).json({ status: 'error', message: dateError });
 
     const generated = [];
     const failed = [];
@@ -714,7 +709,7 @@ const generateProgressReportsBulk = async (req, res) => {
     try {
       for (const studentId of studentIds) {
         try {
-          await generateSingleSKProgressReport(studentId, term, { browser });
+          await generateSingleSKProgressReport(studentId, term, { browser, reportDate });
           generated.push({ studentId, message: 'Generated successfully' });
         } catch (err) {
           failed.push({ studentId, error: err.message });

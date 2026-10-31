@@ -1019,13 +1019,12 @@ SELECT s.student_id, ctx.term_name, sec.k, replace(sec.body, '{first}', split_pa
   FROM students s CROSS JOIN ctx
   CROSS JOIN (VALUES ${Object.entries(C.JK_COMMENTS).map(([k, b]) => `(${lit(k)}, ${lit(b)})`).join(', ')}) sec(k, body)
  WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'JK' AND pg_temp.rnd('jkc:' || s.student_id) < 0.7;
-INSERT INTO sk_subject_comments (student_id, subject_id, term, comment, school)
-SELECT s.student_id, pg_temp.sid('sks:progress_report:' || sub.name), ctx.term_name,
-       split_part(s.name, ' ', 1) || sub.body, 'PLAYGROUND'
+INSERT INTO sk_progress_report_comments (student_id, term, section_type, comment, school)
+SELECT s.student_id, ctx.term_name, sub.k, split_part(s.name, ' ', 1) || sub.body, 'PLAYGROUND'
   FROM students s CROSS JOIN ctx
-  CROSS JOIN (VALUES ('Mathematics', ' counts confidently to 50 and is beginning to count by tens.'),
-                     ('Literacy - Reading', ' recognizes most letters and enjoys sharing books with friends.')) sub(name, body)
- WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'SK' AND pg_temp.rnd('skc:' || s.student_id || sub.name) < 0.6;
+  CROSS JOIN (VALUES ('mathematics', ' counts confidently to 50 and is beginning to count by tens.'),
+                     ('language_arts', ' recognizes most letters and enjoys sharing books with friends.')) sub(k, body)
+ WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'SK' AND pg_temp.rnd('skc:' || s.student_id || sub.k) < 0.6;
 INSERT INTO jk_teacher_assistants (student_id, teacher_assistant_name, term, school)
 SELECT s.student_id, 'Rima Khatib', ctx.term_name, 'PLAYGROUND' FROM students s CROSS JOIN ctx
  WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'JK';
