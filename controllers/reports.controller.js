@@ -1,10 +1,42 @@
 const db = require("../config/database");
 const reportsQueries = require("../queries/reports.queries");
 const logger = require("../logger");
-const { createPDFBuffer } = require("../utils/pdfGenerator");
+const { PDFDocument } = require("pdf-lib");
+const { createPDFBuffer, launchPDFBrowser } = require("../utils/pdfGenerator");
 const { getStudentSummaryHTML } = require("../templates/studentSummaryTemplate");
 const { getStudentSummaryHTMLHorizontal } = require("../templates/studentSummaryTemplateHorizontal");
+const { getStudentTermSummaryHTML } = require("../templates/studentTermSummaryTemplate");
 const { computeClassGrade } = require("../services/gradeEngine");
+const { classAccessGranted } = require("../middleware/access");
+
+// Days absent, counted the same way on every summary page.
+const DAYS_ABSENT_SQL = `
+  SELECT COUNT(*) as days_absent
+  FROM general_attendance
+  WHERE student_id = $1 AND status = 'ABSENT'
+`;
+
+const countDaysAbsent = async (studentId) => {
+  try {
+    const { rows } = await db.query(DAYS_ABSENT_SQL, [studentId]);
+    return parseInt(rows[0]?.days_absent || 0);
+  } catch (err) {
+    logger.warn('Could not fetch attendance data:', err.message);
+    return 0;
+  }
+};
+
+const summaryTemplateFor = (orientation) =>
+  orientation === 'vertical' ? getStudentSummaryHTML : getStudentSummaryHTMLHorizontal;
+
+const groupByClass = (rows) => {
+  const byClass = new Map();
+  for (const row of rows) {
+    if (!byClass.has(row.class_id)) byClass.set(row.class_id, []);
+    byClass.get(row.class_id).push(row);
+  }
+  return byClass;
+};
 
 const generateStudentSummaryReport = async (req, res) => {
   try {
@@ -93,23 +125,11 @@ const generateStudentSummaryReport = async (req, res) => {
     const { pct: calculatedGrade, coverage } = computeClassGrade(assessments, studentScores);
 
     // 9. Get attendance data (days of absence)
-    let daysOfAbsence = 0;
-    try {
-      const { rows: attendanceRows } = await db.query(`
-        SELECT COUNT(*) as days_absent
-        FROM general_attendance
-        WHERE student_id = $1 AND status = 'ABSENT'
-      `, [studentId]);
-      daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
-    } catch (err) {
-      logger.warn('Could not fetch attendance data:', err.message);
-    }
+    const daysOfAbsence = await countDaysAbsent(studentId);
 
     // 10. Generate PDF HTML (horizontal layout by default, use ?orientation=vertical for vertical)
     const orientation = req.query.orientation || 'horizontal';
-    const templateFn = orientation === 'vertical'
-      ? getStudentSummaryHTML
-      : getStudentSummaryHTMLHorizontal;
+    const templateFn = summaryTemplateFor(orientation);
 
     const htmlContent = templateFn({
       schoolInfo,
@@ -148,6 +168,121 @@ const generateStudentSummaryReport = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/reports/student-summary/:studentId?termId=&orientation=
+ * One student's summary for every class they're in that term, as one PDF: a
+ * first page with each class's term grade, then each class's own summary page
+ * (the same page the one-class report prints). A teacher without report_cards
+ * gets only the classes they teach; none of them is a 403.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const generateStudentTermSummaryReport = async (req, res) => {
+  const { studentId } = req.params;
+  const termId = req.query.termId;
+  if (!studentId || typeof termId !== 'string' || !termId) {
+    return res.status(400).json({ status: 'error', message: 'Student ID and term ID are required' });
+  }
+  // A malformed id would fail the uuid cast as a 500; it's simply not found.
+  if (!UUID.test(studentId)) return res.status(404).json({ status: 'error', message: 'Student not found' });
+  if (!UUID.test(termId)) return res.status(404).json({ status: 'error', message: 'Term not found' });
+
+  let browser = null;
+  try {
+    const school = req.user.school;
+    const studentResult = await db.query(reportsQueries.getStudentById, [studentId]);
+    const student = studentResult.rows[0];
+    if (!student || student.school !== school) {
+      return res.status(404).json({ status: 'error', message: 'Student not found' });
+    }
+
+    const termResult = await db.query(reportsQueries.getTermInSchool, [termId, school]);
+    const term = termResult.rows[0];
+    if (!term) return res.status(404).json({ status: 'error', message: 'Term not found' });
+
+    const enrolled = (await db.query(reportsQueries.getStudentClassesForTerm, [studentId, termId, req.user.userId])).rows;
+    if (enrolled.length === 0) {
+      return res.status(404).json({ status: 'error', message: `${student.name} isn't in any ${term.name} classes` });
+    }
+    const classes = enrolled.filter((cls) => classAccessGranted(req, cls, ['report_cards']));
+    if (classes.length === 0) {
+      return res.status(403).json({ status: 'failed', message: 'Not authorized for these classes' });
+    }
+
+    const schoolResult = await db.query(reportsQueries.getSchoolInfoByCode, [student.school]);
+    const schoolInfo = schoolResult.rows[0];
+    if (!schoolInfo) return res.status(404).json({ status: 'error', message: 'School information not found' });
+
+    const classIds = classes.map((c) => c.class_id);
+    const [assessmentsResult, scoresResult, daysOfAbsence] = await Promise.all([
+      db.query(reportsQueries.getAssessmentsByClasses, [classIds]),
+      db.query(reportsQueries.getStudentAssessmentScoresByClasses, [studentId, classIds]),
+      countDaysAbsent(studentId),
+    ]);
+    const assessmentsByClass = groupByClass(assessmentsResult.rows);
+    const scoresByClass = groupByClass(scoresResult.rows);
+
+    const orientation = req.query.orientation === 'vertical' ? 'vertical' : 'horizontal';
+    const templateFn = summaryTemplateFor(orientation);
+    const pages = classes.map((classInfo) => {
+      const assessments = assessmentsByClass.get(classInfo.class_id) || [];
+      const studentAssessments = scoresByClass.get(classInfo.class_id) || [];
+      const { pct, coverage } = computeClassGrade(assessments, studentAssessments);
+      return { classInfo, assessments, studentAssessments, pct, coverage };
+    });
+
+    const coverHtml = getStudentTermSummaryHTML({
+      schoolInfo,
+      student,
+      term,
+      classes: pages.map((p) => ({
+        subject: p.classInfo.subject,
+        teacherName: p.classInfo.teacher_name,
+        pct: p.pct,
+        coverage: p.assessments.length > 0 ? p.coverage : null,
+      })),
+      daysOfAbsence,
+      orientation,
+    });
+    const classHtmls = pages.map((p) => templateFn({
+      schoolInfo,
+      student,
+      classInfo: p.classInfo,
+      term,
+      assessments: p.assessments,
+      studentAssessments: p.studentAssessments,
+      calculatedGrade: p.pct,
+      coverage: p.coverage,
+      daysOfAbsence,
+    }));
+
+    // One Chromium for every page; each class starts on a fresh page.
+    browser = await launchPDFBrowser();
+    const merged = await PDFDocument.create();
+    for (const html of [coverHtml, ...classHtmls]) {
+      const doc = await PDFDocument.load(await createPDFBuffer(html, { browser }));
+      const copied = await merged.copyPages(doc, doc.getPageIndices());
+      copied.forEach((page) => merged.addPage(page));
+    }
+    const pdfBuffer = Buffer.from(await merged.save());
+
+    // Header-safe: a name with accents or another script would make setHeader throw.
+    const safe = (text) => String(text).replace(/[^A-Za-z0-9.-]+/g, '_');
+    const filename = `${safe(student.name)}_${safe(term.name)}_All_classes_Summary.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.send(pdfBuffer);
+    logger.info(`All-classes summary generated for student ${studentId}, term ${termId} (${classes.length} classes)`);
+  } catch (error) {
+    logger.error({ err: error }, 'Error generating all-classes student summary');
+    res.status(500).json({ status: 'error', message: 'Failed to generate student summary report' });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+};
+
 module.exports = {
-  generateStudentSummaryReport
+  generateStudentSummaryReport,
+  generateStudentTermSummaryReport,
 };
