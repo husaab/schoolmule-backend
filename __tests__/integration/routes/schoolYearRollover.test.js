@@ -79,6 +79,30 @@ describe('school year rollover', () => {
     expect(kid.avatar).toEqual(spec);
   });
 
+  it("rollover carries each class's standard comments", async () => {
+    const { rows: [src] } = await pool.query(`SELECT class_id FROM classes WHERE school_year_id = $1`, [year25]);
+    const bank = {
+      coreStandards: { exceeding: 'a', meeting: 'b', workingTowards: 'c', notMeeting: 'd' },
+      workHabits: { E: 'e', G: 'g', S: 's', N: 'n' },
+      cutoffs: { exceeding: 90, meeting: 75, workingTowards: 55 },
+    };
+    await pool.query(
+      `INSERT INTO class_comment_banks (class_id, core_standards, work_habits, cutoffs) VALUES ($1, $2, $3, $4)`,
+      [src.class_id, bank.coreStandards, bank.workHabits, bank.cutoffs]);
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },
+      classes:  { mode: 'duplicate', excludeClassIds: [] },
+      terms:    [{ name: 'Term 1', startDate: '2026-09-01', endDate: '2027-01-31' }],
+      copyPlanner: false,
+      copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+    const { rows: [copied] } = await pool.query(
+      `SELECT b.core_standards, b.work_habits, b.cutoffs FROM class_comment_banks b
+       JOIN classes c ON c.class_id = b.class_id WHERE c.school_year_id = $1`, [year26]);
+    expect(copied).toEqual({ core_standards: bank.coreStandards, work_habits: bank.workHabits, cutoffs: bank.cutoffs });
+  });
+
   it('rollover leaves classes on the defaults and students without an avatar when none was set', async () => {
     const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
       students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },

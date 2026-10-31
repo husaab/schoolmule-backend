@@ -2,6 +2,7 @@ const db = require('../config/database');
 const logger = require('../logger');
 const rolloverQueries = require('../queries/schoolYearRollover.queries');
 const schoolYearQueries = require('../queries/schoolYear.queries');
+const commentBankQueries = require('../queries/commentBank.queries');
 
 const GRADE_PROGRESSION = {
   JK: 'SK', SK: '1',
@@ -137,6 +138,7 @@ const executeRollover = async (req, res, next) => {
           c.accept_late, c.email_new_posts, c.show_class_average,
         ]);
         await client.query(rolloverQueries.copyClassTeachers, [rows[0].class_id, c.class_id]);
+        await client.query(commentBankQueries.copyCommentBank, [rows[0].class_id, c.class_id, req.user.userId]);
         summary.classesCreated += 1;
       }
     }

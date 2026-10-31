@@ -3,6 +3,7 @@
 const db = require("../config/database");
 const classQueries = require("../queries/class.queries");
 const statsExclusionQueries = require("../queries/classStatsExclusions.queries");
+const commentBankQueries = require("../queries/commentBank.queries");
 const bulkQueries = require("../queries/bulk.queries");
 const studentQueries = require("../queries/student.queries");
 const logger = require("../logger");
@@ -788,6 +789,8 @@ const duplicateClass = async (req, res) => {
 
     // 2b) Carry over the source's banner, icon, color and class options
     await client.query(classQueries.duplicateCopyIdentity, [newClass.class_id, sourceClassId]);
+    // ...and its standard progress comments
+    await client.query(commentBankQueries.copyCommentBank, [newClass.class_id, sourceClassId, req.user.userId]);
 
     // 3) Fetch all assessments for source class (parents first)
     const { rows: sourceAssessments } = await client.query(

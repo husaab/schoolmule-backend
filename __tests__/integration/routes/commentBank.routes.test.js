@@ -184,6 +184,32 @@ describe('Integration: /api/comment-banks', () => {
     expect((await authenticatedRequest('get', '/api/comment-banks/mine', asOther)).body.data).toEqual([]);
   });
 
+  describe('Duplicate class', () => {
+    const duplicate = async (sourceId) => {
+      const termId = (await pool.query(
+        `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active)
+         VALUES ('ALHAADIACADEMY', 'Term 2', '2026-02-01', '2026-06-30', '2025-2026', false) RETURNING term_id`,
+      )).rows[0].term_id;
+      const res = await authenticatedRequest('post', `/api/classes/${sourceId}/duplicate`, asTeacher).send({
+        grade: '5', subject: 'Math', teacherName: 'Teacher One', teacherId: TEACHER_ID, termId, termName: 'Term 2',
+      });
+      expect(res.status).toBe(201);
+      return res.body.data.classId || res.body.data.class_id;
+    };
+
+    it("copies the class's standard comments", async () => {
+      await authenticatedRequest('put', url(classId), asTeacher).send(bank({ coreStandards: { meeting: 'Copied {First}.' } }));
+      const newId = await duplicate(classId);
+      const res = await authenticatedRequest('get', url(newId), asTeacher);
+      expect(res.body.data.coreStandards.meeting).toBe('Copied {First}.');
+    });
+
+    it('leaves none when the source has none', async () => {
+      const newId = await duplicate(classId);
+      expect((await authenticatedRequest('get', url(newId), asTeacher)).body.data).toBeNull();
+    });
+  });
+
   it('a student token is refused', async () => {
     const res = await authenticatedRequest('get', url(classId), asStudent);
     expect(res.status).toBe(403);
