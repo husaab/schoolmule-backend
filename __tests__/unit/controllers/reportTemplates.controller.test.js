@@ -395,7 +395,8 @@ describe('Report templates API', () => {
       expect(res.status).toBe(200);
       expect(res.body.school).toEqual({
         code: 'ALHAADIACADEMY', name: 'Example Academy', address: '1 Test Way', phone: '555-0100', email: 'office@example.test',
-        website: '', principal: '', board: '',
+        // The website is the contact email's domain, as the paper footers print it.
+        website: 'www.example.test', principal: '', board: '',
       });
       expect(res.body.assets).toEqual({ logo: 'https://mock-signed-url.com', principalSignature: null, stamp: 'https://mock-signed-url.com', teacherSignature: null });
       expect(res.body.student.grade).toBe('SK');

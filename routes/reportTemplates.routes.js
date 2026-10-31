@@ -12,6 +12,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // Filling in a template's extra fields is part of making report cards, so
 // report_cards holders may too. Staff only; everything is the caller's school.
 router.use(requireStaff);
+// Drafts carry uploaded images inline (reportkit allows a 4 MB document).
+// Parsed here — after sign-in — not before it (server.js skips this path).
+router.use(express.json({ limit: '5mb' }));
 const designer = requirePermission('school_setup');
 const fieldValues = requirePermission('school_setup', 'report_cards');
 
@@ -56,7 +59,7 @@ router.get('/:id', designer, controller.getTemplate);
 router.patch('/:id', designer, controller.renameTemplate);
 router.delete('/:id', designer, controller.deleteTemplate);
 router.put('/:id/draft', designer, controller.saveDraft);
-router.post('/:id/publish', designer, controller.publishTemplate);
+router.post('/:id/publish', designer, previewPdfLimiter, controller.publishTemplate);
 router.get('/:id/versions', designer, controller.listVersions);
 router.post('/:id/versions/:versionId/restore', designer, controller.restoreVersion);
 router.post('/:id/discard-draft', designer, controller.discardDraft);

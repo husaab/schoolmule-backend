@@ -5,9 +5,12 @@
  * The engine is the committed bundle in vendor/reportkit (built from
  * schoolmule/src/reportkit by `npm run sync:reportkit` in the web repo).
  * Fonts are inlined as data URIs and the page may not touch the network:
- * every image must already be a data URI (see inlineAssets).
+ * every image must already be a data URI (see inlineAssets), and the
+ * engine's built-in images (`{ kind: 'builtin' }`, vendor/reportkit/assets)
+ * are handed to the page as data URIs too (builtinImageUris).
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -52,6 +55,32 @@ function engineVersion() {
   return vendor().manifest.engineVersion;
 }
 
+const IMAGE_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.gif': 'image/gif' };
+const builtinCache = new Map();
+
+/**
+ * The built-in images a template uses, as { name: dataUri }. Only names the
+ * engine knows (BUILTIN_IMAGES) are read; a missing file is left out and the
+ * report prints without it.
+ */
+function builtinImageUris(template) {
+  const out = {};
+  for (const name of reportKit().builtinImagesIn(template)) {
+    if (!builtinCache.has(name)) {
+      try {
+        const buf = fs.readFileSync(path.join(VENDOR_DIR, 'assets', name));
+        const mime = IMAGE_MIME[path.extname(name).toLowerCase()] || 'application/octet-stream';
+        builtinCache.set(name, `data:${mime};base64,${buf.toString('base64')}`);
+      } catch (err) {
+        logger.warn({ err: err.message, image: name }, 'A built-in report image is missing from vendor/reportkit/assets');
+        builtinCache.set(name, null);
+      }
+    }
+    if (builtinCache.get(name)) out[name] = builtinCache.get(name);
+  }
+  return out;
+}
+
 async function launchReportBrowser() {
   return puppeteer.launch(LAUNCH_OPTIONS);
 }
@@ -62,11 +91,36 @@ function pageSizeOf(template) {
 
 function shellHtml(size) {
   const { code, fontCss } = vendor();
+  // Only the engine's own script runs: the nonce'd tag. Anything a template
+  // could smuggle into the page (an inline handler, a <script>) is blocked,
+  // and nothing may load except inline styles, fonts and data-URI images.
+  // (page.evaluate goes through the debugger protocol, which CSP doesn't gate.)
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>@page{size:${size.width}px ${size.height}px;margin:0}html,body{margin:0;padding:0;background:#fff}</style>
 <style>${fontCss}</style>
-<script>${code}</script>
+<script nonce="${nonce}">${code}</script>
 </head><body><div id="rk"></div></body></html>`;
+}
+
+// One-off renders (designer previews, publish checks, single reports) each
+// launch Chromium; at most this many at once per server, the rest wait.
+// Bulk runs share one browser and don't count.
+const MAX_OWN_BROWSERS = Number(process.env.REPORT_RENDER_CONCURRENCY) || 2;
+let ownBrowsers = 0;
+const waiting = [];
+async function withBrowserSlot(fn) {
+  if (ownBrowsers >= MAX_OWN_BROWSERS) await new Promise((resolve) => waiting.push(resolve));
+  ownBrowsers += 1;
+  try {
+    return await fn();
+  } finally {
+    ownBrowsers -= 1;
+    const next = waiting.shift();
+    if (next) next();
+  }
 }
 
 /**
@@ -85,12 +139,14 @@ async function layout(browser, template, data) {
     });
     await page.setViewport({ width: size.width, height: size.height, deviceScaleFactor: 1 });
     await page.setContent(shellHtml(size), { waitUntil: 'load' });
-    const result = await page.evaluate(async (doc, reportData) => {
-      // eslint-disable-next-line no-undef
-      const r = await ReportKit.renderReport(document.getElementById('rk'), doc, reportData, { mode: 'print' });
+    const result = await page.evaluate(async (doc, reportData, builtins) => {
+      /* eslint-disable no-undef */
+      const resolveImage = (src, d) => (src && src.kind === 'builtin' ? builtins[src.name] || null : ReportKit.defaultResolveImage(src, d));
+      const r = await ReportKit.renderReport(document.getElementById('rk'), doc, reportData, { mode: 'print', resolveImage });
+      /* eslint-enable no-undef */
       await Promise.all([...document.images].map((img) => (img.decode ? img.decode().catch(() => {}) : null)));
       return r;
-    }, template, data);
+    }, template, data, builtinImageUris(template));
     return { page, result, size };
   } catch (err) {
     await page.close().catch(() => {});
@@ -107,6 +163,11 @@ async function layout(browser, template, data) {
  * @returns {Promise<{pdf: Buffer, pageCount: number, warnings: object[], engineVersion: number}>}
  */
 async function renderReportPdf({ template, data, browser = null }) {
+  if (!browser) return withBrowserSlot(() => renderWith(null, template, data));
+  return renderWith(browser, template, data);
+}
+
+async function renderWith(browser, template, data) {
   const own = !browser;
   const b = browser || (await launchReportBrowser());
   try {
@@ -190,6 +251,7 @@ async function inlineAssets(data, { timeoutMs = 8000 } = {}) {
 }
 
 module.exports = {
+  builtinImageUris,
   renderReportPdf,
   renderReportPngs,
   renderReportText,

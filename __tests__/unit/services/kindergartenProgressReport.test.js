@@ -88,6 +88,16 @@ describe('loadProgressReportContext', () => {
     expect((await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14' })).teacherName).toBe('');
   });
 
+  it('reads through the client it is given (the report engine passes its own)', async () => {
+    answer({ year: YEAR });
+    db.query.mockClear();
+    const client = { query: jest.fn(async (sql) => ({ rows: sql.includes('FROM school_years') ? [YEAR] : sql.includes('general_attendance') ? [{ days: 3 }] : [] })) };
+    const ctx = await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14', client });
+    expect(ctx).toEqual({ reportDate: '2026-11-14', schoolYearLabel: '2026-2027', daysAbsent: 3, teacherName: '' });
+    expect(client.query).toHaveBeenCalledTimes(3);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it('defaults the report date to today where the school is', async () => {
     answer({ year: YEAR });
     const ctx = await loadProgressReportContext(STUDENT, { timezone: 'America/Toronto' });

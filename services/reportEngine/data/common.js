@@ -2,7 +2,9 @@
 //
 // The parts every report shares: the student, homeroom teacher, teacher
 // assistant, absences, the school, its signed images and the school year.
-// Each loader mirrors the legacy generators' query and fallback.
+// Each loader mirrors the legacy generators' query and fallback. (The JK/SK
+// progress reports read their teacher, absences and year through
+// services/kindergartenProgressReport instead: see index.js.)
 
 const supabase = require('../../../config/supabaseClient');
 const logger = require('../../../logger');
@@ -11,6 +13,7 @@ const schoolAssetsQueries = require('../../../queries/schoolAssets.queries');
 const jkQueries = require('../../../queries/jk.queries');
 const skQueries = require('../../../queries/sk.queries');
 const q = require('../../../queries/reportEngineData.queries');
+const { schoolWebsite } = require('../../../templates/printKit');
 const { ReportSkip } = require('./errors');
 const {
   DEFAULT_TIMEZONE,
@@ -70,8 +73,10 @@ async function loadSchool(client, schoolCode) {
     address: '',
     phone: '',
     email: '',
-    // Not stored on schools yet; the designer fills them by hand for now.
+    // From the contact email's domain, as the JK/SK progress footers print
+    // it (printKit.schoolWebsite); '' for a free-mail address.
     website: '',
+    // Not stored on schools yet; the designer fills them by hand for now.
     principal: '',
     board: '',
   };
@@ -87,6 +92,7 @@ async function loadSchool(client, schoolCode) {
       info.address = text(row.address);
       info.phone = text(row.phone);
       info.email = text(row.email);
+      info.website = text(schoolWebsite(row.email));
     }
   } catch (err) {
     logger.warn({ err }, 'reportEngine: could not read the schools row, using the school code');

@@ -9,13 +9,21 @@
 //   grades 1-8 report card      controllers/reportCard.controller.js:584
 //     Al Haadi Term 2 variant   controllers/reportCard.controller.js:760
 //   grades 1-8 progress report  controllers/progressReports.controller.js:412
-//   JK progress / report card   controllers/jk.controller.js:521 / :613
-//   SK progress / report card   controllers/sk.controller.js:463 / :566
+//   JK progress / report card   controllers/jk.controller.js legacyGenerateSingleJK{ProgressReport,ReportCard}
+//   SK progress / report card   controllers/sk.controller.js legacyGenerateSingleSK{ProgressReport,ReportCard}
 //
-// The legacy controllers don't call this yet; __tests__/integration/services/
-// reportEngineData.test.js pins the two side by side.
+// The JK/SK progress reports print a report date, the school year it falls
+// in, the days absent in that year up to the date, and the homeroom teacher
+// else the grade's Kindergarten class teacher: those come from the same
+// services/kindergartenProgressReport.loadProgressReportContext the legacy
+// generators call. Every other document keeps the all-time absence count,
+// 'N/A' teacher and the active-year rule.
+//
+// __tests__/integration/services/reportEngineData.test.js pins the assembler
+// and the legacy generators side by side.
 
 const db = require('../../../config/database');
+const { loadProgressReportContext } = require('../../kindergartenProgressReport');
 const { ReportSkip } = require('./errors');
 const {
   loadStudent,
@@ -42,6 +50,7 @@ const {
   isoDateInTimeZone,
   generatedDateToday,
   isIsoDate,
+  formatSchoolYearLabel,
   text,
 } = require('./format');
 
@@ -84,19 +93,33 @@ async function assembleReportData({ studentId, docType, term, reportDate = null,
   const student = await loadStudent(client, studentId);
   const grade = gradeText(student.grade);
   const isKindergarten = KINDERGARTEN.has(grade);
+  const kindergartenProgress = isKindergarten && docType === 'progress_report';
 
-  const homeroomTeacher = await loadHomeroomTeacher(client, student.homeroom_teacher_id);
   // Subjects first: the grades 1-8 progress report's skips fire here, before
   // any other work, as they do in the legacy generator.
   const subjects = isKindergarten ? [] : await buildSubjects(client, student, docType, term);
 
   const teacherAssistant = await loadTeacherAssistant(client, student.student_id, grade, term);
-  const daysAbsent = await loadDaysAbsent(client, student.student_id);
   const school = await loadSchool(client, student.school);
   const assets = await loadAssets(client, school);
 
-  const date = reportDate || isoDateInTimeZone(school.timezone);
-  const schoolYear = await resolveSchoolYearLabel(client, student.school, date);
+  let homeroomTeacher;
+  let daysAbsent;
+  let date;
+  let schoolYear;
+  if (kindergartenProgress) {
+    const context = await loadProgressReportContext(student, { reportDate, timezone: school.timezone, client });
+    homeroomTeacher = context.teacherName;
+    daysAbsent = context.daysAbsent;
+    date = context.reportDate;
+    // No school year at all: the legacy report prints none.
+    schoolYear = context.schoolYearLabel ? formatSchoolYearLabel(context.schoolYearLabel) : '';
+  } else {
+    homeroomTeacher = await loadHomeroomTeacher(client, student.homeroom_teacher_id);
+    daysAbsent = await loadDaysAbsent(client, student.student_id);
+    date = reportDate || isoDateInTimeZone(school.timezone);
+    schoolYear = await resolveSchoolYearLabel(client, student.school, date);
+  }
 
   const skills = await buildSkills(client, student, docType, term);
   const comments = await buildComments(client, student, docType, term);

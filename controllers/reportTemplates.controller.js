@@ -107,6 +107,8 @@ function docErrors(doc, docType) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return ['The template is missing.'];
   const { errors } = kit().validateTemplate(doc);
   const out = [...(errors || [])];
+  // Postgres JSONB can't store U+0000; refuse it here rather than fail the INSERT.
+  if (JSON.stringify(doc).includes('\\u0000')) out.push('The template contains an invalid character (NUL).');
   if (docType && doc.docType && doc.docType !== docType) {
     out.push(`This template is a ${DOC_LABEL[docType]}; the document says ${DOC_LABEL[doc.docType] || doc.docType}.`);
   }

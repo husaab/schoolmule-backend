@@ -11,6 +11,8 @@
 //   3. grades 1-8 progress report    progressReports.controller generateProgressReport
 //   4. JK progress report            jk.controller generateSingleJKProgressReport
 //   5. SK progress report            sk.controller generateSingleSKProgressReport
+//      (both print a report date, its school year, that year's absences, the
+//      homeroom-else-Kindergarten-class teacher and the comment rows)
 //   6. JK report card                jk.controller generateSingleJKReportCard
 //   7. SK report card                sk.controller generateSingleSKReportCard
 
@@ -38,9 +40,23 @@ function mockSpyTemplate(path, fnName) {
 jest.mock('../../../templates/reportCardTemplate', () => mockSpyTemplate('../../../templates/reportCardTemplate', 'getReportCardHTML'));
 jest.mock('../../../templates/alHaadiT2ReportCardTemplate', () => mockSpyTemplate('../../../templates/alHaadiT2ReportCardTemplate', 'getAlHaadiT2ReportCardHTML'));
 jest.mock('../../../templates/progressReportTemplate', () => mockSpyTemplate('../../../templates/progressReportTemplate', 'getProgressReportHTML'));
-jest.mock('../../../templates/alHaadiProgressReportJKTemplate', () => mockSpyTemplate('../../../templates/alHaadiProgressReportJKTemplate', 'getAlHaadiProgressReportJKHTML'));
+jest.mock('../../../templates/alHaadiProgressReportJKTemplate', () => mockSpyTemplate('../../../templates/alHaadiProgressReportJKTemplate', 'renderAlHaadiProgressReportJK'));
 jest.mock('../../../templates/alHaadiReportCardJKTemplate', () => mockSpyTemplate('../../../templates/alHaadiReportCardJKTemplate', 'getAlHaadiReportCardJKHTML'));
-jest.mock('../../../templates/alHaadiProgressReportSKTemplate', () => mockSpyTemplate('../../../templates/alHaadiProgressReportSKTemplate', 'getAlHaadiProgressReportSKHTML'));
+jest.mock('../../../templates/alHaadiProgressReportSKTemplate', () => mockSpyTemplate('../../../templates/alHaadiProgressReportSKTemplate', 'renderAlHaadiProgressReportSK'));
+
+// Only the template input matters here; the JK/SK progress reports' header/
+// footer and first-page printing (pdf-lib) never runs.
+jest.mock('../../../utils/pdfGenerator', () => ({
+  createPDFBuffer: jest.fn().mockResolvedValue(Buffer.from('fake-pdf')),
+  launchPDFBrowser: jest.fn().mockResolvedValue({ close: jest.fn().mockResolvedValue(undefined) }),
+}));
+
+// The JK/SK progress generators inline the logo/signature/stamp by fetching
+// their signed URL; here the "data URI" names the URL it came from.
+jest.mock('../../../templates/printKit', () => {
+  const actual = jest.requireActual('../../../templates/printKit');
+  return { ...actual, fetchImageDataUri: jest.fn(async (url) => (url ? `data:inlined;${url}` : null)) };
+});
 jest.mock('../../../templates/alHaadiReportCardSKTemplate', () => mockSpyTemplate('../../../templates/alHaadiReportCardSKTemplate', 'getAlHaadiReportCardSKHTML'));
 
 const { getTestPool } = require('../setup/setupTestDB');
@@ -57,6 +73,9 @@ const progressReportsController = require('../../../controllers/progressReports.
 const jkController = require('../../../controllers/jk.controller');
 const skController = require('../../../controllers/sk.controller');
 const { assembleReportData, ReportSkip } = require('../../../services/reportEngine/data');
+const { formatSchoolYearLabel } = require('../../../services/reportEngine/data/format');
+const { schoolWebsite, escapeHtml } = require('../../../templates/printKit');
+const { JK_PROGRESS_COMMENT_ROWS, SK_PROGRESS_COMMENT_ROWS } = require('../../../templates/kindergartenProgressComments');
 
 const SCHOOL = 'ALHAADIACADEMY';
 const TEACHER_ID = '7a1f0c2e-1d3b-4c5a-9e8f-000000000001';
@@ -193,6 +212,44 @@ function expectCommonParity(L, R) {
   // Time-dependent: the same day (± a midnight rollover between the two calls).
   expect(R.meta.generatedDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   expect(Math.abs(Date.parse(R.meta.generatedDate) - Date.parse(L.generatedDate))).toBeLessThanOrEqual(DAY_MS);
+}
+
+const inlined = (url) => (url ? `data:inlined;${url}` : null);
+
+/**
+ * The JK/SK progress templates' input (renderAlHaadiProgressReport{JK,SK})
+ * against ReportData: everything they print about the school, the student,
+ * the date and year, the images and the comment rows.
+ */
+function expectKindergartenProgressParity(L, R, commentRows) {
+  const info = L.schoolInfo;
+  expect(R.school.name).toBe(info.name);
+  expect(R.school.address).toBe(info.address ?? '');
+  expect(R.school.phone).toBe(info.phone ?? '');
+  expect(R.school.email).toBe(info.email ?? '');
+  // The footers print the website the email's domain gives.
+  expect(R.school.website).toBe(schoolWebsite(info.email) || '');
+
+  expect(L.logoDataUri).toBe(inlined(R.assets.logo));
+  expect(L.principalSignatureDataUri).toBe(inlined(R.assets.principalSignature));
+  if ('schoolStampDataUri' in L) expect(L.schoolStampDataUri).toBe(inlined(R.assets.stamp));
+
+  expect(R.student.name).toBe(L.student.name);
+  expect(R.student.oen).toBe(L.student.oen ?? '');
+  expect(R.student.homeroomTeacher).toBe(L.student.teacherName);
+  expect(R.student.daysAbsent).toBe(L.student.daysAbsent);
+  if ('teacherAssistant' in L.student) expect(R.student.teacherAssistant).toBe(L.student.teacherAssistant || '');
+
+  expect(R.meta.reportDate).toBe(L.reportDate);
+  expect(R.meta.schoolYear).toBe(L.schoolYearLabel ? formatSchoolYearLabel(L.schoolYearLabel) : '');
+
+  // Every row, in print order, with the text the template prints.
+  expect(R.comments).toEqual(commentRows.map((row) => ({
+    key: row.key,
+    label: row.label,
+    caption: row.caption || '',
+    text: String(L.comments[row.key] || '').trim(),
+  })));
 }
 
 /** JK domains / SK subjects → R.skills, item by item. */
@@ -431,35 +488,78 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
   }
 
   it('4. JK progress report', async () => {
-    const studentId = await seedStudent({ name: 'Test Student F', grade: 'JK' });
+    // No homeroom: the report names the teacher of the grade's Kindergarten class.
+    const studentId = await seedStudent({ name: 'Test Student F', grade: 'JK', oen: '444555666', homeroom: null });
     await seedJK('progress_report', studentId);
+    const kgClass = await seedClass({ studentId, subject: 'Junior Kindergarten', grade: 'JK', term: T1 });
+    await pool.query(
+      `UPDATE classes SET school_year_id = (SELECT school_year_id FROM school_years WHERE school = $1 AND label = '2025-2026') WHERE class_id = $2`,
+      [SCHOOL, kgClass],
+    );
     await pool.query(
       `INSERT INTO jk_progress_report_comments (student_id, term, section_type, comment, school)
-       VALUES ($1, $2, 'socio_emotional', 'Settles in well.', $3), ($1, $2, 'academic_achievement', 'Counts to 20.', $3)`,
+       VALUES ($1, $2, 'socio_emotional', '  Settles in <well>.  ', $3), ($1, $2, 'academic_achievement', 'Counts to 20.', $3)`,
       [studentId, T1, SCHOOL],
     );
-    await seedAbsences(studentId, SCHOOL, 1);
+    // Two absences in 2025-2026; one the year before and one after the
+    // report date don't count.
+    await seedAbsences(studentId, SCHOOL, 2);
+    await pool.query(
+      `INSERT INTO general_attendance (student_id, attendance_date, status, school) VALUES ($1, '2024-10-01', 'ABSENT', $2), ($1, '2026-03-10', 'ABSENT', $2)`,
+      [studentId, SCHOOL],
+    );
+    const reportDate = '2026-03-02';
 
-    await jkController.generateSingleJKProgressReport(studentId, T1);
-    const { args: L } = lastCall(jkProgressTemplate.getAlHaadiProgressReportJKHTML);
+    await jkController.generateSingleJKProgressReport(studentId, T1, { reportDate });
+    const { args: L, html: rendered } = lastCall(jkProgressTemplate.renderAlHaadiProgressReportJK);
 
-    const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
-    expectCommonParity(L, R);
-    expect(L.student.teacherAssistant).toBe('Assistant Sample');
+    const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1, reportDate });
+    expectKindergartenProgressParity(L, R, JK_PROGRESS_COMMENT_ROWS);
+
+    // The fixture really exercises the rules.
+    expect(L.student).toMatchObject({ teacherName: 'Teacher Sample', teacherAssistant: 'Assistant Sample', daysAbsent: 2 });
+    expect(L.schoolYearLabel).toBe('2025-2026');
+    expect(R.meta).toMatchObject({ reportDate, schoolYear: '2025 - 2026' });
+    expect(R.comments.map((c) => [c.label, c.text])).toEqual([
+      ['Academic achievement', 'Counts to 20.'],
+      ['Socio-emotional development', 'Settles in <well>.'],
+    ]);
+    // …and the legacy page prints those labels and texts.
+    for (const c of R.comments) {
+      expect(rendered.html).toContain(`${escapeHtml(c.label)}:`);
+      expect(rendered.html).toContain(escapeHtml(c.text));
+    }
+
     expect(L.domains.map((d) => d.name)).toEqual(['Belonging and Contributing', 'Problem Solving', 'Empty Domain']);
     expectSkillsParity(R, L.domains, { itemsKey: 'skills', groupIdKey: 'domainId', itemIdKey: 'skillId', rating: L.ratingMap });
     expect(R.skills[0].items.map((i) => i.rating)).toEqual(['D', '']);
     expect(R.skills[0].items.map((i) => i.t2)).toEqual(['I', 'N']);
     expect(R.skills[2].items).toEqual([]);
 
-    // The free comments (not on the legacy template), in section_type order.
-    expect(R.comments).toEqual([
-      { key: 'academic_achievement', label: 'Academic Achievement', caption: '', text: 'Counts to 20.' },
-      { key: 'socio_emotional', label: 'Socio Emotional', caption: '', text: 'Settles in well.' },
-    ]);
     expect(R.subjects).toEqual([]);
     expect(R.learningSkills).toEqual([]);
-    expect(R.student).toMatchObject({ gradeLabel: 'Junior Kindergarten', gradeNumber: -1, daysAbsent: 1 });
+    expect(R.student).toMatchObject({ gradeLabel: 'Junior Kindergarten', gradeNumber: -1 });
+    expect(R.school.website).toBe('www.example.test');
+  });
+
+  it('4b. JK progress report with no school year: no year printed, every absence counts', async () => {
+    const studentId = await seedStudent({ name: 'Test Student F2', grade: 'JK' });
+    await pool.query('DELETE FROM school_years WHERE school = $1', [SCHOOL]);
+    await seedAbsences(studentId, SCHOOL, 3);
+    await pool.query(
+      `INSERT INTO general_attendance (student_id, attendance_date, status, school) VALUES ($1, '2019-01-07', 'ABSENT', $2)`,
+      [studentId, SCHOOL],
+    );
+
+    await jkController.generateSingleJKProgressReport(studentId, T1, { reportDate: '2026-03-02' });
+    const { args: L } = lastCall(jkProgressTemplate.renderAlHaadiProgressReportJK);
+    const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1, reportDate: '2026-03-02' });
+    expectKindergartenProgressParity(L, R, JK_PROGRESS_COMMENT_ROWS);
+    expect(L.schoolYearLabel).toBeNull();
+    expect(R.meta.schoolYear).toBe('');
+    expect(R.student.daysAbsent).toBe(4);
+    expect(R.student.homeroomTeacher).toBe('Teacher Sample');
+    expect(R.comments.map((c) => c.text)).toEqual(['', '']);
   });
 
   it('5. SK progress report', async () => {
@@ -484,23 +584,44 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
       `INSERT INTO sk_subject_comments (student_id, subject_id, term, comment, school) VALUES ($1, $2, $3, 'Counts past 30.', $4)`,
       [studentId, math, T1, SCHOOL],
     );
+    // Two of the nine rows filled (one padded), and an old-style section the
+    // paper template has no row for.
     await pool.query(
-      `INSERT INTO sk_progress_report_comments (student_id, term, section_type, comment, school) VALUES ($1, $2, 'language_arts', 'Enjoys stories.', $3)`,
+      `INSERT INTO sk_progress_report_comments (student_id, term, section_type, comment, school)
+       VALUES ($1, $2, 'language_arts', '  Enjoys stories.  ', $3), ($1, $2, 'french', 'Says bonjour & merci.', $3),
+              ($1, $2, 'academic_achievement', 'Never printed.', $3)`,
       [studentId, T1, SCHOOL],
     );
+    await seedAbsences(studentId, SCHOOL, 1);
+    const reportDate = '2025-11-14';
 
-    await skController.generateSingleSKProgressReport(studentId, T1);
-    const { args: L } = lastCall(skProgressTemplate.getAlHaadiProgressReportSKHTML);
+    await skController.generateSingleSKProgressReport(studentId, T1, { reportDate });
+    const { args: L, html: rendered } = lastCall(skProgressTemplate.renderAlHaadiProgressReportSK);
 
-    const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
-    expectCommonParity(L, R);
+    const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1, reportDate });
+    expectKindergartenProgressParity(L, R, SK_PROGRESS_COMMENT_ROWS);
+
+    expect(L.student).toMatchObject({ teacherName: 'Teacher Sample', daysAbsent: 1 });
+    expect(R.meta).toMatchObject({ reportDate, schoolYear: '2025 - 2026' });
+    expect(R.comments.map((c) => c.key)).toEqual(SK_PROGRESS_COMMENT_ROWS.map((r) => r.key));
+    expect(R.comments[0]).toEqual({
+      key: 'language_arts', label: 'Language Arts', caption: 'Reading, Writing, Oral communication, Media Literacy', text: 'Enjoys stories.',
+    });
+    expect(R.comments.find((c) => c.key === 'french').text).toBe('Says bonjour & merci.');
+    expect(R.comments.filter((c) => c.text === '')).toHaveLength(7);
+    for (const c of R.comments) {
+      expect(rendered.html).toContain(escapeHtml(c.label));
+      if (c.caption) expect(rendered.html).toContain(escapeHtml(c.caption));
+      if (c.text) expect(rendered.html).toContain(escapeHtml(c.text));
+    }
+
     expect(L.subjects.map((s) => s.name)).toEqual(['Literacy - Reading', 'Mathematics']);
     expectSkillsParity(R, L.subjects, {
-      itemsKey: 'standards', groupIdKey: 'subjectId', itemIdKey: 'standardId', rating: L.ratingMap, comments: L.commentMap,
+      itemsKey: 'standards', groupIdKey: 'subjectId', itemIdKey: 'standardId', rating: L.ratingMap,
     });
+    // The subject comment is a report-card field; the progress report doesn't print it.
     expect(R.skills[1].comment).toBe('Counts past 30.');
     expect(R.student.teacherAssistant).toBe('');
-    expect(R.comments).toEqual([{ key: 'language_arts', label: 'Language Arts', caption: '', text: 'Enjoys stories.' }]);
     expect(R.student).toMatchObject({ gradeLabel: 'Senior Kindergarten', gradeNumber: 0 });
   });
 

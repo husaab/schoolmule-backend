@@ -100,10 +100,12 @@ app.use(cors(corsOptions));
 // (~150 KB for Al Haadi), above the 100 KB default. body-parser skips a body
 // it has already parsed, so the global parser below leaves this one alone.
 app.use("/api/finance/families/import", express.json({ limit: "2mb" }));
-// Report templates carry their uploaded images inline (reportkit allows a
-// 4 MB document), so drafts and previews need more than 100 KB too.
-app.use("/api/report-templates", express.json({ limit: "5mb" }));
-app.use(express.json());
+// Report templates carry their uploaded images inline and need more than
+// 100 KB; their router parses its own bodies after sign-in, so an anonymous
+// caller can never make the server buffer a large body.
+const defaultJson = express.json();
+const jsonBodies = (req, res, next) => (req.path.startsWith("/api/report-templates") ? next() : defaultJson(req, res, next));
+app.use(jsonBodies);
 
 // 1000 requests a minute per signed-in user (anonymous: per network), on
 // every request: a school's users share one public IP (final review I3).
