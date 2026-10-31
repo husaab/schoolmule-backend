@@ -10,6 +10,9 @@ const logger = require("../logger");
 const { renderAlHaadiProgressReportJK } = require('../templates/alHaadiProgressReportJKTemplate');
 const { fetchImageDataUri } = require('../templates/printKit');
 const { loadProgressReportContext, parseReportDate } = require('../services/kindergartenProgressReport');
+// Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
+const { withReportEngine, reportEngineSession, kindergartenResult } = require('../services/reportEngine/generate');
+const { ReportSkip } = require('../services/reportEngine/data/errors');
 const { getAlHaadiReportCardJKHTML } = require('../templates/alHaadiReportCardJKTemplate');
 
 // ============================================================
@@ -520,7 +523,16 @@ const bulkUpsertProgressReportComments = async (req, res) => {
 // ============================================================
 // JK Progress Report Generation
 // ============================================================
-const generateSingleJKProgressReport = async (studentId, term, opts = {}) => {
+// Report engine: REPORT_ENGINE=new prints with the template that resolves for
+// the student's term (none, or an engine error: the legacy path below);
+// =shadow prints legacy and also lays it out with the engine, no upload;
+// unset = legacy only.
+const generateSingleJKProgressReport = (studentId, term, opts = {}) => withReportEngine(
+  { docType: 'progress_report', studentId, term, opts, shape: kindergartenResult },
+  (legacyOpts) => legacyGenerateSingleJKProgressReport(studentId, term, legacyOpts),
+);
+
+const legacyGenerateSingleJKProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
@@ -618,7 +630,16 @@ const generateSingleJKProgressReport = async (studentId, term, opts = {}) => {
 // ============================================================
 // JK Report Card Generation
 // ============================================================
-const generateSingleJKReportCard = async (studentId, term, opts = {}) => {
+// Report engine: REPORT_ENGINE=new prints with the template that resolves for
+// the student's term (none, or an engine error: the legacy path below);
+// =shadow prints legacy and also lays it out with the engine, no upload;
+// unset = legacy only.
+const generateSingleJKReportCard = (studentId, term, opts = {}) => withReportEngine(
+  { docType: 'report_card', studentId, term, opts, shape: kindergartenResult },
+  (legacyOpts) => legacyGenerateSingleJKReportCard(studentId, term, legacyOpts),
+);
+
+const legacyGenerateSingleJKReportCard = async (studentId, term, opts = {}) => {
   // 1. Get student
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
@@ -753,7 +774,7 @@ const generateProgressReport = async (req, res) => {
     res.json({ status: 'success', message: 'JK progress report generated', data: result });
   } catch (error) {
     logger.error('Error generating JK progress report:', error);
-    res.status(500).json({ status: 'error', message: error.message || 'Failed to generate progress report' });
+    res.status(error instanceof ReportSkip ? error.status : 500).json({ status: 'error', message: error.message || 'Failed to generate progress report' });
   }
 };
 
@@ -780,11 +801,13 @@ const generateProgressReportsBulk = async (req, res) => {
     } catch (err) {
       logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
     }
+    // Report engine: its own browser for the batch, launched only if it prints.
+    const engine = reportEngineSession();
 
     try {
       for (const studentId of studentIds) {
         try {
-          await generateSingleJKProgressReport(studentId, term, { browser, reportDate });
+          await generateSingleJKProgressReport(studentId, term, { browser, reportDate, engine });
           generated.push({ studentId, message: 'Generated successfully' });
         } catch (err) {
           failed.push({ studentId, error: err.message });
@@ -798,6 +821,7 @@ const generateProgressReportsBulk = async (req, res) => {
           logger.error({ err }, 'Failed to close shared PDF browser');
         }
       }
+      await engine.close();
     }
 
     res.json({ status: 'completed', term, generated, failed });
@@ -822,7 +846,7 @@ const generateReportCard = async (req, res) => {
     res.json({ status: 'success', message: 'JK report card generated', data: result });
   } catch (error) {
     logger.error('Error generating JK report card:', error);
-    res.status(500).json({ status: 'error', message: error.message || 'Failed to generate report card' });
+    res.status(error instanceof ReportSkip ? error.status : 500).json({ status: 'error', message: error.message || 'Failed to generate report card' });
   }
 };
 
@@ -847,11 +871,13 @@ const generateReportCardsBulk = async (req, res) => {
     } catch (err) {
       logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
     }
+    // Report engine: its own browser for the batch, launched only if it prints.
+    const engine = reportEngineSession();
 
     try {
       for (const studentId of studentIds) {
         try {
-          await generateSingleJKReportCard(studentId, term, { browser });
+          await generateSingleJKReportCard(studentId, term, { browser, engine });
           generated.push({ studentId, message: 'Generated successfully' });
         } catch (err) {
           failed.push({ studentId, error: err.message });
@@ -865,6 +891,7 @@ const generateReportCardsBulk = async (req, res) => {
           logger.warn({ err }, 'Failed to close shared PDF browser');
         }
       }
+      await engine.close();
     }
 
     res.json({ status: 'completed', term, generated, failed });

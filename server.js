@@ -62,6 +62,7 @@ const observeRequest = require("./middleware/observeRequest");
 const { attachAccess } = require("./middleware/access");
 const parentApiGate = require("./middleware/parentApiGate");
 const staffRoleRoutes = require("./routes/staffRole.routes");
+const reportTemplateRoutes = require("./routes/reportTemplates.routes");
 const requirePlatformOwner = require("./middleware/requirePlatformOwner");
 
 const logger = require('./logger')
@@ -89,7 +90,8 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization', 'X-School-Year'],
   // Lets the browser read download filenames (CSV/PDF exports) across origins,
   // and which students a QR-card print skipped.
-  exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Skipped-Students', 'X-Skipped-Count'],
+  // The report designer's server preview says its page count and warnings.
+  exposedHeaders: ['Content-Disposition', 'X-Request-Id', 'X-Skipped-Students', 'X-Skipped-Count', 'X-Report-Pages', 'X-Report-Warnings'],
 };
 
 // core modules
@@ -98,6 +100,9 @@ app.use(cors(corsOptions));
 // (~150 KB for Al Haadi), above the 100 KB default. body-parser skips a body
 // it has already parsed, so the global parser below leaves this one alone.
 app.use("/api/finance/families/import", express.json({ limit: "2mb" }));
+// Report templates carry their uploaded images inline (reportkit allows a
+// 4 MB document), so drafts and previews need more than 100 KB too.
+app.use("/api/report-templates", express.json({ limit: "5mb" }));
 app.use(express.json());
 
 // 1000 requests a minute per signed-in user (anonymous: per network), on
@@ -185,6 +190,7 @@ app.use("/api/classroom", classroomRoutes);
 app.use("/api/student", studentPortalRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/finance", financeRoutes);
+app.use("/api/report-templates", reportTemplateRoutes);
 
 // Global error handler — must be after all routes
 app.use(errorHandler);

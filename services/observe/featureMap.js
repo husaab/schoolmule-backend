@@ -12,6 +12,7 @@ const FEATURES = [
   ['/api/reports', 'Report cards'],
   ['/api/progress-reports', 'Report cards'],
   ['/api/report-emails', 'Report cards'],
+  ['/api/report-templates', 'Report designer'],
   ['/api/teacher-attendance', 'Staff attendance'],
   ['/api/attendance', 'Attendance'],
   ['/api/parent-portal', 'Parent portal'],

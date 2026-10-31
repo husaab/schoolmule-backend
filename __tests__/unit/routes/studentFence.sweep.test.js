@@ -52,7 +52,7 @@ const UNFENCED_ROUTES = [
 ];
 
 // server.js mounts on an /api path that are not routers.
-const NON_ROUTER_MOUNTS = ['/api/finance/families/import']; // larger JSON body limit
+const NON_ROUTER_MOUNTS = ['/api/finance/families/import', '/api/report-templates']; // larger JSON body limits
 // Path-less app.use(...) calls in server.js (global middleware, not routes).
 const GLOBAL_MIDDLEWARE = [
   'cors(corsOptions)', 'express.json()', 'globalLimiter', 'httpLogger', 'alertRequestCounter',

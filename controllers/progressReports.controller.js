@@ -9,6 +9,8 @@ const logger = require("../logger");
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const { getProgressReportHTML } = require('../templates/progressReportTemplate');
+// Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
+const { withReportEngine, reportEngineSession, progressReportResult } = require('../services/reportEngine/generate');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Progress-report
@@ -315,13 +317,9 @@ const getProgressReportsByTermAndSchool = async (req, res) => {
 // A report that can't be made from the data as it stands (no classes in the
 // term, no such term): the caller is told why. Logged as a warning, not an
 // error, so a bulk run over a class doesn't look like an outage to Observe.
-class ReportSkip extends Error {
-  constructor(message, status = 422) {
-    super(message);
-    this.name = 'ReportSkip';
-    this.status = status;
-  }
-}
+// One class shared with the report engine (same name, message and status as
+// the one declared here before), so the engine's skips answer the same way.
+const { ReportSkip } = require('../services/reportEngine/data/errors');
 
 // Generate single progress report
 const generateProgressReport = async (req, res) => {
@@ -382,12 +380,14 @@ const generateProgressReportsBulk = async (req, res) => {
     // One Chromium launch for the whole batch instead of one per student —
     // launching Puppeteer per report is the dominant cost in bulk generation.
     let browser = null;
+    // Report engine: its own browser for the batch, launched only if it prints.
+    const engine = reportEngineSession();
     try {
       browser = await launchPDFBrowser();
 
       for (const studentId of studentIds) {
         try {
-          const result = await generateSingleProgressReport(studentId, term, { browser, reportDate });
+          const result = await generateSingleProgressReport(studentId, term, { browser, reportDate, engine });
           successes.push({ studentId, message: 'Progress report generated successfully', data: result });
         } catch (error) {
           if (error instanceof ReportSkip) logger.warn({ studentId, term, reason: error.message }, 'Skipped a progress report');
@@ -397,6 +397,7 @@ const generateProgressReportsBulk = async (req, res) => {
       }
     } finally {
       if (browser) await browser.close();
+      await engine.close();
     }
 
     res.json({
@@ -415,11 +416,21 @@ const generateProgressReportsBulk = async (req, res) => {
   }
 };
 
+// Report engine: REPORT_ENGINE=new prints with the template that resolves for
+// the student's grade and term (none, or an engine error: the legacy path
+// below); =shadow prints legacy and also lays it out with the engine, no
+// upload; unset = legacy only. JK/SK students route on to the JK/SK
+// generators, which don't run the engine a second time.
+const generateSingleProgressReport = (studentId, term, opts = {}) => withReportEngine(
+  { docType: 'progress_report', studentId, term, opts, shape: progressReportResult },
+  (legacyOpts) => legacyGenerateSingleProgressReport(studentId, term, legacyOpts),
+);
+
 // Helper function to generate a single progress report.
 // opts.browser — a shared Puppeteer browser to reuse (bulk flows pass one so
 // the whole batch pays a single Chromium launch); omit it for a one-off report.
 // opts.reportDate — YYYY-MM-DD printed on JK/SK progress reports (null: today).
-const generateSingleProgressReport = async (studentId, term, opts = {}) => {
+const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) => {
   // 1. Get student information
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) {
