@@ -103,6 +103,7 @@ const ALL_TABLES = [
   'general_attendance',
   'parent_students',
   'staff',
+  'class_comment_banks',
   'class_teachers',
   'class_students',
   'assessments',

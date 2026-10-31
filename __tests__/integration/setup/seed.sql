@@ -2316,6 +2316,16 @@ CREATE TABLE IF NOT EXISTS student_views (
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- database/migrations/class_comment_banks_migration.sql
+CREATE TABLE IF NOT EXISTS class_comment_banks (
+  class_id       UUID PRIMARY KEY REFERENCES classes(class_id) ON DELETE CASCADE,
+  core_standards JSONB NOT NULL,
+  work_habits    JSONB NOT NULL,
+  cutoffs        JSONB NOT NULL,
+  updated_by     UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Student soft delete (student_soft_delete_migration.sql): the table is
 -- students_all and `students` is a view of the rows that aren't deleted. Last,
 -- so every foreign key above was created against the table.

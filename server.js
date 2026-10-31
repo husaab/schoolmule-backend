@@ -25,6 +25,7 @@ const schoolRoutes = require("./routes/school.routes")
 const termRoutes = require("./routes/term.routes")
 const reportsRoutes = require("./routes/reports.routes")
 const progressReportsRoutes = require("./routes/progressReports.routes")
+const commentBankRoutes = require("./routes/commentBank.routes")
 const excludedAssessmentRoutes = require("./routes/excludedAssessment.routes")
 const schoolAssetRoutes = require("./routes/schoolAssets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
@@ -163,6 +164,7 @@ app.use("/api/staff", staffRoutes);
 app.use("/api/terms", termRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/progress-reports", progressReportsRoutes);
+app.use("/api/comment-banks", commentBankRoutes);
 app.use("/api/excluded-assessments", excludedAssessmentRoutes);
 app.use("/api/school-assets", schoolAssetRoutes);
 app.use("/api/report-emails", reportEmailRoutes);
