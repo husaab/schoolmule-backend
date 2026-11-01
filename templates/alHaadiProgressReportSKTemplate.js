@@ -19,22 +19,9 @@
 
 const { mulishFontFaces, escapeHtml, formatLongDate, schoolYearWording, contactLine } = require('./printKit');
 
-/**
- * The "Strengths/Next Steps for Improvement" rows, as on the paper template.
- * Stored in sk_progress_report_comments with `key` as section_type. Keep in
- * step with the web/app copy (src/lib/skProgressComments.ts).
- */
-const SK_PROGRESS_COMMENT_ROWS = [
-  { key: 'language_arts', label: 'Language Arts', caption: 'Reading, Writing, Oral communication, Media Literacy' },
-  { key: 'mathematics', label: 'Mathematics' },
-  { key: 'science', label: 'Science' },
-  { key: 'social_studies', label: 'Social Studies' },
-  { key: 'quran', label: 'Quran' },
-  { key: 'arabic', label: 'Arabic' },
-  { key: 'islamic_studies', label: 'Islamic Studies' },
-  { key: 'creativity', label: 'Creativity' },
-  { key: 'french', label: 'French' },
-];
+// The "Strengths/Next Steps for Improvement" rows, as on the paper template
+// (one list with the report engine: ./kindergartenProgressComments.js).
+const { SK_PROGRESS_COMMENT_ROWS } = require('./kindergartenProgressComments');
 
 const EVALUATION_KEY = [
   ['E', 'Excellent'],

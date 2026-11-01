@@ -28,6 +28,8 @@ CREATE TABLE schools (
   email_sender_local     TEXT,
   student_requests_notified_at TIMESTAMPTZ,
   email_reply_to         TEXT[] NOT NULL DEFAULT '{}',
+  principal_name         TEXT,
+  board_name             TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2333,3 +2335,108 @@ ALTER TABLE students RENAME TO students_all;
 CREATE INDEX IF NOT EXISTS students_deleted_idx ON students_all (school, school_year_id, deleted_at DESC) WHERE deleted_at IS NOT NULL;
 CREATE VIEW students WITH (security_invoker = true) AS
   SELECT * FROM students_all WHERE deleted_at IS NULL;
+
+-- Report Template Designer (report_templates_migration.sql): same DDL and
+-- constraint names as the migration, after the students_all rename so the
+-- field values FK targets the table. The Al Haadi assignment row it seeds is
+-- left out (tables are truncated between tests anyway).
+CREATE TABLE IF NOT EXISTS report_templates (
+  template_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school               school NOT NULL,
+  doc_type             TEXT NOT NULL CONSTRAINT report_templates_doc_type_check
+                         CHECK (doc_type IN ('report_card', 'progress_report')),
+  name                 TEXT NOT NULL CONSTRAINT report_templates_name_check
+                         CHECK (char_length(btrim(name)) BETWEEN 1 AND 100),
+  base_key             TEXT,
+  draft_doc            JSONB NOT NULL,
+  draft_rev            INT NOT NULL DEFAULT 1,
+  published_version_id UUID,
+  archived_at          TIMESTAMPTZ,
+  created_by           UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_by           UUID REFERENCES users(user_id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS report_templates_school_name_key
+  ON report_templates (school, lower(name)) WHERE archived_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS report_template_versions (
+  version_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_id    UUID NOT NULL CONSTRAINT report_template_versions_template_id_fkey
+                   REFERENCES report_templates(template_id) ON DELETE RESTRICT,
+  version_no     INT NOT NULL,
+  doc            JSONB NOT NULL,
+  doc_sha256     TEXT,
+  engine_version INT,
+  note           TEXT,
+  published_by   UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  published_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT report_template_versions_template_version_key UNIQUE (template_id, version_no)
+);
+ALTER TABLE report_templates
+  ADD CONSTRAINT report_templates_published_version_id_fkey
+  FOREIGN KEY (published_version_id) REFERENCES report_template_versions(version_id);
+
+CREATE OR REPLACE FUNCTION report_template_versions_immutable() RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.doc IS DISTINCT FROM OLD.doc
+     OR NEW.doc_sha256 IS DISTINCT FROM OLD.doc_sha256
+     OR NEW.template_id IS DISTINCT FROM OLD.template_id
+     OR NEW.version_no IS DISTINCT FROM OLD.version_no THEN
+    RAISE EXCEPTION 'report_template_versions are immutable (version %)', OLD.version_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_report_template_versions_immutable
+  BEFORE UPDATE ON report_template_versions
+  FOR EACH ROW EXECUTE FUNCTION report_template_versions_immutable();
+
+CREATE TABLE IF NOT EXISTS report_template_assignments (
+  assignment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school        school NOT NULL,
+  doc_type      TEXT NOT NULL CONSTRAINT report_template_assignments_doc_type_check
+                  CHECK (doc_type IN ('report_card', 'progress_report')),
+  template_id   UUID CONSTRAINT report_template_assignments_template_id_fkey
+                  REFERENCES report_templates(template_id) ON DELETE RESTRICT,
+  default_key   TEXT,
+  grades        TEXT[],
+  terms         TEXT[],
+  priority      INT NOT NULL DEFAULT 100,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_by    UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT report_template_assignments_target_check
+    CHECK ((template_id IS NULL) <> (default_key IS NULL)),
+  CONSTRAINT report_template_assignments_grades_check
+    CHECK (grades IS NULL OR grades <@ ARRAY['JK', 'SK', '1', '2', '3', '4', '5', '6', '7', '8']::TEXT[])
+);
+CREATE INDEX IF NOT EXISTS report_template_assignments_school_doc_idx
+  ON report_template_assignments (school, doc_type);
+CREATE INDEX IF NOT EXISTS report_template_assignments_template_idx
+  ON report_template_assignments (template_id) WHERE template_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS report_field_values (
+  school     school NOT NULL,
+  student_id UUID NOT NULL CONSTRAINT report_field_values_student_id_fkey
+               REFERENCES students_all(student_id) ON DELETE CASCADE,
+  doc_type   TEXT NOT NULL CONSTRAINT report_field_values_doc_type_check
+               CHECK (doc_type IN ('report_card', 'progress_report')),
+  term       TEXT NOT NULL,
+  field_key  TEXT NOT NULL,
+  value      TEXT,
+  updated_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (student_id, doc_type, term, field_key)
+);
+
+ALTER TABLE report_cards
+  ADD COLUMN template_version_id UUID CONSTRAINT report_cards_template_version_id_fkey REFERENCES report_template_versions(version_id),
+  ADD COLUMN template_key TEXT,
+  ADD COLUMN engine_version INT,
+  ADD COLUMN render_warnings JSONB;
+ALTER TABLE progress_reports
+  ADD COLUMN template_version_id UUID CONSTRAINT progress_reports_template_version_id_fkey REFERENCES report_template_versions(version_id),
+  ADD COLUMN template_key TEXT,
+  ADD COLUMN engine_version INT,
+  ADD COLUMN render_warnings JSONB;

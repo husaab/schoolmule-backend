@@ -289,6 +289,42 @@ describe('school sender settings', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 
+  it('exposes the principal and board report cards print', async () => {
+    mockQueryResponse([buildSchoolRow({ principal_name: 'Principal Sample', board_name: 'Private' })]);
+    let res = await authGet('/api/schools/ALHAADIACADEMY');
+    expect(res.body.data).toMatchObject({ principalName: 'Principal Sample', boardName: 'Private' });
+    mockQueryResponse([buildSchoolRow()]);
+    res = await authGet('/api/schools/ALHAADIACADEMY');
+    expect(res.body.data).toMatchObject({ principalName: '', boardName: '' });
+  });
+
+  it('PUT saves the principal and board, trimmed; leaving them out keeps them; null clears', async () => {
+    const row = buildSchoolRow();
+    mockQueryResponse([row]); // own-school lookup
+    mockQueryResponse([row]);
+    await authPut(`/api/schools/${row.school_id}`).send({ name: 'S', principalName: '  Principal Sample ', boardName: 'Private' });
+    expect(db.query.mock.calls.at(-1)[1].slice(8)).toEqual([row.school_id, 'Principal Sample', 'Private']);
+
+    mockQueryResponse([row]);
+    mockQueryResponse([row]);
+    await authPut(`/api/schools/${row.school_id}`).send({ name: 'S' });
+    expect(db.query.mock.calls.at(-1)[1].slice(9)).toEqual([null, null]);
+
+    mockQueryResponse([row]);
+    mockQueryResponse([row]);
+    await authPut(`/api/schools/${row.school_id}`).send({ name: 'S', principalName: null, boardName: '' });
+    expect(db.query.mock.calls.at(-1)[1].slice(9)).toEqual(['', '']);
+  });
+
+  it('PUT rejects a principal or board that is not text or too long', async () => {
+    let res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', principalName: 42 });
+    expect(res.status).toBe(400);
+    res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', boardName: 'x'.repeat(121) });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Board/);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it('PUT rejects a malformed reply-to address', async () => {
     const res = await authPut(`/api/schools/${uuidv4()}`).send({ name: 'S', emailReplyTo: ['ok@x.ca', 'nope@'] });
     expect(res.status).toBe(400);

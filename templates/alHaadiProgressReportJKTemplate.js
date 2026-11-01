@@ -13,6 +13,8 @@
  */
 
 const { assetDataUri, mulishFontFaces, escapeHtml, formatLongDate, schoolYearWording, contactLine } = require('./printKit');
+// The Teacher's Comments rows (one list with the report engine).
+const { JK_PROGRESS_COMMENT_ROWS } = require('./kindergartenProgressComments');
 
 const LEGEND = [
   ['D - Developing:', 'Children can apply the skill or concept correctly.'],
@@ -204,8 +206,7 @@ function renderAlHaadiProgressReportJK(data) {
   <div class="comments-page">
     <div class="comments">
       <h2>Teacher's Comments:</h2>
-      ${commentBlock('Academic achievement:', comments.academic_achievement)}
-      ${commentBlock('Socio-emotional development:', comments.socio_emotional)}
+      ${JK_PROGRESS_COMMENT_ROWS.map((row) => commentBlock(`${row.label}:`, comments[row.key])).join('\n      ')}
     </div>
 
     <div class="signoff">

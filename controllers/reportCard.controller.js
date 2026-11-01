@@ -12,6 +12,9 @@ const { computeClassGrade } = require('../services/gradeEngine');
 const studentViewQueries = require('../queries/studentView.queries');
 const alHaadiT2Queries = require('../queries/alHaadiT2ReportCard.queries');
 const classQueries = require('../queries/class.queries');
+// Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
+const { withReportEngine, reportEngineSession, reportCardResult } = require('../services/reportEngine/generate');
+const { ReportSkip } = require('../services/reportEngine/data/errors');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Report-card
@@ -523,11 +526,13 @@ const generateReportCardsBulk = async (req, res) => {
   } catch (err) {
     logger.error({ err }, 'Failed to launch shared PDF browser, falling back to per-student launches');
   }
+  // Report engine: its own browser for the batch, launched only if it prints.
+  const engine = reportEngineSession();
 
   try {
     for (const studentId of studentIds) {
       try {
-        const result = await generateSingleReportCard(studentId, term, { browser });
+        const result = await generateSingleReportCard(studentId, term, { browser, engine });
         successes.push({ studentId, message: result });
       } catch (err) {
         logger.error({ err, studentId }, `Failed to generate report card for ${studentId}`);
@@ -542,6 +547,7 @@ const generateReportCardsBulk = async (req, res) => {
         logger.warn({ err }, 'Failed to close shared PDF browser');
       }
     }
+    await engine.close();
   }
 
   return res.status(200).json({
@@ -576,12 +582,26 @@ const generateReportCard = async (req, res) => {
     if (err.message === 'Student not found') {
       return res.status(404).json({ status: 'failed', message: 'Student not found' });
     }
+    // Report engine: e.g. a required extra field left empty.
+    if (err instanceof ReportSkip) {
+      return res.status(err.status).json({ status: 'failed', message: err.message });
+    }
     logger.error({ err }, "Report card generation failed");
     return res.status(500).json({ status: 'failed', message: 'Internal server error' });
   }
 };
 
-const generateSingleReportCard = async (studentId, term, opts = {}) => {
+// Report engine: REPORT_ENGINE=new prints with the template that resolves for
+// the student's grade and term (none, or an engine error: the legacy path
+// below); =shadow prints legacy and also lays it out with the engine, no
+// upload; unset = legacy only. JK/SK students route on to the JK/SK
+// generators, which don't run the engine a second time.
+const generateSingleReportCard = (studentId, term, opts = {}) => withReportEngine(
+  { docType: 'report_card', studentId, term, opts, shape: reportCardResult },
+  (legacyOpts) => legacyGenerateSingleReportCard(studentId, term, legacyOpts),
+);
+
+const legacyGenerateSingleReportCard = async (studentId, term, opts = {}) => {
   const { rows: studentRows } = await db.query(studentQueries.selectStudentById, [studentId]);
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];

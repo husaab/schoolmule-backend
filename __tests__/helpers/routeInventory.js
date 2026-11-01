@@ -157,7 +157,8 @@ function inventory({ serverSrc, readRouter, nonRouterMounts = [], globalMiddlewa
       }
       continue;
     }
-    if (nonRouterMounts.includes(mount)) continue;
+    // A body parser on a path that also mounts a router: skip only the parser.
+    if (nonRouterMounts.includes(mount) && !files[args[args.length - 1]]) continue;
     const routerVar = args[args.length - 1];
     if (args.length < 2 || !files[routerVar]) {
       problems.push(`${where}: cannot resolve the router to a "const x = require('./routes/<file>')"`);
