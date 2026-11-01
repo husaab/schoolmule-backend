@@ -965,6 +965,46 @@ const getGeneratedReportCards = async (req, res) => {
   }
 };
 
+/**
+ * GET /report-cards/comments-status?term=Term 1
+ * For each grade 1-8 student with a class in the term: how many of those
+ * classes have their report card comments in (work habits, behaviour and a
+ * comment), and which don't, with the class's teacher. The report cards page
+ * shows it before anyone generates a card with blanks. JK/SK aren't listed.
+ * → { status, data: [{ studentId, total, complete, missing: [{ classId, subject, teacherName }] }] }
+ */
+const getTermCommentsStatus = async (req, res) => {
+  const { term } = req.query;
+  if (typeof term !== 'string' || !term.trim()) {
+    return res.status(400).json({ status: 'failed', message: 'Missing query parameter: term is required' });
+  }
+
+  try {
+    const { rows } = await db.query(reportCardQueries.selectTermCommentsStatus, [
+      req.user.school,
+      term,
+      req.schoolYear?.schoolYearId || null,
+    ]);
+
+    const byStudent = new Map();
+    for (const row of rows) {
+      let entry = byStudent.get(row.student_id);
+      if (!entry) {
+        entry = { studentId: row.student_id, total: 0, complete: 0, missing: [] };
+        byStudent.set(row.student_id, entry);
+      }
+      entry.total += 1;
+      if (row.complete) entry.complete += 1;
+      else entry.missing.push({ classId: row.class_id, subject: row.subject, teacherName: row.teacher_name || null });
+    }
+
+    return res.status(200).json({ status: 'success', data: [...byStudent.values()] });
+  } catch (err) {
+    logger.error({ err }, 'Error fetching report card comments status');
+    return res.status(500).json({ status: 'failed', message: 'Error fetching report card comments status' });
+  }
+};
+
 const getGeneratedReportCardsByStudentId = async (req, res) => {
   const { studentId, term } = req.query;
   // The school comes from the session, never the query string.
@@ -1070,6 +1110,7 @@ module.exports = {
   deleteReportCard,
   deleteReportCardsBulk,
   getGeneratedReportCardsByStudentId,
+  getTermCommentsStatus,
   // exported for unit testing (Al Haadi T2 variant)
   mergeTermSubjects,
   computeTermSubjectGrades,

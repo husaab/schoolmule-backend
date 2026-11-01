@@ -48,6 +48,29 @@ const reportCardQueries = {
     WHERE student_id = $1 AND term = $2 AND school = $3
   `,
 
+  // Every class a grade 1-8 student takes in the term, and whether its
+  // teacher has entered the report card's work habits, behaviour and comment
+  // for them (what the class's Report card comments page counts as done).
+  // Feedback is stored under the class's own term name. JK and SK cards are
+  // skills-based and print no class comments, so they're left out.
+  // $1 school, $2 term name, $3 school year (null = any).
+  selectTermCommentsStatus: `
+    SELECT cs.student_id, c.class_id, c.subject, c.teacher_name,
+      (NULLIF(btrim(f.work_habits), '') IS NOT NULL
+        AND NULLIF(btrim(f.behavior), '') IS NOT NULL
+        AND NULLIF(btrim(f.comment), '') IS NOT NULL) AS complete
+    FROM classes c
+    JOIN terms t ON t.term_id = c.term_id
+    JOIN class_students cs ON cs.class_id = c.class_id
+    JOIN students s ON s.student_id = cs.student_id
+    LEFT JOIN report_card_feedback f
+      ON f.student_id = cs.student_id AND f.class_id = c.class_id AND f.term = t.name
+    WHERE c.school = $1 AND t.name = $2
+      AND ($3::uuid IS NULL OR t.school_year_id = $3)
+      AND COALESCE(s.grade::text, '') NOT IN ('JK', 'SK')
+    ORDER BY cs.student_id, c.subject
+  `,
+
   updateReportCardEmailStatus: `
     UPDATE report_cards
     SET 

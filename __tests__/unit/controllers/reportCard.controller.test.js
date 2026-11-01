@@ -431,6 +431,56 @@ describe('Report Card Controller', () => {
     });
   });
 
+  // ─── GET /api/report-cards/comments-status ─────────────────────
+  describe('GET /api/report-cards/comments-status', () => {
+    const url = '/api/report-cards/comments-status';
+    const db = require('../../../config/database');
+    const S1 = '21111111-1111-4111-8111-111111111111';
+    const S2 = '22222222-2222-4222-8222-222222222222';
+
+    it('counts each student\'s classes with comments in and names the ones missing', async () => {
+      const token = mockAdminUser();
+      mockQueryResponse([
+        { student_id: S1, class_id: 'c-art', subject: 'Art', teacher_name: 'Teacher One', complete: true },
+        { student_id: S1, class_id: 'c-math', subject: 'Math', teacher_name: 'Teacher Two', complete: false },
+        { student_id: S2, class_id: 'c-art', subject: 'Art', teacher_name: null, complete: true },
+      ]);
+
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`).query({ term: 'Term 1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([
+        { studentId: S1, total: 2, complete: 1, missing: [{ classId: 'c-math', subject: 'Math', teacherName: 'Teacher Two' }] },
+        { studentId: S2, total: 1, complete: 1, missing: [] },
+      ]);
+      const call = db.query.mock.calls.find(([sql]) => typeof sql === 'string' && sql.includes('report_card_feedback f'));
+      expect(call[1][0]).toBe(TEST_SCHOOL);
+      expect(call[1][1]).toBe('Term 1');
+    });
+
+    it('returns 400 without a term', async () => {
+      const token = mockAdminUser();
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`);
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 500 on a database error', async () => {
+      const token = mockAdminUser();
+      mockQueryError('DB failure');
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`).query({ term: 'Term 1' });
+      expect(res.status).toBe(500);
+    });
+
+    it('refuses staff without report card access', async () => {
+      const { giveRole } = require('../../helpers/mockAccess');
+      const { TEST_TEACHER_USER_ID } = require('../../helpers/mockAuth');
+      giveRole(TEST_TEACHER_USER_ID, ['students']);
+      const token = mockTeacherUser();
+      const res = await request(app).get(url).set('Authorization', `Bearer ${token}`).query({ term: 'Term 1' });
+      expect(res.status).toBe(403);
+    });
+  });
+
   // ─── GET /api/report-cards/view/student ────────────────────────
   describe('GET /api/report-cards/view/student', () => {
     const url = '/api/report-cards/view/student';

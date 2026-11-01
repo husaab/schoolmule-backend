@@ -5,7 +5,7 @@ const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPat
 const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
-const { generateReportCard, upsertFeedback, getFeedback, getClassFeedback, upsertBulkFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, deleteReportCardsBulk, getGeneratedReportCardsByStudentId} = require('../controllers/reportCard.controller');
+const { generateReportCard, upsertFeedback, getFeedback, getClassFeedback, upsertBulkFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, deleteReportCardsBulk, getGeneratedReportCardsByStudentId, getTermCommentsStatus} = require('../controllers/reportCard.controller');
 
 const router = express.Router();
 
@@ -49,6 +49,8 @@ router.get('/feedback/class/:classId', classFeedback((req) => [req.params.classI
 router.post('/feedback/bulk', classFeedback(entriesClasses), upsertBulkFeedback);
 router.post('/generate/bulk', reportCards, ownStudents, generateReportCardsBulk);
 router.get('/view', reportCards, getGeneratedReportCards);
+// Whose report card comments are in for the term (the report cards page, before generating).
+router.get('/comments-status', reportCards, getTermCommentsStatus);
 router.delete('/delete', reportCards, requireOwnReportPaths((req) => req.query.filePath), deleteReportCard);
 router.post('/delete/bulk', reportCards, requireOwnReportPaths((req) => req.body && req.body.filePaths), deleteReportCardsBulk);
 
