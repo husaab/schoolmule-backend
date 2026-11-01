@@ -28,6 +28,8 @@ CREATE TABLE schools (
   email_sender_local     TEXT,
   student_requests_notified_at TIMESTAMPTZ,
   email_reply_to         TEXT[] NOT NULL DEFAULT '{}',
+  principal_name         TEXT,
+  board_name             TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_updated_at        TIMESTAMPTZ DEFAULT NOW()
 );

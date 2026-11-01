@@ -76,7 +76,7 @@ async function loadSchool(client, schoolCode) {
     // From the contact email's domain, as the JK/SK progress footers print
     // it (printKit.schoolWebsite); '' for a free-mail address.
     website: '',
-    // Not stored on schools yet; the designer fills them by hand for now.
+    // School Settings → School Information (schools.principal_name / board_name).
     principal: '',
     board: '',
   };
@@ -93,6 +93,8 @@ async function loadSchool(client, schoolCode) {
       info.phone = text(row.phone);
       info.email = text(row.email);
       info.website = text(schoolWebsite(row.email));
+      info.principal = text(row.principal_name);
+      info.board = text(row.board_name);
     }
   } catch (err) {
     logger.warn({ err }, 'reportEngine: could not read the schools row, using the school code');

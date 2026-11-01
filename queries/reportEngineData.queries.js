@@ -23,7 +23,7 @@ const reportEngineDataQueries = {
   // jk.controller.js:50 (fetchSchoolData), plus timezone for the report date.
   // Params: $1 school_code (normalised)
   selectSchoolByCode: `
-    SELECT school_id, name, address, phone, email, timezone
+    SELECT school_id, name, address, phone, email, timezone, principal_name, board_name
     FROM schools WHERE school_code = $1
   `,
 

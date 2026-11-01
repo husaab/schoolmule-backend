@@ -261,6 +261,15 @@ describe('assembleReportData — grades 1-8 report card', () => {
     expect(data.school.website).toBe('');
   });
 
+  it('prints the principal and board from School Settings', async () => {
+    const client = fakeClient(routes({ school: [{ ...schoolRow, principal_name: 'Principal Sample', board_name: 'Private' }] }));
+    const data = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 1', client });
+    expect(data.school.principal).toBe('Principal Sample');
+    expect(data.school.board).toBe('Private');
+    const unset = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 1', client: fakeClient(routes({ school: [schoolRow] })) });
+    expect([unset.school.principal, unset.school.board]).toEqual(['', '']);
+  });
+
   it('has no subjects for a student in no classes', async () => {
     const client = fakeClient([[q.selectStudentClasses, []], ...routes()]);
     const data = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 1', client });

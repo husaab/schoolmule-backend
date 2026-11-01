@@ -30,10 +30,25 @@ const toSchoolPayload = (school) => {
     academicYearEndDate: school.academic_year_end_date,
     emailSendingDomain: school.email_sending_domain || null,
     emailReplyTo: Array.isArray(school.email_reply_to) ? school.email_reply_to : [],
+    // What report cards print as {{school.principal}} / {{school.board}}.
+    principalName: school.principal_name || '',
+    boardName: school.board_name || '',
     emailAddresses: { academics: sender('academics'), messages: sender('messages') },
     createdAt: school.created_at,
     lastUpdatedAt: school.last_updated_at,
   };
+};
+
+// A name printed on report cards. undefined = not provided (leave it);
+// null or '' clears it.
+const REPORT_NAME_MAX = 120;
+const parseReportName = (raw, label) => {
+  if (raw === undefined) return { value: null };
+  if (raw === null) return { value: '' };
+  if (typeof raw !== 'string') return { error: `${label} must be text` };
+  const value = raw.trim();
+  if (value.length > REPORT_NAME_MAX) return { error: `${label} can be at most ${REPORT_NAME_MAX} characters` };
+  return { value };
 };
 
 // Accepts an array or a comma/newline separated string. Returns the cleaned
@@ -226,7 +241,9 @@ const updateSchool = async (req, res) => {
     timezone,
     academicYearStartDate,
     academicYearEndDate,
-    emailReplyTo
+    emailReplyTo,
+    principalName,
+    boardName
   } = req.body;
 
   if (!id) {
@@ -248,6 +265,12 @@ const updateSchool = async (req, res) => {
   if (replyTo.error) {
     return res.status(400).json({ status: 'failed', message: replyTo.error });
   }
+  const principal = parseReportName(principalName, 'Principal');
+  const board = parseReportName(boardName, 'Board');
+  const nameError = principal.error || board.error;
+  if (nameError) {
+    return res.status(400).json({ status: 'failed', message: nameError });
+  }
 
   try {
     const { rows: found } = await db.query(schoolQueries.selectSchoolById, [id]);
@@ -263,7 +286,9 @@ const updateSchool = async (req, res) => {
       academicYearStartDate || null,
       academicYearEndDate || null,
       replyTo.list ?? null,
-      id
+      id,
+      principal.value,
+      board.value
     ]);
 
     if (rows.length === 0) {

@@ -18,6 +18,8 @@ const schoolQueries = {
       academic_year_end_date,
       email_sending_domain,
       email_reply_to,
+      principal_name,
+      board_name,
       created_at,
       last_updated_at
     FROM schools
@@ -42,6 +44,8 @@ const schoolQueries = {
       academic_year_end_date,
       email_sending_domain,
       email_reply_to,
+      principal_name,
+      board_name,
       created_at,
       last_updated_at
     FROM schools
@@ -66,6 +70,8 @@ const schoolQueries = {
       academic_year_end_date,
       email_sending_domain,
       email_reply_to,
+      principal_name,
+      board_name,
       created_at,
       last_updated_at
     FROM schools
@@ -95,7 +101,8 @@ const schoolQueries = {
   /**
    * Update school
    * Params: name, address, phone, email, timezone, academic_year_start_date, academic_year_end_date,
-   *         email_reply_to (TEXT[] or NULL to leave unchanged), school_id
+   *         email_reply_to (TEXT[] or NULL to leave unchanged), school_id,
+   *         principal_name, board_name (NULL = leave unchanged, '' = clear)
    */
   updateSchool: `
     UPDATE schools 
@@ -108,6 +115,8 @@ const schoolQueries = {
       academic_year_start_date = $6,
       academic_year_end_date = $7,
       email_reply_to = COALESCE($8::text[], email_reply_to),
+      principal_name = CASE WHEN $10::text IS NULL THEN principal_name ELSE NULLIF(btrim($10::text), '') END,
+      board_name = CASE WHEN $11::text IS NULL THEN board_name ELSE NULLIF(btrim($11::text), '') END,
       last_updated_at = NOW()
     WHERE school_id = $9
     RETURNING *
