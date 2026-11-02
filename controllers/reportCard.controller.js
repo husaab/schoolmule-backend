@@ -272,6 +272,38 @@ function mergeTermSubjects(t1Map, t2Map) {
  *   behavior?: string,
  *   comment?: string
  */
+// The details a teacher picks to help the AI write a report card comment
+// (the web's src/lib/reportCardDetails.ts holds the list). Checked for shape
+// only, so a change to the list never makes saves fail; readers ignore keys
+// they don't know. Never printed, never shown to families.
+const COMMENT_DETAILS_ERROR = 'Comment details must be picks from the list and a note of up to 300 characters.';
+const DETAIL_KEY = /^[A-Za-z][A-Za-z0-9]{0,39}$/;
+const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * An entry's commentDetails: { sent: false } when it doesn't carry them (keep
+ * what is saved: older app builds), { sent: true, value } to save (null clears;
+ * no picks and a blank note save null), or { error }.
+ */
+const readCommentDetails = (value) => {
+  if (value === undefined) return { sent: false };
+  if (value === null) return { sent: true, value: null };
+  if (!isPlainObject(value)) return { error: COMMENT_DETAILS_ERROR };
+  const picks = value.picks === undefined ? {} : value.picks;
+  if (!isPlainObject(picks)) return { error: COMMENT_DETAILS_ERROR };
+  const entries = Object.entries(picks);
+  if (entries.length > 30) return { error: COMMENT_DETAILS_ERROR };
+  for (const [k, v] of entries) {
+    if (!DETAIL_KEY.test(k) || typeof v !== 'string' || !DETAIL_KEY.test(v)) return { error: COMMENT_DETAILS_ERROR };
+  }
+  const note = value.note === undefined ? '' : value.note;
+  if (typeof note !== 'string' || note.length > 300) return { error: COMMENT_DETAILS_ERROR };
+  if (entries.length === 0 && note.trim() === '') return { sent: true, value: null };
+  return { sent: true, value: { picks, note } };
+};
+
+const detailsParams = (details) => [details.sent && details.value ? JSON.stringify(details.value) : null, details.sent];
+
 const upsertFeedback = async (req, res) => {
   // term is intentionally ignored if sent — it's derived from the class below.
   const { studentId, classId, workHabits, behavior, comment } = req.body;
@@ -281,6 +313,11 @@ const upsertFeedback = async (req, res) => {
       status: 'failed',
       message: 'Missing required fields: studentId or classId'
     });
+  }
+
+  const details = readCommentDetails(req.body.commentDetails);
+  if (details.error) {
+    return res.status(400).json({ status: 'failed', message: details.error });
   }
 
   try {
@@ -298,7 +335,8 @@ const upsertFeedback = async (req, res) => {
       term,
       workHabits || null,
       behavior || null,
-      comment || null
+      comment || null,
+      ...detailsParams(details)
     ]);
 
     return res.status(200).json({
@@ -389,7 +427,8 @@ const getClassFeedback = async (req, res) => {
       term: row.term,
       workHabits: row.work_habits,
       behavior: row.behavior,
-      comment: row.comment
+      comment: row.comment,
+      commentDetails: row.comment_details ?? null
     }));
 
     return res.status(200).json({
@@ -420,17 +459,25 @@ const upsertBulkFeedback = async (req, res) => {
   // Validate all entries first before starting transaction.
   // term is ignored if sent — it's derived from each entry's class below.
   const validationErrors = [];
+  const detailsByIndex = [];
+  let detailsError = null;
   for (let i = 0; i < feedbackEntries.length; i++) {
     const entry = feedbackEntries[i];
     if (!entry.studentId || !entry.classId) {
       validationErrors.push({ index: i, studentId: entry.studentId, error: 'Missing required fields' });
     }
+    const details = readCommentDetails(entry && entry.commentDetails);
+    if (details.error) {
+      detailsError = details.error;
+      validationErrors.push({ index: i, studentId: entry && entry.studentId, error: details.error });
+    }
+    detailsByIndex.push(details);
   }
 
   if (validationErrors.length > 0) {
     return res.status(400).json({
       status: 'failed',
-      message: 'Validation failed for some entries',
+      message: detailsError || 'Validation failed for some entries',
       data: {
         updated: 0,
         failed: validationErrors.length,
@@ -460,7 +507,7 @@ const upsertBulkFeedback = async (req, res) => {
 
     let successCount = 0;
 
-    for (const entry of feedbackEntries) {
+    for (const [index, entry] of feedbackEntries.entries()) {
       const { studentId, classId, workHabits, behavior, comment } = entry;
       const term = classTermById.get(classId); // class-derived, never client-sent
 
@@ -475,7 +522,8 @@ const upsertBulkFeedback = async (req, res) => {
         term,
         workHabitsValue,
         behaviorValue,
-        commentValue
+        commentValue,
+        ...detailsParams(detailsByIndex[index])
       ]);
       successCount++;
     }

@@ -1,13 +1,16 @@
 const reportCardQueries = {
+  // $7 comment_details (jsonb or null), $8 whether the entry carried them:
+  // an entry without them (older app builds) keeps what is saved.
   upsertFeedback: `
     INSERT INTO report_card_feedback (
-      student_id, class_id, term, work_habits, behavior, comment
-    ) VALUES ($1, $2, $3, $4, $5, $6)
+      student_id, class_id, term, work_habits, behavior, comment, comment_details
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
     ON CONFLICT (student_id, class_id, term) DO UPDATE
     SET
       work_habits = EXCLUDED.work_habits,
       behavior = EXCLUDED.behavior,
       comment = EXCLUDED.comment,
+      comment_details = CASE WHEN $8::boolean THEN EXCLUDED.comment_details ELSE report_card_feedback.comment_details END,
       created_at = now()
   `,
 
@@ -18,7 +21,7 @@ const reportCardQueries = {
   `,
 
   selectFeedbackByClass: `
-    SELECT rcf.student_id, rcf.class_id, rcf.term, rcf.work_habits, rcf.behavior, rcf.comment, s.name as student_name
+    SELECT rcf.student_id, rcf.class_id, rcf.term, rcf.work_habits, rcf.behavior, rcf.comment, rcf.comment_details, s.name as student_name
     FROM report_card_feedback rcf
     JOIN students s ON s.student_id = rcf.student_id
     WHERE rcf.class_id = $1 AND rcf.term = $2

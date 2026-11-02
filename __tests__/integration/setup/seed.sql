@@ -483,6 +483,7 @@ CREATE TABLE report_card_feedback (
   work_habits            TEXT,
   behavior               TEXT,
   comment                TEXT,
+  comment_details        JSONB,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (student_id, class_id, term)
 );

@@ -304,6 +304,101 @@ describe('Integration: Report Card Routes (Feedback CRUD)', () => {
     });
   });
 
+  // The details a teacher picks to help the AI write the comment. They are
+  // never printed; an entry that doesn't carry them (older app builds) keeps
+  // what is saved.
+  describe('comment details', () => {
+    const DETAILS = { picks: { understanding: 'most', focus: 'occasionallyDistracted' }, note: 'Strong at mental math.' };
+    const DETAILS_ERROR = 'Comment details must be picks from the list and a note of up to 300 characters.';
+
+    const setup = async () => {
+      const classId = await seedClass();
+      const studentId = await seedStudent();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
+      return { classId, studentId };
+    };
+    const bulk = (entries) => authenticatedRequest('post', '/api/report-cards/feedback/bulk').send({ feedbackEntries: entries });
+    const classFeedback = async (classId) => {
+      const res = await authenticatedRequest('get', `/api/report-cards/feedback/class/${classId}`);
+      expect(res.status).toBe(200);
+      return res.body.data;
+    };
+
+    it('saves comment details and returns them with the class feedback', async () => {
+      const { classId, studentId } = await setup();
+      const res = await bulk([{ studentId, classId, workHabits: 'G', behavior: 'G', comment: 'Hi.', commentDetails: DETAILS }]);
+      expect(res.status).toBe(200);
+
+      const [row] = await classFeedback(classId);
+      expect(row.commentDetails).toEqual(DETAILS);
+      expect(row.comment).toBe('Hi.');
+    });
+
+    it('keeps saved details when an entry does not carry them', async () => {
+      const { classId, studentId } = await setup();
+      await bulk([{ studentId, classId, workHabits: 'G', behavior: 'G', comment: 'Hi.', commentDetails: DETAILS }]);
+      const res = await bulk([{ studentId, classId, workHabits: 'E', behavior: 'G', comment: 'New.' }]);
+      expect(res.status).toBe(200);
+
+      const [row] = await classFeedback(classId);
+      expect(row.workHabits).toBe('E');
+      expect(row.comment).toBe('New.');
+      expect(row.commentDetails).toEqual(DETAILS);
+    });
+
+    it('clears details when commentDetails is null', async () => {
+      const { classId, studentId } = await setup();
+      await bulk([{ studentId, classId, workHabits: 'G', commentDetails: DETAILS }]);
+      await bulk([{ studentId, classId, workHabits: 'G', commentDetails: null }]);
+
+      const [row] = await classFeedback(classId);
+      expect(row.commentDetails).toBeNull();
+    });
+
+    it('stores null for empty picks and an empty note', async () => {
+      const { classId, studentId } = await setup();
+      await bulk([{ studentId, classId, workHabits: 'G', commentDetails: { picks: {}, note: '' } }]);
+
+      const [row] = await classFeedback(classId);
+      expect(row.commentDetails).toBeNull();
+    });
+
+    it('rejects a note over 300 characters and saves nothing', async () => {
+      const { classId, studentId } = await setup();
+      const res = await bulk([{ studentId, classId, workHabits: 'G', commentDetails: { picks: {}, note: 'x'.repeat(301) } }]);
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe(DETAILS_ERROR);
+
+      expect(await classFeedback(classId)).toEqual([]);
+    });
+
+    it('rejects picks that are not short identifiers', async () => {
+      const { classId, studentId } = await setup();
+      const res = await bulk([{ studentId, classId, workHabits: 'G', commentDetails: { picks: { 'x y': 'a' } } }]);
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe(DETAILS_ERROR);
+    });
+
+    it('saves and keeps comment details on the single endpoint', async () => {
+      const { classId, studentId } = await setup();
+      const first = await authenticatedRequest('post', '/api/report-cards/feedback')
+        .send({ studentId, classId, workHabits: 'G', behavior: 'G', comment: 'Hi.', commentDetails: DETAILS });
+      expect(first.status).toBe(200);
+      const second = await authenticatedRequest('post', '/api/report-cards/feedback')
+        .send({ studentId, classId, workHabits: 'S', behavior: 'G', comment: 'Hi again.' });
+      expect(second.status).toBe(200);
+
+      const [row] = await classFeedback(classId);
+      expect(row.workHabits).toBe('S');
+      expect(row.commentDetails).toEqual(DETAILS);
+
+      const bad = await authenticatedRequest('post', '/api/report-cards/feedback')
+        .send({ studentId, classId, commentDetails: 'not an object' });
+      expect(bad.status).toBe(400);
+      expect(bad.body.message).toBe(DETAILS_ERROR);
+    });
+  });
+
   describe('Authentication', () => {
     it('returns 401 when no token is provided', async () => {
       const res = await request(app).get('/api/report-cards/feedback?studentId=x&classId=x&term=x');

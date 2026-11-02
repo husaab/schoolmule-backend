@@ -75,7 +75,8 @@ describe('Report Card Controller', () => {
       // to those extra calls.
       const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years') && !sql.includes('access:gradebook'));
       const upsertCall = controllerCalls[1];
-      expect(upsertCall[1]).toEqual(['sid', 'cid', 'Term 1', 'G', null, null]);
+      // No commentDetails sent: null and false keep whatever details are saved.
+      expect(upsertCall[1]).toEqual(['sid', 'cid', 'Term 1', 'G', null, null, null, false]);
     });
 
     it('should return 400 when studentId is missing', async () => {
