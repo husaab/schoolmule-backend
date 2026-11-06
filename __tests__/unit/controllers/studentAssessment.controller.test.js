@@ -303,6 +303,68 @@ describe('GET /api/studentAssessments/classes/:classId/scores/csv (Excel export)
   });
 });
 
+describe('the Excel export and modified marks', () => {
+  const ExcelJS = require('exceljs');
+  const row = (student_id, student_name, extra = {}) => ({
+    student_id, student_name,
+    assessment_id: 'a1', assessment_name: 'Quiz 1',
+    weight_percent: 100, weight_points: 100, max_score: 50,
+    score: 40, status: 'graded', is_excluded: false, is_parent: false,
+    parent_assessment_id: null, is_modified: false, modified_label: null,
+    ...extra,
+  });
+  const exportOf = async (rows) => {
+    mockGradebookGuard();
+    mockQueryResponse(rows);
+    const res = await request(app)
+      .get('/api/studentAssessments/classes/class-123/scores/csv')
+      .set(authHeader())
+      .buffer(true)
+      .parse((r, done) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => done(null, Buffer.concat(chunks)));
+      });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body);
+    return workbook.worksheets[0];
+  };
+  const cells = (sheet) => {
+    const out = [];
+    sheet.eachRow((r) => r.eachCell((c) => out.push(c)));
+    return out;
+  };
+  const LEGEND = 'Italic violet score = Modified (see cell note)';
+
+  it('keeps the score a number and adds the label as a note', async () => {
+    const sheet = await exportOf([row('s1', 'Adam', { is_modified: true, modified_label: 'Grade 3 level' }), row('s2', 'Layla')]);
+    const marked = cells(sheet).filter((c) => c.note);
+    expect(marked).toHaveLength(1);
+    expect(marked[0].value).toBe(40);
+    expect(JSON.stringify(marked[0].note)).toContain('Grade 3 level');
+    expect(marked[0].font.italic).toBe(true);
+    expect(marked[0].fill.fgColor.argb).toBe('FFF5F3FF');
+  });
+
+  it('notes "Modified" when there is no label', async () => {
+    const sheet = await exportOf([row('s1', 'Adam', { is_modified: true })]);
+    expect(JSON.stringify(cells(sheet).find((c) => c.note).note)).toContain('Modified');
+  });
+
+  it('adds a legend only when there is a modified mark', async () => {
+    const withMark = await exportOf([row('s1', 'Adam', { is_modified: true })]);
+    expect(cells(withMark).some((c) => c.value === LEGEND)).toBe(true);
+    const without = await exportOf([row('s1', 'Adam')]);
+    expect(cells(without).some((c) => c.value === LEGEND)).toBe(false);
+  });
+
+  it('ignores the flag on a missing mark', async () => {
+    const sheet = await exportOf([row('s1', 'Adam', { is_modified: true, status: 'missing', score: null })]);
+    expect(cells(sheet).some((c) => c.note)).toBe(false);
+    expect(cells(sheet).some((c) => c.value === LEGEND)).toBe(false);
+  });
+});
+
 // ─── GET /api/studentAssessments/:studentId/:assessmentId ───────
 describe('GET /api/studentAssessments/:studentId/:assessmentId', () => {
   it('returns a student assessment record', async () => {

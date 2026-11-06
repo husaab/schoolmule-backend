@@ -6,6 +6,7 @@ const logger = require('../logger');
 const ExcelJS = require('exceljs');
 const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, STATUSES } = require('../services/gradeEngine');
 const gradingQueries = require('../queries/grading.queries');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 /**
  * D3/D17: which of these columns are turn-in columns (an assessment filled by
@@ -422,6 +423,8 @@ const exportScoresExcel = async (req, res) => {
         score: r.score,
         status: r.status,
         is_excluded: r.is_excluded,
+        is_modified: r.is_modified,
+        modified_label: r.modified_label,
       };
     }
 
@@ -533,6 +536,7 @@ const exportScoresExcel = async (req, res) => {
     );
 
     // Step 4: Create workbook (non-streaming for merge support)
+    let hasModifiedMark = false;
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Gradebook', {
       views: [{ state: 'frozen', xSplit: 1, ySplit: 2 }]
@@ -787,16 +791,22 @@ const exportScoresExcel = async (req, res) => {
               },
             };
           } else if (state === 'graded') {
+            const modified = isEffectivelyModified(scoreData);
             cell.value = scoreData.score;
             cell.style = {
-              font: { size: 10 },
+              font: { size: 10, ...(modified ? { italic: true } : {}) },
               alignment: { horizontal: 'center', vertical: 'middle' },
+              ...(modified ? { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F3FF' } } } : {}),
               border: {
                 bottom: { style: 'thin', color: { argb: 'FFE0E0E0' } },
                 left: { style: 'hair', color: { argb: 'FFE0E0E0' } },
                 right: { style: 'hair', color: { argb: 'FFE0E0E0' } },
               },
             };
+            if (modified) {
+              cell.note = scoreData.modified_label || 'Modified';
+              hasModifiedMark = true;
+            }
           } else {
             cell.value = '-';
             cell.style = {
@@ -830,6 +840,12 @@ const exportScoresExcel = async (req, res) => {
 
       row.commit();
       rowIndex++;
+    }
+
+    if (hasModifiedMark) {
+      const legend = sheet.getRow(rowIndex + 1).getCell(1);
+      legend.value = 'Italic violet score = Modified (see cell note)';
+      legend.font = { size: 9, italic: true, color: { argb: 'FF6D28D9' } };
     }
 
     // Step 9: Write workbook to response

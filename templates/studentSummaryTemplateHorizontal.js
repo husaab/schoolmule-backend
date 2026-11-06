@@ -4,7 +4,7 @@
  */
 
 const { buildScoreLookup, formatCoverage } = require('../services/gradeEngine');
-const { getLetterGrade, renderLeafCell, renderParentCell } = require('./studentSummaryCells');
+const { getLetterGrade, renderLeafCell, renderParentCell, modifiedLine } = require('./studentSummaryCells');
 
 /**
  * Format assessment date to "Feb 7, 2026" format (shorter for horizontal layout)
@@ -57,7 +57,7 @@ function getStudentSummaryHTMLHorizontal({
     assessmentRows += `
       <tr class="standalone-assessment">
         <td class="date-cell">${formatAssessmentDate(assessment.date, assessment.created_at)}</td>
-        <td class="name-cell">${assessment.name}</td>
+        <td class="name-cell">${assessment.name}${modifiedLine(studentScore)}</td>
         <td class="weight-cell">${parseFloat(assessment.weight_points) || 0}%</td>
         <td class="score-cell">
           <div class="score-display">
@@ -112,6 +112,7 @@ function getStudentSummaryHTMLHorizontal({
               <span class="tree-connector ${isLast ? 'last' : ''}"></span>
               <span class="child-name">${child.name}</span>
             </div>
+            ${modifiedLine(childScore)}
           </td>
           <td class="weight-cell">${parseFloat(child.weight_points) || 0}%</td>
           <td class="score-cell">

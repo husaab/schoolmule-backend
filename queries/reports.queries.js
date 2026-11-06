@@ -66,11 +66,16 @@ const getStudentAssessmentScores = `
     a.weight_percent,
     a.weight_points,
     COALESCE(sa.status, 'graded') AS status,
-    (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+    (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+    (mm.student_id IS NOT NULL) AS is_modified,
+    mm.label AS modified_label
   FROM assessments a
   LEFT JOIN student_assessments sa
     ON sa.assessment_id = a.assessment_id
    AND sa.student_id = $1
+  LEFT JOIN modified_marks mm
+    ON mm.assessment_id = a.assessment_id
+   AND mm.student_id = $1
   WHERE a.class_id = $2
 `;
 
@@ -143,11 +148,16 @@ const getStudentAssessmentScoresByClasses = `
     a.weight_percent,
     a.weight_points,
     COALESCE(sa.status, 'graded') AS status,
-    (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+    (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+    (mm.student_id IS NOT NULL) AS is_modified,
+    mm.label AS modified_label
   FROM assessments a
   LEFT JOIN student_assessments sa
     ON sa.assessment_id = a.assessment_id
    AND sa.student_id = $1
+  LEFT JOIN modified_marks mm
+    ON mm.assessment_id = a.assessment_id
+   AND mm.student_id = $1
   WHERE a.class_id = ANY($2::uuid[])
 `;
 

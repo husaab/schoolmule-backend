@@ -3,6 +3,14 @@
 // for a cell; only the surrounding table markup differs.
 
 const { computeAssessmentForStudent, cellState } = require('../services/gradeEngine');
+const { escapeHtml } = require('./emailLayout');
+const { isEffectivelyModified, modifiedEmailLine } = require('../utils/modifiedMark');
+
+/** A modified mark's line under the assessment's name; nothing on any other cell. */
+function modifiedLine(studentScore) {
+  if (!isEffectivelyModified(studentScore)) return '';
+  return `<div style="margin-top:2px;font-size:8pt;font-style:italic;color:#6d28d9;">${escapeHtml(modifiedEmailLine(studentScore.modified_label))}</div>`;
+}
 
 /**
  * Get letter grade and color based on percentage
@@ -72,4 +80,4 @@ function renderParentCell(parent, assessments, scoreLookup) {
   };
 }
 
-module.exports = { getLetterGrade, renderLeafCell, renderParentCell };
+module.exports = { getLetterGrade, renderLeafCell, renderParentCell, modifiedLine };
