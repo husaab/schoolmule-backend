@@ -35,6 +35,7 @@ const { getGuardianInviteEmailHTML } = require('../templates/emailTemplate');
 const { accessRowToConversation } = require('../middleware/requireConversationAccess');
 const { photoUrlsFor } = require('../services/profile/photos');
 const replyReminders = require('../services/replyReminders');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 const MAX_BODY = 5000;
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -329,6 +330,7 @@ async function buildThread(conv, user, req = null) {
   const c = ctxRes.rows[0];
   if (c) {
     const hideScore = (family && !c.is_published) || staffWithoutGrades;
+    const modified = !hideScore && isEffectivelyModified(c);
     context = {
       assessmentId: c.assessment_id,
       name: c.name,
@@ -341,7 +343,9 @@ async function buildThread(conv, user, req = null) {
       status: hideScore ? null : c.status === 'missing' || c.status === 'excused' ? c.status : c.score == null ? 'blank' : 'graded',
       isPublished: Boolean(c.is_published),
       parentComment: hideScore ? null : c.parent_comment,
-      classAvgPct: family || staffWithoutGrades || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
+      classAvgPct: family || staffWithoutGrades || modified || c.class_avg_pct == null ? null : Number(c.class_avg_pct),
+      modified,
+      modifiedLabel: modified ? c.modified_label ?? null : null,
       // The marks exist but this viewer doesn't see them (RBAC), as opposed to "not graded".
       marksHidden: staffWithoutGrades,
     };

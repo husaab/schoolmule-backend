@@ -43,12 +43,15 @@ SELECT s.student_id, s.name, ${studentAvatarSql('s')}, ${studentPhotoSql('s')},
        CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS visible_status,
        CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS visible_published_at,
        EXISTS (SELECT 1 FROM conversations cv WHERE cv.student_id = s.student_id AND cv.classwork_item_id = i.item_id) AS has_thread,
-       ${SIGNS_IN('s')} AS signs_in
+       ${SIGNS_IN('s')} AS signs_in,
+       (mm.student_id IS NOT NULL) AS is_modified,
+       mm.label AS modified_label
 FROM classwork_items i
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 JOIN class_students cs ON cs.class_id = i.class_id
 JOIN students s ON s.student_id = cs.student_id AND s.is_archived IS NOT TRUE
 ${WORK_JOINS('s.student_id')}
+LEFT JOIN modified_marks mm ON mm.assessment_id = i.assessment_id AND mm.student_id = s.student_id
 WHERE i.item_id = $1 AND ($2::uuid IS NULL OR s.student_id = $2::uuid) AND ${IN_ITEM_AUDIENCE}
 ORDER BY s.name, s.student_id`;
 

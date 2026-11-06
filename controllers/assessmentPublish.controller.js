@@ -33,6 +33,7 @@ const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate'
 const { getResend, sendOrThrow } = require('../utils/emailUtils');
 const { schoolSender } = require('../services/email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 const {
   computeAssessmentForStudent,
   buildScoreLookup,
@@ -157,6 +158,20 @@ function countUngradedStudents(requested, allAssessments, scoreRowsByStudent) {
   return warnings;
 }
 
+/** The modified marks a publish of these columns would release, for the teacher's last check. */
+function modifiedMarksIn(assessmentIds, scoreRowsByStudent) {
+  const selected = new Set(assessmentIds);
+  const marks = [];
+  for (const { studentId, studentName, rows } of scoreRowsByStudent.values()) {
+    for (const r of rows) {
+      if (selected.has(r.assessment_id) && isEffectivelyModified(r)) {
+        marks.push({ assessmentId: r.assessment_id, studentId, studentName });
+      }
+    }
+  }
+  return marks;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // GET /api/assessment-publications/classes/:classId
 // Current publish state for every assessment in the class.
@@ -218,6 +233,7 @@ const previewPublish = async (req, res) => {
         cascadedChildIds: cascade.cascadedChildIds,
         skippedUngradedChildIds: cascade.skippedUngradedChildIds,
         warnings,
+        modified: modifiedMarksIn(cascade.finalIds, scoreRowsByStudent),
         studentCount: recipients.filter((r) => r.emails.length > 0).length,
         recipientCount: new Set(recipients.flatMap((r) => r.emails)).size,
         studentsWithoutEmail: recipients.filter((r) => r.emails.length === 0).length,

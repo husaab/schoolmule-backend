@@ -356,6 +356,8 @@ const messagingQueries = {
     SELECT a.assessment_id, a.name, a.date, a.weight_points, a.max_score, a.is_published, a.parent_comment, a.published_at,
            sa.score,
            sa.status,
+           (mm.student_id IS NOT NULL) AS is_modified,
+           mm.label AS modified_label,
            (SELECT ROUND(AVG(CASE WHEN x.status = 'missing' THEN 0 ELSE x.score / NULLIF(a.max_score, 0) * 100 END)::numeric, 1)
               FROM student_assessments x
               JOIN class_students xcs ON xcs.class_id = a.class_id AND xcs.student_id = x.student_id
@@ -375,6 +377,7 @@ const messagingQueries = {
                 )) AS class_avg_pct
     FROM assessments a
     LEFT JOIN student_assessments sa ON sa.assessment_id = a.assessment_id AND sa.student_id = $2
+    LEFT JOIN modified_marks mm ON mm.assessment_id = a.assessment_id AND mm.student_id = $2
     WHERE a.assessment_id = $1
   `,
 

@@ -14,6 +14,7 @@ const { buildStudentTermDetail } = require('../services/studentTermDetail');
 const { cellState } = require('../services/gradeEngine');
 const classStats = require('../services/classStats');
 const stats = require('../utils/statsUtils');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 const { COUNTED, EVERYONE } = classStats.POOL;
 
@@ -245,6 +246,7 @@ function buildAssessmentStats(cls) {
       histogram: stats.histogram(pcts),
       avgAll: stats.round1(stats.mean(everyone.get(a.assessment_id).pcts)),
       leftOutCount: classStats.leftOutCount(cls, a.assessment_id),
+      modifiedCount: classStats.modifiedCount(cls, a.assessment_id),
       // Heuristic anomaly flag: very low class average or very high spread.
       isAnomalous: summary != null && (summary.avg < 50 || summary.stdDev > 25),
     });
@@ -360,6 +362,8 @@ const getClassDetail = async (req, res) => {
         isExcluded: Boolean(r.is_excluded),
         isParent: Boolean(r.is_parent),
         parentAssessmentId: r.parent_assessment_id,
+        modified: isEffectivelyModified(r),
+        modifiedLabel: isEffectivelyModified(r) ? r.modified_label ?? null : null,
       })),
     }));
 

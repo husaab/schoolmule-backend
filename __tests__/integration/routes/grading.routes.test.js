@@ -832,6 +832,55 @@ describe('Integration: grading and per-student Publish', () => {
       expect(parentScore(await parentGrades(asParentA, amalId))).toMatchObject({ score: 8, modified: true, modifiedLabel: LABEL });
     });
 
+    it('the grading view shows the flag on a draft, for the teacher to change', async () => {
+      await flag(amalId);
+      await patch(amalId, { draftScore: 8 });
+
+      const { students } = (await get(`${itemUrl}/submissions`)).data;
+
+      expect(students.find((r) => r.studentId === amalId)).toMatchObject({ draftScore: 8, modified: true, modifiedLabel: LABEL });
+      expect(students.find((r) => r.studentId === bilalId)).toMatchObject({ modified: false, modifiedLabel: null });
+    });
+
+    it('the publish preview names the modified marks going out', async () => {
+      const col = await publishedColumn();
+      await pool.query('UPDATE assessments SET is_published = FALSE, published_at = NULL WHERE assessment_id = $1', [col]);
+      await flag(amalId, col);
+
+      const { data } = await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [col] });
+
+      expect(data.modified).toEqual([{ assessmentId: col, studentId: amalId, studentName: 'Amal Haddad' }]);
+    });
+
+    it('the publish preview lists a draft going out, and nothing for a column with none', async () => {
+      await flag(amalId);
+      await patch(amalId, { draftScore: 8 });
+      const withDraft = await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [columnId] });
+      expect(withDraft.data.modified).toEqual([{ assessmentId: columnId, studentId: amalId, studentName: 'Amal Haddad' }]);
+
+      const plain = await assessment(sciId, 'Spelling', { weight: 5, max: 10 });
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, 9, 'graded')`, [bilalId, plain]);
+      const without = await post(`/api/assessment-publications/classes/${sciId}/preview`, { assessmentIds: [plain] });
+      expect(without.data.modified).toEqual([]);
+    });
+
+    it('staff see it on the student profile and beside the column average', async () => {
+      const col = await publishedColumn();
+      await flag(amalId, col);
+      engine.invalidateCache();
+
+      const profile = (await get(`/api/students/${amalId}/grades?termId=${termId}`, asAdmin)).data;
+      const science = profile.detail.classes.find((c) => c.classId === sciId);
+      expect(science.assessmentScores.find((a) => a.assessmentId === col)).toMatchObject({ modified: true, modifiedLabel: LABEL });
+
+      engine.invalidateCache();
+      const detail = (await get(`/api/analytics/class/${sciId}?termId=${termId}`, asAdmin)).data;
+      expect(detail.assessments.find((a) => a.assessmentId === col).modifiedCount).toBe(1);
+      expect(detail.assessments.find((a) => a.assessmentId === col).leftOutCount).toBe(0);
+      const amalRow = detail.students.find((s) => s.studentId === amalId);
+      expect(amalRow.assessmentScores.find((a) => a.assessmentId === col)).toMatchObject({ modified: true, modifiedLabel: LABEL });
+    });
+
     it('survives holdCellsAsDrafts deleting the score row', async () => {
       const { holdCellsAsDrafts } = require('../../../queries/grading.queries');
       await flag(amalId);

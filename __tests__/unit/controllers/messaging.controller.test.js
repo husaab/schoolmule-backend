@@ -613,6 +613,40 @@ describe('messaging controller', () => {
       expect(res.body.data.messages[0].attachments.map((a) => a.url)).toEqual(['https://mock-signed-url.com/p/1.png', 'https://mock-signed-url.com/p/2.pdf']);
     });
 
+    describe('a modified mark in the thread', () => {
+      const LABEL = 'Earlier grade level skills';
+      const context = (extra = {}) => ({ 'AS class_avg_pct': [{
+        assessment_id: ASSESSMENT, name: 'Q', max_score: 20, score: 14, status: 'graded', is_published: true, class_avg_pct: 76,
+        is_modified: true, modified_label: LABEL, ...extra,
+      }] });
+      const open = async (overrides, user) => {
+        makeRouter(overrides);
+        const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, user);
+        expect(res.status).toBe(200);
+        return res.body.data.context;
+      };
+
+      it('tells the parent once the mark is shared', async () => {
+        expect(await open(context(), mockParentUser())).toMatchObject({ modified: true, modifiedLabel: LABEL, classAvgPct: null });
+      });
+
+      it('tells the teacher, with no class average to compare it to', async () => {
+        expect(await open(context(), mockTeacherUser())).toMatchObject({ modified: true, modifiedLabel: LABEL, classAvgPct: null, pct: 70 });
+      });
+
+      it('stays hidden from a parent until the mark is shared', async () => {
+        expect(await open(context({ is_published: false }), mockParentUser())).toMatchObject({ modified: false, modifiedLabel: null });
+      });
+
+      it('stays hidden on a missing mark', async () => {
+        expect(await open(context({ status: 'missing', score: null }), mockTeacherUser())).toMatchObject({ modified: false, modifiedLabel: null });
+      });
+
+      it('is off with no flag, and the teacher keeps the class average', async () => {
+        expect(await open(context({ is_modified: false, modified_label: null }), mockTeacherUser())).toMatchObject({ modified: false, modifiedLabel: null, classAvgPct: 76 });
+      });
+    });
+
     it('gives staff the class average', async () => {
       makeRouter();
       const res = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockTeacherUser());

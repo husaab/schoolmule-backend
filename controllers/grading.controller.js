@@ -124,6 +124,10 @@ function toGradingRow(r, { linked, assessmentPublished = false, quiz = false }) 
     // The student signs in (studentSignsIn.SIGNS_IN, the parent lens's rule),
     // so a publish can email them (smoke S5).
     signsIn: Boolean(r.signs_in),
+    // The stored flag, as in the gradebook: the teacher sees and changes it
+    // whether or not there's a mark yet.
+    modified: linked && Boolean(r.is_modified),
+    modifiedLabel: linked ? r.modified_label ?? null : null,
   };
   const label = gradingLabel({ ...row, linked, isDraft: linked && hasDraft && unpublished });
   return {

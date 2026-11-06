@@ -12,6 +12,7 @@ const engine = require('./analyticsEngine');
 const classStats = require('./classStats');
 const { cellState } = require('./gradeEngine');
 const stats = require('../utils/statsUtils');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 /**
  * Returns the detail payload, or null when the student has no classes in
@@ -72,6 +73,8 @@ async function buildStudentTermDetail(school, studentId, termId, { compareTerm =
         isExcluded: Boolean(r.is_excluded),
         isParent: Boolean(r.is_parent),
         parentAssessmentId: r.parent_assessment_id,
+        modified: isEffectivelyModified(r),
+        modifiedLabel: isEffectivelyModified(r) ? r.modified_label ?? null : null,
       })),
     });
 
