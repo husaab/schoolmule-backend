@@ -171,6 +171,20 @@ const analyticsQueries = {
     WHERE ${where}
   `),
 
+  /** Cells a teacher marked as modified. Whether one shows depends on the cell's state (utils/modifiedMark.js). */
+  selectMatrixModifiedMarks: perScope((where) => `
+    SELECT
+      mm.student_id,
+      mm.assessment_id,
+      mm.label
+    FROM classes AS c
+    JOIN assessments AS a
+      ON a.class_id = c.class_id
+    JOIN modified_marks AS mm
+      ON mm.assessment_id = a.assessment_id
+    WHERE ${where}
+  `),
+
   /**
    * Per-student attendance over a term's date window.
    * NOTE: status enum values are UPPERCASE ('PRESENT','LATE','ABSENT') —

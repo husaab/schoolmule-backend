@@ -81,6 +81,8 @@ describe('joinMatrixRows', () => {
       is_excluded: false,
       stats_left_out_class: false,
       stats_left_out_assessment: false,
+      is_modified: false,
+      modified_label: null,
     });
   });
 
@@ -128,6 +130,7 @@ describe('loadMatrixRows', () => {
       q.selectMatrixStudents.students,
       q.selectMatrixScores.students,
       q.selectMatrixLeftOutCells.students,
+      q.selectMatrixModifiedMarks.students,
     ]);
     for (const [, params] of db.query.mock.calls) expect(params).toEqual(['SCH', 't1', ['s1']]);
     expect(rows).toHaveLength(1);
@@ -137,12 +140,33 @@ describe('loadMatrixRows', () => {
 
 describe('the scope filters', () => {
   it('keep JK/SK out of every read and give each scope its own filter', () => {
-    for (const key of ['selectMatrixClasses', 'selectMatrixAssessments', 'selectMatrixEnrollments', 'selectMatrixStudents', 'selectMatrixScores', 'selectMatrixLeftOutCells']) {
+    for (const key of ['selectMatrixClasses', 'selectMatrixAssessments', 'selectMatrixEnrollments', 'selectMatrixStudents', 'selectMatrixScores', 'selectMatrixLeftOutCells', 'selectMatrixModifiedMarks']) {
       expect(Object.keys(q[key])).toEqual(['term', 'allTerms', 'class', 'students']);
       for (const text of Object.values(q[key])) expect(text).toContain("c.grade NOT IN ('JK', 'SK')");
       expect(q[key].term).toContain('c.term_id = $2');
       expect(q[key].class).toContain('c.class_id = $1');
       expect(q[key].students).toContain('ANY($3::uuid[])');
     }
+  });
+});
+
+describe('joinMatrixRows and modified marks', () => {
+  const base = () => ({
+    classes: [cls()],
+    assessments: [assessment()],
+    enrollments: [{ class_id: 'c1', student_id: 's1', stats_left_out_class: false }, { class_id: 'c1', student_id: 's2', stats_left_out_class: false }],
+    students: [student('s1', 'Student One'), student('s2', 'Student Two')],
+    scores: [],
+    leftOutCells: [],
+  });
+
+  it('carries the flag and label onto the flagged cell only', () => {
+    const rows = joinMatrixRows({ ...base(), modifiedMarks: [{ student_id: 's1', assessment_id: 'a1', label: 'Grade 3 level' }] });
+    expect(rows.find((r) => r.student_id === 's1')).toMatchObject({ is_modified: true, modified_label: 'Grade 3 level' });
+    expect(rows.find((r) => r.student_id === 's2')).toMatchObject({ is_modified: false, modified_label: null });
+  });
+
+  it('keeps working when no marks are passed', () => {
+    expect(joinMatrixRows(base())[0]).toMatchObject({ is_modified: false, modified_label: null });
   });
 });

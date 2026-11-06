@@ -19,6 +19,7 @@ const MATRIX_READS = {
   selectMatrixStudents: 'students',
   selectMatrixScores: 'scores',
   selectMatrixLeftOutCells: 'leftOutCells',
+  selectMatrixModifiedMarks: 'modifiedMarks',
 };
 
 /**
@@ -48,6 +49,11 @@ function splitMatrixRows(rows = []) {
       status: r.status ?? (r.is_excluded ? 'excused' : null),
     })),
     leftOutCells: rows.filter((r) => r.stats_left_out_assessment).map((r) => pick(r, ['class_id', 'student_id', 'assessment_id'])),
+    modifiedMarks: rows.filter((r) => r.is_modified).map((r) => ({
+      student_id: r.student_id,
+      assessment_id: r.assessment_id,
+      label: r.modified_label ?? null,
+    })),
   };
 }
 

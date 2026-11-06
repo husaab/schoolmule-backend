@@ -205,3 +205,95 @@ describe('one place pools a class', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('modified marks', () => {
+  const LABEL = 'Earlier grade level skills';
+  const modifiedS3 = () => classOf(classRows({ s3a1: { is_modified: true, modified_label: LABEL, status: 'graded' } }));
+
+  it('a modified mark stays out of its own column, in the counted pool only', () => {
+    const stu = modifiedS3().students.get('s3');
+    expect(classStats.inPool(stu, COUNTED, 'a1')).toBe(false);
+    expect(classStats.inPool(stu, EVERYONE, 'a1')).toBe(true);
+    expect(classStats.inPool(stu, COUNTED, 'a2')).toBe(true);
+  });
+
+  it('the student stays in the class pool', () => {
+    expect(classStats.inPool(modifiedS3().students.get('s3'), COUNTED)).toBe(true);
+  });
+
+  it('the column average leaves the mark out; another column is untouched', () => {
+    const averages = classStats.assessmentAverages(modifiedS3(), COUNTED);
+    expect(averages.get('a1')).toEqual({ avg: 75, n: 2 });
+    expect(averages.get('a2').n).toBe(3);
+  });
+
+  it('class average, median and rank do not change', () => {
+    const plain = classOf(classRows());
+    const cls = modifiedS3();
+    expect(classStats.classAverage(cls, COUNTED)).toBe(classStats.classAverage(plain, COUNTED));
+    expect(classStats.classMedian(cls, COUNTED)).toBe(classStats.classMedian(plain, COUNTED));
+    expect(classStats.rankInClass(cls).get('s3')).toEqual(classStats.rankInClass(plain).get('s3'));
+  });
+
+  it('never reads as a teacher leaving the student out', () => {
+    const cls = modifiedS3();
+    expect(cls.students.get('s3').leftOut).toBeNull();
+    expect(classStats.leftOutCount(cls, 'a1')).toBe(0);
+    expect(classStats.leftOutCount(cls)).toBe(0);
+    expect(classStats.modifiedCount(cls, 'a1')).toBe(1);
+    expect(classStats.modifiedCount(cls, 'a2')).toBe(0);
+  });
+
+  it('a teacher exclusion still counts while a modified mark is on the same column', () => {
+    const cls = classOf(classRows({ s3a1: { is_modified: true, status: 'graded', stats_left_out_assessment: true } }));
+    expect(classStats.leftOutCount(cls, 'a1')).toBe(1);
+  });
+
+  it.each([
+    ['missing', { status: 'missing', score: null }],
+    ['excused', { status: 'excused', score: 40 }],
+    ['blank', { status: 'graded', score: null }],
+  ])('a %s cell with the flag behaves as if it had none', (_name, cell) => {
+    const flagged = classOf(classRows({ s3a1: { is_modified: true, ...cell } }));
+    const plain = classOf(classRows({ s3a1: cell }));
+    expect(classStats.modifiedCount(flagged, 'a1')).toBe(0);
+    expect(classStats.assessmentAverages(flagged, COUNTED).get('a1')).toEqual(classStats.assessmentAverages(plain, COUNTED).get('a1'));
+  });
+
+  it('a category holding a modified mark leaves that student out of the category too', () => {
+    const cat = (student_id, score, flag = {}) => [
+      row({ student_id, assessment_id: 'cat', is_parent: true, score: null, max_score: null }),
+      row({ student_id, assessment_id: 'kid', parent_assessment_id: 'cat', score, ...flag }),
+    ];
+    const cls = classOf([...cat('s1', 80), ...cat('s2', 60), ...cat('s3', 20, { is_modified: true, status: 'graded' })]);
+    const stu = cls.students.get('s3');
+    expect(classStats.inPool(stu, COUNTED, 'cat')).toBe(false);
+    expect(classStats.modifiedCount(cls, 'cat')).toBe(1);
+    expect(classStats.assessmentAverages(cls, COUNTED).get('cat').n).toBe(2);
+  });
+
+  describe('what other families see on a small class', () => {
+    const LETTERS = ['s1', 's2', 's3', 's4', 's5', 's6'];
+    const portal = (rows, studentId) =>
+      engine.getStudentClassBreakdown(engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true }), studentId).classes[0];
+    const scored = (count) => LETTERS.slice(0, count + 1).map((student_id, k) => row({
+      student_id,
+      student_name: `Student ${k}`,
+      score: k === 0 ? 20 : 80,
+      ...(k === 0 ? { is_modified: true, modified_label: LABEL, status: 'graded' } : {}),
+    }));
+
+    it('one modified mark and 4 others: no column average, so nobody can subtract to it', () => {
+      expect(portal(scored(4), 's2').assessmentScores[0].classAvgPct).toBeNull();
+    });
+
+    it('one modified mark and 5 others: the average of the 5', () => {
+      expect(portal(scored(5), 's2').assessmentScores[0].classAvgPct).toBe(80);
+    });
+
+    it('does not hide the class-level average', () => {
+      const cls = portal(scored(4), 's2');
+      expect(cls.classAvg).not.toBeNull();
+    });
+  });
+});

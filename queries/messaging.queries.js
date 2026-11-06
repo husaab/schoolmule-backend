@@ -363,6 +363,10 @@ const messagingQueries = {
               WHERE x.assessment_id = a.assessment_id
                 AND x.status <> 'excused'
                 AND (x.score IS NOT NULL OR x.status = 'missing')
+                AND NOT (
+                  x.status = 'graded' AND x.score IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM modified_marks mm WHERE mm.student_id = x.student_id AND mm.assessment_id = a.assessment_id)
+                )
                 AND NOT EXISTS (
                   SELECT 1 FROM class_stats_exclusions e
                   WHERE e.class_id = a.class_id

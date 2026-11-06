@@ -293,6 +293,42 @@ describe('Integration: modified marks', () => {
     });
   });
 
+  describe('the average in a message thread', () => {
+    const { selectAssessmentContext } = require('../../../queries/messaging.queries');
+
+    const seedTwoStudents = async () => {
+      const { classId, insertAssessment } = await seedClass();
+      const assessmentId = await insertAssessment('Fractions Test');
+      const adam = await seedStudent(classId, 'Adam Test');
+      const layla = await seedStudent(classId, 'Layla Test');
+      await pool.query(
+        `INSERT INTO student_assessments (student_id, assessment_id, score, status)
+         VALUES ($1, $3, 20, 'graded'), ($2, $3, 40, 'graded')`,
+        [adam, layla, assessmentId],
+      );
+      return { classId, assessmentId, adam, layla };
+    };
+    const threadAverage = async (assessmentId, studentId) =>
+      Number((await pool.query(selectAssessmentContext, [assessmentId, studentId])).rows[0].class_avg_pct);
+
+    it('leaves out a modified mark', async () => {
+      const { classId, assessmentId, adam, layla } = await seedTwoStudents();
+      expect(await threadAverage(assessmentId, layla)).toBe(60);
+
+      await put(classId, adam, assessmentId);
+
+      expect(await threadAverage(assessmentId, layla)).toBe(80);
+    });
+
+    it('still counts a missing mark that has the flag, as 0', async () => {
+      const { classId, assessmentId, adam, layla } = await seedTwoStudents();
+      await put(classId, adam, assessmentId);
+      await pool.query(`UPDATE student_assessments SET score = NULL, status = 'missing' WHERE student_id = $1`, [adam]);
+
+      expect(await threadAverage(assessmentId, layla)).toBe(40);
+    });
+  });
+
   it('never tells a family when it changes on a published column', async () => {
     const { classId, insertAssessment } = await seedClass();
     const assessmentId = await insertAssessment('Fractions Test');

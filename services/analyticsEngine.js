@@ -315,7 +315,7 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
     // average a teacher left students out of is floored too, so leaving out
     // most of a small class can't turn it into one classmate's mark.
     const partial = classroom ? null : partlyPublished(cls);
-    const floored = (id) => (classroom ? true : partial.has(id) || classStats.leftOutCount(cls, id) > 0);
+    const floored = (id) => (classroom ? true : partial.has(id) || classStats.leftOutCount(cls, id) > 0 || classStats.modifiedCount(cls, id) > 0);
     const shows = !classroom || Boolean(cls.showClassAverage);
     const classAvgByAssessment = new Map();
     if (shows) {

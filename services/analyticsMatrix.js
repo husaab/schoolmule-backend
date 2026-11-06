@@ -17,7 +17,7 @@ const cellKey = (studentId, assessmentId) => `${studentId}:${assessmentId}`;
  * class, student or assessment that appears between them is skipped until
  * the next read.
  */
-function joinMatrixRows({ classes, assessments, enrollments, students, scores, leftOutCells }) {
+function joinMatrixRows({ classes, assessments, enrollments, students, scores, leftOutCells, modifiedMarks = [] }) {
   const classById = new Map(classes.map((c) => [c.class_id, c]));
   const studentById = new Map(students.map((s) => [s.student_id, s]));
   const assessmentsByClass = new Map();
@@ -27,6 +27,7 @@ function joinMatrixRows({ classes, assessments, enrollments, students, scores, l
   }
   const scoreByCell = new Map(scores.map((s) => [cellKey(s.student_id, s.assessment_id), s]));
   const leftOut = new Set(leftOutCells.map((x) => `${x.class_id}:${cellKey(x.student_id, x.assessment_id)}`));
+  const modifiedByCell = new Map(modifiedMarks.map((m) => [cellKey(m.student_id, m.assessment_id), m]));
 
   const rows = [];
   for (const e of enrollments) {
@@ -37,6 +38,7 @@ function joinMatrixRows({ classes, assessments, enrollments, students, scores, l
     for (const a of classAssessments) {
       const cell = scoreByCell.get(cellKey(e.student_id, a.assessment_id));
       const status = cell?.status ?? 'graded';
+      const modified = modifiedByCell.get(cellKey(e.student_id, a.assessment_id));
       rows.push({
         class_id: cls.class_id,
         class_grade: cls.class_grade,
@@ -66,6 +68,8 @@ function joinMatrixRows({ classes, assessments, enrollments, students, scores, l
         is_excluded: status === 'excused',
         stats_left_out_class: e.stats_left_out_class,
         stats_left_out_assessment: leftOut.has(`${e.class_id}:${cellKey(e.student_id, a.assessment_id)}`),
+        is_modified: Boolean(modified),
+        modified_label: modified?.label ?? null,
       });
     }
   }
@@ -80,15 +84,16 @@ function joinMatrixRows({ classes, assessments, enrollments, students, scores, l
  */
 async function loadMatrixRows(scope, params) {
   const read = (queries) => db.query(queries[scope], params).then((r) => r.rows);
-  const [classes, assessments, enrollments, students, scores, leftOutCells] = await Promise.all([
+  const [classes, assessments, enrollments, students, scores, leftOutCells, modifiedMarks] = await Promise.all([
     read(q.selectMatrixClasses),
     read(q.selectMatrixAssessments),
     read(q.selectMatrixEnrollments),
     read(q.selectMatrixStudents),
     read(q.selectMatrixScores),
     read(q.selectMatrixLeftOutCells),
+    read(q.selectMatrixModifiedMarks),
   ]);
-  return joinMatrixRows({ classes, assessments, enrollments, students, scores, leftOutCells });
+  return joinMatrixRows({ classes, assessments, enrollments, students, scores, leftOutCells, modifiedMarks });
 }
 
 module.exports = { loadMatrixRows, joinMatrixRows };

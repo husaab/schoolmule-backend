@@ -19,6 +19,8 @@
 const stats = require('../utils/statsUtils');
 const { buildScoreLookup, computeAssessmentForStudent } = require('./gradeEngine');
 
+const { isEffectivelyModified } = require('../utils/modifiedMark');
+
 const POOL = Object.freeze({ COUNTED: 'counted', EVERYONE: 'everyone' });
 
 function assertPool(pool) {
@@ -29,11 +31,17 @@ function assertPool(pool) {
  * Tag every student of a class with what they're left out of, from the matrix
  * rows' flags: stu.leftOut = { wholeClass, assessmentIds: Set } or null. A
  * category left out covers its children; a child never covers its category.
+ *
+ * Also stu.modifiedIds: the columns a modified mark keeps this student out of,
+ * its own column and the category holding it. That's kept apart from leftOut,
+ * which is a teacher's decision and is shown as one ("2 left out").
  */
 function attachLeftOut(cls) {
   const childrenOf = new Map();
+  const parentOf = new Map();
   for (const a of cls.assessments) {
     if (!a.parent_assessment_id) continue;
+    parentOf.set(a.assessment_id, a.parent_assessment_id);
     if (!childrenOf.has(a.parent_assessment_id)) childrenOf.set(a.parent_assessment_id, []);
     childrenOf.get(a.parent_assessment_id).push(a.assessment_id);
   }
@@ -41,28 +49,52 @@ function attachLeftOut(cls) {
   for (const stu of cls.students.values()) {
     let wholeClass = false;
     const assessmentIds = new Set();
+    const modifiedIds = new Set();
     for (const r of stu.rows) {
       if (r.stats_left_out_class) wholeClass = true;
+      if (isEffectivelyModified(r)) {
+        modifiedIds.add(r.assessment_id);
+        if (parentOf.has(r.assessment_id)) modifiedIds.add(parentOf.get(r.assessment_id));
+      }
       if (!r.stats_left_out_assessment) continue;
       assessmentIds.add(r.assessment_id);
       for (const childId of childrenOf.get(r.assessment_id) || []) assessmentIds.add(childId);
     }
     stu.leftOut = wholeClass || assessmentIds.size > 0 ? { wholeClass, assessmentIds } : null;
+    stu.modifiedIds = modifiedIds;
   }
 }
 
-/** Whether a student is in the pool for the class, or for one assessment. */
-function inPool(stu, pool, assessmentId = null) {
-  assertPool(pool);
-  if (pool === POOL.EVERYONE || !stu.leftOut) return true;
-  if (stu.leftOut.wholeClass) return false;
-  return assessmentId == null || !stu.leftOut.assessmentIds.has(assessmentId);
+/** Whether a teacher left this student out of the class, or of one assessment. */
+function leftOutByTeacher(stu, assessmentId = null) {
+  if (!stu.leftOut) return false;
+  if (stu.leftOut.wholeClass) return true;
+  return assessmentId != null && stu.leftOut.assessmentIds.has(assessmentId);
 }
 
-/** How many students are out of the counted pool for the class, or for one assessment. */
+/**
+ * Whether a student is in the pool for the class, or for one assessment. A
+ * modified mark is on a different test, so it stays out of its own column; the
+ * student's term grade still counts in the class's figures.
+ */
+function inPool(stu, pool, assessmentId = null) {
+  assertPool(pool);
+  if (pool === POOL.EVERYONE) return true;
+  if (assessmentId != null && stu.modifiedIds?.has(assessmentId)) return false;
+  return !leftOutByTeacher(stu, assessmentId);
+}
+
+/** How many students a teacher left out of the class, or of one assessment. */
 function leftOutCount(cls, assessmentId = null) {
   let n = 0;
-  for (const stu of cls.students.values()) if (!inPool(stu, POOL.COUNTED, assessmentId)) n += 1;
+  for (const stu of cls.students.values()) if (leftOutByTeacher(stu, assessmentId)) n += 1;
+  return n;
+}
+
+/** How many modified marks are out of this column's counted pool. */
+function modifiedCount(cls, assessmentId) {
+  let n = 0;
+  for (const stu of cls.students.values()) if (stu.modifiedIds?.has(assessmentId)) n += 1;
   return n;
 }
 
@@ -146,6 +178,7 @@ module.exports = {
   attachLeftOut,
   inPool,
   leftOutCount,
+  modifiedCount,
   classPcts,
   everyonePcts,
   classAverage,
