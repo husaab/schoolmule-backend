@@ -353,7 +353,7 @@ describe('Integration: student work', () => {
     await publish(assessmentId);
     ({ data } = await get(url));
     expect(data.submission).toMatchObject({ status: 'graded', canUnsubmit: false, canEdit: false });
-    expect(data.grade).toEqual({ score: 8, maxScore: 10, status: 'graded', feedback: null, publishedAt: expect.any(String) });
+    expect(data.grade).toEqual({ modified: false, modifiedLabel: null, score: 8, maxScore: 10, status: 'graded', feedback: null, publishedAt: expect.any(String) });
     expect((await post(`${url}/unsubmit`, asAmal, 409)).code).toBe('ITEM_CLOSED');
     expect((await submissions(item.itemId))[0].turned_in_at).not.toBeNull();
   });
