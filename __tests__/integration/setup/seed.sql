@@ -2337,6 +2337,19 @@ CREATE INDEX IF NOT EXISTS students_deleted_idx ON students_all (school, school_
 CREATE VIEW students WITH (security_invoker = true) AS
   SELECT * FROM students_all WHERE deleted_at IS NULL;
 
+-- Modified marks (modified_marks_migration.sql): after the students_all rename
+-- so the student FK targets the table.
+CREATE TABLE IF NOT EXISTS modified_marks (
+  student_id    UUID NOT NULL REFERENCES students_all(student_id) ON DELETE CASCADE,
+  assessment_id UUID NOT NULL REFERENCES assessments(assessment_id) ON DELETE CASCADE,
+  label         TEXT CONSTRAINT modified_marks_label_length CHECK (label IS NULL OR char_length(label) <= 80),
+  created_by    UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (student_id, assessment_id)
+);
+CREATE INDEX IF NOT EXISTS modified_marks_assessment ON modified_marks (assessment_id);
+
 -- Report Template Designer (report_templates_migration.sql): same DDL and
 -- constraint names as the migration, after the students_all rename so the
 -- field values FK targets the table. The Al Haadi assignment row it seeds is

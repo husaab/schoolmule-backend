@@ -283,6 +283,7 @@ async function applyUpdate(client, studentId, diff) {
 const dependentTables = [
   { table: 'class_students',              column: 'student_id', label: 'class enrolments' },
   { table: 'student_assessments',         column: 'student_id', label: 'assessment scores' },
+  { table: 'modified_marks',              column: 'student_id', label: 'modified marks' },
   { table: 'student_excluded_assessments',column: 'student_id', label: 'assessment exclusions' },
   { table: 'class_attendance',            column: 'student_id', label: 'class attendance' },
   { table: 'general_attendance',          column: 'student_id', label: 'general attendance' },
