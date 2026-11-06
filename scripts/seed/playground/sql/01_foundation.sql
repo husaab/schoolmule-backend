@@ -638,6 +638,20 @@ INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, pare
 VALUES ('16e34e73-dcb1-e8a0-c2cd-d38b56dcbcc2'::uuid, '1815be2c-69ee-e380-33d8-4b51a6200ee9'::uuid, '1ae775d6-5b9b-ba57-dcb2-688678839cb1'::uuid, 'Riley Reviewer', 'reviewer@playground.test',
         'Guardian', 'PLAYGROUND', now() - interval '3 days');
 
+-- The closed testers' shared login: a guardian of all three Haddad children,
+-- so the child switcher, grades and classes all have something to show.
+INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, created_at)
+SELECT '9cfa4771-8501-9c9e-3822-364dcf99f4d0'::uuid, 'tester@playground.test', 'Taylor Tester', pw.hash, 'Taylor', 'Tester', 'PLAYGROUND', 'PARENT', TRUE, TRUE,
+       now() - interval '3 days'
+  FROM pw;
+INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, parent_name, parent_email, relation, school, created_at)
+VALUES ('6e5defce-c66a-3f49-8c41-b1e036f9db0d'::uuid, '83d8eb35-9a3e-9733-2f4f-d913684d23cc'::uuid, '9cfa4771-8501-9c9e-3822-364dcf99f4d0'::uuid, 'Taylor Tester', 'tester@playground.test',
+        'Guardian', 'PLAYGROUND', now() - interval '3 days'),
+       ('c111d12a-0b19-c57f-def1-6be944fff78a'::uuid, '1815be2c-69ee-e380-33d8-4b51a6200ee9'::uuid, '9cfa4771-8501-9c9e-3822-364dcf99f4d0'::uuid, 'Taylor Tester', 'tester@playground.test',
+        'Guardian', 'PLAYGROUND', now() - interval '3 days'),
+       ('5b9fa7da-40ed-90b7-c360-74f61b73b889'::uuid, '823d8c8d-6362-d062-cfd6-7ec190b62686'::uuid, '9cfa4771-8501-9c9e-3822-364dcf99f4d0'::uuid, 'Taylor Tester', 'tester@playground.test',
+        'Guardian', 'PLAYGROUND', now() - interval '3 days');
+
 -- ── Student logins: Grade 5 all active; Grades 6–8 mostly active, some invited ─
 CREATE TEMP TABLE seed_logins ON COMMIT DROP AS
 SELECT v.user_id::uuid, v.student_id::uuid, v.state, v.email FROM (VALUES

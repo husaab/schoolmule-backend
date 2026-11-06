@@ -372,6 +372,10 @@ for (const s of students.filter((x) => x.login)) {
 }
 // The store reviewers' deletable account (foundation, after the guardians).
 const REVIEWER = sid('user:reviewer');
+// The Google Play closed test's shared login (a testers' community), kept off
+// the review logins so a tester changing its password or deleting it can't
+// break an App Store or Play review. A reseed restores it.
+const TESTER = sid('user:tester');
 const pendingRows = C.PENDING_SIGNUPS.map((p) => [lit(sid(`user:${p.key}`)), lit(`${slug(p.first)}.${slug(p.last)}@${C.DOMAIN}`), lit(`${p.first} ${p.last}`), lit(p.first), lit(p.last), lit(p.role), p.daysAgo]);
 
 const staffDirRows = staff.map((s) => {
@@ -519,6 +523,16 @@ SELECT ${lit(REVIEWER)}::uuid, ${lit(`reviewer@${C.DOMAIN}`)}, 'Riley Reviewer',
 INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, parent_name, parent_email, relation, school, created_at)
 VALUES (${lit(sid('link:reviewer'))}::uuid, ${lit(lina.id)}::uuid, ${lit(REVIEWER)}::uuid, 'Riley Reviewer', ${lit(`reviewer@${C.DOMAIN}`)},
         'Guardian', 'PLAYGROUND', now() - interval '3 days');
+
+-- The closed testers' shared login: a guardian of all three Haddad children,
+-- so the child switcher, grades and classes all have something to show.
+INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, created_at)
+SELECT ${lit(TESTER)}::uuid, ${lit(`tester@${C.DOMAIN}`)}, 'Taylor Tester', pw.hash, 'Taylor', 'Tester', 'PLAYGROUND', 'PARENT', TRUE, TRUE,
+       now() - interval '3 days'
+  FROM pw;
+INSERT INTO parent_students (parent_student_link_id, student_id, parent_id, parent_name, parent_email, relation, school, created_at)
+VALUES ${[adam, lina, sara].map((k) => `(${lit(sid(`link:tester:${k.first}`))}::uuid, ${lit(k.id)}::uuid, ${lit(TESTER)}::uuid, 'Taylor Tester', ${lit(`tester@${C.DOMAIN}`)},
+        'Guardian', 'PLAYGROUND', now() - interval '3 days')`).join(',\n       ')};
 
 -- ── Student logins: Grade 5 all active; Grades 6–8 mostly active, some invited ─
 CREATE TEMP TABLE seed_logins ON COMMIT DROP AS
