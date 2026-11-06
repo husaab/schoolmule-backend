@@ -114,7 +114,7 @@ function renderPlan(plan, { schoolName, schoolInfo, portalUrl }) {
     subject: `${plan.studentName} — New Grades Posted`,
     html: getGradesDigestEmailHTML({
       studentName: plan.studentName,
-      classes: plan.classes.map((c) => ({ className: c.className, assessments: c.lines, runningGradeLabel: c.runningGradeLabel })),
+      classes: plan.classes.map((c) => ({ className: c.className, assessments: c.lines, runningGradeLabel: c.runningGradeLabel, modifiedCount: c.modifiedCount })),
       schoolName, schoolInfo, portalUrl,
     }),
   };

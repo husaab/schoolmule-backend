@@ -517,6 +517,7 @@ const previewPublishEmail = async (req, res) => {
         assessments: sample.lines,
         speak: previewSpeak && { label: previewSpeak.label, url: `${portalOrigin()}${previewSpeak.path}` },
         runningGradeLabel: sample.runningGradeLabel,
+        modifiedCount: sample.modifiedCount,
         batchComment: trimmedBatchComment,
         schoolName: getSchoolName(school),
         schoolInfo,

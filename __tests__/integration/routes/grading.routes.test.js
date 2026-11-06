@@ -881,6 +881,34 @@ describe('Integration: grading and per-student Publish', () => {
       expect(amalRow.assessmentScores.find((a) => a.assessmentId === col)).toMatchObject({ modified: true, modifiedLabel: LABEL });
     });
 
+    describe('the classroom emails read it', () => {
+      const classroomEmail = require('../../../queries/classroomEmail.queries');
+      const SINCE = '2000-01-01T00:00:00Z';
+      const NOW = () => new Date(Date.now() + DAY_MS).toISOString();
+
+      it('on a student\'s graded work', async () => {
+        await flag(amalId);
+        await patch(amalId, { draftScore: 8 });
+        await publish([amalId]);
+
+        const { rows } = await pool.query(classroomEmail.selectGradedWork, [AMAL_USER_ID, SINCE, NOW(), 'nobody@example.com', '00000000-0000-4000-8000-000000000000']);
+
+        expect(rows[0]).toMatchObject({ is_modified: true, modified_label: LABEL });
+      });
+
+      it('on a parent\'s summary, and not before the mark is published', async () => {
+        await flag(amalId);
+        await patch(amalId, { draftScore: 8 });
+        const childWork = async () => (await pool.query(classroomEmail.selectChildWork, [[amalId], NOW(), SINCE, '2000-01-01'])).rows
+          .find((r) => r.assessment_id === columnId);
+
+        expect(await childWork()).toMatchObject({ is_modified: false, modified_label: null });
+
+        await publish([amalId]);
+        expect(await childWork()).toMatchObject({ is_modified: true, modified_label: LABEL });
+      });
+    });
+
     it('survives holdCellsAsDrafts deleting the score row', async () => {
       const { holdCellsAsDrafts } = require('../../../queries/grading.queries');
       await flag(amalId);

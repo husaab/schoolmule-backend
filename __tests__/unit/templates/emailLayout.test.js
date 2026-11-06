@@ -182,6 +182,61 @@ describe('emailTemplate – every template uses the shared layout', () => {
       expect(alone).not.toContain('Speak to');
     });
 
+    describe('modified marks', () => {
+      const EXPLAINER = "Modified means Adam wrote a different version of this assessment, set by the teacher. The mark shows how Adam did on that version, so it can&#039;t be compared directly to the class&#039;s test.";
+      const row = (extra = {}) => ({ name: 'Fractions Test', scoreLabel: '36/50', pctLabel: '72%', modified: true, modifiedLabel: 'Earlier grade level skills', ...extra });
+      const email = (assessments, extra = {}) => templates.getAssessmentPublishedEmailHTML({
+        ...cases.getAssessmentPublishedEmailHTML, studentName: 'Adam Test', assessments, runningGradeLabel: '78% · based on 3 assessments', ...extra,
+      });
+
+      it('name the label on the row', () => {
+        expect(email([row()])).toContain('Modified assessment · Earlier grade level skills');
+      });
+
+      it('stand alone with no label', () => {
+        const html = email([row({ modifiedLabel: null })]);
+        expect(html).toContain('>Modified assessment</div>');
+      });
+
+      it('explain the word once, however many rows have it', () => {
+        const html = email([row(), row({ name: 'Second Test' })]);
+        expect(html.split(EXPLAINER)).toHaveLength(2);
+      });
+
+      it('say so beside the current grade', () => {
+        expect(email([row()], { modifiedCount: 1 })).toContain('</strong>, including 1 modified assessment. Work that has not been graded');
+        expect(email([row()], { modifiedCount: 2 })).toContain('</strong>, including 2 modified assessments. Work that has not been graded');
+      });
+
+      it('explain the word when only the current grade includes one', () => {
+        const html = email([row({ modified: false, modifiedLabel: null })], { modifiedCount: 1 });
+        expect(html).toContain(EXPLAINER);
+      });
+
+      it('print nothing without one', () => {
+        const html = email([row({ modified: false, modifiedLabel: null })]);
+        expect(html).not.toContain('Modified');
+        expect(html).not.toContain('modified');
+      });
+
+      it('print a hostile label as text', () => {
+        const html = email([row({ modifiedLabel: '<b>Grade 3 & "up"</b>' })]);
+        expect(html).not.toContain('<b>Grade 3');
+        expect(html).toContain('&lt;b&gt;Grade 3 &amp; &quot;up&quot;&lt;/b&gt;');
+      });
+
+      it('work in the digest of several classes', () => {
+        const html = templates.getGradesDigestEmailHTML({
+          ...cases.getGradesDigestEmailHTML,
+          studentName: 'Adam Test',
+          classes: [{ className: 'Math 5', assessments: [row()], runningGradeLabel: '78%', modifiedCount: 1 }],
+        });
+        expect(html).toContain('Modified assessment · Earlier grade level skills');
+        expect(html).toContain('including 1 modified assessment');
+        expect(html).toContain(EXPLAINER);
+      });
+    });
+
     it('colour missing work rose', () => {
       const html = render([{ name: 'Reading Log', scoreLabel: 'Missing', pctLabel: '0%', isMissing: true }]);
       expect(html).toMatch(/color:#be123c;">Missing</);

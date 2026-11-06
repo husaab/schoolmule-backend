@@ -447,6 +447,8 @@ const classroomEmailQueries = {
              TO_CHAR(a.date, 'YYYY-MM-DD') AS date,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
              CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
+             CASE WHEN ${GRADE_VISIBLE} THEN mm.student_id IS NOT NULL ELSE FALSE END AS is_modified,
+             CASE WHEN ${GRADE_VISIBLE} THEN mm.label END AS modified_label,
              CASE WHEN ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')} THEN sub.feedback END AS feedback,
              ${TEACHER_NAME('gb', 'tu')} AS teacher_name,
              ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')} AS item_visible
@@ -457,6 +459,7 @@ const classroomEmailQueries = {
       JOIN classes c ON c.class_id = i.class_id AND c.archived_at IS NULL
       LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
       LEFT JOIN student_assessments sa ON sa.assessment_id = i.assessment_id AND sa.student_id = s.student_id
+      LEFT JOIN modified_marks mm ON mm.assessment_id = i.assessment_id AND mm.student_id = s.student_id
       LEFT JOIN users gb ON gb.user_id = sub.graded_by AND gb.is_archived IS NOT TRUE
       LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
       WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
@@ -469,7 +472,7 @@ const classroomEmailQueries = {
       SELECT 'col:' || a.assessment_id::text, ${PUBLISHED_KEY('a.published_at')}, a.published_at,
              i.item_id, i.kind, COALESCE(a.name, i.title), c.subject, a.max_score,
              TO_CHAR(a.date, 'YYYY-MM-DD'),
-             sa.score, sa.status, NULL::text,
+             sa.score, sa.status, mm.student_id IS NOT NULL, mm.label, NULL::text,
              ${TEACHER_NAME('pb', 'tu')},
              ${ITEM_VISIBLE('i', 'a', 's', '$3::timestamptz')}
       FROM students s
@@ -479,6 +482,7 @@ const classroomEmailQueries = {
       JOIN classwork_items i ON i.assessment_id = a.assessment_id
       JOIN classes c ON c.class_id = a.class_id AND c.archived_at IS NULL
       LEFT JOIN classwork_submissions sub ON sub.item_id = i.item_id AND sub.student_id = s.student_id
+      LEFT JOIN modified_marks mm ON mm.assessment_id = a.assessment_id AND mm.student_id = s.student_id
       LEFT JOIN users pb ON pb.user_id = a.published_by AND pb.is_archived IS NOT TRUE
       LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
       WHERE su.user_id = $1 AND ${STUDENT_EMAIL_OK('s')}
@@ -531,6 +535,8 @@ const classroomEmailQueries = {
            ${GRADE_VISIBLE} AS grade_visible,
            CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS score,
            CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS status,
+           CASE WHEN ${GRADE_VISIBLE} THEN mm.student_id IS NOT NULL ELSE FALSE END AS is_modified,
+           CASE WHEN ${GRADE_VISIBLE} THEN mm.label END AS modified_label,
            a.max_score,
            CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS grade_published_at,
            CASE WHEN ${FEEDBACK_VISIBLE} THEN sub.feedback END AS feedback,
@@ -541,6 +547,7 @@ const classroomEmailQueries = {
     JOIN classwork_items i ON i.class_id = c.class_id
     LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
     ${WORK_JOINS('ro.student_id')}
+    LEFT JOIN modified_marks mm ON mm.assessment_id = i.assessment_id AND mm.student_id = ro.student_id
     LEFT JOIN users gb ON gb.user_id = sub.graded_by AND gb.is_archived IS NOT TRUE
     LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE
     WHERE ro.student_id = ANY($1::uuid[])

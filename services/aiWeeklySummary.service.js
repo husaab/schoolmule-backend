@@ -132,7 +132,8 @@ async function gatherWeekFacts({ school, studentId, termId, engineName, weekStar
             : null;
         if (pct == null) continue;
 
-        facts.newMarks.push({ subject: cls.subject, name: a.name, pct });
+        // The label stays out of the prompt: teachers write it for families, not for a model.
+        facts.newMarks.push({ subject: cls.subject, name: a.name, pct, modified: Boolean(a.modified || a.includesModified) });
       }
     }
 
@@ -193,7 +194,7 @@ const hasActivity = (facts) =>
 
 function buildUserPrompt(facts, studentName, weekStart, weekEnd) {
   const marks = facts.newMarks.length
-    ? facts.newMarks.map((m) => `- ${m.subject}: ${m.name} — ${m.pct}%`).join('\n')
+    ? facts.newMarks.map((m) => `- ${m.subject}: ${m.name} — ${m.pct}%${m.modified ? ' (modified assessment)' : ''}`).join('\n')
     : 'None';
 
   let attendance = 'No attendance recorded this week.';
@@ -232,7 +233,7 @@ Guidelines:
 - Be warm and factual — celebrate genuine wins, note concerns gently, never invent numbers or subjects.
 - If there is very little information above, write a brief, honest summary rather than padding it out.
 - Do not use bullet points or headers — write flowing sentences.
-- Do not include raw percentages beyond what's given; you may round or describe qualitatively.
+- Do not include raw percentages beyond what's given; you may round or describe qualitatively.${facts.newMarks.some((m) => m.modified) ? "\n- A mark marked 'modified assessment' is for a different version of the work. Do not compare it with the class or other students, and do not describe it as high or low." : ''}
 
 Write only the summary text, no labels or preamble.`;
 }

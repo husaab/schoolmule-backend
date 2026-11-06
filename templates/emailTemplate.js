@@ -21,6 +21,7 @@ const {
   COLORS,
   FONT_BODY,
 } = require('./emailLayout');
+const { modifiedEmailLine, modifiedExplainer } = require('../utils/modifiedMark');
 
 const appUrl = (path) => `${process.env.FRONTEND_URL || ''}${path}`;
 
@@ -589,6 +590,8 @@ function getCertificateEmailHTML({ studentName, viewName, customMessage, schoolN
   });
 }
 
+const MODIFIED_INK = '#6d28d9';
+
 // The graded assessments table: category, name, date and the teacher's note on
 // the left; score and percentage on the right (rose when missing).
 function gradeRowsTable(assessments) {
@@ -603,6 +606,7 @@ function gradeRowsTable(assessments) {
         ${a.group ? `<div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;line-height:1.4;color:${COLORS.muted};margin:0 0 2px;">${escapeHtml(a.group)}</div>` : ''}
         <div style="font-size:15px;font-weight:500;line-height:1.4;color:${COLORS.heading};">${escapeHtml(a.name)}</div>
         ${a.dateLabel ? `<div style="font-size:13px;line-height:1.4;color:${COLORS.muted};margin-top:2px;">${escapeHtml(a.dateLabel)}</div>` : ''}
+        ${a.modified ? `<div style="font-size:13px;line-height:1.4;color:${MODIFIED_INK};margin-top:2px;">${escapeHtml(modifiedEmailLine(a.modifiedLabel))}</div>` : ''}
         ${a.comment ? `<div style="font-size:13px;line-height:1.5;color:${COLORS.muted};margin-top:2px;">${multiline(a.comment)}</div>` : ''}
       </td>
       <td align="right" style="${cell}${last}padding-left:16px;text-align:right;white-space:nowrap;">
@@ -615,10 +619,16 @@ function gradeRowsTable(assessments) {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">${rows}</table>`;
 }
 
-const currentGrade = (className, runningGradeLabel) =>
+const currentGrade = (className, runningGradeLabel, modifiedCount = 0) =>
   runningGradeLabel
-    ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>. Work that has not been graded yet is not included.`)
+    ? paragraph(`Current grade in ${escapeHtml(className)}: <strong>${escapeHtml(runningGradeLabel)}</strong>${modifiedCount > 0 ? `, including ${modifiedCount} modified assessment${modifiedCount === 1 ? '' : 's'}` : ''}. Work that has not been graded yet is not included.`)
     : '';
+
+/** What "modified" means, once per email, when anything in it mentions the word. */
+const modifiedExplainerFor = (studentName, assessments, modifiedCount = 0) =>
+  (assessments.some((a) => a.modified) || modifiedCount > 0
+    ? paragraph(escapeHtml(modifiedExplainer(String(studentName).split(/\s+/)[0])))
+    : '');
 
 /**
  * "New grades posted" digest — one per guardian per child per publish batch.
@@ -637,6 +647,7 @@ function getAssessmentPublishedEmailHTML({
   assessments,
   batchComment,
   runningGradeLabel,
+  modifiedCount = 0,
   schoolName,
   schoolInfo,
   portalUrl,
@@ -653,7 +664,8 @@ function getAssessmentPublishedEmailHTML({
       paragraph('Dear Parent/Guardian,'),
       paragraph(`${count} in <strong>${escapeHtml(className)}</strong> ${assessments.length === 1 ? 'was' : 'were'} graded and shared with you.`),
       gradeRowsTable(assessments),
-      currentGrade(className, runningGradeLabel),
+      currentGrade(className, runningGradeLabel, modifiedCount),
+      modifiedExplainerFor(studentName, assessments, modifiedCount),
       batchComment ? note('Message from the teacher', multiline(batchComment)) : '',
       ...(setupUrl
         ? [
@@ -680,9 +692,10 @@ function getGradesDigestEmailHTML({ studentName, classes, schoolName, schoolInfo
     .map((c) => [
       `<p style="margin:24px 0 4px;font-family:${FONT_BODY};font-size:17px;font-weight:600;line-height:1.3;color:${COLORS.heading};">${escapeHtml(c.className)}</p>`,
       gradeRowsTable(c.assessments),
-      currentGrade(c.className, c.runningGradeLabel),
+      currentGrade(c.className, c.runningGradeLabel, c.modifiedCount),
     ].join(''))
     .join('');
+  const totalModified = classes.reduce((n, c) => n + (c.modifiedCount || 0), 0);
 
   return renderEmail({
     brand: schoolBrand(schoolInfo, schoolName),
@@ -692,6 +705,7 @@ function getGradesDigestEmailHTML({ studentName, classes, schoolName, schoolInfo
       paragraph('Dear Parent/Guardian,'),
       paragraph(`${count} in ${where} ${total === 1 ? 'was' : 'were'} graded and shared with you.`),
       sections,
+      modifiedExplainerFor(studentName, classes.flatMap((c) => c.assessments), totalModified),
       button('View in Parent Portal', portalUrl),
       signOff(schoolName),
     ].join(''),

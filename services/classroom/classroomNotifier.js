@@ -28,6 +28,7 @@
 
 const db = require('../../config/database');
 const logger = require('../../logger');
+const { isEffectivelyModified } = require('../../utils/modifiedMark');
 const q = require('../../queries/classroomEmail.queries');
 const schoolQueries = require('../../queries/school.queries');
 const { getResend, sendOrThrow } = require('../../utils/emailUtils');
@@ -243,6 +244,7 @@ async function buildGraded(job, recipient, now) {
         scoreLabel: digest.scoreLabel({ score: r.score, maxScore: r.max_score, status: r.status }),
         feedback: r.feedback,
         teacherName: r.teacher_name,
+        ...modifiedOf(r),
       })),
       // One grade on work the student can open links to it; else the Grades page.
       link: rows.length === 1 && rows[0].item_visible ? studentItemLink(rows[0].item_id) : `${base()}/student/grades`,
@@ -270,6 +272,11 @@ const groupBy = (rows, key) => rows.reduce((m, r) => m.set(r[key], [...(m.get(r[
 const listNames = (names) => {
   const n = names.filter(Boolean);
   return n.length > 1 ? `${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}` : n[0] || 'your child';
+};
+/** A work row's modified label, once it's a real mark the family may see. */
+const modifiedOf = (r) => {
+  const modified = isEffectivelyModified(r);
+  return { modified, modifiedLabel: modified ? r.modified_label ?? null : null };
 };
 const childHeader = (c) => ({
   name: digest.firstName(c.name),
@@ -384,6 +391,7 @@ async function buildSummary(job, recipient, now) {
         scoreLabel: digest.scoreLabel({ score: r.score, maxScore: r.max_score, status: r.status }),
         feedback: r.feedback,
         teacherName: r.teacher_name,
+        ...modifiedOf(r),
       })),
       due: sections.due.map((r) => ({ title: r.title || 'Untitled', subject: r.subject, dayLabel: digest.weekdayShort(r.due_at) })),
       posts: posts.get(c.student_id).map((p) => ({

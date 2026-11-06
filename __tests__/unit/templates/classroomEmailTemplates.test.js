@@ -158,6 +158,40 @@ describe('missingAlertEmail ask links', () => {
   });
 });
 
+describe('modified marks in classroom emails', () => {
+  const EXPLAINER = "Modified means Adam wrote a different version of this assessment";
+  const grade = (o = {}) => ({ title: 'Fractions Test', subject: 'Math', scoreLabel: '36/50', feedback: null, teacherName: 'Ms. Rivera', modified: true, modifiedLabel: 'Earlier grade level skills', ...o });
+  const graded = (grades) => t.gradedEmail({ ...school, recipientFirstName: 'Adam', grades, link: 'http://localhost:3000/student/grades' }).html;
+  const weekly = (grades) => t.weeklySummaryEmail({
+    ...school,
+    recipientFirstName: 'Mona',
+    children: [{ name: 'Adam', gradeLabel: 'Grade 5', avatarUrl: null, missing: [], due: [], posts: [], grades }],
+    frequency: 'weekly',
+    rangeLabel: 'Nov 2 - 6',
+    link: 'http://localhost:3000/parent/classes',
+  }).html;
+
+  it.each([['the graded email', graded], ['the weekly summary', weekly]])('%s names the label and explains the word once', (_name, render) => {
+    const html = render([grade(), grade({ title: 'Second Test' })]);
+    expect(html).toContain('Modified assessment · Earlier grade level skills');
+    expect(html.split(EXPLAINER)).toHaveLength(2);
+  });
+
+  it.each([['the graded email', graded], ['the weekly summary', weekly]])('%s stands alone with no label', (_name, render) => {
+    expect(render([grade({ modifiedLabel: null })])).toContain('>Modified assessment</div>');
+  });
+
+  it.each([['the graded email', graded], ['the weekly summary', weekly]])('%s prints nothing without one', (_name, render) => {
+    expect(render([grade({ modified: false, modifiedLabel: null })])).not.toMatch(/modified/i);
+  });
+
+  it.each([['the graded email', graded], ['the weekly summary', weekly]])('%s prints a hostile label as text', (_name, render) => {
+    const html = render([grade({ modifiedLabel: '<b>Grade 3</b>' })]);
+    expect(html).not.toContain('<b>Grade 3');
+    expect(html).toContain('&lt;b&gt;Grade 3&lt;/b&gt;');
+  });
+});
+
 describe('weeklySummaryEmail', () => {
   const children = [
     {

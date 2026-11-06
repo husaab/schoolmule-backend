@@ -120,6 +120,33 @@ describe('messageNotifier', () => {
     expect(r.ran('DO UPDATE SET last_emailed_at')).toHaveLength(1);
   });
 
+  describe('a modified mark in the facts block', () => {
+    const emailWith = async (assessment, role = 'PARENT') => {
+      makeRouter({
+        'FOR UPDATE SKIP LOCKED': [job()],
+        'AS recipient_email': [ctx({ recipient_role: role })],
+        'AS attachment_count': [msg()],
+        'AS class_avg_pct': [{ assessment_id: 'a1', score: 14, max_score: 20, status: 'graded', is_published: true, ...assessment }],
+      });
+      await notifier.drainOnce();
+      return mockSend.mock.calls[0][0].html;
+    };
+
+    it('says so beside the score', async () => {
+      expect(await emailWith({ is_modified: true, modified_label: 'Grade 3 level' })).toContain('14/20 (70%) · Modified');
+    });
+
+    it('says nothing on an ordinary mark', async () => {
+      expect(await emailWith({ is_modified: false })).not.toContain('Modified');
+    });
+
+    it('says nothing on a missing mark', async () => {
+      const html = await emailWith({ is_modified: true, status: 'missing', score: null });
+      expect(html).toContain('Missing (0%)');
+      expect(html).not.toContain('Modified');
+    });
+  });
+
   it('hides the score from a parent when the assessment is unpublished and links staff to /messages', async () => {
     makeRouter({
       'FOR UPDATE SKIP LOCKED': [job()],

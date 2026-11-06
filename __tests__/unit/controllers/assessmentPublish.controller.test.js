@@ -37,7 +37,7 @@ const scoreRow = (assessmentId, score, isExcluded = false) => ({
 // One row of the parent email: a released column with its own score; a column
 // inside a category carries the category's name as `group`.
 const line = (assessmentId, name, scoreLabel, pctLabel, extra = {}) => ({
-  assessmentId, name, group: null, dateLabel: null, scoreLabel, pctLabel, isMissing: false, comment: null, ...extra,
+  assessmentId, name, group: null, dateLabel: null, scoreLabel, pctLabel, isMissing: false, comment: null, modified: false, modifiedLabel: null, ...extra,
 });
 
 describe('expandCascade', () => {
@@ -132,6 +132,46 @@ describe('countUngradedStudents', () => {
 describe('buildEmailTasks', () => {
   const quiz = assessment({ assessment_id: 'q1', name: 'Quiz 1', max_score: 20 });
   const test = assessment({ assessment_id: 't1', name: 'Unit Test', max_score: 50 });
+
+  describe('modified marks', () => {
+    const LABEL = 'Earlier grade level skills';
+    const flagged = (id, score, extra = {}) => ({ ...scoreRow(id, score), is_modified: true, modified_label: LABEL, ...extra });
+
+    it('carries the label on the row and counts it', () => {
+      const scores = new Map([student('s1', 'Adam', [flagged('q1', 18), scoreRow('t1', 40)])]);
+      const [task] = buildEmailTasks(['q1', 't1'], [quiz, test], scores);
+      expect(task.lines[0]).toEqual(line('q1', 'Quiz 1', '18/20', '90%', { modified: true, modifiedLabel: LABEL }));
+      expect(task.lines[1].modified).toBe(false);
+      expect(task.modifiedCount).toBe(1);
+    });
+
+    it('counts every modified mark the family can see, not only this batch', () => {
+      const earlier = { ...test, is_published: true };
+      const scores = new Map([student('s1', 'Adam', [scoreRow('q1', 18), flagged('t1', 40)])]);
+      const [task] = buildEmailTasks(['q1'], [quiz, earlier], scores);
+      expect(task.lines).toHaveLength(1);
+      expect(task.lines[0].modified).toBe(false);
+      expect(task.modifiedCount).toBe(1);
+    });
+
+    it('a missing mark with the flag has no label and is not counted', () => {
+      const scores = new Map([student('s1', 'Adam', [flagged('q1', null, { status: 'missing' }), scoreRow('t1', 40)])]);
+      const [task] = buildEmailTasks(['q1', 't1'], [quiz, test], scores);
+      expect(task.lines[0]).toMatchObject({ isMissing: true, modified: false, modifiedLabel: null });
+      expect(task.modifiedCount).toBe(0);
+    });
+
+    it('leaves a classmate alone', () => {
+      const scores = new Map([
+        student('s1', 'Adam', [flagged('q1', 18)]),
+        student('s2', 'Layla', [scoreRow('q1', 19)]),
+      ]);
+      const tasks = buildEmailTasks(['q1'], [quiz], scores);
+      const layla = tasks.find((t) => t.studentName === 'Layla');
+      expect(layla.modifiedCount).toBe(0);
+      expect(JSON.stringify(layla)).not.toContain(LABEL);
+    });
+  });
 
   it('builds one task per student with at least one graded published assessment', () => {
     const scores = new Map([

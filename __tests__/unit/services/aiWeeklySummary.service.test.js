@@ -59,6 +59,30 @@ describe('buildUserPrompt', () => {
     expect(prompt).toContain('Amina');
   });
 
+  describe('a modified mark', () => {
+    const withModified = { ...facts, newMarks: [{ subject: 'Math', name: 'Fractions Test', pct: 72, modified: true }] };
+
+    it('says so on the mark', () => {
+      const prompt = service.buildUserPrompt(withModified, 'Adam', '2026-08-31', '2026-09-06');
+      expect(prompt).toContain('Math: Fractions Test — 72% (modified assessment)');
+    });
+
+    it('tells the model not to compare it', () => {
+      const prompt = service.buildUserPrompt(withModified, 'Adam', '2026-08-31', '2026-09-06');
+      expect(prompt).toContain("A mark marked 'modified assessment' is for a different version of the work. Do not compare it with the class or other students, and do not describe it as high or low.");
+    });
+
+    it('never names a plan', () => {
+      const prompt = service.buildUserPrompt(withModified, 'Adam', '2026-08-31', '2026-09-06');
+      expect(prompt).not.toMatch(/\biep\b/i);
+    });
+
+    it('leaves the prompt as it was with no modified mark', () => {
+      const prompt = service.buildUserPrompt(facts, 'Amina', '2026-08-31', '2026-09-06');
+      expect(prompt).not.toMatch(/modified/i);
+    });
+  });
+
   it('says "None" for empty sections rather than omitting them', () => {
     const prompt = service.buildUserPrompt(
       { newMarks: [], attendance: null, missingWork: [], feedback: [] },

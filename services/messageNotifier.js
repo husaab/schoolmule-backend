@@ -29,6 +29,7 @@ const outbox = require('./email/outbox');
 const replyReminders = require('./replyReminders');
 const push = require('./push/pushQueue');
 const { threadPath } = require('../utils/appPaths');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 const DEFAULT_INTERVAL_MS = 30000;
 const MAX_ATTEMPTS = 3;
@@ -75,7 +76,8 @@ async function contextLineFor(ctx) {
   if (a.status === 'excused') return 'Excused';
   if (a.score == null || !a.max_score) return null;
   const pct = Math.round((Number(a.score) / Number(a.max_score)) * 1000) / 10;
-  return `${Number(a.score)}/${Number(a.max_score)} (${pct}%)`;
+  const line = `${Number(a.score)}/${Number(a.max_score)} (${pct}%)`;
+  return isEffectivelyModified(a) ? `${line} · Modified` : line;
 }
 
 /**

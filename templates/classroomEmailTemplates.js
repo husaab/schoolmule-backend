@@ -11,6 +11,7 @@ const {
   schoolBrand, escapeHtml, multiline, paragraph, finePrint, button, askLine, note, facts, signOff, schoolContact, renderEmail, COLORS, FONT_BODY,
 } = require('./emailLayout');
 const { summarySubject, missingSubject, possessiveNames } = require('../services/classroom/classroomDigest');
+const { modifiedEmailLine, modifiedExplainer } = require('../utils/modifiedMark');
 
 const DISPLAY = "Outfit, 'Helvetica Neue', Helvetica, Arial, sans-serif";
 const ROSE = { bg: '#fff1f2', border: '#fecdd3', ink: '#be123c' };
@@ -55,13 +56,21 @@ const splitRow = (left, right, { last = false } = {}) => `
 const dateLine = (dateLabel) =>
   (dateLabel ? `<div style="margin-top:2px;font-size:13px;line-height:1.4;color:${COLORS.muted};">${escapeHtml(dateLabel)}</div>` : '');
 
+/** A modified mark's line under its title. */
+const modifiedLine = (g) =>
+  (g.modified ? `<div style="margin-top:2px;font-size:13px;line-height:1.4;color:#6d28d9;">${escapeHtml(modifiedEmailLine(g.modifiedLabel))}</div>` : '');
+
+/** What "modified" means, once per student, when one of their grades has it. */
+const modifiedExplainerFor = (grades, firstName) =>
+  (grades.some((g) => g.modified) ? paragraph(escapeHtml(modifiedExplainer(firstName || 'the student'))) : '');
+
 /** A grade: title · subject (and its date) with the score on the right, then quoted feedback and the teacher. */
 function gradeBox(g) {
   const score = g.scoreLabel ? `<strong style="font-weight:600;color:${COLORS.heading};">${escapeHtml(g.scoreLabel)}</strong>` : '';
   const head = `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
-        <td style="font-family:${FONT_BODY};font-size:15px;line-height:1.5;color:${COLORS.text};">${workLine(g.title, g.subject)}${dateLine(g.dateLabel)}</td>
+        <td style="font-family:${FONT_BODY};font-size:15px;line-height:1.5;color:${COLORS.text};">${workLine(g.title, g.subject)}${dateLine(g.dateLabel)}${modifiedLine(g)}</td>
         <td align="right" style="padding-left:12px;white-space:nowrap;font-family:${FONT_BODY};font-size:15px;">${score}</td>
       </tr>
     </table>`;
@@ -93,7 +102,7 @@ function gradesBySubject(grades) {
           : '';
         return `
         <tr>
-          <td style="padding:9px 0;${rule}${cell}color:${COLORS.text};vertical-align:top;">${escapeHtml(g.title)}${dateLine(g.dateLabel)}${feedback}</td>
+          <td style="padding:9px 0;${rule}${cell}color:${COLORS.text};vertical-align:top;">${escapeHtml(g.title)}${dateLine(g.dateLabel)}${modifiedLine(g)}${feedback}</td>
           <td align="right" style="padding:9px 0 9px 12px;${rule}${cell}white-space:nowrap;vertical-align:top;font-weight:600;color:${COLORS.heading};">${escapeHtml(g.scoreLabel || '')}</td>
         </tr>`;
       }).join('');
@@ -216,6 +225,7 @@ function gradedEmail({ recipientFirstName, grades, link: url, schoolName, school
         hi(recipientFirstName),
         paragraph(grades.length === 1 ? 'Your teacher graded your work.' : 'Your teachers graded your work.'),
         grades.map(gradeBox).join(''),
+        modifiedExplainerFor(grades, recipientFirstName),
         button('Open in SchoolMule', url),
         finePrint('Questions about a grade? Ask your teacher in SchoolMule.'),
         signOff(schoolName),
@@ -272,7 +282,7 @@ function childSummary(child, { dueHeading }) {
     ].join(''), { bg: ROSE.bg, border: ROSE.border, margin: '0 0 14px' }));
   }
   if (child.grades.length) {
-    parts.push(sectionLabel('New grades & feedback'), gradesBySubject(child.grades), '<div style="height:4px;"></div>');
+    parts.push(sectionLabel('New grades & feedback'), gradesBySubject(child.grades), modifiedExplainerFor(child.grades, child.name), '<div style="height:4px;"></div>');
   }
   if (child.due.length) {
     parts.push(

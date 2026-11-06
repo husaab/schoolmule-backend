@@ -20,6 +20,7 @@ const logger = require('../logger');
 const publishQueries = require('../queries/assessmentPublish.queries');
 const schoolQueries = require('../queries/school.queries');
 const { getAssessmentPublishedEmailHTML } = require('../templates/emailTemplate');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 const { parentAskPath, speakLabel } = require('../utils/parentLinks');
 const { signEmailLoginToken, emailLoginUrl } = require('../utils/emailLoginLink');
 const { cleanEmailArray } = require('../utils/emailUtils');
@@ -70,7 +71,7 @@ function groupScoreRowsByStudent(rows) {
  * when the teacher set one. `assessmentId` lets the sender link the row to a
  * conversation about it.
  */
-function formatAssessmentLine(assessment, result, { group = null, comment = assessment.parent_comment || null } = {}) {
+function formatAssessmentLine(assessment, result, { group = null, comment = assessment.parent_comment || null, modifiedLabel = null, modified = false } = {}) {
   const isMissing = result.state === 'missing';
   return {
     assessmentId: assessment.assessment_id,
@@ -81,6 +82,8 @@ function formatAssessmentLine(assessment, result, { group = null, comment = asse
     pctLabel: `${Math.round(result.pct * 10) / 10}%`,
     isMissing,
     comment,
+    modified,
+    modifiedLabel: modified ? modifiedLabel : null,
   };
 }
 
@@ -136,6 +139,7 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { als
   const tasks = [];
   for (const student of scoreRowsByStudent.values()) {
     const lookup = buildScoreLookup(student.rows);
+    const rowById = new Map(student.rows.map((r) => [r.assessment_id, r]));
     const lines = [];
     const gradedIds = [];
 
@@ -148,7 +152,13 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { als
         const result = computeAssessmentForStudent(column, allAssessments, lookup);
         if (!result.isCounted) continue;
         const comment = [categoryNote, column.parent_comment].filter(Boolean).join('\n') || null;
-        lines.push(formatAssessmentLine(column, result, { group: line.is_parent ? line.name : null, comment }));
+        const row = rowById.get(column.assessment_id);
+        lines.push(formatAssessmentLine(column, result, {
+          group: line.is_parent ? line.name : null,
+          comment,
+          modified: isEffectivelyModified(row),
+          modifiedLabel: row?.modified_label ?? null,
+        }));
         categoryNote = null;
         listed = true;
       }
@@ -169,6 +179,8 @@ function buildEmailTasks(publishedIds, allAssessments, scoreRowsByStudent, { als
         running.pct == null
           ? null
           : `${Math.round(running.pct * 10) / 10}% · based on ${formatCoverage(running.coverage)}`,
+      // Every modified mark in that running grade, not only this batch's.
+      modifiedCount: parentVisible.filter((a) => !a.is_parent && isEffectivelyModified(rowById.get(a.assessment_id))).length,
     });
   }
 
@@ -421,6 +433,7 @@ const gradesDigestHandler = {
           className: context.className,
           assessments: task.lines,
           runningGradeLabel: task.runningGradeLabel,
+          modifiedCount: task.modifiedCount,
           batchComment: batchNote(batches),
           schoolName: getSchoolName(school),
           schoolInfo: context.schoolInfo,
@@ -429,7 +442,7 @@ const gradesDigestHandler = {
       },
       sentContent: {
         subject,
-        lines: task.lines.map((l) => ({ name: l.name, group: l.group, date: l.dateLabel, score: l.scoreLabel, pct: l.pctLabel })),
+        lines: task.lines.map((l) => ({ name: l.name, group: l.group, date: l.dateLabel, score: l.scoreLabel, pct: l.pctLabel, modified: l.modified, modifiedLabel: l.modifiedLabel })),
         runningGrade: task.runningGradeLabel,
         batchIds,
       },
