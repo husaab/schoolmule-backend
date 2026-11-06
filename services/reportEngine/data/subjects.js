@@ -17,6 +17,7 @@ const alHaadiT2Queries = require('../../../queries/alHaadiT2ReportCard.queries')
 const studentViewQueries = require('../../../queries/studentView.queries');
 const q = require('../../../queries/reportEngineData.queries');
 const { text } = require('./format');
+const { modifiedSummary, uniqueLabels } = require('../../../utils/modifiedMark');
 
 // ───────────────────────────────────────────────── standard report card ──
 
@@ -24,7 +25,9 @@ const { text } = require('./format');
  * Final grade per subject from every class the student is enrolled in (any
  * term), averaged across classes that share a subject; all-null → null.
  * Mirrors calculateSubjectGradesForStudent (reportCard.controller.js:34).
- * @returns {Promise<Array<{ subject_name: string, final_grade: number|null }>>}
+ * A subject is modified when one of those classes' marks is; the flag comes
+ * from the same score rows as the mark.
+ * @returns {Promise<Array<{ subject_name: string, final_grade: number|null, modified: boolean, modifiedLabels: string[] }>>}
  */
 async function computeSubjectGrades(client, studentId) {
   const { rows: classRows } = await client.query(q.selectStudentClasses, [studentId]);
@@ -35,16 +38,19 @@ async function computeSubjectGrades(client, studentId) {
     const { rows: assessments } = await client.query(q.selectClassAssessments, [cls.class_id]);
     const { rows: scores } = await client.query(q.selectStudentClassScores, [studentId, cls.class_id]);
     const { pct } = computeClassGrade(assessments, scores);
-    if (!subjectMap.has(cls.subject)) subjectMap.set(cls.subject, []);
-    subjectMap.get(cls.subject).push(pct);
+    if (!subjectMap.has(cls.subject)) subjectMap.set(cls.subject, { grades: [], summaries: [] });
+    subjectMap.get(cls.subject).grades.push(pct);
+    subjectMap.get(cls.subject).summaries.push(modifiedSummary(scores));
   }
 
   const results = [];
-  for (const [subject, grades] of subjectMap) {
+  for (const [subject, { grades, summaries }] of subjectMap) {
     const graded = grades.filter((g) => g != null);
     results.push({
       subject_name: subject,
       final_grade: graded.length ? graded.reduce((sum, g) => sum + g, 0) / graded.length : null,
+      modified: summaries.some((m) => m.modified),
+      modifiedLabels: uniqueLabels(summaries.flatMap((m) => m.labels)),
     });
   }
   results.sort((a, b) => a.subject_name.localeCompare(b.subject_name));
@@ -92,6 +98,8 @@ async function buildReportCardSubjects(client, studentId, term) {
       name: g.subject_name,
       teacher: '',
       mark,
+      modified: g.modified,
+      modifiedLabels: g.modifiedLabels,
       workHabits: current.workHabits,
       behaviour: current.behaviour,
       coreStandards: '',
@@ -130,13 +138,12 @@ async function resolveAlHaadiTermPair(client, school, termString) {
 }
 
 /**
- * subject → pct | null for one term. Enrolled with no evidence = null ('I');
- * a subject absent from the map wasn't taken that term ('—'). Mirrors
- * computeTermSubjectGrades (reportCard.controller.js:178).
+ * subject → { pct, modified, labels } for one term. Enrolled with no evidence
+ * = pct null ('I'); a subject absent from the map wasn't taken that term ('—').
  */
-async function computeTermSubjectGrades(client, studentId, termId) {
+async function computeTermSubjectResults(client, studentId, termId) {
   if (!termId) return new Map();
-  const subjectPcts = new Map();
+  const bySubject = new Map();
   const { rows: classRows } = await client.query(alHaadiT2Queries.selectStudentClassesForTerm, [studentId, termId]);
 
   for (const cls of classRows) {
@@ -158,16 +165,45 @@ async function computeTermSubjectGrades(client, studentId, termId) {
     }
     const studentRows = scoreRows.filter((r) => r.student_id === studentId);
     const { pct } = computeClassGrade(assessments, studentRows);
-    if (!subjectPcts.has(cls.subject)) subjectPcts.set(cls.subject, []);
-    subjectPcts.get(cls.subject).push(pct);
+    if (!bySubject.has(cls.subject)) bySubject.set(cls.subject, { pcts: [], summaries: [] });
+    bySubject.get(cls.subject).pcts.push(pct);
+    bySubject.get(cls.subject).summaries.push(modifiedSummary(studentRows));
   }
 
   const result = new Map();
-  for (const [subject, pcts] of subjectPcts) {
+  for (const [subject, { pcts, summaries }] of bySubject) {
     const graded = pcts.filter((p) => p != null);
-    result.set(subject, graded.length > 0 ? graded.reduce((s, p) => s + p, 0) / graded.length : null);
+    result.set(subject, {
+      pct: graded.length > 0 ? graded.reduce((s, p) => s + p, 0) / graded.length : null,
+      modified: summaries.some((m) => m.modified),
+      labels: uniqueLabels(summaries.flatMap((m) => m.labels)),
+    });
   }
   return result;
+}
+
+/**
+ * subject → pct | null for one term. Mirrors computeTermSubjectGrades
+ * (reportCard.controller.js:178).
+ */
+async function computeTermSubjectGrades(client, studentId, termId) {
+  const results = await computeTermSubjectResults(client, studentId, termId);
+  return new Map([...results].map(([subject, r]) => [subject, r.pct]));
+}
+
+/**
+ * What a First / Second / Final row prints about modified marks. The Final
+ * carries the flag when either term does and it has a mark of its own.
+ */
+function termModified(subject, final, t1Results, t2Results) {
+  const t1 = t1Results.get(subject) ?? { modified: false, labels: [] };
+  const t2 = t2Results.get(subject) ?? { modified: false, labels: [] };
+  return {
+    t1,
+    t2,
+    finalModified: typeof final === 'number' && (t1.modified || t2.modified),
+    labels: uniqueLabels([...t1.labels, ...t2.labels]),
+  };
 }
 
 /**
@@ -212,9 +248,10 @@ async function fetchTermFeedback(client, studentId, termRow, termName) {
 /** SubjectRow[] for the Al Haadi Term-2 card: terms.t1 / t2 / final filled. */
 async function buildAlHaadiT2Subjects(client, studentId, school, term) {
   const { t1, t2 } = await resolveAlHaadiTermPair(client, school, term);
-  const t1Map = await computeTermSubjectGrades(client, studentId, t1?.term_id || null);
-  const t2Map = await computeTermSubjectGrades(client, studentId, t2?.term_id || null);
-  const merged = mergeTermSubjects(t1Map, t2Map);
+  const t1Results = await computeTermSubjectResults(client, studentId, t1?.term_id || null);
+  const t2Results = await computeTermSubjectResults(client, studentId, t2?.term_id || null);
+  const pctsOf = (results) => new Map([...results].map(([subject, r]) => [subject, r.pct]));
+  const merged = mergeTermSubjects(pctsOf(t1Results), pctsOf(t2Results));
 
   // Each row carries its own term's work habits / behaviour; T1 feedback is
   // read under the T1 term's name, T2 under the generation term string.
@@ -224,20 +261,23 @@ async function buildAlHaadiT2Subjects(client, studentId, school, term) {
   return merged.map((s) => {
     const r1 = termResult(s.t1, findFeedback(feedbacksT1, s.subject));
     const r2 = termResult(s.t2, findFeedback(feedbacksT2, s.subject));
+    const flags = termModified(s.subject, s.final, t1Results, t2Results);
     return {
       id: s.subject,
       name: s.subject,
       teacher: '',
       mark: s.t2,
+      modified: flags.t2.modified,
+      modifiedLabels: flags.t2.labels,
       workHabits: r2.workHabits,
       behaviour: r2.behaviour,
       coreStandards: '',
       // The card's teacher comment is Term 2's only.
       comment: r2.comment,
       terms: {
-        t1: r1,
-        t2: r2,
-        final: { mark: s.final, workHabits: '', behaviour: '', comment: '' },
+        t1: { ...r1, modified: flags.t1.modified, modifiedLabels: flags.t1.labels },
+        t2: { ...r2, modified: flags.t2.modified, modifiedLabels: flags.t2.labels },
+        final: { mark: s.final, workHabits: '', behaviour: '', comment: '', modified: flags.finalModified },
       },
     };
   });
@@ -249,6 +289,8 @@ module.exports = {
   buildReportCardSubjects,
   resolveAlHaadiTermPair,
   computeTermSubjectGrades,
+  computeTermSubjectResults,
+  termModified,
   mergeTermSubjects,
   fetchTermFeedback,
   buildAlHaadiT2Subjects,

@@ -23,13 +23,15 @@
 
 const { formatCommentHTML } = require('../utils/commentFormatter')
 const { formatReportMark } = require('./reportCardTemplate')
+const { escapeHtml } = require('./emailLayout')
+const { modifiedNote } = require('../utils/modifiedMark')
 
 function getAlHaadiT2ReportCardHTML({
   schoolInfo,
   schoolAssets,
   student,
   term,
-  subjects, // Array<{ subject, t1: number|null, t2: number|null, final: number|null }>
+  subjects, // Array<{ subject, t1: number|null, t2: number|null, final: number|null, t1Modified?, t2Modified?, finalModified?, modifiedLabels? }>
   feedbacksT1, // Term 1 feedback rows: [{ subject, work_habits, behavior, comment, ... }]
   feedbacksT2, // Term 2 feedback rows (same shape; also the source of comments)
   generatedDate
@@ -74,24 +76,25 @@ function getAlHaadiT2ReportCardHTML({
           <tbody>
             <tr>
               <td class="term-cell">First Term</td>
-              <td class="grade-cell">${formatGrade(sub.t1)}</td>
+              <td class="grade-cell">${formatGrade(sub.t1)}${sub.t1Modified ? '*' : ''}</td>
               <td class="habit-cell">${fbT1?.work_habits || '-'}</td>
               <td class="habit-cell">${fbT1?.behavior || '-'}</td>
             </tr>
             <tr>
               <td class="term-cell">Second Term</td>
-              <td class="grade-cell">${formatGrade(sub.t2)}</td>
+              <td class="grade-cell">${formatGrade(sub.t2)}${sub.t2Modified ? '*' : ''}</td>
               <td class="habit-cell">${fbT2?.work_habits || '-'}</td>
               <td class="habit-cell">${fbT2?.behavior || '-'}</td>
             </tr>
             <tr class="final-term-row">
               <td class="term-cell">Final Term</td>
-              <td class="grade-cell">${formatGrade(sub.final)}</td>
+              <td class="grade-cell">${formatGrade(sub.final)}${sub.finalModified ? '*' : ''}</td>
               <td class="habit-cell"></td>
               <td class="habit-cell"></td>
             </tr>
           </tbody>
         </table>
+        ${sub.t1Modified || sub.t2Modified || sub.finalModified ? `<div class="modified-note">${escapeHtml(modifiedNote(sub.modifiedLabels))}</div>` : ''}
         <div class="comment-header">Teacher Comments</div>
         <div class="comment-box">${comment || '<span class="no-comment">No comments provided</span>'}</div>
       </div>
@@ -419,6 +422,14 @@ function getAlHaadiT2ReportCardHTML({
         .habit-cell {
           font-weight: bold;
           font-size: 12pt;
+        }
+
+        .modified-note {
+          padding: 6px 15px;
+          font-size: 9.5pt;
+          font-style: italic;
+          color: #515b69;
+          border-top: 1px solid var(--border-color);
         }
 
         .comment-header {

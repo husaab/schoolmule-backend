@@ -43,6 +43,12 @@ function uniqueLabels(labels) {
   return [...seen.values()];
 }
 
+/** Whether these score rows hold a real modified mark, and their labels. */
+function modifiedSummary(rows) {
+  const marks = (rows || []).filter(isEffectivelyModified);
+  return { modified: marks.length > 0, labels: uniqueLabels(marks.map((r) => r.modified_label)) };
+}
+
 /** The line a report card prints inside a subject's card. */
 function modifiedNote(labels) {
   const unique = uniqueLabels(labels);
@@ -66,6 +72,7 @@ module.exports = {
   normalizeModifiedLabel,
   validateModifiedLabel,
   isEffectivelyModified,
+  modifiedSummary,
   uniqueLabels,
   modifiedNote,
   modifiedEmailLine,

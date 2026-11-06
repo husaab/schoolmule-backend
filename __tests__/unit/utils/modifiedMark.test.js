@@ -1,6 +1,7 @@
 const {
   MODIFIED_LABEL_MAX,
   MODIFIED_LABEL_ERROR,
+  modifiedSummary,
   normalizeModifiedLabel,
   validateModifiedLabel,
   isEffectivelyModified,
@@ -81,6 +82,22 @@ describe('modifiedNote', () => {
 
   it('ignores an unlabelled mark beside a labelled one', () => {
     expect(modifiedNote(['A', null])).toBe('* Includes modified assessments: A');
+  });
+});
+
+describe('modifiedSummary', () => {
+  const graded = (label) => ({ is_modified: true, modified_label: label, status: 'graded', score: 40 });
+
+  it('collects the labels of the real modified marks', () => {
+    expect(modifiedSummary([graded('A'), graded(null), { status: 'graded', score: 40 }])).toEqual({ modified: true, labels: ['A'] });
+  });
+
+  it('ignores flags on cells with no real mark', () => {
+    expect(modifiedSummary([
+      { is_modified: true, modified_label: 'A', status: 'missing', score: null },
+      { is_modified: true, modified_label: 'B', status: 'excused', score: 40 },
+      { is_modified: true, modified_label: 'C', status: 'graded', score: null },
+    ])).toEqual({ modified: false, labels: [] });
   });
 });
 

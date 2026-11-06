@@ -202,8 +202,8 @@ describe('assembleReportData — grades 1-8 report card', () => {
     // Sorted by name; two Mathematics classes average; no evidence → 'I';
     // the first feedback row found for a subject wins.
     expect(data.subjects).toEqual([
-      { id: 'Art', name: 'Art', teacher: '', mark: 'I', workHabits: '', behaviour: '', coreStandards: '', comment: '', terms: {} },
-      { id: 'Mathematics', name: 'Mathematics', teacher: '', mark: 85, workHabits: 'E', behaviour: 'G', coreStandards: '', comment: 'Strong term.', terms: {} },
+      { id: 'Art', name: 'Art', teacher: '', mark: 'I', modified: false, modifiedLabels: [], workHabits: '', behaviour: '', coreStandards: '', comment: '', terms: {} },
+      { id: 'Mathematics', name: 'Mathematics', teacher: '', mark: 85, modified: false, modifiedLabels: [], workHabits: 'E', behaviour: 'G', coreStandards: '', comment: 'Strong term.', terms: {} },
     ]);
     expect(data.skills).toEqual([]);
     expect(data.comments).toEqual([]);
@@ -312,14 +312,16 @@ describe('assembleReportData — Al Haadi Term 2 three-row card', () => {
       name: 'Mathematics',
       teacher: '',
       mark: 90,
+      modified: false,
+      modifiedLabels: [],
       workHabits: 'E',
       behaviour: 'G',
       coreStandards: '',
       comment: 'T2 note.',
       terms: {
-        t1: { mark: 80, workHabits: 'S', behaviour: 'N', comment: 'T1 note.' },
-        t2: { mark: 90, workHabits: 'E', behaviour: 'G', comment: 'T2 note.' },
-        final: { mark: 85, workHabits: '', behaviour: '', comment: '' },
+        t1: { mark: 80, workHabits: 'S', behaviour: 'N', comment: 'T1 note.', modified: false, modifiedLabels: [] },
+        t2: { mark: 90, workHabits: 'E', behaviour: 'G', comment: 'T2 note.', modified: false, modifiedLabels: [] },
+        final: { mark: 85, workHabits: '', behaviour: '', comment: '', modified: false },
       },
     });
     // Rule A: T1-only subject → no T2 mark, no final.
@@ -382,6 +384,97 @@ describe('Al Haadi term pair + merge rules', () => {
     const client = fakeClient([]);
     expect(await subjects.computeTermSubjectGrades(client, SID, null)).toEqual(new Map());
     expect(client.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('modified marks on a report card', () => {
+  const LABEL = 'Earlier grade level skills';
+  const assessment = (id) => ({ assessment_id: id, name: id, weight_points: 10, max_score: 50, is_parent: false, parent_assessment_id: null });
+  const score = (id, value, extra = {}) => ({ assessment_id: id, score: value, status: 'graded', is_excluded: false, is_modified: false, modified_label: null, ...extra });
+  const flagged = (id, value, label = LABEL) => score(id, value, { is_modified: true, modified_label: label });
+
+  // class id -> [subject, rows]
+  const standardClient = (classes) => fakeClient([
+    [q.selectStudentClasses, Object.entries(classes).map(([class_id, [subject]]) => ({ class_id, subject }))],
+    [q.selectClassAssessments, ([classId]) => classes[classId][1].map((r) => assessment(r.assessment_id))],
+    [q.selectStudentClassScores, ([, classId]) => classes[classId][1]],
+  ]);
+
+  describe('the standard card', () => {
+    it('flags the subject and collects its labels', async () => {
+      const rows = await subjects.buildReportCardSubjects(standardClient({ m: ['Math', [flagged('a', 40), score('b', 30)]] }), SID, 'Term 1');
+      expect(rows[0]).toMatchObject({ name: 'Math', mark: 70, modified: true, modifiedLabels: [LABEL] });
+    });
+
+    it('flags a subject when one of its two classes has a modified mark', async () => {
+      const rows = await subjects.buildReportCardSubjects(standardClient({
+        m1: ['Math', [flagged('a', 40)]],
+        m2: ['Math', [score('b', 30)]],
+        s: ['Science', [score('c', 30)]],
+      }), SID, 'Term 1');
+      expect(rows.find((r) => r.name === 'Math')).toMatchObject({ modified: true, modifiedLabels: [LABEL] });
+      expect(rows.find((r) => r.name === 'Science')).toMatchObject({ modified: false, modifiedLabels: [] });
+    });
+
+    it('does not flag a missing mark', async () => {
+      const rows = await subjects.buildReportCardSubjects(standardClient({
+        m: ['Math', [score('a', null, { status: 'missing', is_modified: true, modified_label: LABEL }), score('b', 30)]],
+      }), SID, 'Term 1');
+      expect(rows[0]).toMatchObject({ modified: false, modifiedLabels: [] });
+    });
+  });
+
+  describe('the First / Second / Final card', () => {
+    const termRows = (subject, rows) => rows.map((r) => ({
+      ...r,
+      student_id: SID,
+      assessment_name: r.assessment_id,
+      weight_percent: null,
+      weight_points: 10,
+      max_score: 50,
+      is_parent: false,
+      parent_assessment_id: null,
+    }));
+    // term id -> rows, one class per term
+    const termClient = (t1Rows, t2Rows) => fakeClient([
+      [alHaadiT2Queries.selectTermByNameAndSchool, [{ term_id: 't2', name: 'Term 2', academic_year: '2026' }]],
+      [alHaadiT2Queries.selectTerm1ForAcademicYear, [{ term_id: 't1', name: 'Term 1', academic_year: '2026' }]],
+      [alHaadiT2Queries.selectStudentClassesForTerm, ([, termId]) => [{ class_id: termId === 't1' ? 'c1' : 'c2', subject: 'Math' }]],
+      [studentViewQueries.selectScoresForClass, ([classId]) => (classId === 'c1' ? termRows('Math', t1Rows) : termRows('Math', t2Rows))],
+    ]);
+    const card = (t1Rows, t2Rows) => subjects.buildAlHaadiT2Subjects(termClient(t1Rows, t2Rows), SID, 'ALHAADIACADEMY', 'Term 2');
+
+    it('flags the term it happened in, and the final', async () => {
+      const [row] = await card([flagged('a', 40)], [score('b', 30)]);
+      expect(row.terms.t1).toMatchObject({ modified: true, modifiedLabels: [LABEL] });
+      expect(row.terms.t2).toMatchObject({ modified: false, modifiedLabels: [] });
+      expect(row.terms.final).toMatchObject({ mark: 70, modified: true });
+    });
+
+    it('the row itself follows the second term, which is its printed mark', async () => {
+      const [row] = await card([score('a', 40)], [flagged('b', 30)]);
+      expect(row).toMatchObject({ mark: 60, modified: true, modifiedLabels: [LABEL] });
+      expect(row.terms.final.modified).toBe(true);
+    });
+
+    it('flags no final that has no mark', async () => {
+      const [row] = await card([flagged('a', 40)], []);
+      expect(row.terms.t1.modified).toBe(true);
+      expect(row.terms.final).toMatchObject({ mark: 'I', modified: false });
+    });
+
+    it('flags nothing with no modified mark', async () => {
+      const [row] = await card([score('a', 40)], [score('b', 30)]);
+      expect(row.modified).toBe(false);
+      expect(row.terms.t1.modified).toBe(false);
+      expect(row.terms.t2.modified).toBe(false);
+      expect(row.terms.final.modified).toBe(false);
+    });
+
+    it('computeTermSubjectGrades still returns plain percentages', async () => {
+      const map = await subjects.computeTermSubjectGrades(termClient([flagged('a', 40)], []), SID, 't1');
+      expect(map).toEqual(new Map([['Math', 80]]));
+    });
   });
 });
 

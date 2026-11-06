@@ -329,6 +329,37 @@ describe('Integration: modified marks', () => {
     });
   });
 
+  describe('the legacy report card, if the engine ever falls back to it', () => {
+    const { calculateSubjectGradesForStudent } = require('../../../controllers/reportCard.controller');
+
+    it('flags the subject from the same scores as the mark', async () => {
+      const { classId, insertAssessment } = await seedClass();
+      const assessmentId = await insertAssessment('Fractions Test');
+      const studentId = await seedStudent(classId);
+      await pool.query(
+        `INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, 40, 'graded')`,
+        [studentId, assessmentId],
+      );
+      await put(classId, studentId, assessmentId);
+
+      const [math] = await calculateSubjectGradesForStudent(studentId);
+
+      expect(math).toMatchObject({ subject_name: 'Math', modified: true, modifiedLabels: [LABEL] });
+      expect(Number(math.final_grade)).toBe(80);
+    });
+
+    it('does not flag a cell with no real mark', async () => {
+      const { classId, insertAssessment } = await seedClass();
+      const assessmentId = await insertAssessment('Fractions Test');
+      const studentId = await seedStudent(classId);
+      await put(classId, studentId, assessmentId);
+
+      const [math] = await calculateSubjectGradesForStudent(studentId);
+
+      expect(math).toMatchObject({ modified: false, modifiedLabels: [] });
+    });
+  });
+
   it('never tells a family when it changes on a published column', async () => {
     const { classId, insertAssessment } = await seedClass();
     const assessmentId = await insertAssessment('Fractions Test');

@@ -4,6 +4,8 @@
  */
 
 const { formatCommentHTML } = require('../utils/commentFormatter')
+const { escapeHtml } = require('./emailLayout')
+const { modifiedNote } = require('../utils/modifiedMark')
 
 /**
  * Convert a numeric percentage to a letter grade based on school rubric.
@@ -84,12 +86,13 @@ function getReportCardHTML({
           </thead>
           <tbody>
             <tr>
-              <td class="grade-cell">${formatReportMark(sub.grade, grade)}</td>
+              <td class="grade-cell">${formatReportMark(sub.grade, grade)}${sub.modified && sub.grade != null ? '*' : ''}</td>
               <td class="habit-cell">${workHabits}</td>
               <td class="habit-cell">${behavior}</td>
             </tr>
           </tbody>
         </table>
+        ${sub.modified ? `<div class="modified-note">${escapeHtml(modifiedNote(sub.modifiedLabels))}</div>` : ''}
         <div class="comment-header">Teacher Comments</div>
         <div class="comment-box">${comment || '<span class="no-comment">No comments provided</span>'}</div>
       </div>
@@ -403,6 +406,14 @@ function getReportCardHTML({
         .habit-cell {
           font-weight: bold;
           font-size: 12pt;
+        }
+
+        .modified-note {
+          padding: 6px 15px;
+          font-size: 9.5pt;
+          font-style: italic;
+          color: #515b69;
+          border-top: 1px solid var(--border-color);
         }
 
         .comment-header {

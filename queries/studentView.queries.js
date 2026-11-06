@@ -116,7 +116,9 @@ const studentViewQueries = {
       a.parent_assessment_id,
       sa.score,
       COALESCE(sa.status, 'graded') AS status,
-      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+      (mm.student_id IS NOT NULL) AS is_modified,
+      mm.label AS modified_label
     FROM class_students AS cs
     JOIN students AS s
       ON cs.student_id = s.student_id
@@ -125,6 +127,9 @@ const studentViewQueries = {
     LEFT JOIN student_assessments AS sa
       ON sa.student_id   = cs.student_id
      AND sa.assessment_id = a.assessment_id
+    LEFT JOIN modified_marks AS mm
+      ON mm.student_id   = cs.student_id
+     AND mm.assessment_id = a.assessment_id
     WHERE cs.class_id = $1
   `,
 

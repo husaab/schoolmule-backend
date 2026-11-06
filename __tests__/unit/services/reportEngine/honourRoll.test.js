@@ -81,6 +81,68 @@ describe('Honour Roll templates (real Chromium)', () => {
     });
   });
 
+  describe('a modified mark on every subject', () => {
+    const LONGEST = 'x'.repeat(40) + ' ' + 'y'.repeat(39);
+    const flagAll = (data, labels = [LONGEST]) => {
+      const flag = { modified: true, modifiedLabels: labels };
+      data.subjects = data.subjects.map((s) => ({
+        ...s,
+        ...flag,
+        terms: { t1: { ...s.terms.t1, ...flag }, t2: { ...s.terms.t2, ...flag }, final: { ...s.terms.final, modified: true } },
+      }));
+      return data;
+    };
+
+    describe.each([
+      ['report-card-standard', { 1: 6, 4: 7, 8: 7 }],
+      ['report-card-t1t2final', { 1: 6, 4: 7, 8: 7 }],
+    ])('%s', (key, counts) => {
+      it.each(Object.keys(counts))('sample %s keeps its page count with no warnings', async (s) => {
+        const { pageCount, warnings } = await printed(key, flagAll(sample(s, 'report_card')));
+        expect(pageCount).toBe(counts[s]);
+        expect(warnings).toEqual([]);
+      });
+
+      it('long content keeps its page count, with the footer on the last page', async () => {
+        const { pages, pageCount, warnings } = await printed(key, flagAll(longContent('report_card')));
+        expect(pageCount).toBe(7);
+        expect(warnings).toEqual([]);
+        expect(pages[pageCount - 1]).toMatch(/Created on/);
+      });
+
+      // The far extreme, every subject with two different labels of the longest
+      // length: the note wraps, so a report may run one page longer. Nothing is
+      // lost and nothing is cut off.
+      it.each(['1', '8'])('two of the longest labels on sample %s stay readable, at most one page longer', async (s) => {
+        const labels = [LONGEST, `${'y'.repeat(40)} ${'x'.repeat(39)}`];
+        const { pages, pageCount, warnings } = await printed(key, flagAll(sample(s, 'report_card'), labels));
+        expect(pageCount).toBeLessThanOrEqual(counts[s] + 1);
+        expect(warnings).toEqual([]);
+        expect(pages.join(' ')).toContain(LONGEST);
+        expect(pages[pageCount - 1]).toMatch(/Created on/);
+      });
+    });
+
+    it('prints the note and the asterisk on real paper', async () => {
+      const { pages } = await printed('report-card-standard', flagAll(sample('4', 'report_card')));
+      const subjectPage = pages[1];
+      expect(subjectPage).toMatch(/%\*/);
+      expect(subjectPage).toContain('Includes modified assessments');
+    });
+
+    it('prints a hostile label as text', async () => {
+      const data = sample('4', 'report_card');
+      data.subjects[0] = { ...data.subjects[0], modified: true, modifiedLabels: ['<b>Grade 3</b>'] };
+      const { pages } = await printed('report-card-standard', data);
+      expect(pages[1]).toContain('<b>Grade 3</b>');
+    });
+
+    it('still embeds no Type 3 font', async () => {
+      const { pdf } = await renderReportPdf({ template: build('report-card-standard'), data: flagAll(sample('4', 'report_card')), browser });
+      expect(pdf.toString('latin1')).not.toMatch(/\/Subtype\s*\/Type3/);
+    });
+  });
+
   describe.each([
     ['report-card-standard'],
     ['report-card-t1t2final'],

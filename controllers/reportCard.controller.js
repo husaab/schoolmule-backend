@@ -15,6 +15,8 @@ const classQueries = require('../queries/class.queries');
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, reportCardResult } = require('../services/reportEngine/generate');
 const { ReportSkip } = require('../services/reportEngine/data/errors');
+const reportSubjects = require('../services/reportEngine/data/subjects');
+const { modifiedSummary, uniqueLabels } = require('../utils/modifiedMark');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Report-card
@@ -32,7 +34,7 @@ async function resolveClassTerm(classId) {
  * (graded work only; null when the student has no evidence in the subject).
  *
  * @param {string} studentId - The student's UUID
- * @returns {Promise<Array<{subject_name: string, final_grade: number|null}>>}
+ * @returns {Promise<Array<{subject_name: string, final_grade: number|null, modified: boolean, modifiedLabels: string[]}>>}
  */
 async function calculateSubjectGradesForStudent(studentId) {
   // 1. Get all classes the student is enrolled in
@@ -72,11 +74,16 @@ async function calculateSubjectGradesForStudent(studentId) {
         a.assessment_id,
         sa.score,
         COALESCE(sa.status, 'graded') AS status,
-      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded
+      (COALESCE(sa.status, 'graded') = 'excused') AS is_excluded,
+        (mm.student_id IS NOT NULL) AS is_modified,
+        mm.label AS modified_label
       FROM assessments a
       LEFT JOIN student_assessments sa
         ON sa.assessment_id = a.assessment_id
         AND sa.student_id = $1
+      LEFT JOIN modified_marks mm
+        ON mm.assessment_id = a.assessment_id
+        AND mm.student_id = $1
       WHERE a.class_id = $2
     `, [studentId, cls.class_id]);
 
@@ -85,7 +92,8 @@ async function calculateSubjectGradesForStudent(studentId) {
 
     classGrades.push({
       subject: cls.subject,
-      grade: pct
+      grade: pct,
+      modifiedMarks: modifiedSummary(studentScores)
     });
   }
 
@@ -102,9 +110,12 @@ async function calculateSubjectGradesForStudent(studentId) {
   const results = [];
   for (const [subject, grades] of subjectMap) {
     const graded = grades.filter((g) => g != null);
+    const marks = classGrades.filter((cg) => cg.subject === subject).map((cg) => cg.modifiedMarks);
     results.push({
       subject_name: subject,
-      final_grade: graded.length ? graded.reduce((sum, g) => sum + g, 0) / graded.length : null
+      final_grade: graded.length ? graded.reduce((sum, g) => sum + g, 0) / graded.length : null,
+      modified: marks.some((m) => m.modified),
+      modifiedLabels: uniqueLabels(marks.flatMap((m) => m.labels))
     });
   }
 
@@ -750,7 +761,9 @@ const legacyGenerateSingleReportCard = async (studentId, term, opts = {}) => {
   const assessments = await calculateSubjectGradesForStudent(studentId);
   const subjects = assessments.map(a => ({
     subject: a.subject_name,
-    grade: a.final_grade == null ? null : Number(a.final_grade)
+    grade: a.final_grade == null ? null : Number(a.final_grade),
+    modified: a.modified,
+    modifiedLabels: a.modifiedLabels
   }));
 
   const { rows: classRows } = await db.query(`
@@ -906,7 +919,14 @@ const generateAlHaadiT2ReportCard = async (studentId, term, student, opts = {}) 
     computeTermSubjectGrades(studentId, t1?.term_id || null),
     computeTermSubjectGrades(studentId, t2?.term_id || null),
   ]);
-  const subjects = mergeTermSubjects(t1Map, t2Map);
+  const [t1Results, t2Results] = await Promise.all([
+    reportSubjects.computeTermSubjectResults(db, studentId, t1?.term_id || null),
+    reportSubjects.computeTermSubjectResults(db, studentId, t2?.term_id || null),
+  ]);
+  const subjects = mergeTermSubjects(t1Map, t2Map).map((row) => {
+    const flags = reportSubjects.termModified(row.subject, row.final, t1Results, t2Results);
+    return { ...row, t1Modified: flags.t1.modified, t2Modified: flags.t2.modified, finalModified: flags.finalModified, modifiedLabels: flags.labels };
+  });
 
   // Work Habits / Behaviour carry forward per term: the First Term row shows
   // the Term 1 feedback, the Second Term row Term 2's. Feedback rows are
@@ -1162,5 +1182,6 @@ module.exports = {
   // exported for unit testing (Al Haadi T2 variant)
   mergeTermSubjects,
   computeTermSubjectGrades,
-  resolveAlHaadiTermPair
+  resolveAlHaadiTermPair,
+  calculateSubjectGradesForStudent
 };
