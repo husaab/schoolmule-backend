@@ -20,7 +20,7 @@ Password for every seeded login: **`Playground2026!`**
 Other logins on the same password, for when you need another view:
 
 - `reviewer@playground.test` (Riley Reviewer, a guardian of Lina) is for App Store and Google Play reviewers to delete from Settings → Delete Account. Deleting erases it (the address becomes `deleted-…@deleted.schoolmule.invalid`); the next reseed clears that and brings it back.
-- `tester@playground.test` (Taylor Tester, a guardian of Adam, Lina and Sara) is the shared login for the Google Play closed test's outside testers (a testers' community, from 2026-11-06). Keep it off the review logins: if a tester changes its password or deletes it, reseed and it comes back.
+- `tester@playground.test` (Taylor Tester, a guardian of Adam, Lina and Sara) is the shared login for the Google Play closed test's outside testers (a testers' community, from 2026-11-06). Keep it off the review logins: if a tester changes its password or deletes it, reseed and it comes back. The same testers also get `celine.najjar@students.playground.test` (a Grade 5 student) and `claire.dubois@playground.test` (a teacher with 8 classes), so don't use those two for anything that must stay untouched.
 
 - `yusuf.rahman@playground.test` is the Vice Principal (ADMIN), who also teaches Grade 7 Math.
 - `huda.saleem@playground.test` is the Office Manager (ADMIN with the "Office Staff" role, so no grades and no finance).
