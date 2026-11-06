@@ -26,6 +26,8 @@ const WORK_COLUMNS = `
   CASE WHEN ${GRADE_VISIBLE} THEN sa.score END AS grade_score,
   CASE WHEN ${GRADE_VISIBLE} THEN sa.status END AS grade_status,
   CASE WHEN ${GRADE_VISIBLE} THEN COALESCE(sub.published_at, a.published_at) END AS grade_published_at,
+  CASE WHEN ${GRADE_VISIBLE} AND sa.status = 'graded' AND sa.score IS NOT NULL THEN mm.student_id IS NOT NULL ELSE FALSE END AS grade_modified,
+  CASE WHEN ${GRADE_VISIBLE} AND sa.status = 'graded' AND sa.score IS NOT NULL THEN mm.label END AS grade_modified_label,
   sub.turned_in_at, sub.is_late AS sub_is_late,
   ${WORK_STATE_SQL} AS work_status,
   ${WORK_LATE_SQL} AS is_late,
@@ -42,6 +44,7 @@ JOIN classes c ON c.class_id = ro.class_id
 JOIN classwork_items i ON i.class_id = c.class_id
 LEFT JOIN assessments a ON a.assessment_id = i.assessment_id
 ${WORK_JOINS('ro.student_id')}
+LEFT JOIN modified_marks mm ON mm.assessment_id = i.assessment_id AND mm.student_id = ro.student_id
 LEFT JOIN users tu ON tu.user_id = c.teacher_id AND tu.is_archived IS NOT TRUE`;
 
 const WORK_WHERE = `ro.student_id = $1 AND c.school = $2 AND c.archived_at IS NULL AND ${ITEM_VISIBLE('i', 'a', 'ro')}`;

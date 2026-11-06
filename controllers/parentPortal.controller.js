@@ -452,6 +452,9 @@ const getRecentPublications = async (req, res) => {
             comment: a.parentComment,
             publishedAt: a.publishedAt,
             isNew: lastSeenTime == null || publishedTime > lastSeenTime,
+            modified: a.modified,
+            modifiedLabel: a.modifiedLabel,
+            includesModified: a.includesModified,
           });
         }
       }

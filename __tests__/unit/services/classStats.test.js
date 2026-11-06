@@ -272,6 +272,69 @@ describe('modified marks', () => {
     expect(classStats.assessmentAverages(cls, COUNTED).get('cat').n).toBe(2);
   });
 
+  describe('the family breakdown', () => {
+    const portal = (rows, studentId) =>
+      engine.getStudentClassBreakdown(engine.buildMatrixFromRows(rows, 't1', 'null_skip', { publishedOnly: true }), studentId).classes[0];
+    const inCategory = (student_id, score, flag = {}) => [
+      row({ student_id, assessment_id: 'cat', is_parent: true, score: null, max_score: null }),
+      row({ student_id, assessment_id: 'kid', parent_assessment_id: 'cat', score, ...flag }),
+      row({ student_id, assessment_id: 'alone', score: 70 }),
+    ];
+    const rows = () => [
+      ...inCategory('s1', 20, { is_modified: true, modified_label: LABEL, status: 'graded' }),
+      ...inCategory('s2', 80),
+    ];
+    const byId = (cls, id) => cls.assessmentScores.find((a) => a.assessmentId === id);
+
+    it('marks the leaf and hides its class average', () => {
+      expect(byId(portal(rows(), 's1'), 'kid')).toMatchObject({ modified: true, modifiedLabel: LABEL, includesModified: false, classAvgPct: null });
+    });
+
+    it('marks the category holding it and hides that average too', () => {
+      expect(byId(portal(rows(), 's1'), 'cat')).toMatchObject({ modified: false, modifiedLabel: null, includesModified: true, classAvgPct: null });
+    });
+
+    it('leaves the rest of the student\'s rows alone', () => {
+      expect(byId(portal(rows(), 's1'), 'alone')).toMatchObject({ modified: false, modifiedLabel: null, includesModified: false, classAvgPct: 70 });
+    });
+
+    it('counts it for the class', () => {
+      expect(portal(rows(), 's1').modifiedCount).toBe(1);
+    });
+
+    it('shows nothing on a classmate\'s rows', () => {
+      const cls = portal(rows(), 's2');
+      expect(cls.modifiedCount).toBe(0);
+      expect(byId(cls, 'kid')).toMatchObject({ modified: false, modifiedLabel: null });
+      expect(byId(cls, 'cat')).toMatchObject({ includesModified: false });
+      expect(JSON.stringify(cls)).not.toContain(LABEL);
+    });
+
+    it('does not count a mark that is not published yet', () => {
+      const unpublished = [
+        ...inCategory('s1', 20, { is_modified: true, modified_label: LABEL, status: 'graded', is_published: false }),
+        ...inCategory('s2', 80, { is_published: false }),
+      ];
+      expect(portal(unpublished, 's1').modifiedCount).toBe(0);
+    });
+
+    it.each([
+      ['missing', { status: 'missing', score: null }],
+      ['excused', { status: 'excused', score: 40 }],
+      ['blank', { status: 'graded', score: null }],
+    ])('a %s cell shows no label and does not mark its category', (_name, cell) => {
+      const cls = portal([...inCategory('s1', 20, { is_modified: true, modified_label: LABEL, ...cell }), ...inCategory('s2', 80)], 's1');
+      expect(byId(cls, 'kid')).toMatchObject({ modified: false, modifiedLabel: null });
+      expect(byId(cls, 'cat')).toMatchObject({ includesModified: false });
+      expect(cls.modifiedCount).toBe(0);
+    });
+
+    it('a mark with no label is still modified', () => {
+      const cls = portal([...inCategory('s1', 20, { is_modified: true, modified_label: null, status: 'graded' }), ...inCategory('s2', 80)], 's1');
+      expect(byId(cls, 'kid')).toMatchObject({ modified: true, modifiedLabel: null });
+    });
+  });
+
   describe('what other families see on a small class', () => {
     const LETTERS = ['s1', 's2', 's3', 's4', 's5', 's6'];
     const portal = (rows, studentId) =>

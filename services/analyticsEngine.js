@@ -25,6 +25,7 @@ const stats = require('../utils/statsUtils');
 const gradeEngine = require('./gradeEngine');
 const classStats = require('./classStats');
 const { loadMatrixRows } = require('./analyticsMatrix');
+const { isEffectivelyModified } = require('../utils/modifiedMark');
 const { computeClassGrade, computeAssessmentForStudent, buildScoreLookup, cellState } = gradeEngine;
 
 const ENGINE_NAME = 'graded_only';
@@ -330,6 +331,12 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
     const classFloored = classroom || partial.size > 0 || classStats.leftOutCount(cls) > 0;
     const showClassAvg = shows && peerPcts.length > 0 && (!classFloored || peerPcts.length >= MIN_STUDENTS_FOR_AVERAGE);
 
+    // This student's modified marks and the categories holding them. Neither
+    // shows a class average: it would compare a different test with the room's.
+    const modifiedRows = stu.rows.filter((r) => !r.is_parent && isEffectivelyModified(r));
+    const modifiedIds = new Set(modifiedRows.map((r) => r.assessment_id));
+    const categoriesHoldingModified = new Set(modifiedRows.map((r) => r.parent_assessment_id).filter(Boolean));
+
     classes.push({
       classId: cls.classId,
       subject: cls.subject,
@@ -340,9 +347,12 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
       missingCount: stu.missingCount,
       excludedCount: stu.excludedCount,
       notYetGradedCount: stu.notYetGradedCount,
+      modifiedCount: modifiedIds.size,
       assessmentScores: stu.rows.map((r) => {
         const assessment = byId.get(r.assessment_id);
         const isParent = Boolean(r.is_parent);
+        const modified = modifiedIds.has(r.assessment_id);
+        const includesModified = categoriesHoldingModified.has(r.assessment_id);
         const rollup =
           isParent && assessment
             ? computeAssessmentForStudent(assessment, cls.assessments, scoreLookup)
@@ -366,9 +376,12 @@ function getStudentClassBreakdown(matrix, studentId, { classroom = false } = {})
           // over graded children, or null when none are graded yet.
           rollupPct: rollup && rollup.isCounted ? stats.round1(rollup.pct) : null,
           // The room's mean on this one assessment, for context next to the mark.
-          classAvgPct: classAvgByAssessment.get(r.assessment_id) ?? null,
+          classAvgPct: modified || includesModified ? null : classAvgByAssessment.get(r.assessment_id) ?? null,
           parentComment: r.parent_comment || null,
           publishedAt: r.published_at || null,
+          modified,
+          modifiedLabel: modified ? r.modified_label ?? null : null,
+          includesModified,
         };
       }),
     });

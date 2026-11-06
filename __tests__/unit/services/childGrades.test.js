@@ -102,6 +102,7 @@ describe('buildChildGrades', () => {
       assessmentId: QUIZ1, itemId: null, classId: MATH, subject: 'Math', teacherName: 'Ziad Teacher',
       title: 'Quiz 1', kind: 'assessment', categoryName: null, score: 8, maxScore: 10, status: 'graded',
       publishedAt: quiz1.published_at.toISOString(), feedback: null, parentComment: 'Great work on fractions',
+      modified: false, modifiedLabel: null,
     });
     expect(math).toMatchObject({ gradedCount: 1, missingCount: 0, latestPublishedAt: quiz1.published_at.toISOString() });
     expect(JSON.stringify(grades)).not.toContain(BILAL);

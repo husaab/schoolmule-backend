@@ -78,6 +78,9 @@ function codedError(status, code, message) {
 /** A visible grade's score: missing and excused carry none. */
 const visibleScore = (row) => (row.grade_status === 'graded' ? num(row.grade_score) : null);
 
+/** A visible grade's modified label. The query only sets these on a real mark. */
+const modifiedOf = (row) => ({ modified: Boolean(row.grade_modified), modifiedLabel: row.grade_modified_label ?? null });
+
 /** A selectStudentWork / selectStudentItem row → the internal work item (every payload picks from it). */
 function toWork(row, identity = identityOf(row)) {
   return {
@@ -98,7 +101,7 @@ function toWork(row, identity = identityOf(row)) {
     publishedAt: iso(row.grade_published_at),
     topicId: row.topic_id ?? null,
     postedAt: iso(row.posted_at),
-    grade: row.grade_visible ? { score: visibleScore(row), maxScore: num(row.max_score) } : null,
+    grade: row.grade_visible ? { score: visibleScore(row), maxScore: num(row.max_score), ...modifiedOf(row) } : null,
     assessmentId: row.assessment_id ?? null,
     teacher: row.teacher_id ? { userId: row.teacher_id, name: row.teacher_name, avatar: row.teacher_avatar ?? null } : null,
   };
@@ -330,7 +333,7 @@ function permissions(row, { turnedInAt, textAnswer, fileCount }) {
 function gradeBlock(row, w) {
   const feedback = row.visible_feedback ?? null;
   if (row.grade_visible) {
-    return { score: visibleScore(row), maxScore: num(row.max_score), status: row.grade_status, feedback, publishedAt: w.publishedAt };
+    return { score: visibleScore(row), maxScore: num(row.max_score), status: row.grade_status, feedback, publishedAt: w.publishedAt, ...modifiedOf(row) };
   }
   if (!row.assessment_id && feedback !== null) {
     return { score: null, maxScore: null, status: 'graded', feedback, publishedAt: iso(row.sub_published_at) };

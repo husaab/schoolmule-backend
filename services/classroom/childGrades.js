@@ -57,6 +57,8 @@ function gradeItemsOf(cls, row) {
       publishedAt: iso(a.publishedAt),
       feedback: null, // withClasswork: the submission's feedback once visible
       parentComment: a.parentComment ?? null,
+      modified: a.modified,
+      modifiedLabel: a.modifiedLabel,
     }))
     .sort(newestFirst);
 }
@@ -72,6 +74,7 @@ function toChildClassGrades(row, cls) {
     finalPct: cls ? cls.finalPct ?? null : null,
     classAvg: row.show_class_average && cls ? cls.classAvg ?? null : null,
     gradedCount: items.filter((i) => i.status === 'graded').length,
+    modifiedCount: items.filter((i) => i.modified).length,
     missingCount: 0, // set in buildChildGrades from the work-status rule (derived + confirmed)
     latestPublishedAt: items.reduce((latest, i) => (i.publishedAt && (!latest || i.publishedAt > latest) ? i.publishedAt : latest), null),
     items,

@@ -718,6 +718,135 @@ describe('Integration: grading and per-student Publish', () => {
   });
 
   // ── Fix round 1 (task-16-review.md) ────────────────────────────────────
+  describe('modified marks', () => {
+    const LABEL = 'Earlier grade level skills';
+    const flag = (studentId, assessmentId = columnId, label = LABEL) => expectStatus(
+      authenticatedRequest('put', `/api/studentAssessments/classes/${sciId}/modified-marks/${studentId}/${assessmentId}`, asTeacher).send({ label }),
+      200,
+    );
+    const recentPublications = async (who) => {
+      engine.invalidateCache();
+      return (await get('/api/parent-portal/recent-publications', who)).data;
+    };
+    const markCount = async (studentId) => (await pool.query(
+      'SELECT count(*)::int AS n FROM modified_marks WHERE student_id = $1', [studentId],
+    )).rows[0].n;
+
+    // A plain published column: Amal 10/50, everyone else 40/50. Five others count.
+    const publishedColumn = async () => {
+      const id = await assessment(sciId, 'Fractions Test', { weight: 10, max: 50 });
+      await pool.query('UPDATE assessments SET is_published = TRUE, published_at = NOW() WHERE assessment_id = $1', [id]);
+      for (const name of ['Sami Test', 'Rana Test', 'Tala Test']) await makeStudent(name, sciId, null);
+      await pool.query(
+        `INSERT INTO student_assessments (student_id, assessment_id, score, status)
+         SELECT cs.student_id, $1, CASE WHEN cs.student_id = $2 THEN 10 ELSE 40 END, 'graded'
+         FROM class_students cs WHERE cs.class_id = $3`,
+        [id, amalId, sciId],
+      );
+      return id;
+    };
+
+    it("the student's parent sees the label and no class average beside the mark", async () => {
+      const col = await publishedColumn();
+      await flag(amalId, col);
+
+      const grades = await parentGrades(asParentA, amalId);
+
+      expect(parentScore(grades, col)).toMatchObject({ score: 10, modified: true, modifiedLabel: LABEL, classAvgPct: null });
+      expect(grades.classes.find((c) => c.classId === sciId).modifiedCount).toBe(1);
+    });
+
+    it("another student's parent gets no trace of it, and an average without that mark", async () => {
+      const col = await publishedColumn();
+      await flag(amalId, col);
+
+      const grades = await parentGrades(asParentB, bilalId);
+
+      expect(parentScore(grades, col)).toMatchObject({ score: 40, modified: false, modifiedLabel: null, classAvgPct: 80 });
+      expect(grades.classes.find((c) => c.classId === sciId).modifiedCount).toBe(0);
+      expect(JSON.stringify(grades)).not.toContain(LABEL);
+      expect(JSON.stringify(await recentPublications(asParentB))).not.toContain(LABEL);
+      expect(await studentGrade(asBilal, col)).toMatchObject({ modified: false, modifiedLabel: null });
+    });
+
+    it('the parent feed, the student and the parent lens all carry it', async () => {
+      const col = await publishedColumn();
+      await flag(amalId, col);
+
+      const feed = await recentPublications(asParentA);
+      const fromFeed = (feed.items || feed).find((i) => i.assessmentId === col);
+      expect(fromFeed).toMatchObject({ modified: true, modifiedLabel: LABEL });
+
+      expect(await studentGrade(asAmal, col)).toMatchObject({ score: 10, modified: true, modifiedLabel: LABEL });
+      const own = (await get('/api/student/grades', asAmal)).data.classes.find((c) => c.classId === sciId);
+      expect(own.modifiedCount).toBe(1);
+
+      engine.invalidateCache();
+      const lens = (await get(`/api/parent-portal/students/${amalId}/classroom/grades`, asParentA)).data;
+      const lensClass = lens.classes.find((c) => c.classId === sciId);
+      expect(lensClass.items.find((i) => i.assessmentId === col)).toMatchObject({ modified: true, modifiedLabel: LABEL });
+      expect(lensClass.modifiedCount).toBe(1);
+    });
+
+    it('a missing mark shows Missing with no label, and the flag is kept for later', async () => {
+      const col = await publishedColumn();
+      await flag(amalId, col);
+      await expectStatus(
+        authenticatedRequest('patch', `/api/studentAssessments/classes/${sciId}/status`, asTeacher).send({ studentId: amalId, assessmentId: col, status: 'missing' }),
+        200,
+      );
+
+      const grades = await parentGrades(asParentA, amalId);
+
+      expect(parentScore(grades, col)).toMatchObject({ status: 'missing', modified: false, modifiedLabel: null });
+      expect(grades.classes.find((c) => c.classId === sciId).modifiedCount).toBe(0);
+      expect(await studentGrade(asAmal, col)).toMatchObject({ status: 'missing', modified: false, modifiedLabel: null });
+      expect(await markCount(amalId)).toBe(1);
+    });
+
+    it('a flag on an unpublished turn-in column stays hidden until the mark is published, and survives moving back to draft', async () => {
+      await flag(amalId);
+      await patch(amalId, { draftScore: 8 });
+
+      // Not published: the family sees neither the mark nor the flag.
+      expect(JSON.stringify(await parentGrades(asParentA, amalId))).not.toContain(LABEL);
+      expect(await studentGrade(asAmal)).toBeNull();
+      expect((await studentItem(asAmal)).grade).toBeNull();
+
+      await publish([amalId]);
+      expect(parentScore(await parentGrades(asParentA, amalId))).toMatchObject({ score: 8, modified: true, modifiedLabel: LABEL });
+      expect(await studentGrade(asAmal)).toMatchObject({ score: 8, modified: true, modifiedLabel: LABEL });
+      expect((await studentItem(asAmal)).grade).toMatchObject({ score: 8, modified: true, modifiedLabel: LABEL });
+
+      // Unpublish, then publish someone else: moveCellsToDrafts deletes Amal's score row.
+      await patch(bilalId, { draftScore: 6 });
+      await post(`/api/assessment-publications/classes/${sciId}/unpublish`, { assessmentIds: [columnId] });
+      await publish([bilalId]);
+      expect(await gradebook()).toEqual([{ student_id: bilalId, score: 6, status: 'graded' }]);
+      expect(await markCount(amalId)).toBe(1);
+      expect(JSON.stringify(await parentGrades(asParentA, amalId))).not.toContain(LABEL);
+      expect(await studentGrade(asAmal)).toBeNull();
+
+      // Published again: the label comes back with the mark.
+      await publish([amalId]);
+      expect(parentScore(await parentGrades(asParentA, amalId))).toMatchObject({ score: 8, modified: true, modifiedLabel: LABEL });
+    });
+
+    it('survives holdCellsAsDrafts deleting the score row', async () => {
+      const { holdCellsAsDrafts } = require('../../../queries/grading.queries');
+      await flag(amalId);
+      await pool.query(
+        `INSERT INTO student_assessments (student_id, assessment_id, score, status) VALUES ($1, $2, 8, 'graded')`,
+        [amalId, columnId],
+      );
+
+      await pool.query(holdCellsAsDrafts, [item.itemId, columnId, [amalId]]);
+
+      expect(await gradebook()).toEqual([]);
+      expect(await markCount(amalId)).toBe(1);
+    });
+  });
+
   describe('fix round 1', () => {
     const editItem = (url, body, status) => expectStatus(authenticatedRequest('patch', url, asTeacher).send(body), status);
     const patchOn = (url, studentId, body, status = 200) =>
