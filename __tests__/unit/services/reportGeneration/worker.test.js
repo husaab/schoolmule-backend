@@ -44,7 +44,7 @@ describe('report generation worker', () => {
     browsers = [];
     engines = [];
     launchPDFBrowser.mockImplementation(async () => {
-      const browser = { close: jest.fn().mockResolvedValue() };
+      const browser = { close: jest.fn().mockResolvedValue(), isConnected: jest.fn().mockReturnValue(true) };
       browsers.push(browser);
       return browser;
     });
@@ -146,6 +146,56 @@ describe('report generation worker', () => {
     await expect(worker.drainAll({ print: usesBrowsers() })).resolves.toBe(0);
     expect(launchPDFBrowser).not.toHaveBeenCalled();
     expect(reportEngineSession).not.toHaveBeenCalled();
+  });
+
+  it('a browser that dies mid-print puts the student back and the next print gets a new one', async () => {
+    queue = pending('s1', 's2');
+    const print = jest.fn(async (job, session) => {
+      const { browser } = await session.tools();
+      if (job.studentId === 's1' && browsers.length === 1) {
+        browser.isConnected.mockReturnValue(false);
+        throw new Error('Protocol error: Connection closed.');
+      }
+    });
+
+    await worker.drainAll({ print });
+    // s1 went back in the queue (not failed) and printed on a fresh browser.
+    expect(queue.map((i) => [i.studentId, i.status, i.attempts])).toEqual([['s1', 'generated', 2], ['s2', 'generated', 1]]);
+    expect(launchPDFBrowser).toHaveBeenCalledTimes(2);
+    expect(browsers[0].close).toHaveBeenCalled();
+  });
+
+  it('replaces a browser that died between prints before the next one', async () => {
+    queue = pending('s1', 's2');
+    const seen = [];
+    const print = jest.fn(async (job, session) => {
+      const { browser } = await session.tools();
+      seen.push(browser);
+      // Chromium crashes after the first report.
+      if (job.studentId === 's1') browser.isConnected.mockReturnValue(false);
+    });
+
+    await worker.drainAll({ print });
+    expect(queue.map((i) => i.status)).toEqual(['generated', 'generated']);
+    expect(seen[1]).not.toBe(seen[0]);
+  });
+
+  it('an engine browser that died is replaced too', async () => {
+    queue = pending('s1', 's2');
+    const engineBrowser = { isConnected: jest.fn().mockReturnValue(true) };
+    reportEngineSession.mockImplementation(() => {
+      const engine = { browser: jest.fn().mockResolvedValue(engines.length === 0 ? engineBrowser : { isConnected: () => true }), close: jest.fn().mockResolvedValue() };
+      engines.push(engine);
+      return engine;
+    });
+    const print = jest.fn(async (job, session) => {
+      await session.tools();
+      if (job.studentId === 's1') engineBrowser.isConnected.mockReturnValue(false);
+    });
+
+    await worker.drainAll({ print });
+    expect(reportEngineSession).toHaveBeenCalledTimes(2);
+    expect(engines[0].close).toHaveBeenCalled();
   });
 
   it('prints without a shared browser when it fails to launch, as the bulk route does', async () => {

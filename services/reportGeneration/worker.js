@@ -15,7 +15,9 @@
 // 3 claims the student fails. A print that takes over 90 seconds closes the
 // browsers and goes back in the queue, so a hung Chromium can't stop it.
 // One PDF browser and one report engine session serve many reports: launched
-// on the first print, replaced after 50, closed when the queue is empty.
+// on the first print, replaced after 50 or when one has died (a crashed
+// Chromium puts its student back in the queue rather than failing everyone
+// after it), closed when the queue is empty.
 //
 // IMPORTANT: startWorker() must only be called from a real server process
 // (see the require.main guard in server.js).
@@ -66,6 +68,15 @@ function createSession({ recycleAfter = RECYCLE_AFTER } = {}) {
         })();
       }
       return tools;
+    },
+    /** True when a browser it launched has died (Chromium crashed or was killed). */
+    async lost() {
+      if (!tools) return false;
+      const { browser, engine } = await tools;
+      const dead = (b) => !!b && typeof b.isConnected === 'function' && !b.isConnected();
+      if (dead(browser)) return true;
+      const engineBrowser = await Promise.resolve(engine.browser()).catch(() => null);
+      return dead(engineBrowser);
     },
     async printedOne() {
       printed += 1;
@@ -159,6 +170,9 @@ async function drainOnce(session, { timeoutMs = ITEM_TIMEOUT_MS, print = printRe
     return 1;
   }
 
+  // A browser that died since the last report is replaced before this one.
+  if (await session.lost()) await session.close();
+
   let clock = null;
   try {
     const printing = Promise.resolve().then(() => print({
@@ -172,6 +186,13 @@ async function drainOnce(session, { timeoutMs = ITEM_TIMEOUT_MS, print = printRe
   } catch (error) {
     if (error instanceof TimedOut) {
       logger.error({ ...target, timeoutMs }, 'Report generation: a report took too long; closing the browsers and trying it again');
+      await session.close();
+      await db.query(q.releaseItem, [job.run_id, job.student_id]);
+      return 1;
+    }
+    if (await session.lost()) {
+      // Not this student's fault: back in the queue, on new browsers (the attempts cap still applies).
+      logger.error({ ...target, err: error }, 'Report generation: the browser died mid-report; trying it again');
       await session.close();
       await db.query(q.releaseItem, [job.run_id, job.student_id]);
       return 1;
