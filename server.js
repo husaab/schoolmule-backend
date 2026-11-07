@@ -29,6 +29,7 @@ const commentBankRoutes = require("./routes/commentBank.routes")
 const excludedAssessmentRoutes = require("./routes/excludedAssessment.routes")
 const schoolAssetRoutes = require("./routes/schoolAssets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
+const reportGenerationRoutes = require("./routes/reportGeneration.routes");
 const teacherAttendanceRoutes = require("./routes/teacherAttendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
 const jkRoutes = require("./routes/jk.routes")
@@ -175,6 +176,7 @@ app.use("/api/comment-banks", commentBankRoutes);
 app.use("/api/excluded-assessments", excludedAssessmentRoutes);
 app.use("/api/school-assets", schoolAssetRoutes);
 app.use("/api/report-emails", reportEmailRoutes);
+app.use("/api/report-generation", reportGenerationRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
 app.use("/api/jk", jkRoutes);
