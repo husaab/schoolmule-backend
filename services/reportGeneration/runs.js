@@ -60,7 +60,7 @@ async function withItems(runRows) {
       createdByName: r.created_by_name,
       stalled: r.stalled,
       counts,
-      items: items.map((i) => ({ studentId: i.student_id, status: i.status, error: i.error })),
+      items: items.map((i) => ({ studentId: i.student_id, status: i.status, error: i.error, finishedAt: i.finished_at })),
     };
   });
 }
@@ -150,9 +150,17 @@ async function cancelRun({ runId, school }) {
   return readRun(runId, school);
 }
 
-/** Try again: what failed waits again. No second finish email (same dedupe key). */
-async function retryRun({ runId, school }) {
+/**
+ * Try again: what failed waits again (only `studentIds`, when given: the
+ * page sends the students whose latest result is this run's failure). No
+ * second finish email (same dedupe key).
+ */
+async function retryRun({ runId, school, studentIds = null }) {
   if (!UUID.test(String(runId || ''))) return null;
+  if (studentIds !== null && (!Array.isArray(studentIds) || !studentIds.every((id) => typeof id === 'string' && UUID.test(id)))) {
+    throw httpError(400, 'Invalid student id');
+  }
+  const only = studentIds === null ? null : studentIds.map((id) => id.toLowerCase());
   const client = await db.connect();
   let requeued = 0;
   try {
@@ -163,7 +171,7 @@ async function retryRun({ runId, school }) {
       return null;
     }
     await client.query(q.lockRuns, [lockKey(run.school, run.report_type, run.term)]);
-    ({ rowCount: requeued } = await client.query(q.requeueFailedItems, [runId, run.school, run.report_type, run.term]));
+    ({ rowCount: requeued } = await client.query(q.requeueFailedItems, [runId, run.school, run.report_type, run.term, only]));
     if (requeued > 0) await client.query(q.reopenRun, [runId]);
     await client.query('COMMIT');
   } catch (error) {

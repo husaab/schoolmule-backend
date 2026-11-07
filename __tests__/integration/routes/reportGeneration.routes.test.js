@@ -91,7 +91,7 @@ describe('Integration: /api/report-generation', () => {
         createdBy: ADMIN.userId, createdByName: 'Office Admin', stalled: false,
       });
       expect(run.counts).toEqual({ pending: 3, generated: 0, failed: 0, cancelled: 0 });
-      expect(run.items).toEqual([a, b, c].map((studentId) => ({ studentId, status: 'queued', error: null })));
+      expect(run.items).toEqual([a, b, c].map((studentId) => ({ studentId, status: 'queued', error: null, finishedAt: null })));
 
       expect((await items(run.runId)).map((i) => [i.student_id, i.position, i.status, i.attempts])).toEqual([
         [a, 0, 'pending', 0], [b, 1, 'pending', 0], [c, 2, 'pending', 0],
@@ -320,7 +320,10 @@ describe('Integration: /api/report-generation', () => {
 
       const { data } = await control(runId, 'retry');
       expect(data.finishedAt).toBeNull();
-      expect(data.items).toEqual([{ studentId: a, status: 'queued', error: null }, { studentId: b, status: 'generated', error: null }]);
+      expect(data.items).toEqual([
+        { studentId: a, status: 'queued', error: null, finishedAt: null },
+        { studentId: b, status: 'generated', error: null, finishedAt: expect.any(String) },
+      ]);
       expect((await items(runId))[0]).toMatchObject({ status: 'pending', attempts: 0, error: null, claimed_until: null });
       expect((await runRow(runId)).dismissed_at).toBeNull();
       expect(kick).toHaveBeenCalledTimes(1);
@@ -335,6 +338,17 @@ describe('Integration: /api/report-generation', () => {
 
       const { data } = await control(runId, 'retry');
       expect(data.items.map((i) => [i.studentId, i.status])).toEqual([[a, 'failed'], [b, 'queued']]);
+    });
+
+    it('retry with studentIds puts back only those students', async () => {
+      const a = await makeStudent('Amal Haddad');
+      const b = await makeStudent('Bilal Karim');
+      const c = await makeStudent('Dalia Nassar');
+      const runId = await insertRun({ students: [a, b, c], finishedAgo: '1 hour', status: 'failed' });
+
+      const { data } = await post(`${RUNS}/${runId}/retry`, { studentIds: [a, c] }, ADMIN, 200);
+      expect(data.items.map((i) => [i.studentId, i.status])).toEqual([[a, 'queued'], [b, 'failed'], [c, 'queued']]);
+      await post(`${RUNS}/${runId}/retry`, { studentIds: ['not-a-student'] }, ADMIN, 400);
     });
 
     it('dismiss refuses a run that is still going', async () => {

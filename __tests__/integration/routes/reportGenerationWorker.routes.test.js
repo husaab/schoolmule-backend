@@ -197,6 +197,17 @@ describe('Integration: report generation worker', () => {
     expect(print).not.toHaveBeenCalled();
   });
 
+  it('finishes a run left open with nothing waiting (a crash between its last report and its finish)', async () => {
+    const [a, b] = await students(2);
+    const runId = await queue([a, b]);
+    await pool.query(`UPDATE report_generation_items SET status = 'generated', finished_at = NOW()`);
+    const { print } = recorder();
+
+    await expect(worker.drainAll({ print })).resolves.toBe(0);
+    expect(print).not.toHaveBeenCalled();
+    expect((await runRow(runId)).finished_at).not.toBeNull();
+  });
+
   it('sets finished_at once when two finishes race', async () => {
     const [a] = await students(1);
     const runId = await queue([a]);

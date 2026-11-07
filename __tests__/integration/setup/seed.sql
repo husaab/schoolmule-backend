@@ -2478,6 +2478,9 @@ CREATE TABLE IF NOT EXISTS report_generation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_report_generation_runs_school
   ON report_generation_runs (school, report_type, term, created_at DESC);
+-- The runs still open (the worker's sweep, the stuck-queue alert).
+CREATE INDEX IF NOT EXISTS idx_report_generation_runs_open
+  ON report_generation_runs (queued_at) WHERE finished_at IS NULL;
 ALTER TABLE report_generation_runs ENABLE ROW LEVEL SECURITY;
 
 CREATE TABLE IF NOT EXISTS report_generation_items (

@@ -138,6 +138,19 @@ async function settle(job, status, error = null) {
   return finished;
 }
 
+/** Finishes runs a crash left open with nothing waiting, and sends their finish email. */
+async function sweepStrandedRuns() {
+  const { rows } = await db.query(q.finishStrandedRuns);
+  for (const run of rows) {
+    logger.warn({ runId: run.run_id }, 'Report generation: finished a run left open with nothing waiting');
+    try {
+      await queueDoneEmail(run);
+    } catch (err) {
+      logger.error({ err, runId: run.run_id }, "Report generation: couldn't queue the finish email");
+    }
+  }
+}
+
 /**
  * Prints the next queued student, if any.
  * @param session  createSession(): the browsers to print with
@@ -159,6 +172,7 @@ async function drainOnce(session, { timeoutMs = ITEM_TIMEOUT_MS, print = printRe
   }
   if (!job) {
     await session.close();
+    await sweepStrandedRuns();
     return 0;
   }
   await db.query(q.markRunServed, [job.run_id]);

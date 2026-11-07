@@ -124,6 +124,13 @@ describe('Integration: report generation finish email', () => {
     expect(sent()).toHaveLength(1);
   });
 
+  it('a run left open by a crash still emails once the worker sweeps it', async () => {
+    const runId = await queue(await students(10));
+    await pool.query(`UPDATE report_generation_items SET status = 'generated', finished_at = NOW() WHERE run_id = $1`, [runId]);
+    await printAll();
+    expect((await doneRows()).map((r) => r.subject_id)).toEqual([runId]);
+  });
+
   it('skips the email when the starter has no address any more', async () => {
     await queue(await students(10));
     await pool.query('DELETE FROM users WHERE user_id = $1', [ADMIN.userId]);

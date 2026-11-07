@@ -82,7 +82,7 @@ const reportGenerationQueries = {
 
   // $1 run ids
   selectItems: `
-    SELECT i.run_id, i.student_id, ${ITEM_STATUS} AS status, i.error
+    SELECT i.run_id, i.student_id, ${ITEM_STATUS} AS status, i.error, i.finished_at
     FROM report_generation_items i
     WHERE i.run_id = ANY($1::uuid[])
     ORDER BY i.run_id, i.position`,
@@ -99,13 +99,14 @@ const reportGenerationQueries = {
     SET status = 'cancelled', claimed_until = NULL, finished_at = NOW()
     WHERE run_id = $1 AND status = 'pending' AND (claimed_until IS NULL OR claimed_until <= NOW())`,
 
-  // Try again: failed items wait again, unless the student is waiting in
-  // another run of this report and term already.
-  // $1 run_id, $2 school, $3 report_type, $4 term
+  // Try again: failed items wait again (only these students, when named),
+  // unless the student is waiting in another run of this report and term already.
+  // $1 run_id, $2 school, $3 report_type, $4 term, $5 student ids|null
   requeueFailedItems: `
     UPDATE report_generation_items i
     SET status = 'pending', attempts = 0, error = NULL, claimed_until = NULL, finished_at = NULL
     WHERE i.run_id = $1 AND i.status = 'failed'
+      AND ($5::uuid[] IS NULL OR i.student_id = ANY($5::uuid[]))
       AND NOT EXISTS (
         SELECT 1 FROM report_generation_items o
         JOIN report_generation_runs orun ON orun.run_id = o.run_id
@@ -185,6 +186,15 @@ const reportGenerationQueries = {
     JOIN report_generation_items i ON i.run_id = r.run_id
     WHERE r.run_id = $1
     GROUP BY r.run_id`,
+
+  // Runs left open with nothing waiting: a server died between a run's last
+  // report and finishing it. The worker sweeps them when the queue is empty.
+  finishStrandedRuns: `
+    UPDATE report_generation_runs r
+    SET finished_at = NOW()
+    WHERE r.finished_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM report_generation_items i WHERE i.run_id = r.run_id AND i.status = 'pending')
+    RETURNING r.run_id, r.school::text AS school, r.report_type, r.term, r.student_count, r.created_by, r.finished_at`,
 
   // Finishes a run once nothing waits. Only one caller gets the row back,
   // however many finish at once. $1 run_id

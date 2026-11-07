@@ -52,7 +52,8 @@ const listRuns = async (req, res) => {
 
 const control = (action, message) => async (req, res) => {
   try {
-    const run = await runs[action]({ runId: req.params.runId, school: req.user.school });
+    const studentIds = action === 'retryRun' && req.body?.studentIds !== undefined ? req.body.studentIds : null;
+    const run = await runs[action]({ runId: req.params.runId, school: req.user.school, studentIds });
     if (!run) return res.status(404).json(NOT_FOUND);
     return res.json({ status: 'success', data: run });
   } catch (error) {
