@@ -225,6 +225,9 @@ if (require.main === module) {
   // Emails and pushes the owner when production misbehaves. Only where
   // ALERTS_ENABLED=true (Railway): a local backend uses the prod database.
   require("./services/observe/alerts/worker").startWorker();
+  // Prints queued report cards and progress reports. Only where
+  // REPORT_GENERATION_WORKER=true (Railway): a local backend uses the prod database.
+  require("./services/reportGeneration/worker").startWorker();
 
   // A crash should leave a trace in error_events before Railway restarts us.
   process.on("unhandledRejection", (reason) => {

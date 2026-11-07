@@ -773,5 +773,7 @@ module.exports = {
   generateProgressReport,
   generateProgressReportsBulk,
   deleteProgressReport,
-  deleteProgressReportsBulk
+  deleteProgressReportsBulk,
+  // The report generation worker prints with it (services/reportGeneration/worker.js).
+  generateSingleProgressReport,
 };

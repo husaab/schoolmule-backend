@@ -122,6 +122,49 @@ const reportGenerationQueries = {
   // $1 run_id
   dismissRun: `UPDATE report_generation_runs SET dismissed_at = NOW() WHERE run_id = $1`,
 
+  // ── The worker ──
+
+  // Claims the next student to print, with a 2-minute lease: from the run
+  // served longest ago (a run never served first), in the run's order. An
+  // item whose lease ran out (its server died mid-print) is claimed again.
+  claimNextItem: `
+    WITH next AS (
+      SELECT x.run_id, x.student_id
+      FROM report_generation_items x
+      JOIN report_generation_runs r ON r.run_id = x.run_id
+      WHERE x.status = 'pending' AND (x.claimed_until IS NULL OR x.claimed_until < NOW())
+      ORDER BY r.last_served_at NULLS FIRST, r.created_at, x.position
+      FOR UPDATE OF x SKIP LOCKED
+      LIMIT 1
+    )
+    UPDATE report_generation_items i
+    SET attempts = i.attempts + 1, claimed_until = NOW() + interval '2 minutes'
+    FROM next, report_generation_runs r
+    WHERE i.run_id = next.run_id AND i.student_id = next.student_id AND r.run_id = i.run_id
+    RETURNING i.run_id, i.student_id, i.attempts, r.report_type, r.term,
+              to_char(r.report_date, 'YYYY-MM-DD') AS report_date, r.school::text AS school`,
+
+  // The turn order between runs; needn't be atomic with the claim. $1 run_id
+  markRunServed: `UPDATE report_generation_runs SET last_served_at = NOW() WHERE run_id = $1`,
+
+  // $1 run_id, $2 student_id
+  markItemGenerated: `
+    UPDATE report_generation_items
+    SET status = 'generated', error = NULL, claimed_until = NULL, finished_at = NOW()
+    WHERE run_id = $1 AND student_id = $2 AND status = 'pending'`,
+
+  // $1 run_id, $2 student_id, $3 error
+  markItemFailed: `
+    UPDATE report_generation_items
+    SET status = 'failed', error = $3, claimed_until = NULL, finished_at = NOW()
+    WHERE run_id = $1 AND student_id = $2 AND status = 'pending'`,
+
+  // A print that timed out: back in the queue for another attempt. $1 run_id, $2 student_id
+  releaseItem: `
+    UPDATE report_generation_items
+    SET claimed_until = NULL
+    WHERE run_id = $1 AND student_id = $2 AND status = 'pending'`,
+
   // Finishes a run once nothing waits. Only one caller gets the row back,
   // however many finish at once. $1 run_id
   finishRunIfDone: `

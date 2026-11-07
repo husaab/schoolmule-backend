@@ -1179,6 +1179,8 @@ module.exports = {
   deleteReportCardsBulk,
   getGeneratedReportCardsByStudentId,
   getTermCommentsStatus,
+  // The report generation worker prints with it (services/reportGeneration/worker.js).
+  generateSingleReportCard,
   // exported for unit testing (Al Haadi T2 variant)
   mergeTermSubjects,
   computeTermSubjectGrades,
