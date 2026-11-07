@@ -16,6 +16,7 @@ const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
 const logger = require('../logger');
 const q = require('../queries/reportEmailRuns.queries');
+const generationQueries = require('../queries/reportGeneration.queries');
 const outboxQueries = require('../queries/emailOutbox.queries');
 const schoolQueries = require('../queries/school.queries');
 const reportCardQueries = require('../queries/reportCard.queries');
@@ -57,6 +58,9 @@ const SKIP = {
   NOT_PARENT: 'No longer a parent address',
   ARCHIVED: 'Student archived',
   GONE: 'Send removed',
+  // Waiting to be generated again (services/reportGeneration/): the email
+  // would attach the old PDF.
+  REGENERATING: 'A new version is being generated',
 };
 
 const lower = (emails) => [...new Set(cleanEmailArray(emails).map((e) => e.toLowerCase()))];
@@ -99,6 +103,8 @@ async function queueSend({ school, userId = null, reportType, term, studentIds, 
     await client.query(q.lockSends, [`report_email:${school}:${reportType}:${term}`]);
     const { rows: busyRows } = await client.query(q.selectPendingForStudents, [school, reportType, term, students.map((s) => s.student_id)]);
     const busy = new Set(busyRows.map((b) => `${b.student_id}:${b.email}`));
+    const { rows: waitingRows } = await client.query(generationQueries.selectWaitingStudents, [school, reportType, term, students.map((s) => s.student_id)]);
+    const regenerating = new Set(waitingRows.map((w) => w.student_id));
     const { rows: [run] } = await client.query(q.insertRun, [
       school, reportType, term, customHeader || null, customMessage || null, JSON.stringify(cc),
       chosen ? 'chosen' : 'guardians', students.length, userId,
@@ -116,6 +122,9 @@ async function queueSend({ school, userId = null, reportType, term, studentIds, 
     const rows = students.flatMap((student) => {
       if (!hasReport.has(student.student_id)) {
         return [{ ...base(student), recipientEmail: null, status: 'skipped', skipReason: SKIP.NO_REPORT(spec, term) }];
+      }
+      if (regenerating.has(student.student_id)) {
+        return [{ ...base(student), recipientEmail: null, status: 'skipped', skipReason: SKIP.REGENERATING }];
       }
       const addresses = chosen ? lower(chosen) : parentEmails(student);
       if (addresses.length === 0) return [{ ...base(student), recipientEmail: null, status: 'skipped', skipReason: SKIP.NO_EMAIL }];

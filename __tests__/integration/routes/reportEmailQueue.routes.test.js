@@ -307,6 +307,43 @@ describe('Integration: report emails through the outbox', () => {
     }
   });
 
+  // A report waiting to be generated again (services/reportGeneration/).
+  const waitingToRegenerate = async (studentId, { reportType = 'report_card', term = TERM } = {}) => {
+    const { rows: [genRun] } = await pool.query(
+      `INSERT INTO report_generation_runs (school, school_year_id, report_type, term, student_count)
+       VALUES ('ALHAADIACADEMY', $1, $2, $3, 1) RETURNING run_id`,
+      [yearId, reportType, term],
+    );
+    await pool.query(
+      `INSERT INTO report_generation_items (run_id, student_id, position) VALUES ($1, $2, 0)`,
+      [genRun.run_id, studentId],
+    );
+  };
+
+  it('skips a student whose report is being regenerated and sends the rest', async () => {
+    await waitingToRegenerate(amalId);
+    const res = await bulk([amalId, bilalId, samiId]);
+    expect(res.summary).toMatchObject({ total: 3, queued: 1, skipped: 2 });
+
+    const students = (await run(res.runId)).students;
+    expect(students.find((s) => s.studentId === amalId)).toMatchObject({ status: 'skipped', reason: 'A new version is being generated' });
+    // No report yet still says so.
+    expect(students.find((s) => s.studentId === samiId)).toMatchObject({ status: 'skipped', reason: 'No report card for Term 1' });
+    const rows = await outboxRows(pool);
+    expect(rows.filter((r) => r.student_id === amalId).map((r) => [r.status, r.skip_reason])).toEqual([['skipped', 'A new version is being generated']]);
+    expect(rows.filter((r) => r.student_id === bilalId).map((r) => r.status)).toEqual(['pending']);
+
+    await drain();
+    expect(sent().map((m) => m.to[0])).toEqual([RANIA]);
+  });
+
+  it('a pending item of the other report type or term does not hold up a send', async () => {
+    await waitingToRegenerate(amalId, { reportType: 'progress_report' });
+    await waitingToRegenerate(amalId, { term: 'Term 2' });
+    const res = await bulk([amalId]);
+    expect(res.summary).toMatchObject({ queued: 1, skipped: 0 });
+  });
+
   it("only staff with report card access read or retry a send, and only their own school's", async () => {
     const { runId } = await bulk([amalId]);
     await get(`/api/report-emails/runs/${runId}`, PARENT, 403);
