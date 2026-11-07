@@ -40,6 +40,7 @@ const HANDLERS = {
   reply_escalation: () => require('../replyReminders').replyEscalationHandler,
   reply_nudge: () => require('../replyReminders').replyNudgeHandler,
   report_email: () => require('../reportEmails').reportEmailHandler,
+  report_generation_done: () => require('../reportGeneration/doneEmail').reportGenerationDoneHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).

@@ -26,6 +26,7 @@ const q = require('../../queries/reportGeneration.queries');
 const pdfGenerator = require('../../utils/pdfGenerator');
 const reportEngine = require('../reportEngine/generate');
 const { finishIfDone } = require('./runs');
+const { queueDoneEmail } = require('./doneEmail');
 
 const POLL_MS = 5000;
 const ITEM_TIMEOUT_MS = 90 * 1000;
@@ -114,7 +115,16 @@ function standDown() {
 async function settle(job, status, error = null) {
   if (status === 'generated') await db.query(q.markItemGenerated, [job.run_id, job.student_id]);
   else await db.query(q.markItemFailed, [job.run_id, job.student_id, error]);
-  return finishIfDone(job.run_id);
+  // Only the one call that finishes the run gets its row: one email.
+  const finished = await finishIfDone(job.run_id);
+  if (finished) {
+    try {
+      await queueDoneEmail(finished);
+    } catch (err) {
+      logger.error({ err, runId: job.run_id }, "Report generation: couldn't queue the finish email");
+    }
+  }
+  return finished;
 }
 
 /**

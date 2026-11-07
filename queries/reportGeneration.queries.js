@@ -165,6 +165,27 @@ const reportGenerationQueries = {
     SET claimed_until = NULL
     WHERE run_id = $1 AND student_id = $2 AND status = 'pending'`,
 
+  // ── The finish email (services/reportGeneration/doneEmail.js) ──
+
+  // Whether a finished run gets its email: what was stopped, and the
+  // starter's address. $1 run_id
+  selectDoneRecipient: `
+    SELECT (SELECT COUNT(*)::int FROM report_generation_items i WHERE i.run_id = r.run_id AND i.status = 'cancelled') AS cancelled,
+           u.user_id, u.email
+    FROM report_generation_runs r
+    LEFT JOIN users u ON u.user_id = r.created_by
+    WHERE r.run_id = $1`,
+
+  // The counts, read when the email is sent. $1 run_id
+  selectDoneCounts: `
+    SELECT r.run_id, r.school::text AS school, r.report_type, r.term,
+           COUNT(*) FILTER (WHERE i.status = 'generated')::int AS generated,
+           COUNT(*) FILTER (WHERE i.status = 'failed')::int AS failed
+    FROM report_generation_runs r
+    JOIN report_generation_items i ON i.run_id = r.run_id
+    WHERE r.run_id = $1
+    GROUP BY r.run_id`,
+
   // Finishes a run once nothing waits. Only one caller gets the row back,
   // however many finish at once. $1 run_id
   finishRunIfDone: `
