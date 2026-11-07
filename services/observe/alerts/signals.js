@@ -24,7 +24,7 @@ const probe = { consecutiveFails: 0, lastError: null, okSince: null, lastAt: nul
 const loopback = { consecutiveFails: 0, lastError: null, okSince: null, lastAt: null };
 let vitals = null;    // { lagP99Ms, rssMb, at }
 let railway = null;   // { available, cpu, memoryGb, deploy, asOf, at }
-let slow = null;      // { newErrors, outboxFailed, boots10m, at }
+let slow = null;      // { newErrors, outboxFailed, boots10m, reportQueueStuck, at }
 let lagMonitor = null;
 
 function bucket(ms) {

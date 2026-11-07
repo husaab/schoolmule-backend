@@ -128,6 +128,14 @@ module.exports = {
   outboxFailed: `
     SELECT COUNT(*)::int AS n FROM email_outbox
     WHERE status = 'failed' AND finished_at > NOW() - INTERVAL '1 hour'`,
+  // Report generation runs with students waiting and nothing finished in 15
+  // minutes (counted from when the run was queued, if nothing has).
+  reportQueueStuck: `
+    SELECT COUNT(*)::int AS n FROM report_generation_runs r
+    WHERE r.finished_at IS NULL
+      AND EXISTS (SELECT 1 FROM report_generation_items i WHERE i.run_id = r.run_id AND i.status = 'pending')
+      AND GREATEST(r.queued_at, (SELECT MAX(f.finished_at) FROM report_generation_items f WHERE f.run_id = r.run_id))
+          < NOW() - INTERVAL '15 minutes'`,
 
   // Console.
   listIncidents: `

@@ -331,6 +331,24 @@ const RULES = [
       return { tripped: n >= p.count, value: n, summary: `${plural(n, 'queued email')} failed in the last hour.` };
     },
   },
+  {
+    id: 'report_queue_stuck',
+    tier: 'warning',
+    name: 'Report generation stuck',
+    description: 'Report cards or progress reports are waiting to be generated and none has finished in 15 minutes: the worker is off (REPORT_GENERATION_WORKER) or stuck.',
+    source: 'Report generation',
+    window: '15 min',
+    params: {
+      count: { label: 'Stuck runs', unit: 'runs', default: 1, min: 1, max: 1000 },
+    },
+    evaluate(s, p) {
+      if (!fresh(s.slow, SLOW_STALE_MS, s.now) || !Number.isInteger(s.slow.reportQueueStuck)) {
+        return { tripped: null, value: null, summary: 'Report generation reading unavailable.' };
+      }
+      const n = s.slow.reportQueueStuck;
+      return { tripped: n >= p.count, value: n, summary: `${plural(n, 'report generation run')} ${n === 1 ? 'has' : 'have'} had nothing finish in 15 minutes.` };
+    },
+  },
 
   // ─── Info: one email, no reminders, overnight ones in the morning ─────
   {

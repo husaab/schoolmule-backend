@@ -316,6 +316,34 @@ describe('overrides', () => {
   });
 });
 
+describe('report generation stuck', () => {
+  const now = OCT27_1130;
+  const reading = (reportQueueStuck, at = now) => signals.setSlow({ newErrors: [], outboxFailed: 0, boots10m: 0, reportQueueStuck }, at);
+  const result = (s) => s.results.find((x) => x.id === 'report_queue_stuck');
+
+  it("trips when a run hasn't moved in 15 minutes", () => {
+    reading(1);
+    const s = tick(fresh(), now);
+    expect(result(s)).toMatchObject({ tripped: true, value: 1, live: true });
+    expect(result(s).summary).toBe('1 report generation run has had nothing finish in 15 minutes.');
+    expect(RULE_BY_ID.get('report_queue_stuck').tier).toBe('warning');
+    expect(s.open.rules.report_queue_stuck).toBeDefined();
+  });
+
+  it('stays healthy at 0', () => {
+    reading(0);
+    expect(result(tick(fresh(), now))).toMatchObject({ tripped: false, value: 0 });
+  });
+
+  it('is unknown when the reading is missing or stale', () => {
+    expect(result(tick(fresh(), now)).tripped).toBeNull();
+    reading(null);
+    expect(result(tick(fresh(), now)).tripped).toBeNull();
+    reading(2, now - 11 * MIN);
+    expect(result(tick(fresh(), now)).tripped).toBeNull();
+  });
+});
+
 describe('mergeIncidents', () => {
   it('folds an incident opened while the database was away into the one it had open', () => {
     const kept = { ...engine.newIncident('kept', OCT21_2202), tier: 'warning', title: 'Slow responses', notifiedAt: OCT21_2202, notifiedTier: 'warning', subject: 'kept thread',

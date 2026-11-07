@@ -48,13 +48,14 @@ async function reading(what, sql, params, pick) {
   }
 }
 
-/** New error types, failed queued emails in the last hour, starts in the last 10 minutes. */
+/** New error types, failed queued emails in the last hour, starts in the last 10 minutes, stuck report generation. */
 async function slowReadings({ newErrorOccurrences = 2 } = {}) {
   const newErrors = await reading('new error types', q.newErrorTypes, [newErrorOccurrences], (rows) =>
     rows.map((r) => ({ fingerprint: r.fingerprint, message: r.message, count: r.count })));
   const outboxFailed = await reading('failed outbox emails', q.outboxFailed, [], (rows) => rows[0].n);
   const boots10m = await reading('recent starts', q.bootsSince, [10], (rows) => rows[0].n);
-  return { newErrors, outboxFailed, boots10m };
+  const reportQueueStuck = await reading('stuck report generation', q.reportQueueStuck, [], (rows) => rows[0].n);
+  return { newErrors, outboxFailed, boots10m, reportQueueStuck };
 }
 
 module.exports = { probeDb, probeLoopback, slowReadings };

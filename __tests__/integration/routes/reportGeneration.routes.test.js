@@ -251,6 +251,20 @@ describe('Integration: /api/report-generation', () => {
       expect((await list())[0].stalled).toBe(false);
     });
 
+    it("the owner's stuck-queue alert counts a run that hasn't moved in 15 minutes", async () => {
+      const { slowReadings } = require('../../../services/observe/alerts/probes');
+      const a = await makeStudent('Amal Haddad');
+      const b = await makeStudent('Bilal Karim');
+      const { data: { run } } = await start([a, b]);
+      expect((await slowReadings()).reportQueueStuck).toBe(0);
+
+      await pool.query(`UPDATE report_generation_runs SET queued_at = NOW() - interval '16 minutes' WHERE run_id = $1`, [run.runId]);
+      expect((await slowReadings()).reportQueueStuck).toBe(1);
+
+      await pool.query(`UPDATE report_generation_items SET status = 'generated', finished_at = NOW() - interval '1 minute' WHERE student_id = $1`, [a]);
+      expect((await slowReadings()).reportQueueStuck).toBe(0);
+    });
+
     it('stops listing a dismissed run, a run finished 15 days ago, and a one-student run finished 2 minutes ago', async () => {
       const ids = [];
       for (const name of ['Amal Haddad', 'Bilal Karim', 'Dalia Nassar', 'Sami Yusuf', 'Rania Karim', 'Omar Haddad', 'Hana Saleh']) ids.push(await makeStudent(name));
