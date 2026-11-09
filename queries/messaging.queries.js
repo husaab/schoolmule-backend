@@ -20,6 +20,64 @@ const { GRADE_RANK } = require('../utils/gradeRank');
 const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 const { PERSON_NAME } = require('./personName');
 
+// A typed-in guardian stays editable from the New message window until they
+// are invited. People who came from the student file are changed on the file.
+const GUARDIAN_EDITABLE = (ps, s) => `(${ps}.parent_id IS NULL AND ${ps}.invited_at IS NULL
+  AND LOWER(TRIM(COALESCE(${ps}.parent_email, ''))) NOT IN (LOWER(TRIM(COALESCE(${s}.mother_email, ''))), LOWER(TRIM(COALESCE(${s}.father_email, '')))))`;
+
+// Everyone staff can reach about student `s`: guardian rows, then the mother
+// and father on the student file, one entry per address (a guardian row wins).
+// Announcements and classroom emails read the same two sources. A person with
+// no link yet is matched to an account by email, because sending links them.
+// A child's own login or an archived account is never offered as a guardian.
+const STAFF_GUARDIANS = (s) => `COALESCE((
+  SELECT json_agg(json_build_object(
+           'linkId', g.link_id, 'name', g.name, 'relation', g.relation, 'email', g.email,
+           'hasAccount', g.has_account, 'invitePending', g.invite_pending, 'invitedAt', g.invited_at,
+           'canEdit', g.can_edit
+         ) ORDER BY g.src, g.relation DESC, g.name)
+  FROM (
+    SELECT DISTINCT ON (x.email_key) x.*
+    FROM (
+      SELECT ps.parent_student_link_id AS link_id, 0 AS src,
+             COALESCE(NULLIF(${PERSON_NAME('a')}, ''), NULLIF(TRIM(ps.parent_name), '')) AS name,
+             ps.relation,
+             COALESCE(a.email, NULLIF(TRIM(ps.parent_email), '')) AS email,
+             COALESCE(NULLIF(LOWER(TRIM(COALESCE(a.email, ps.parent_email, ''))), ''), ps.parent_student_link_id::text) AS email_key,
+             a.user_id IS NOT NULL AND COALESCE(a.password, '') <> '!' AS has_account,
+             a.user_id IS NOT NULL AND a.password = '!' AS invite_pending,
+             ps.invited_at,
+             ${GUARDIAN_EDITABLE('ps', s)} AS can_edit
+      FROM parent_students ps
+      LEFT JOIN LATERAL (
+        SELECT u.* FROM users u
+        WHERE u.user_id = ps.parent_id
+           OR (ps.parent_id IS NULL AND LOWER(u.email) = LOWER(TRIM(ps.parent_email)) AND u.school = ${s}.school
+               AND u.is_archived IS NOT TRUE AND u.role::text <> 'STUDENT')
+        LIMIT 1
+      ) a ON TRUE
+      WHERE ps.student_id = ${s}.student_id
+      UNION ALL
+      SELECT NULL, 1,
+             COALESCE(NULLIF(${PERSON_NAME('a')}, ''), NULLIF(TRIM(f.name), '')),
+             f.relation,
+             COALESCE(a.email, TRIM(f.email)),
+             LOWER(TRIM(f.email)),
+             a.user_id IS NOT NULL AND COALESCE(a.password, '') <> '!',
+             a.user_id IS NOT NULL AND a.password = '!',
+             NULL,
+             FALSE
+      FROM (VALUES ('Mother', ${s}.mother_name, ${s}.mother_email), ('Father', ${s}.father_name, ${s}.father_email)) AS f(relation, name, email)
+      LEFT JOIN LATERAL (
+        SELECT u.* FROM users u WHERE LOWER(u.email) = LOWER(TRIM(f.email)) AND u.school = ${s}.school LIMIT 1
+      ) a ON TRUE
+      WHERE TRIM(COALESCE(f.email, '')) <> ''
+        AND (a.user_id IS NULL OR (a.is_archived IS NOT TRUE AND a.role::text <> 'STUDENT'))
+    ) x
+    ORDER BY x.email_key, x.src
+  ) g
+), '[]'::json)`;
+
 // An item thread the school keeps from guardians. `c` is the conversations
 // alias. Never true for a thread with no classwork anchor, so every
 // parent–teacher thread keeps its guardians.
@@ -592,41 +650,17 @@ const messagingQueries = {
   `,
   // Staff picker. $1 class_id
   selectTeacherTargetStudents: `
-    SELECT s.student_id, s.name,
-           COALESCE(json_agg(json_build_object(
-                      'linkId', ps.parent_student_link_id,
-                      'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
-                      'relation', ps.relation,
-                      'email', COALESCE(u.email, ps.parent_email),
-                      'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
-                      'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
-                      'invitedAt', ps.invited_at))
-                    FILTER (WHERE ps.parent_student_link_id IS NOT NULL), '[]') AS guardians
+    SELECT s.student_id, s.name, ${STAFF_GUARDIANS('s')} AS guardians
     FROM class_students cs
     JOIN students s ON s.student_id = cs.student_id
-    LEFT JOIN parent_students ps ON ps.student_id = s.student_id
-    LEFT JOIN users u ON u.user_id = ps.parent_id
     WHERE cs.class_id = $1
-    GROUP BY s.student_id, s.name
     ORDER BY s.name
   `,
   // Same guardian summary for a single student (Students page). $1 student_id
   selectTeacherTargetStudentsOne: `
-    SELECT s.student_id, s.name,
-           COALESCE(json_agg(json_build_object(
-                      'linkId', ps.parent_student_link_id,
-                      'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
-                      'relation', ps.relation,
-                      'email', COALESCE(u.email, ps.parent_email),
-                      'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
-                      'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
-                      'invitedAt', ps.invited_at))
-                    FILTER (WHERE ps.parent_student_link_id IS NOT NULL), '[]') AS guardians
+    SELECT s.student_id, s.name, ${STAFF_GUARDIANS('s')} AS guardians
     FROM students s
-    LEFT JOIN parent_students ps ON ps.student_id = s.student_id
-    LEFT JOIN users u ON u.user_id = ps.parent_id
     WHERE s.student_id = $1
-    GROUP BY s.student_id, s.name
   `,
   selectTeacherTargetAssessments: `
     SELECT assessment_id, name, date, is_published FROM assessments
@@ -759,16 +793,7 @@ const messagingQueries = {
       COALESCE((SELECT ARRAY_AGG(cs.class_id) FROM class_students cs JOIN classes cl ON cl.class_id = cs.class_id
                  WHERE cs.student_id = s.student_id AND ($4::uuid IS NULL OR cl.school_year_id = $4) AND ${inCurrentTerm('cl', '$5', '$6')}
                    AND ($3::text = 'ADMIN' OR cl.teacher_id = $1 OR EXISTS (SELECT 1 FROM class_teachers ct WHERE ct.class_id = cl.class_id AND ct.teacher_id = $1))), '{}')::uuid[] AS class_ids,
-      COALESCE((SELECT json_agg(json_build_object(
-                  'linkId', ps.parent_student_link_id,
-                  'name', COALESCE(NULLIF(${PERSON_NAME('u')}, ''), ps.parent_name),
-                  'relation', ps.relation,
-                  'email', COALESCE(u.email, ps.parent_email),
-                  'hasAccount', ps.parent_id IS NOT NULL AND COALESCE(u.password, '') <> '!',
-                  'invitePending', ps.parent_id IS NOT NULL AND u.password = '!',
-                  'invitedAt', ps.invited_at))
-                 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
-                WHERE ps.student_id = s.student_id), '[]') AS guardians
+      ${STAFF_GUARDIANS('s')} AS guardians
     FROM students s
     WHERE s.school = $2 AND s.is_archived IS NOT TRUE AND ($4::uuid IS NULL OR s.school_year_id = $4)
       AND ($3::text = 'ADMIN' OR s.homeroom_teacher_id = $1 OR EXISTS (
@@ -784,6 +809,58 @@ const messagingQueries = {
   `,
 
   // ── Phase 2: guardian invites ───────────────────────────────
+  // The mother and father on the student file become guardian rows, so the
+  // invite, the reminder and the grade emails all have one list to read. $1 student_id
+  insertGuardianRowsFromFile: `
+    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school)
+    SELECT s.student_id, NULLIF(TRIM(f.name), ''), TRIM(f.email), f.relation, s.school
+    FROM students s
+    CROSS JOIN LATERAL (
+      SELECT DISTINCT ON (LOWER(TRIM(v.email))) v.*
+      FROM (VALUES ('Mother', s.mother_name, s.mother_email), ('Father', s.father_name, s.father_email)) AS v(relation, name, email)
+      WHERE TRIM(COALESCE(v.email, '')) <> ''
+      ORDER BY LOWER(TRIM(v.email)), v.relation DESC
+    ) f
+    WHERE s.student_id = $1
+      AND NOT EXISTS (
+        SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+        WHERE ps.student_id = s.student_id AND LOWER(TRIM(COALESCE(u.email, ps.parent_email, ''))) = LOWER(TRIM(f.email)))
+      AND NOT EXISTS (
+        SELECT 1 FROM users u
+        WHERE LOWER(u.email) = LOWER(TRIM(f.email)) AND u.school = s.school AND (u.is_archived IS TRUE OR u.role::text = 'STUDENT'))
+  `,
+  // Is this address already someone on this student's list? $3 skips the row being edited.
+  // $1 student_id, $2 email, $3 link_id|null
+  selectGuardianEmailTaken: `
+    SELECT EXISTS (
+      SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+      WHERE ps.student_id = $1 AND ps.parent_student_link_id IS DISTINCT FROM $3::uuid
+        AND LOWER(TRIM(COALESCE(u.email, ps.parent_email, ''))) = LOWER($2)
+    ) OR EXISTS (
+      SELECT 1 FROM students s
+      WHERE s.student_id = $1 AND LOWER($2) IN (LOWER(TRIM(COALESCE(s.mother_email, ''))), LOWER(TRIM(COALESCE(s.father_email, ''))))
+    ) AS taken
+  `,
+  // $1 student_id, $2 name, $3 email, $4 relation, $5 school
+  insertTypedGuardian: `
+    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school)
+    VALUES ($1, $2, $3, $4, $5)
+  `,
+  // $1 link_id, $2 school
+  selectGuardianForChange: `
+    SELECT ps.student_id, ${GUARDIAN_EDITABLE('ps', 's')} AS can_edit
+    FROM parent_students ps JOIN students s ON s.student_id = ps.student_id
+    WHERE ps.parent_student_link_id = $1 AND s.school = $2
+  `,
+  // Both re-check the row is still un-invited, so a send in between wins. $1 link_id ...
+  updateTypedGuardian: `
+    UPDATE parent_students SET parent_name = $2, parent_email = $3, relation = $4
+    WHERE parent_student_link_id = $1 AND parent_id IS NULL AND invited_at IS NULL
+  `,
+  deleteTypedGuardian: `
+    DELETE FROM parent_students
+    WHERE parent_student_link_id = $1 AND parent_id IS NULL AND invited_at IS NULL
+  `,
   // Link rows that have an email but no account. $1 student_id
   selectUnlinkedGuardians: `
     SELECT parent_student_link_id, parent_name, parent_email, relation, invited_at

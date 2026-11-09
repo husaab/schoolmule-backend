@@ -16,6 +16,9 @@ router.get('/conversations/targets', c.getTargets);
 router.get('/conversations/stubs', c.getStubs);
 router.post('/conversations', c.uploadFiles, c.createConversation);
 router.post('/conversations/invites/:linkId/resend', c.resendInvite);
+router.post('/students/:studentId/guardians', c.addGuardian);
+router.patch('/guardians/:linkId', c.updateGuardian);
+router.delete('/guardians/:linkId', c.removeGuardian);
 
 router.get('/conversations/:id', requireConversationAccess, c.getConversation);
 router.post('/conversations/:id/messages', requireConversationAccess, c.uploadFiles, c.postMessage);

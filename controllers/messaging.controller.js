@@ -218,12 +218,15 @@ async function sendGuardianInvite({ school, to, recipientFirstName, teacherName,
  * in this thread. An email that already has an account is linked instead
  * (they will get the ordinary digest). Never throws.
  */
+const isStaffView = (user) => ['TEACHER', 'ADMIN'].includes(user.role);
+
 async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, body }) {
   // Staff only, and never on an item thread the school keeps from guardians
   // (the invite would carry the message itself).
-  if (!['TEACHER', 'ADMIN'].includes(user.role) || invite === false || conv.guardiansHidden) return [];
+  if (!isStaffView(user) || conv.guardiansHidden) return [];
   const results = [];
   try {
+    await db.query(q.insertGuardianRowsFromFile, [conv.studentId]);
     const { rows: links } = await db.query(q.selectUnlinkedGuardians, [conv.studentId]);
     for (const link of links) {
       const email = String(link.parent_email).trim();
@@ -245,6 +248,8 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
           results.push({ linkId: link.parent_student_link_id, name, status: 'linked' });
           continue;
         }
+        // The tick box is about people with no account; those with one were linked above.
+        if (invite === false) continue;
         const [firstName, ...rest] = name.split(/\s+/);
         const lastName = rest.join(' ') || '';
         const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT', null, null]);
@@ -540,6 +545,15 @@ const getUnreadSummary = async (req, res) => {
   }
 };
 
+/** Why this staff member can't write about this student: [status, message], or null when they can. */
+async function studentAccessError(req, studentId, term) {
+  const { rows } = await db.query(q.selectStudentForStaff, [studentId]);
+  if (!rows.length || rows[0].school !== req.user.school) return [404, 'Student not found'];
+  if (seesAllThreads(req)) return null;
+  const { rows: ctx } = await db.query(q.selectGeneralAnchorContext, [studentId, req.user.userId, req.user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]);
+  return ctx[0]?.caller_teaches ? null : [403, 'Not authorized for this student'];
+}
+
 // GET /api/messaging/conversations/targets?studentId= | ?classId=
 const getTargets = async (req, res) => {
   const user = req.user;
@@ -581,13 +595,9 @@ const getTargets = async (req, res) => {
 
     if (!classId && studentId) {
       // Students page: one student, no class in hand. Staff must teach them (or be admin).
-      const { rows: srows } = await db.query(q.selectStudentForStaff, [studentId]);
-      if (!srows.length || srows[0].school !== user.school) return failed(res, 404, 'Student not found');
       const term = await resolveCurrentTerm(req);
-      if (!seesAllThreads(req)) {
-        const { rows: ctxRows } = await db.query(q.selectGeneralAnchorContext, [studentId, user.userId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]);
-        if (!ctxRows.length || !ctxRows[0].caller_teaches) return failed(res, 403, 'Not authorized for this student');
-      }
+      const denied = await studentAccessError(req, studentId, term);
+      if (denied) return failed(res, ...denied);
       const [{ rows: guardians }, { rows: classRows }] = await Promise.all([
         db.query(q.selectTeacherTargetStudentsOne, [studentId]),
         db.query(q.selectStudentClassesForStaff, [studentId, user.userId, req.schoolYear?.schoolYearId ?? null, ...termParams(term)]),
@@ -656,6 +666,102 @@ const getTargets = async (req, res) => {
   } catch (error) {
     logger.error('Error loading message targets:', error);
     return failed(res, 500, 'Error loading targets');
+  }
+};
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** A typed-in guardian, cleaned, or { error } saying what to fix. */
+function guardianInput(body = {}) {
+  const name = String(body.name ?? '').trim();
+  const email = String(body.email ?? '').trim();
+  const relation = String(body.relation ?? '').trim();
+  if (!name || name.length > 120) return { error: "Enter the guardian's name" };
+  if (email.length > 254 || !EMAIL_RE.test(email)) return { error: 'Enter a valid email address' };
+  if (!relation || relation.length > 40) return { error: 'Choose how they are related to the student' };
+  return { name, email, relation };
+}
+
+/** Why this address can't be used for this student: [status, message], or null. */
+async function guardianEmailProblem(school, studentId, email, linkId) {
+  const { rows: [{ taken }] } = await db.query(q.selectGuardianEmailTaken, [studentId, email, linkId]);
+  if (taken) return [409, 'That email is already on file for this student'];
+  const { rows: [account] } = await db.query(q.selectUserByEmailInSchool, [email, school]);
+  if (account && (account.is_archived || String(account.role) === 'STUDENT')) return [400, "That email can't be used for a guardian. Ask the office to check it."];
+  return null;
+}
+
+const guardiansOf = async (studentId) => (await db.query(q.selectTeacherTargetStudentsOne, [studentId])).rows[0]?.guardians ?? [];
+
+// POST /api/messaging/students/:studentId/guardians
+const addGuardian = async (req, res) => {
+  const { studentId } = req.params;
+  if (badId(studentId)) return failed(res, 400, 'Invalid id');
+  if (!isStaffView(req.user)) return failed(res, 403, 'Not authorized');
+  try {
+    const denied = await studentAccessError(req, studentId, await resolveCurrentTerm(req));
+    if (denied) return failed(res, ...denied);
+    const input = guardianInput(req.body);
+    if (input.error) return failed(res, 400, input.error);
+    const problem = await guardianEmailProblem(req.user.school, studentId, input.email, null);
+    if (problem) return failed(res, ...problem);
+    // The parents on the file are saved first: once a student has any guardian
+    // row, grade emails go to those rows alone, and they must not lose out.
+    await db.query(q.insertGuardianRowsFromFile, [studentId]);
+    await db.query(q.insertTypedGuardian, [studentId, input.name, input.email, input.relation, req.user.school]);
+    return res.status(201).json({ status: 'success', data: { guardians: await guardiansOf(studentId) } });
+  } catch (error) {
+    logger.error('Error adding guardian:', error);
+    return failed(res, 500, 'Error adding guardian');
+  }
+};
+
+const GUARDIAN_LOCKED = [409, 'This guardian has been invited or comes from the student file, so only the office can change them.'];
+
+/** The guardian row a staff member may change: { link }, or { denied: [status, message] }. */
+async function guardianForChange(req, linkId) {
+  const { rows: [link] } = await db.query(q.selectGuardianForChange, [linkId, req.user.school]);
+  if (!link) return { denied: [404, 'Guardian not found'] };
+  const denied = await studentAccessError(req, link.student_id, await resolveCurrentTerm(req));
+  if (denied) return { denied };
+  return link.can_edit ? { link } : { denied: GUARDIAN_LOCKED };
+}
+
+// PATCH /api/messaging/guardians/:linkId
+const updateGuardian = async (req, res) => {
+  const { linkId } = req.params;
+  if (badId(linkId)) return failed(res, 400, 'Invalid id');
+  if (!isStaffView(req.user)) return failed(res, 403, 'Not authorized');
+  try {
+    const { link, denied } = await guardianForChange(req, linkId);
+    if (denied) return failed(res, ...denied);
+    const input = guardianInput(req.body);
+    if (input.error) return failed(res, 400, input.error);
+    const problem = await guardianEmailProblem(req.user.school, link.student_id, input.email, linkId);
+    if (problem) return failed(res, ...problem);
+    const { rowCount } = await db.query(q.updateTypedGuardian, [linkId, input.name, input.email, input.relation]);
+    if (!rowCount) return failed(res, ...GUARDIAN_LOCKED);
+    return res.status(200).json({ status: 'success', data: { guardians: await guardiansOf(link.student_id) } });
+  } catch (error) {
+    logger.error('Error updating guardian:', error);
+    return failed(res, 500, 'Error updating guardian');
+  }
+};
+
+// DELETE /api/messaging/guardians/:linkId
+const removeGuardian = async (req, res) => {
+  const { linkId } = req.params;
+  if (badId(linkId)) return failed(res, 400, 'Invalid id');
+  if (!isStaffView(req.user)) return failed(res, 403, 'Not authorized');
+  try {
+    const { link, denied } = await guardianForChange(req, linkId);
+    if (denied) return failed(res, ...denied);
+    const { rowCount } = await db.query(q.deleteTypedGuardian, [linkId]);
+    if (!rowCount) return failed(res, ...GUARDIAN_LOCKED);
+    return res.status(200).json({ status: 'success', data: { guardians: await guardiansOf(link.student_id) } });
+  } catch (error) {
+    logger.error('Error removing guardian:', error);
+    return failed(res, 500, 'Error removing guardian');
   }
 };
 
@@ -1077,6 +1183,9 @@ module.exports = {
   getStubs,
   createConversation,
   resendInvite,
+  addGuardian,
+  updateGuardian,
+  removeGuardian,
   getConversation,
   postMessage,
   editMessage,
@@ -1088,6 +1197,8 @@ module.exports = {
   getAttachmentUrl,
   // exported for unit tests
   validateBody,
+  // delivers a message by hand when the normal send could not reach the family
+  inviteUnlinkedGuardians,
   needsReplyFor,
   // shared with the student portal (controllers/studentMessaging.controller.js)
   toItem,

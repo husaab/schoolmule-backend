@@ -826,6 +826,219 @@ describe('Integration: Messaging routes', () => {
     });
   });
 
+  describe('guardians on the student file', () => {
+    let bilal;
+    const fileStudent = async (name, { mother = null, motherEmail = null, father = null, fatherEmail = null } = {}) => {
+      const { rows } = await pool.query(
+        `INSERT INTO students (name, grade, school, school_year_id, mother_name, mother_email, father_name, father_email)
+         VALUES ($1, '6', 'ALHAADIACADEMY', $2, $3, $4, $5, $6) RETURNING student_id`,
+        [name, yearId, mother, motherEmail, father, fatherEmail],
+      );
+      await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, rows[0].student_id]);
+      return rows[0].student_id;
+    };
+    const guardiansOf = async (id, who = asTeacher) =>
+      (await authenticatedRequest('get', `/api/messaging/conversations/targets?studentId=${id}`, who)).body.data.students[0].guardians;
+    const writeAbout = (id, extra = {}) => {
+      let req = authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+        .field('studentId', id).field('teacherId', TEACHER_ID).field('title', 'Planner').field('body', 'Please check the planner.');
+      for (const [k, v] of Object.entries(extra)) req = req.field(k, v);
+      return req;
+    };
+    const rowsOf = async (id) => (await pool.query(
+      `SELECT parent_student_link_id, parent_id, parent_name, parent_email, relation FROM parent_students WHERE student_id = $1 ORDER BY relation`, [id])).rows;
+    const addGuardian = (id, body, who = asTeacher) =>
+      authenticatedRequest('post', `/api/messaging/students/${id}/guardians`, who).send(body);
+
+    beforeEach(async () => {
+      bilal = await fileStudent('Bilal Test', { mother: ' Hana Test ', motherEmail: ' Hana@Example.com ', father: 'Omar Test' });
+      getResend().emails.send.mockClear();
+    });
+
+    it('shows the parent on the file, with their email, as having no account yet', async () => {
+      const expected = [{ linkId: null, name: 'Hana Test', relation: 'Mother', email: 'Hana@Example.com', hasAccount: false, invitePending: false, invitedAt: null, canEdit: false }];
+      expect(await guardiansOf(bilal)).toEqual(expected);
+
+      // Every way into the picker gives the same answer: the class and the roster too.
+      const byClass = await authenticatedRequest('get', `/api/messaging/conversations/targets?classId=${classId}`, asTeacher);
+      expect(byClass.body.data.students.find((s) => s.studentId === bilal).guardians).toEqual(expected);
+      const roster = await authenticatedRequest('get', '/api/messaging/conversations/targets', asTeacher);
+      expect(roster.body.data.students.find((s) => s.studentId === bilal).guardians).toEqual(expected);
+    });
+
+    it('lists both parents, once each, and treats one shared address as one person', async () => {
+      const both = await fileStudent('Sara Test', { mother: 'Hana Test', motherEmail: 'hana@example.com', father: 'Omar Test', fatherEmail: 'omar@example.com' });
+      expect((await guardiansOf(both)).map((g) => [g.relation, g.email])).toEqual([['Mother', 'hana@example.com'], ['Father', 'omar@example.com']]);
+      const shared = await fileStudent('Noor Test', { mother: 'Hana Test', motherEmail: 'family@example.com', father: 'Omar Test', fatherEmail: 'FAMILY@example.com' });
+      expect((await guardiansOf(shared)).map((g) => g.relation)).toEqual(['Mother']);
+    });
+
+    it('shows the real account status when the email on the file already has an account', async () => {
+      const kid = await fileStudent('Ali Test', { mother: 'Typed Name', motherEmail: 'MOM@example.com' });
+      expect(await guardiansOf(kid)).toEqual([expect.objectContaining({ linkId: null, name: 'Mom Test', hasAccount: true, invitePending: false, canEdit: false })]);
+    });
+
+    it('does not repeat someone already linked, and still shows the other parent on the file', async () => {
+      const kid = await fileStudent('Ali Test', { mother: 'Mom Test', motherEmail: 'mom@example.com', father: 'Omar Test', fatherEmail: 'omar@example.com' });
+      await pool.query(`INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, relation, school) VALUES ($1, $2, 'Mom Test', 'mom@example.com', 'Mother', 'ALHAADIACADEMY')`, [kid, MOM_ID]);
+      expect((await guardiansOf(kid)).map((g) => [g.relation, g.email, g.hasAccount, Boolean(g.linkId)])).toEqual([
+        ['Mother', 'mom@example.com', true, true],
+        ['Father', 'omar@example.com', false, false],
+      ]);
+    });
+
+    it("leaves out a child's own login address on the file", async () => {
+      const STUDENT_LOGIN_ID = '550e8400-e29b-41d4-a716-446655440078';
+      await user(STUDENT_LOGIN_ID, 'kid.login@example.com', 'Kid Login', 'STUDENT');
+      const kid = await fileStudent('Kid Login', { mother: 'Mix Up', motherEmail: 'kid.login@example.com' });
+      expect(await guardiansOf(kid)).toEqual([]);
+    });
+
+    it('writing about the student invites the parent on the file, once, with the message', async () => {
+      const res = await writeAbout(bilal);
+      expect(res.status).toBe(201);
+      expect(res.body.data.invites).toEqual([expect.objectContaining({ name: 'Hana Test', status: 'invited' })]);
+      const [row] = await rowsOf(bilal);
+      expect(row).toMatchObject({ parent_name: 'Hana Test', parent_email: 'Hana@Example.com', relation: 'Mother' });
+      expect(row.parent_id).not.toBeNull();
+      const [invite] = getResend().emails.send.mock.calls.map(([e]) => e);
+      expect(invite.to).toEqual(['Hana@Example.com']);
+      expect(invite.html).toContain('Please check the planner.');
+      expect(await guardiansOf(bilal)).toEqual([expect.objectContaining({ invitePending: true, hasAccount: false, canEdit: false })]);
+
+      // Writing again adds no row and no second invite.
+      const again = await authenticatedRequest('post', `/api/messaging/conversations/${res.body.data.conversation.conversationId}/messages`, asTeacher).field('body', 'One more thing.');
+      expect(again.body.data.invites).toEqual([]);
+      expect(await rowsOf(bilal)).toHaveLength(1);
+      expect(getResend().emails.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("a sibling's first message links the same parent without a second invite, and queues their email", async () => {
+      await writeAbout(bilal);
+      getResend().emails.send.mockClear();
+      const sibling = await fileStudent('Sara Test', { mother: 'Hana Test', motherEmail: 'hana@example.com' });
+      expect(await guardiansOf(sibling)).toEqual([expect.objectContaining({ linkId: null, invitePending: true })]);
+
+      const res = await writeAbout(sibling);
+      expect(res.body.data.invites).toEqual([expect.objectContaining({ status: 'linked' })]);
+      expect(getResend().emails.send).not.toHaveBeenCalled();
+      const [row] = await rowsOf(sibling);
+      const jobs = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [res.body.data.conversation.conversationId]);
+      expect(jobs.rows.map((j) => j.recipient_id)).toContain(row.parent_id);
+    });
+
+    it('with the invite box unticked, nobody new gets an account but someone who has one is still emailed', async () => {
+      const kid = await fileStudent('Ali Test', { mother: 'Mom Test', motherEmail: 'mom@example.com', father: 'Omar Test', fatherEmail: 'omar@example.com' });
+      const res = await writeAbout(kid, { invite: 'false' });
+      expect(res.status).toBe(201);
+      expect(getResend().emails.send).not.toHaveBeenCalled();
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE email = 'omar@example.com'`)).rows[0].n).toBe(0);
+      const jobs = await pool.query(`SELECT recipient_id FROM message_email_jobs WHERE conversation_id = $1 AND status = 'pending'`, [res.body.data.conversation.conversationId]);
+      expect(jobs.rows.map((j) => j.recipient_id)).toContain(MOM_ID);
+    });
+
+    describe('adding a guardian by hand', () => {
+      const lina = { name: ' Lina Test ', email: ' Lina@Example.com ', relation: 'Grandparent' };
+
+      it('adds them beside the parents on the file, marked as having no account, and editable', async () => {
+        const res = await addGuardian(bilal, lina);
+        expect(res.status).toBe(201);
+        expect(res.body.data.guardians.map((g) => [g.name, g.relation, g.email, g.hasAccount, g.canEdit])).toEqual(expect.arrayContaining([
+          ['Hana Test', 'Mother', 'Hana@Example.com', false, false],
+          ['Lina Test', 'Grandparent', 'Lina@Example.com', false, true],
+        ]));
+      });
+
+      it('keeps the parent on the file in the guardian rows, so grade emails do not stop reaching them', async () => {
+        await addGuardian(bilal, lina);
+        const { selectGuardianEmailsByStudent } = require('../../../queries/assessmentPublish.queries');
+        const { rows } = await pool.query(selectGuardianEmailsByStudent, [[bilal]]);
+        expect(rows[0].guardian_emails.map((e) => e.toLowerCase()).sort()).toEqual(['hana@example.com', 'lina@example.com']);
+      });
+
+      it('gets the first message as an invite, and from then on can only be changed by the office', async () => {
+        const added = await addGuardian(bilal, lina);
+        const linkId = added.body.data.guardians.find((g) => g.name === 'Lina Test').linkId;
+        await writeAbout(bilal);
+        const sent = getResend().emails.send.mock.calls.map(([e]) => e.to[0]).sort();
+        expect(sent).toEqual(['Hana@Example.com', 'Lina@Example.com']);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${linkId}`, asTeacher)).status).toBe(409);
+        expect((await authenticatedRequest('patch', `/api/messaging/guardians/${linkId}`, asTeacher).send({ ...lina, email: 'typo@example.com' })).status).toBe(409);
+      });
+
+      it('can be corrected and removed before anything is sent', async () => {
+        const added = await addGuardian(bilal, lina);
+        const linkId = added.body.data.guardians.find((g) => g.name === 'Lina Test').linkId;
+
+        const edited = await authenticatedRequest('patch', `/api/messaging/guardians/${linkId}`, asTeacher).send({ name: 'Lina Corrected', email: 'lina.c@example.com', relation: 'Guardian' });
+        expect(edited.status).toBe(200);
+        expect(edited.body.data.guardians).toEqual(expect.arrayContaining([expect.objectContaining({ linkId, name: 'Lina Corrected', email: 'lina.c@example.com', relation: 'Guardian', canEdit: true })]));
+
+        const removed = await authenticatedRequest('delete', `/api/messaging/guardians/${linkId}`, asTeacher);
+        expect(removed.status).toBe(200);
+        expect(removed.body.data.guardians.map((g) => g.name)).toEqual(['Hana Test']);
+      });
+
+      it('the parents on the file stay read-only here, even once saved as rows', async () => {
+        const added = await addGuardian(bilal, lina);
+        const saved = (await rowsOf(bilal)).find((r) => r.relation === 'Mother');
+        expect(added.body.data.guardians.find((g) => g.name === 'Hana Test').canEdit).toBe(false);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${saved.parent_student_link_id}`, asTeacher)).status).toBe(409);
+      });
+
+      it('refuses an address already on file for this student', async () => {
+        expect((await addGuardian(bilal, { ...lina, email: 'HANA@example.com' })).status).toBe(409);
+        await addGuardian(bilal, lina);
+        expect((await addGuardian(bilal, { ...lina, name: 'Lina Again' })).status).toBe(409);
+      });
+
+      it('an edit cannot take an address already on file', async () => {
+        const added = await addGuardian(bilal, lina);
+        const linkId = added.body.data.guardians.find((g) => g.name === 'Lina Test').linkId;
+        expect((await authenticatedRequest('patch', `/api/messaging/guardians/${linkId}`, asTeacher).send({ ...lina, email: 'hana@example.com' })).status).toBe(409);
+        // Keeping their own address is not a clash.
+        expect((await authenticatedRequest('patch', `/api/messaging/guardians/${linkId}`, asTeacher).send({ ...lina, name: 'Lina New' })).status).toBe(200);
+      });
+
+      it("refuses a child's own login address", async () => {
+        await user('550e8400-e29b-41d4-a716-446655440079', 'kid.two@example.com', 'Kid Two', 'STUDENT');
+        expect((await addGuardian(bilal, { ...lina, email: 'kid.two@example.com' })).status).toBe(400);
+      });
+
+      it('needs a name, a real email and a relation', async () => {
+        expect((await addGuardian(bilal, { ...lina, name: '  ' })).status).toBe(400);
+        expect((await addGuardian(bilal, { ...lina, email: 'not-an-email' })).status).toBe(400);
+        expect((await addGuardian(bilal, { ...lina, relation: '' })).status).toBe(400);
+        expect((await authenticatedRequest('post', '/api/messaging/students/not-a-uuid/guardians', asTeacher).send(lina)).status).toBe(400);
+      });
+
+      it('is open to staff who can write about the student, and no one else', async () => {
+        const OUTSIDER_ID = '550e8400-e29b-41d4-a716-446655440080';
+        await user(OUTSIDER_ID, 'outsider@example.com', 'Out Sider', 'TEACHER');
+        const asOutsider = { userId: OUTSIDER_ID, username: 'Out Sider', email: 'outsider@example.com', role: 'TEACHER' };
+        expect((await addGuardian(bilal, lina, asOutsider)).status).toBe(403);
+        expect((await addGuardian(bilal, lina, asMom)).status).toBe(403);
+
+        const added = await addGuardian(bilal, lina, asPrincipal);
+        expect(added.status).toBe(201);
+        const linkId = added.body.data.guardians.find((g) => g.name === 'Lina Test').linkId;
+        expect((await authenticatedRequest('patch', `/api/messaging/guardians/${linkId}`, asOutsider).send(lina)).status).toBe(403);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${linkId}`, asOutsider)).status).toBe(403);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${linkId}`, asMom)).status).toBe(403);
+      });
+
+      it("reads another school's student and guardian as not found", async () => {
+        const otherYear = await pool.query(`SELECT school_year_id FROM school_years WHERE school <> 'ALHAADIACADEMY' LIMIT 1`);
+        const { rows: [other] } = await pool.query(
+          `INSERT INTO students (name, grade, school, school_year_id) VALUES ('Far Away', '6', 'PLAYGROUND', $1) RETURNING student_id`, [otherYear.rows[0]?.school_year_id ?? null]);
+        const { rows: [link] } = await pool.query(
+          `INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Far Parent', 'far@example.com', 'Guardian', 'PLAYGROUND') RETURNING parent_student_link_id`, [other.student_id]);
+        expect((await addGuardian(other.student_id, lina, asPrincipal)).status).toBe(404);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${link.parent_student_link_id}`, asPrincipal)).status).toBe(404);
+      });
+    });
+  });
+
   describe('email digests', () => {
     const notifier = require('../../../services/messageNotifier');
     const { getResend } = require('../../../utils/emailUtils');
