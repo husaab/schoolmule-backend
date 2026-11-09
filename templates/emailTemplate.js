@@ -277,6 +277,8 @@ function attachmentLine(files, count, fallback) {
 }
 const anyAttached = (lists) => lists.some((files) => Array.isArray(files) && files.some((f) => f.attached));
 
+const CORRECTED_INTRO = 'This is the corrected version of a message you were emailed earlier. Please use this one.';
+
 function getConversationDigestEmailHTML({
   recipientFirstName,
   studentName,
@@ -289,13 +291,15 @@ function getConversationDigestEmailHTML({
   schoolInfo,
   forStudent = false,
   parentsIncluded = true,
+  corrected = false,
 }) {
   if (forStudent) {
-    return studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded });
+    return studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded, corrected });
   }
   const first = messages[0];
-  const heading =
-    messages.length === 1
+  const heading = corrected
+    ? `${first.senderName} corrected a message`
+    : messages.length === 1
       ? `New message from ${first.senderName}`
       : `${messages.length} new messages about ${studentName}`;
 
@@ -316,7 +320,9 @@ function getConversationDigestEmailHTML({
     content: [
       paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
       paragraph(
-        `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in the conversation about <strong>${escapeHtml(studentName)}</strong>'s <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
+        corrected
+          ? CORRECTED_INTRO
+          : `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in the conversation about <strong>${escapeHtml(studentName)}</strong>'s <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
       ),
       facts([
         ['Student', escapeHtml(studentName)],
@@ -340,9 +346,11 @@ function getConversationDigestEmailHTML({
  * that their parents are in the conversation too (unless the school keeps
  * this item thread from parents).
  */
-function studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded }) {
+function studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded, corrected }) {
   const first = messages[0];
-  const heading = messages.length === 1 ? `New message from ${first.senderName}` : `${messages.length} new messages`;
+  const heading = corrected
+    ? `${first.senderName} corrected a message`
+    : messages.length === 1 ? `New message from ${first.senderName}` : `${messages.length} new messages`;
   const blocks = messages
     .map((m) => {
       const meta = `${m.senderName} · ${m.sentAtLabel}`;
@@ -357,7 +365,9 @@ function studentConversationDigest({ recipientFirstName, className, title, conte
     content: [
       paragraph(`Hi ${escapeHtml(recipientFirstName || 'there')},`),
       paragraph(
-        `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in your conversation <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
+        corrected
+          ? CORRECTED_INTRO
+          : `${messages.length === 1 ? 'There is a new message' : 'There are new messages'} in your conversation <strong>${escapeHtml(title)}</strong> in ${escapeHtml(className)}.`,
       ),
       facts([
         ['Conversation', escapeHtml(title) + (contextLine ? ` · ${escapeHtml(contextLine)}` : '')],

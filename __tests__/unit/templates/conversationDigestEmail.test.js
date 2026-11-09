@@ -12,6 +12,28 @@ describe('getConversationDigestEmailHTML', () => {
     schoolInfo: null,
   };
 
+  it('says plainly when the email is a corrected version', () => {
+    const html = getConversationDigestEmailHTML({
+      ...base,
+      corrected: true,
+      messages: [{ senderName: 'Ahmed Khan', body: 'Fixed text', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 0 }],
+    });
+    expect(html).toContain('Ahmed Khan corrected a message');
+    expect(html).toContain('corrected version');
+    expect(html).not.toContain('New message from');
+  });
+
+  it('says so to a student too', () => {
+    const html = getConversationDigestEmailHTML({
+      ...base,
+      forStudent: true,
+      corrected: true,
+      messages: [{ senderName: 'Ahmed Khan', body: 'Fixed text', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 0 }],
+    });
+    expect(html).toContain('Ahmed Khan corrected a message');
+    expect(html).toContain('corrected version');
+  });
+
   it('escapes bodies, lists each message, names attachments and links to the thread', () => {
     const html = getConversationDigestEmailHTML({
       ...base,

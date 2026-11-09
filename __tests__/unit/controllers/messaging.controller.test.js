@@ -687,20 +687,166 @@ describe('messaging controller', () => {
   });
 
   describe('PATCH / DELETE messages', () => {
-    it('refuses an edit after 15 minutes', async () => {
-      makeRouter({ 'SELECT message_id, sender_id, kind, created_at, deleted_at': [{ message_id: MESSAGE, sender_id: PARENT, kind: 'message', created_at: new Date(Date.now() - 16 * 60 * 1000).toISOString(), deleted_at: null }] });
-      const res = await authenticatedRequest('patch', `/api/messaging/conversations/${CONVO}/messages/${MESSAGE}`, mockParentUser()).send({ body: 'edited' });
+    const SELECT_MESSAGE = 'SELECT message_id, sender_id, kind, created_at, deleted_at';
+    const ATTACHMENTS = 'WHERE message_id = ANY';
+    const url = `/api/messaging/conversations/${CONVO}/messages/${MESSAGE}`;
+    const FILE_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const FILE_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const minutesAgo = (n) => new Date(Date.now() - n * 60 * 1000).toISOString();
+    const sent = (over = {}) => [{
+      message_id: MESSAGE, sender_id: PARENT, sender_role: 'PARENT', kind: 'message', body: 'Hello',
+      created_at: minutesAgo(1), edited_at: null, deleted_at: null, ...over,
+    }];
+    const file = (id, name = `${id}.pdf`) => ({ attachment_id: id, message_id: MESSAGE, file_path: `p/${id}.pdf`, file_name: name, mime_type: 'application/pdf', size_bytes: 10 });
+    const saved = { 'SET body = $2': [{ edited_at: '2026-10-07T12:05:00Z' }] };
+    const parentEdit = () => authenticatedRequest('patch', url, mockParentUser());
+
+    it("refuses a parent's edit after 30 minutes", async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent({ created_at: minutesAgo(31) }) });
+      const res = await parentEdit().send({ body: 'edited' });
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/30 minutes/);
+    });
+
+    it('lets a parent edit at 29 minutes', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent({ created_at: minutesAgo(29) }), ...saved });
+      const res = await parentEdit().send({ body: 'edited' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.editedAt).toBe('2026-10-07T12:05:00Z');
+    });
+
+    it('lets staff edit a message of any age', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent({ sender_id: TEACHER, sender_role: 'TEACHER', created_at: '2024-01-01T00:00:00Z' }), ...saved });
+      const res = await authenticatedRequest('patch', url, mockTeacherUser()).send({ body: 'edited' });
+      expect(res.status).toBe(200);
+    });
+
+    it('holds a message sent as a parent to the parent limit, even from the teacher view', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent({ sender_id: TEACHER, sender_role: 'PARENT', created_at: minutesAgo(31) }) });
+      const res = await authenticatedRequest('patch', url, mockTeacherUser()).send({ body: 'edited' });
       expect(res.status).toBe(403);
     });
 
-    it('edits within the window', async () => {
-      makeRouter({
-        'SELECT message_id, sender_id, kind, created_at, deleted_at': [{ message_id: MESSAGE, sender_id: PARENT, kind: 'message', created_at: new Date().toISOString(), deleted_at: null }],
-        'SET body = $2': [{ edited_at: '2026-10-07T12:05:00Z' }],
+    it('removes one file, keeps the rest, and deletes it from storage only after the save', async () => {
+      const r = makeRouter({ [SELECT_MESSAGE]: sent(), [ATTACHMENTS]: [file(FILE_A), file(FILE_B)], ...saved });
+      let committed = null;
+      supabase._mockStorage.remove.mockImplementation(() => {
+        committed = r.ran('COMMIT').length;
+        return Promise.resolve({ data: {}, error: null });
       });
-      const res = await authenticatedRequest('patch', `/api/messaging/conversations/${CONVO}/messages/${MESSAGE}`, mockParentUser()).send({ body: 'edited' });
+      await parentEdit().send({ body: 'Hello', removeAttachmentIds: [FILE_A] }).expect(200);
+      expect(r.ran('DELETE FROM message_attachments')[0].params).toEqual([MESSAGE, [FILE_A]]);
+      expect(r.ran('SET body = $2')).toHaveLength(1);
+      expect(supabase._mockStorage.remove).toHaveBeenCalledWith([`p/${FILE_A}.pdf`]);
+      expect(committed).toBe(1);
+    });
+
+    it('adds a file next to the ones already there', async () => {
+      const r = makeRouter({ [SELECT_MESSAGE]: sent(), [ATTACHMENTS]: [file(FILE_A)], ...saved });
+      await parentEdit().field('body', 'Hello').attach('files', png, { filename: 'right.png', contentType: 'image/png' }).expect(200);
+      expect(supabase._mockStorage.upload).toHaveBeenCalledTimes(1);
+      expect(r.ran('INSERT INTO message_attachments')).toHaveLength(1);
+      expect(r.ran('SET body = $2')).toHaveLength(1);
+    });
+
+    it('counts the files already on the message toward the cap of 5', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent(), [ATTACHMENTS]: [1, 2, 3, 4].map((n) => file(`${FILE_A.slice(0, -1)}${n}`)) });
+      const res = await parentEdit().field('body', 'Hello')
+        .attach('files', png, { filename: 'a.png', contentType: 'image/png' })
+        .attach('files', png, { filename: 'b.png', contentType: 'image/png' });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/5 files/);
+      expect(supabase._mockStorage.upload).not.toHaveBeenCalled();
+    });
+
+    it('accepts a message with no text while a file stays', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent({ body: 'Hello' }), [ATTACHMENTS]: [file(FILE_A), file(FILE_B)], ...saved });
+      const res = await parentEdit().send({ body: '', removeAttachmentIds: [FILE_A] });
       expect(res.status).toBe(200);
-      expect(res.body.data.editedAt).toBe('2026-10-07T12:05:00Z');
+    });
+
+    it('refuses a message left with no text and no files', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent(), [ATTACHMENTS]: [file(FILE_A)] });
+      const res = await parentEdit().send({ body: '', removeAttachmentIds: [FILE_A] });
+      expect(res.status).toBe(400);
+    });
+
+    it('refuses a file that is not on this message', async () => {
+      makeRouter({ [SELECT_MESSAGE]: sent(), [ATTACHMENTS]: [file(FILE_A)] });
+      const res = await parentEdit().send({ body: 'Hello', removeAttachmentIds: [FILE_B] });
+      expect(res.status).toBe(409);
+    });
+
+    it('writes nothing when nothing changed', async () => {
+      const r = makeRouter({ [SELECT_MESSAGE]: sent(), ...saved });
+      await parentEdit().send({ body: 'Hello' }).expect(200);
+      expect(r.ran('SET body = $2')).toHaveLength(0);
+    });
+
+    it('removes a new upload when the save fails', async () => {
+      const r = makeRouter({
+        [SELECT_MESSAGE]: sent(),
+        'SET body = $2': () => { throw new Error('database went away'); },
+      });
+      const res = await parentEdit().field('body', 'Changed').attach('files', png, { filename: 'a.png', contentType: 'image/png' });
+      expect(res.status).toBe(500);
+      expect(r.ran('ROLLBACK').length).toBeGreaterThan(0);
+      expect(supabase._mockStorage.remove.mock.calls[0][0][0]).toMatch(new RegExp(`${CONVO}/${MESSAGE}/.+\\.png$`));
+    });
+
+    describe('the corrected email', () => {
+      const EMAILED = 'cp.last_emailed_at >= m.created_at';
+      const guardian = { user_id: OTHER_PARENT, name: 'Dana Example', email: 'dana@example.com', invite_pending: false };
+
+      it('queues nothing unless the sender asked', async () => {
+        const r = makeRouter({ [SELECT_MESSAGE]: sent(), [EMAILED]: [guardian], ...saved });
+        const res = await parentEdit().send({ body: 'Fixed' }).expect(200);
+        expect(res.body.data.correctionsQueued).toBe(0);
+        expect(r.ran('INSERT INTO email_outbox')).toHaveLength(0);
+      });
+
+      it('goes only to the people already emailed, resolved by the server', async () => {
+        const r = makeRouter({ [SELECT_MESSAGE]: sent(), [EMAILED]: [guardian], 'INSERT INTO email_outbox': [{ id: 'o1' }], ...saved });
+        const res = await parentEdit().send({ body: 'Fixed', emailCorrection: true }).expect(200);
+        expect(res.body.data.correctionsQueued).toBe(1);
+        const [row] = JSON.parse(r.ran('INSERT INTO email_outbox')[0].params[0]);
+        expect(row).toMatchObject({
+          kind: 'message_correction', recipient_user_id: OTHER_PARENT, recipient_email: 'dana@example.com',
+          subject_type: 'message', subject_id: MESSAGE, created_by: PARENT,
+        });
+        expect(row.dedupe_key).toContain(MESSAGE);
+      });
+
+      it('queues nothing when nobody has been emailed yet', async () => {
+        const r = makeRouter({ [SELECT_MESSAGE]: sent(), [EMAILED]: [], ...saved });
+        const res = await parentEdit().send({ body: 'Fixed', emailCorrection: 'true' }).expect(200);
+        expect(res.body.data.correctionsQueued).toBe(0);
+        expect(r.ran('INSERT INTO email_outbox')).toHaveLength(0);
+      });
+
+      it('tells the sender who was already emailed, with no addresses', async () => {
+        makeRouter({ [SELECT_MESSAGE]: sent(), [EMAILED]: [guardian] });
+        const res = await authenticatedRequest('get', `${url}/edit-context`, mockParentUser()).expect(200);
+        expect(res.body.data).toEqual({ emailedTo: [{ userId: OTHER_PARENT, name: 'Dana Example' }] });
+      });
+
+      it('tells nobody else who was emailed', async () => {
+        makeRouter({ [SELECT_MESSAGE]: sent(), [EMAILED]: [guardian] });
+        await authenticatedRequest('get', `${url}/edit-context`, mockTeacherUser()).expect(403);
+      });
+    });
+
+    it('tells each viewer which messages they can edit', async () => {
+      const rows = { 'AS sender_relation': [{
+        message_id: MESSAGE, sender_id: PARENT, sender_role: 'PARENT', kind: 'message', body: 'Hello',
+        created_at: minutesAgo(1), edited_at: null, deleted_at: null, sender_name: 'Layla Test', sender_relation: 'Mother',
+      }] };
+      makeRouter(rows);
+      const own = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockParentUser()).expect(200);
+      expect(own.body.data.messages[0].canEdit).toBe(true);
+      makeRouter(rows);
+      const other = await authenticatedRequest('get', `/api/messaging/conversations/${CONVO}`, mockTeacherUser()).expect(200);
+      expect(other.body.data.messages[0].canEdit).toBe(false);
     });
 
     it('refuses a delete by someone who is neither author nor admin', async () => {

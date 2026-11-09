@@ -6,6 +6,9 @@ jest.mock('resend', () => ({
 
 const { getApp, authenticatedRequest } = require('../setup/integrationApp');
 const { getTestPool } = require('../setup/setupTestDB');
+const { TINY_PNG } = require('../../helpers/imageFixtures');
+const { deliverQueuedEmails, outboxRows } = require('../../helpers/emailOutbox');
+const { getResend } = require('../../../utils/emailUtils');
 
 const ADMIN_ID = '550e8400-e29b-41d4-a716-446655440000';
 const TEACHER_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -263,6 +266,125 @@ describe('Integration: Messaging routes', () => {
     const after = await authenticatedRequest('get', `/api/messaging/conversations/${id}`, asDad);
     expect(after.body.data.messages[0]).toMatchObject({ body: null, attachments: [] });
     expect(after.body.data.messages[0].deletedAt).not.toBeNull();
+  });
+
+  describe('editing a sent message', () => {
+    const threadUrl = (id) => `/api/messaging/conversations/${id}`;
+    const msgUrl = (id, messageId) => `${threadUrl(id)}/messages/${messageId}`;
+    const ageMessage = (messageId, interval) => pool.query(`UPDATE messages SET created_at = NOW() - $2::interval WHERE message_id = $1`, [messageId, interval]);
+    const threadFor = async (id, who) => (await authenticatedRequest('get', threadUrl(id), who)).body.data;
+    const teacherReply = async (build = (r) => r) => {
+      const id = (await start(asMom, publishedId, 'Can we talk?')).body.data.conversation.conversationId;
+      const res = await build(authenticatedRequest('post', `${threadUrl(id)}/messages`, asTeacher).field('body', 'I rechecked it and'));
+      expect(res.status).toBe(201);
+      return { id, message: res.body.data.messages.find((m) => m.senderId === TEACHER_ID) };
+    };
+    const markEmailed = (id, userId, messageId) => pool.query(
+      `INSERT INTO conversation_participants (conversation_id, user_id, last_emailed_at)
+       SELECT $1, $2, created_at FROM messages WHERE message_id = $3
+       ON CONFLICT (conversation_id, user_id) DO UPDATE SET last_emailed_at = EXCLUDED.last_emailed_at`,
+      [id, userId, messageId],
+    );
+
+    it('a teacher edits a month-old message', async () => {
+      const { id, message } = await teacherReply();
+      await ageMessage(message.messageId, '30 days');
+      const res = await authenticatedRequest('patch', msgUrl(id, message.messageId), asTeacher).send({ body: 'I rechecked it and added the point back.' });
+      expect(res.status).toBe(200);
+
+      const after = (await threadFor(id, asTeacher)).messages.find((m) => m.messageId === message.messageId);
+      expect(after).toMatchObject({ body: 'I rechecked it and added the point back.', canEdit: true });
+      expect(after.editedAt).not.toBeNull();
+    });
+
+    it('a parent has 30 minutes', async () => {
+      const id = (await start(asMom, publishedId, 'First try')).body.data.conversation.conversationId;
+      const mine = (await threadFor(id, asMom)).messages[0];
+      await ageMessage(mine.messageId, '29 minutes');
+      expect((await authenticatedRequest('patch', msgUrl(id, mine.messageId), asMom).send({ body: 'Second try' })).status).toBe(200);
+      await ageMessage(mine.messageId, '31 minutes');
+      expect((await authenticatedRequest('patch', msgUrl(id, mine.messageId), asMom).send({ body: 'Third try' })).status).toBe(403);
+      expect((await threadFor(id, asMom)).messages[0]).toMatchObject({ body: 'Second try', canEdit: false });
+    });
+
+    it('swaps a wrong file for the right one and leaves the others', async () => {
+      const { id, message } = await teacherReply((r) => r
+        .attach('files', TINY_PNG, { filename: 'keep.png', contentType: 'image/png' })
+        .attach('files', TINY_PNG, { filename: 'wrong.png', contentType: 'image/png' }));
+      const wrong = message.attachments.find((a) => a.fileName === 'wrong.png');
+
+      const res = await authenticatedRequest('patch', msgUrl(id, message.messageId), asTeacher)
+        .field('body', 'I rechecked it and')
+        .field('removeAttachmentIds', wrong.attachmentId)
+        .attach('files', TINY_PNG, { filename: 'right.png', contentType: 'image/png' });
+      expect(res.status).toBe(200);
+
+      const after = (await threadFor(id, asTeacher)).messages.find((m) => m.messageId === message.messageId);
+      expect(after.attachments.map((a) => a.fileName).sort()).toEqual(['keep.png', 'right.png']);
+      expect(after.editedAt).not.toBeNull();
+    });
+
+    it('offers and sends the corrected email only to people whose email went out', async () => {
+      const { id, message } = await teacherReply();
+      await markEmailed(id, MOM_ID, message.messageId);
+
+      const context = await authenticatedRequest('get', `${msgUrl(id, message.messageId)}/edit-context`, asTeacher);
+      expect(context.status).toBe(200);
+      expect(context.body.data.emailedTo).toEqual([{ userId: MOM_ID, name: 'Mom Test' }]);
+
+      const res = await authenticatedRequest('patch', msgUrl(id, message.messageId), asTeacher).send({ body: 'The full, corrected message.', emailCorrection: true });
+      expect(res.body.data.correctionsQueued).toBe(1);
+
+      getResend().emails.send.mockClear();
+      await deliverQueuedEmails(pool);
+      const rows = await outboxRows(pool);
+      expect(rows.filter((r) => r.kind === 'message_correction')).toHaveLength(1);
+      expect(rows.find((r) => r.kind === 'message_correction')).toMatchObject({ recipient_email: 'mom@example.com', status: 'sent' });
+      const [[sent]] = getResend().emails.send.mock.calls;
+      expect(sent.to).toEqual(['mom@example.com']);
+      expect(sent.subject).toMatch(/corrected a message/);
+      expect(sent.html).toContain('The full, corrected message.');
+    });
+
+    it('sends no corrected email when the box is left off', async () => {
+      const { id, message } = await teacherReply();
+      await markEmailed(id, MOM_ID, message.messageId);
+      await authenticatedRequest('patch', msgUrl(id, message.messageId), asTeacher).send({ body: 'Quietly fixed.' }).expect(200);
+      expect((await outboxRows(pool)).filter((r) => r.kind === 'message_correction')).toEqual([]);
+    });
+
+    it('leaves out someone who muted the thread', async () => {
+      const { id, message } = await teacherReply();
+      await markEmailed(id, MOM_ID, message.messageId);
+      await pool.query(`UPDATE conversation_participants SET muted = TRUE WHERE conversation_id = $1 AND user_id = $2`, [id, MOM_ID]);
+      const context = await authenticatedRequest('get', `${msgUrl(id, message.messageId)}/edit-context`, asTeacher);
+      expect(context.body.data.emailedTo).toEqual([]);
+    });
+
+    it('counts a guardian who only has the invite email, and gives them a way in', async () => {
+      await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Hana Test', 'hana@example.com', 'Aunt', 'ALHAADIACADEMY')`, [studentId]);
+      const { id, message } = await teacherReply();
+      const { rows: [hana] } = await pool.query(`SELECT user_id FROM users WHERE email = 'hana@example.com'`);
+
+      const context = await authenticatedRequest('get', `${msgUrl(id, message.messageId)}/edit-context`, asTeacher);
+      expect(context.body.data.emailedTo).toEqual([{ userId: hana.user_id, name: 'Hana Test' }]);
+
+      await authenticatedRequest('patch', msgUrl(id, message.messageId), asTeacher).send({ body: 'Corrected for the invite.', emailCorrection: true }).expect(200);
+      getResend().emails.send.mockClear();
+      await deliverQueuedEmails(pool);
+      const [[sent]] = getResend().emails.send.mock.calls;
+      expect(sent.to).toEqual(['hana@example.com']);
+      expect(sent.html).toContain('invite=1');
+      expect(sent.html).toContain('Corrected for the invite.');
+    });
+
+    it('a later message from the same teacher is not treated as covered by the invite', async () => {
+      await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Hana Test', 'hana@example.com', 'Aunt', 'ALHAADIACADEMY')`, [studentId]);
+      const { id } = await teacherReply();
+      const later = (await authenticatedRequest('post', `${threadUrl(id)}/messages`, asTeacher).field('body', 'One more thing')).body.data.messages.at(-1);
+      const context = await authenticatedRequest('get', `${msgUrl(id, later.messageId)}/edit-context`, asTeacher);
+      expect(context.body.data.emailedTo).toEqual([]);
+    });
   });
 
   it('an admin who only opens a thread reads it for themselves without joining it', async () => {

@@ -12,7 +12,9 @@ const path = require('path');
 const crypto = require('crypto');
 const db = require('../config/database');
 const supabase = require('../config/supabaseClient');
-const { BUCKET, SIGNED_URL_TTL, uploadFiles, signedUrlMap } = require('../utils/attachmentUpload');
+const { BUCKET, MAX_FILES, SIGNED_URL_TTL, uploadFiles, signedUrlMap, removeObjects } = require('../utils/attachmentUpload');
+const { canEditMessage, withinEditWindow, editWindowText } = require('../utils/messageEditRules');
+const emailOutbox = require('../services/email/outbox');
 const logger = require('../logger');
 const pushEvents = require('../services/push/pushEvents');
 const { threadPath } = require('../utils/appPaths');
@@ -38,7 +40,6 @@ const replyReminders = require('../services/replyReminders');
 const { isEffectivelyModified } = require('../utils/modifiedMark');
 
 const MAX_BODY = 5000;
-const EDIT_WINDOW_MS = 15 * 60 * 1000;
 const EMAIL_DELAY = '2 minutes';
 const MAX_TITLE = 120;
 const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
@@ -105,6 +106,16 @@ async function signAttachments(rows) {
   }));
 }
 
+/** Upload one file and record it on the message, inside the caller's transaction. */
+async function storeAttachment(client, { school, conversationId, messageId }, file, uploaded) {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const filePath = `${school}/${conversationId}/${messageId}/${crypto.randomUUID()}${ext}`;
+  const { error } = await supabase.storage.from(BUCKET).upload(filePath, file.buffer, { contentType: file.mimetype, upsert: false });
+  if (error) throw new Error(`Upload failed: ${error.message}`);
+  uploaded.push(filePath);
+  await client.query(q.insertAttachment, [messageId, filePath, file.originalname, file.mimetype, file.size]);
+}
+
 /**
  * Insert a message and its attachments in one transaction. Files are uploaded
  * before COMMIT so a storage failure rolls the message back; objects already
@@ -117,12 +128,7 @@ async function persistMessage({ conversationId, school, sender, kind = 'message'
     await client.query('BEGIN');
     const { rows: [m] } = await client.query(q.insertMessage, [conversationId, sender.userId, sender.role, kind, body]);
     for (const f of files) {
-      const ext = path.extname(f.originalname).toLowerCase();
-      const filePath = `${school}/${conversationId}/${m.message_id}/${crypto.randomUUID()}${ext}`;
-      const { error } = await supabase.storage.from(BUCKET).upload(filePath, f.buffer, { contentType: f.mimetype, upsert: false });
-      if (error) throw new Error(`Upload failed: ${error.message}`);
-      uploaded.push(filePath);
-      await client.query(q.insertAttachment, [m.message_id, filePath, f.originalname, f.mimetype, f.size]);
+      await storeAttachment(client, { school, conversationId, messageId: m.message_id }, f, uploaded);
     }
     if (kind === 'message') await client.query(q.touchConversation, [conversationId]);
     await client.query('COMMIT');
@@ -417,6 +423,7 @@ async function buildThread(conv, user, req = null) {
       createdAt: m.created_at,
       editedAt: m.edited_at,
       deletedAt: m.deleted_at,
+      canEdit: canEditMessage(m, user.userId),
       attachments: m.deleted_at ? [] : byMessage.get(m.message_id) || [],
     })),
     lastReadAt: state.last_read_at ?? null,
@@ -872,24 +879,106 @@ const postMessage = async (req, res) => {
   }
 };
 
-// PATCH /api/messaging/conversations/:id/messages/:messageId  { body }
+/** Why this user can't edit this message; null when they can. */
+function editRefusal(m, userId) {
+  if (!m || m.kind !== 'message') return [404, 'Message not found'];
+  if (m.sender_id !== userId) return [403, 'You can only edit your own messages'];
+  if (m.deleted_at) return [403, 'This message was removed'];
+  if (!withinEditWindow(m)) return [403, editWindowText(m.sender_role)];
+  return null;
+}
+
+/** One email per person who already has the first version. The server decides who that is. */
+async function queueCorrections(client, conv, m, editedAt, userId) {
+  const { rows } = await client.query(q.selectAlreadyEmailed, [conv.conversationId, m.message_id]);
+  return emailOutbox.enqueue(client, rows.map((r) => ({
+    kind: 'message_correction',
+    school: conv.school,
+    recipientUserId: r.user_id,
+    recipientEmail: r.email,
+    subjectType: 'message',
+    subjectId: m.message_id,
+    studentId: conv.studentId,
+    dedupeKey: `msgfix:${m.message_id}:${new Date(editedAt).getTime()}`,
+    payload: { messageId: m.message_id, conversationId: conv.conversationId },
+    createdBy: userId,
+  })));
+}
+
+// PATCH /api/messaging/conversations/:id/messages/:messageId
+// { body, removeAttachmentIds?, emailCorrection? } + new files (JSON or multipart)
 const editMessage = async (req, res) => {
-  const text = typeof req.body.body === 'string' ? req.body.body.trim() : '';
-  if (!text || text.length > MAX_BODY) return failed(res, 400, `Message must be 1–${MAX_BODY} characters`);
+  const requestedRemovals = [...new Set([].concat(req.body.removeAttachmentIds ?? []).filter(Boolean))];
+  if (badId(...requestedRemovals)) return failed(res, 400, 'Invalid id');
+  const files = req.files || [];
+  const conv = req.conversation;
+  const { userId } = req.user;
+  const client = await db.connect();
+  const uploaded = [];
+  let removedPaths = [];
+  let response;
+  const refuse = async (status, message) => {
+    await client.query('ROLLBACK');
+    return failed(res, status, message);
+  };
   try {
-    const { rows } = await db.query(q.selectMessageForMutation, [req.params.messageId, req.conversation.conversationId]);
-    const m = rows[0];
-    if (!m || m.kind !== 'message') return failed(res, 404, 'Message not found');
-    if (m.sender_id !== req.user.userId) return failed(res, 403, 'You can only edit your own messages');
-    if (m.deleted_at) return failed(res, 403, 'This message was removed');
-    if (Date.now() - new Date(m.created_at).getTime() > EDIT_WINDOW_MS) {
-      return failed(res, 403, 'Messages can be edited for 15 minutes after sending');
+    await client.query('BEGIN');
+    const { rows: [m] } = await client.query(q.lockMessageForEdit, [req.params.messageId, conv.conversationId]);
+    const refusal = editRefusal(m, userId);
+    if (refusal) return await refuse(...refusal);
+
+    // A student edits the words only, and has no tick box.
+    const fromStudent = m.sender_role === 'STUDENT';
+    const removeIds = fromStudent ? [] : requestedRemovals;
+    const { rows: current } = await client.query(q.selectAttachmentsByMessageIds, [[m.message_id]]);
+    const removing = current.filter((a) => removeIds.includes(a.attachment_id));
+    if (removing.length !== removeIds.length) return await refuse(409, 'That file is no longer on this message');
+    const remaining = current.length - removing.length + files.length;
+    if (remaining > MAX_FILES) return await refuse(400, `At most ${MAX_FILES} files per message`);
+    const v = validateBody(req.body.body === undefined ? m.body : req.body.body, remaining);
+    if (v.error) return await refuse(400, v.error);
+
+    if (v.text === m.body && removing.length === 0 && files.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(200).json({ status: 'success', data: { messageId: m.message_id, body: m.body, editedAt: m.edited_at, correctionsQueued: 0 } });
     }
-    const { rows: [u] } = await db.query(q.updateMessageBody, [m.message_id, text]);
-    return res.status(200).json({ status: 'success', data: { messageId: m.message_id, body: text, editedAt: u.edited_at } });
+
+    if (removing.length) await client.query(q.deleteAttachmentsByIds, [m.message_id, removeIds]);
+    for (const f of files) {
+      await storeAttachment(client, { school: conv.school, conversationId: conv.conversationId, messageId: m.message_id }, f, uploaded);
+    }
+    const { rows: [u] } = await client.query(q.updateMessageBody, [m.message_id, v.text]);
+    const wantsCorrection = !fromStudent && flag(req.body.emailCorrection, false);
+    const correctionsQueued = wantsCorrection ? await queueCorrections(client, conv, m, u.edited_at, userId) : 0;
+    await client.query('COMMIT');
+    removedPaths = removing.map((a) => a.file_path);
+    response = { messageId: m.message_id, body: v.text, editedAt: u.edited_at, correctionsQueued };
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    await removeObjects(uploaded);
     logger.error('Error editing message:', error);
     return failed(res, 500, 'Error editing message');
+  } finally {
+    client.release();
+  }
+  // Only once the change is saved: a failed save must not lose a file still on the message.
+  await removeObjects(removedPaths);
+  return res.status(200).json({ status: 'success', data: response });
+};
+
+// GET /api/messaging/conversations/:id/messages/:messageId/edit-context
+// Who already has this message by email, for the editor's "email the corrected
+// version" tick box. The sender only, and names only.
+const getEditContext = async (req, res) => {
+  try {
+    const { rows: [m] } = await db.query(q.selectMessageForMutation, [req.params.messageId, req.conversation.conversationId]);
+    if (!m || m.kind !== 'message') return failed(res, 404, 'Message not found');
+    if (m.sender_id !== req.user.userId) return failed(res, 403, 'You can only edit your own messages');
+    const { rows } = await db.query(q.selectAlreadyEmailed, [req.conversation.conversationId, m.message_id]);
+    return res.status(200).json({ status: 'success', data: { emailedTo: rows.map((r) => ({ userId: r.user_id, name: r.name })) } });
+  } catch (error) {
+    logger.error('Error loading the edit context:', error);
+    return failed(res, 500, 'Error loading message');
   }
 };
 
@@ -989,6 +1078,7 @@ module.exports = {
   getConversation,
   postMessage,
   editMessage,
+  getEditContext,
   deleteMessage,
   markRead,
   setStatus,
@@ -1009,6 +1099,5 @@ module.exports = {
   isUuid,
   MAX_BODY,
   MAX_TITLE,
-  EDIT_WINDOW_MS,
   PAST_TERM_MESSAGE,
 };

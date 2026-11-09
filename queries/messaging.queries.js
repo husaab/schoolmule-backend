@@ -402,12 +402,70 @@ const messagingQueries = {
 
   // $1 message_id, $2 conversation_id
   selectMessageForMutation: `
-    SELECT message_id, sender_id, kind, created_at, deleted_at FROM messages
+    SELECT message_id, sender_id, kind, created_at, deleted_at, sender_role, body, edited_at FROM messages
     WHERE message_id = $1 AND conversation_id = $2
+  `,
+  // The same row, held for the edit's transaction so two saves can't interleave.
+  // $1 message_id, $2 conversation_id
+  lockMessageForEdit: `
+    SELECT message_id, sender_id, kind, created_at, deleted_at, sender_role, body, edited_at FROM messages
+    WHERE message_id = $1 AND conversation_id = $2
+    FOR UPDATE
   `,
   // $1 message_id, $2 body
   updateMessageBody: `
     UPDATE messages SET body = $2, edited_at = NOW() WHERE message_id = $1 RETURNING edited_at
+  `,
+  // $1 message_id, $2 attachment_id[]
+  deleteAttachmentsByIds: `
+    DELETE FROM message_attachments WHERE message_id = $1 AND attachment_id = ANY($2::uuid[])
+  `,
+  // Who has this message in their inbox: people whose digest reached it (the
+  // watermark only moves after a real send), and guardians with no account yet,
+  // whose invite email carried it in the minute after it was posted. The first
+  // never counts someone who muted the thread since. $1 conversation_id, $2 message_id
+  selectAlreadyEmailed: `
+    WITH m AS (
+      SELECT message_id, conversation_id, sender_id, created_at FROM messages
+      WHERE conversation_id = $1 AND message_id = $2
+    )
+    SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.email, COALESCE(u.password = '!', FALSE) AS invite_pending
+    FROM m
+    JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
+      AND cp.last_emailed_at >= m.created_at AND COALESCE(cp.muted, FALSE) = FALSE
+    JOIN users u ON u.user_id = cp.user_id
+    WHERE u.user_id IS DISTINCT FROM m.sender_id AND u.is_archived = FALSE AND u.email IS NOT NULL
+    UNION
+    SELECT u.user_id, ${PERSON_NAME('u')} AS name, u.email, TRUE AS invite_pending
+    FROM m
+    JOIN conversations c ON c.conversation_id = m.conversation_id
+    JOIN parent_students ps ON ps.invite_conversation_id = c.conversation_id AND ps.student_id = c.student_id
+      AND ps.invited_by = m.sender_id
+      AND ps.invited_at >= m.created_at AND ps.invited_at < m.created_at + INTERVAL '1 minute'
+    JOIN users u ON u.user_id = ps.parent_id
+    WHERE u.password = '!' AND u.is_archived = FALSE AND u.email IS NOT NULL
+    ORDER BY name
+  `,
+  // The corrected email, as things stand when it is sent. $1 message_id, $2 recipient user_id
+  selectCorrectionContext: `
+    SELECT m.message_id, m.conversation_id, m.body, m.created_at, m.deleted_at,
+           ${PERSON_NAME('su')} AS sender_name,
+           c.title, c.assessment_id, c.classwork_item_id, c.includes_student,
+           s.name AS student_name, COALESCE(cl.subject, NULLIF(lt.staff_title, ''), 'Homeroom') AS class_subject,
+           u.first_name AS recipient_first_name, u.role AS recipient_role, u.is_archived AS recipient_archived,
+           (u.password = '!') AS recipient_invite_pending, COALESCE(cp.muted, FALSE) AS muted,
+           ${GUARDIANS_HIDDEN} AS guardians_hidden,
+           EXISTS (SELECT 1 FROM parent_students ps JOIN users gu ON gu.user_id = ps.parent_id AND gu.is_archived = FALSE
+             WHERE ps.student_id = c.student_id) AS has_guardians
+    FROM messages m
+    JOIN conversations c ON c.conversation_id = m.conversation_id
+    JOIN students s ON s.student_id = c.student_id
+    LEFT JOIN classes cl ON cl.class_id = c.class_id
+    LEFT JOIN users lt ON lt.user_id = c.teacher_id
+    LEFT JOIN users su ON su.user_id = m.sender_id
+    JOIN users u ON u.user_id = $2
+    LEFT JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id AND cp.user_id = $2
+    WHERE m.message_id = $1
   `,
   // $1 message_id, $2 user_id
   softDeleteMessage: `

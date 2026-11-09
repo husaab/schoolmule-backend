@@ -586,7 +586,7 @@ function stopWorker() {
 }
 
 module.exports = {
-  startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, MAX_ATTEMPTS,
+  startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, threadLink, timeLabel, MAX_ATTEMPTS,
   drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick, drainClassroom,
   drainEmailOutbox, replyReminderTick,
 };

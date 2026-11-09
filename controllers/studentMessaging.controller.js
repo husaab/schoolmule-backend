@@ -23,6 +23,7 @@ const q = require('../queries/messaging.queries');
 const work = require('../services/classroom/studentWork');
 const { isMember } = require('../middleware/requireConversationAccess');
 const m = require('./messaging.controller');
+const { withinEditWindow } = require('../utils/messageEditRules');
 const { signedPhotoUrls } = require('../services/profile/photos');
 
 const ok = (res, data, status = 200) => res.status(status).json({ status: 'success', data });
@@ -176,7 +177,7 @@ const deleteMessage = async (req, res, next) => {
   try {
     const { rows: [msg] } = await db.query(q.selectMessageForMutation, [req.params.messageId, req.conversation.conversationId]);
     if (msg && msg.kind === 'message' && msg.sender_id === req.user.userId && !msg.deleted_at
-        && Date.now() - new Date(msg.created_at).getTime() > m.EDIT_WINDOW_MS) {
+        && !withinEditWindow({ ...msg, sender_role: 'STUDENT' })) {
       return failed(res, 403, MESSAGES.DELETE_WINDOW);
     }
     return m.deleteMessage(req, res, next);
