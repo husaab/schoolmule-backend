@@ -44,6 +44,8 @@ const EMAIL_DELAY = '2 minutes';
 const MAX_TITLE = 120;
 const RESEND_INVITE_COOLDOWN_MS = 60 * 60 * 1000;
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
@@ -220,18 +222,32 @@ async function sendGuardianInvite({ school, to, recipientFirstName, teacherName,
  */
 const isStaffView = (user) => ['TEACHER', 'ADMIN'].includes(user.role);
 
+/** Bring this student's guardian rows in line with the student file. */
+async function syncGuardianRowsFromFile(studentId) {
+  await db.query(q.deleteStaleFileGuardians, [studentId]);
+  await db.query(q.insertGuardianRowsFromFile, [studentId]);
+}
+
 async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, body }) {
   // Staff only, and never on an item thread the school keeps from guardians
   // (the invite would carry the message itself).
   if (!isStaffView(user) || conv.guardiansHidden) return [];
   const results = [];
   try {
-    await db.query(q.insertGuardianRowsFromFile, [conv.studentId]);
+    await syncGuardianRowsFromFile(conv.studentId);
     const { rows: links } = await db.query(q.selectUnlinkedGuardians, [conv.studentId]);
     for (const link of links) {
       const email = String(link.parent_email).trim();
       const name = (link.parent_name && link.parent_name.trim()) || email.split('@')[0];
+      const skip = () => results.push({ linkId: link.parent_student_link_id, name, status: 'skipped' });
+      // False when the row was changed or removed after it was read above.
+      const linkTo = async (userId, recordInvite) =>
+        (await db.query(q.linkGuardianToUser, [link.parent_student_link_id, userId, user.userId, conv.conversationId, recordInvite, email])).rows.length > 0;
       try {
+        if (!EMAIL_RE.test(email)) {
+          skip();
+          continue;
+        }
         const { rows: existing } = await db.query(q.selectUserByEmailInSchool, [email, conv.school]);
         if (existing.length) {
           const u = existing[0];
@@ -239,11 +255,10 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
           // linked to their own child reads the thread in their parent view.
           // Never a student login (re-review N6): a child's own address on a
           // guardian row would make the child their own guardian.
-          if (u.is_archived || String(u.role) === 'STUDENT') {
-            results.push({ linkId: link.parent_student_link_id, name, status: 'skipped' });
+          if (u.is_archived || String(u.role) === 'STUDENT' || !(await linkTo(u.user_id, false))) {
+            skip();
             continue;
           }
-          await db.query(q.linkGuardianToUser, [link.parent_student_link_id, u.user_id, user.userId, conv.conversationId, false]);
           conv.guardianIds.push(u.user_id);
           results.push({ linkId: link.parent_student_link_id, name, status: 'linked' });
           continue;
@@ -254,7 +269,10 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
         const lastName = rest.join(' ') || '';
         const { rows: created } = await db.query(adminUserQueries.insertInvitedUser, [email, name, firstName, lastName, conv.school, 'PARENT', null, null]);
         const newUser = created[0];
-        await db.query(q.linkGuardianToUser, [link.parent_student_link_id, newUser.user_id, user.userId, conv.conversationId, true]);
+        if (!(await linkTo(newUser.user_id, true))) {
+          skip();
+          continue;
+        }
         const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [newUser.user_id]);
         await sendGuardianInvite({
           school: conv.school,
@@ -669,8 +687,6 @@ const getTargets = async (req, res) => {
   }
 };
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 /** A typed-in guardian, cleaned, or { error } saying what to fix. */
 function guardianInput(body = {}) {
   const name = String(body.name ?? '').trim();
@@ -684,7 +700,8 @@ function guardianInput(body = {}) {
 
 /** Why this address can't be used for this student: [status, message], or null. */
 async function guardianEmailProblem(school, studentId, email, linkId) {
-  const { rows: [{ taken }] } = await db.query(q.selectGuardianEmailTaken, [studentId, email, linkId]);
+  const { rows: [{ taken, removed }] } = await db.query(q.selectGuardianEmailTaken, [studentId, email, linkId]);
+  if (removed) return [409, 'This person was removed from this student on the Relations page. They can be added back there.'];
   if (taken) return [409, 'That email is already on file for this student'];
   const { rows: [account] } = await db.query(q.selectUserByEmailInSchool, [email, school]);
   if (account && (account.is_archived || String(account.role) === 'STUDENT')) return [400, "That email can't be used for a guardian. Ask the office to check it."];
@@ -707,7 +724,7 @@ const addGuardian = async (req, res) => {
     if (problem) return failed(res, ...problem);
     // The parents on the file are saved first: once a student has any guardian
     // row, grade emails go to those rows alone, and they must not lose out.
-    await db.query(q.insertGuardianRowsFromFile, [studentId]);
+    await syncGuardianRowsFromFile(studentId);
     await db.query(q.insertTypedGuardian, [studentId, input.name, input.email, input.relation, req.user.school]);
     return res.status(201).json({ status: 'success', data: { guardians: await guardiansOf(studentId) } });
   } catch (error) {

@@ -26,10 +26,19 @@ const rolloverQueries = {
   `,
 
   copyParentLinks: `
-    INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, parent_number, relation, school)
-    SELECT $1, ps.parent_id, ps.parent_name, ps.parent_email, ps.parent_number, ps.relation, ps.school
+    INSERT INTO parent_students (student_id, parent_id, parent_name, parent_email, parent_number, relation, school, source)
+    SELECT $1, ps.parent_id, ps.parent_name, ps.parent_email, ps.parent_number, ps.relation, ps.school, ps.source
     FROM parent_students ps
     WHERE ps.student_id = $2
+  `,
+
+  // Someone the office removed stays removed in the new year's row. $1 = new student_id, $2 = old student_id
+  copyGuardianRemovals: `
+    INSERT INTO guardian_removals (student_id, email, removed_by, removed_at)
+    SELECT $1, gr.email, gr.removed_by, gr.removed_at
+    FROM guardian_removals gr
+    WHERE gr.student_id = $2
+    ON CONFLICT DO NOTHING
   `,
 
   // The student's login follows them into the new year's row, beside the

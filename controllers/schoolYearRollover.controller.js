@@ -116,6 +116,7 @@ const executeRollover = async (req, res, next) => {
           s.gender ?? null,
         ]);
         await client.query(rolloverQueries.copyParentLinks, [inserted.rows[0].student_id, s.student_id]);
+        await client.query(rolloverQueries.copyGuardianRemovals, [inserted.rows[0].student_id, s.student_id]);
         await client.query(rolloverQueries.copyStudentAccountLink, [
           inserted.rows[0].student_id, s.student_id, targetYearId, req.user.userId,
         ]);

@@ -361,6 +361,7 @@ describe('PATCH /api/parent-students/:id', () => {
   it('updates a parent-student relation', async () => {
     mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     const updated = buildParentStudentRow({ relation: 'FATHER' });
+    mockQueryResponse([]); // the old address is remembered
     mockQueryResponse([updated], 1);
 
     const res = await request(app)
@@ -403,6 +404,7 @@ describe('PATCH /api/parent-students/:id', () => {
     // checkExistingRelationExcludingLink returns no existing
     mockQueryResponse([]);
     const updated = buildParentStudentRow({ relation: 'FATHER' });
+    mockQueryResponse([]); // the old address is remembered
     mockQueryResponse([updated], 1);
 
     const res = await request(app)
@@ -434,6 +436,7 @@ describe('PATCH /api/parent-students/:id', () => {
   it('skips the duplicate check when parentId is null', async () => {
     mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
     const updated = buildParentStudentRow({ parent_id: null });
+    mockQueryResponse([]); // the old address is remembered
     mockQueryResponse([updated], 1);
 
     const res = await request(app)
@@ -450,6 +453,7 @@ describe('PATCH /api/parent-students/:id', () => {
 describe('DELETE /api/parent-students/:id', () => {
   it('deletes a parent-student relation', async () => {
     mockQueryResponse([{ parent_student_link_id: 'link-1', school: 'ALHAADIACADEMY' }]); // school check
+    mockQueryResponse([]); // the old address is remembered
     mockQueryResponse([], 1);
 
     const res = await request(app)

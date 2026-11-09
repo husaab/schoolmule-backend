@@ -937,6 +937,75 @@ describe('Integration: Messaging routes', () => {
       expect(jobs.rows.map((j) => j.recipient_id)).toContain(MOM_ID);
     });
 
+    describe('when the office has been involved', () => {
+      const asAdmin = { userId: ADMIN_ID, username: 'Admin User', email: 'admin@example.com', role: 'ADMIN' };
+      const removeRow = (linkId) => authenticatedRequest('delete', `/api/parent-students/${linkId}`, asAdmin);
+
+      it('a guardian the office removed stays removed: not listed, not re-added, not invited', async () => {
+        const first = await writeAbout(bilal);
+        const [row] = await rowsOf(bilal);
+        expect((await removeRow(row.parent_student_link_id)).status).toBe(200);
+        getResend().emails.send.mockClear();
+
+        expect(await guardiansOf(bilal)).toEqual([]);
+        const res = await authenticatedRequest('post', `/api/messaging/conversations/${first.body.data.conversation.conversationId}/messages`, asTeacher).field('body', 'One more thing.');
+        expect(res.body.data.invites).toEqual([]);
+        expect(await rowsOf(bilal)).toEqual([]);
+        expect(getResend().emails.send).not.toHaveBeenCalled();
+      });
+
+      it('a teacher cannot type back in someone the office removed, and the office can restore them', async () => {
+        await writeAbout(bilal);
+        const [row] = await rowsOf(bilal);
+        await removeRow(row.parent_student_link_id);
+
+        const typed = await addGuardian(bilal, { name: 'Hana Test', email: 'hana@example.com', relation: 'Mother' });
+        expect(typed.status).toBe(409);
+        expect(typed.body.message).toMatch(/removed/i);
+
+        const restored = await authenticatedRequest('post', '/api/parent-students', asAdmin)
+          .send({ studentId: bilal, parentName: 'Hana Test', parentEmail: 'hana@example.com', relation: 'Mother' });
+        expect(restored.status).toBe(201);
+        await pool.query(`DELETE FROM parent_students WHERE student_id = $1`, [bilal]);
+        expect((await guardiansOf(bilal)).map((g) => g.relation)).toEqual(['Mother']);
+      });
+
+      it('moving a guardian to a new address keeps the old address on the file from coming back', async () => {
+        const added = await addGuardian(bilal, { name: 'Lina Test', email: 'lina@example.com', relation: 'Guardian' });
+        expect(added.status).toBe(201);
+        const saved = (await rowsOf(bilal)).find((r) => r.relation === 'Mother');
+        const moved = await authenticatedRequest('patch', `/api/parent-students/${saved.parent_student_link_id}`, asAdmin)
+          .send({ parentName: 'Hana Test', parentEmail: 'hana.new@example.com', relation: 'Mother' });
+        expect(moved.status).toBe(200);
+        expect((await guardiansOf(bilal)).map((g) => g.email).sort()).toEqual(['hana.new@example.com', 'lina@example.com']);
+      });
+
+      it('a guardian row the office entered is not editable by a teacher', async () => {
+        const { rows: [row] } = await pool.query(
+          `INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Office Entry', 'office@example.com', 'Guardian', 'ALHAADIACADEMY') RETURNING parent_student_link_id`, [bilal]);
+        const listed = (await guardiansOf(bilal)).find((g) => g.email === 'office@example.com');
+        expect(listed.canEdit).toBe(false);
+        expect((await authenticatedRequest('delete', `/api/messaging/guardians/${row.parent_student_link_id}`, asTeacher)).status).toBe(409);
+      });
+
+      it('when the file is corrected before anything was sent, the old address is dropped and never invited', async () => {
+        await addGuardian(bilal, { name: 'Lina Test', email: 'lina@example.com', relation: 'Guardian' });
+        await pool.query(`UPDATE students_all SET mother_email = 'hana.fixed@example.com' WHERE student_id = $1`, [bilal]);
+        await writeAbout(bilal);
+        const sent = getResend().emails.send.mock.calls.map(([e]) => e.to[0].toLowerCase()).sort();
+        expect(sent).toEqual(['hana.fixed@example.com', 'lina@example.com']);
+        expect((await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE LOWER(email) = 'hana@example.com'`)).rows[0].n).toBe(0);
+      });
+
+      it('text on the file that is not an email is ignored', async () => {
+        const kid = await fileStudent('Ali Test', { mother: 'Mix Up', motherEmail: 'N/A', father: 'Two Boxes', fatherEmail: 'a@example.com / b@example.com' });
+        expect(await guardiansOf(kid)).toEqual([]);
+        await addGuardian(kid, { name: 'Lina Test', email: 'lina@example.com', relation: 'Guardian' });
+        expect((await rowsOf(kid)).map((r) => r.parent_email)).toEqual(['lina@example.com']);
+        expect((await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE email = 'N/A'`)).rows[0].n).toBe(0);
+      });
+    });
+
     describe('adding a guardian by hand', () => {
       const lina = { name: ' Lina Test ', email: ' Lina@Example.com ', relation: 'Grandparent' };
 

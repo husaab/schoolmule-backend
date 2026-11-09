@@ -247,6 +247,7 @@ const createParentStudent = async (req, res) => {
 
     const { rows } = await db.query(parentStudentQueries.createParentStudent, values);
     const ps = rows[0];
+    await db.query(parentStudentQueries.forgetGuardianRemoval, [studentId, parentId || null, parentEmail || null]);
 
     logger.info(`Parent-student relation created successfully: ${ps.parent_student_link_id}`);
     return res.status(201).json({
@@ -312,6 +313,7 @@ const updateParentStudent = async (req, res) => {
       id
     ];
 
+    await db.query(parentStudentQueries.rememberGuardianRemoval, [id, req.user.userId, parentId || null, parentEmail || null]);
     const { rows, rowCount } = await db.query(parentStudentQueries.updateParentStudent, values);
 
     if (rowCount === 0) {
@@ -322,6 +324,7 @@ const updateParentStudent = async (req, res) => {
     }
 
     const ps = rows[0];
+    await db.query(parentStudentQueries.forgetGuardianRemoval, [ps.student_id, parentId || null, parentEmail || null]);
     logger.info(`Parent-student relation updated successfully: ${id}`);
     return res.status(200).json({
       status: "success",
@@ -353,6 +356,7 @@ const deleteParentStudent = async (req, res) => {
     if (!(await linkInSchool(id, req.user.school))) {
       return res.status(404).json(NOT_FOUND(id));
     }
+    await db.query(parentStudentQueries.rememberGuardianRemoval, [id, req.user.userId, null, null]);
     const result = await db.query(parentStudentQueries.deleteParentStudent, [id]);
 
     if (result.rowCount === 0) {

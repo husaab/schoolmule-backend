@@ -449,7 +449,7 @@ describe('messaging controller', () => {
       const res = await replyAsTeacher();
       expect(res.status).toBe(201);
       expect(r.ran("true AS invite_pending")[0].params).toEqual(['hana@example.com', 'Hana Test', 'Hana', 'Test', SCHOOL, 'PARENT', null, null]);
-      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'new-user', TEACHER, CONVO, true]);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'new-user', TEACHER, CONVO, true, 'hana@example.com']);
       expect(r.ran('INSERT INTO password_reset_tokens')[0].params).toEqual(['new-user']);
       expect(global.__mockInviteSend).toHaveBeenCalledTimes(1);
       const email = global.__mockInviteSend.mock.calls[0][0];
@@ -468,9 +468,30 @@ describe('messaging controller', () => {
       const res = await replyAsTeacher();
       expect(res.status).toBe(201);
       expect(r.ran("true AS invite_pending")).toHaveLength(0);
-      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'existing', TEACHER, CONVO, false]);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'existing', TEACHER, CONVO, false, 'hana@example.com']);
       expect(global.__mockInviteSend).not.toHaveBeenCalled();
       expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'linked' }]);
+    });
+
+    it('sends nothing when the guardian row changed or went away during the send', async () => {
+      makeRouter({
+        'parent_id IS NULL AND parent_email IS NOT NULL': [unlinked],
+        'LOWER(email) = LOWER($1)': [],
+        "true AS invite_pending": [{ user_id: 'new-user', email: 'hana@example.com', first_name: 'Hana' }],
+        'SET parent_id = $2': [],
+      });
+      const res = await replyAsTeacher();
+      expect(res.status).toBe(201);
+      expect(global.__mockInviteSend).not.toHaveBeenCalled();
+      expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'skipped' }]);
+    });
+
+    it('skips a guardian row whose address is not an email', async () => {
+      const r = makeRouter({ 'parent_id IS NULL AND parent_email IS NOT NULL': [{ ...unlinked, parent_email: 'N/A' }] });
+      const res = await replyAsTeacher();
+      expect(res.status).toBe(201);
+      expect(r.ran("true AS invite_pending")).toHaveLength(0);
+      expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'skipped' }]);
     });
 
     it('respects invite=false and omits the preview when includePreview=false', async () => {
@@ -1020,7 +1041,7 @@ describe('messaging controller', () => {
       });
       const res = await authenticatedRequest('post', `/api/messaging/conversations/${CONVO}/messages`, mockTeacherUser()).field('body', 'Reminder');
       expect(res.status).toBe(201);
-      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'staff-guardian', TEACHER, CONVO, false]);
+      expect(r.ran('SET parent_id = $2')[0].params).toEqual([LINK, 'staff-guardian', TEACHER, CONVO, false, 'hana@example.com']);
       expect(global.__mockInviteSend).not.toHaveBeenCalled();
       expect(res.body.data.invites).toEqual([{ linkId: LINK, name: 'Hana Test', status: 'linked' }]);
     });

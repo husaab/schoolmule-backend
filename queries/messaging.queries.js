@@ -21,9 +21,15 @@ const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 const { PERSON_NAME } = require('./personName');
 
 // A typed-in guardian stays editable from the New message window until they
-// are invited. People who came from the student file are changed on the file.
-const GUARDIAN_EDITABLE = (ps, s) => `(${ps}.parent_id IS NULL AND ${ps}.invited_at IS NULL
-  AND LOWER(TRIM(COALESCE(${ps}.parent_email, ''))) NOT IN (LOWER(TRIM(COALESCE(${s}.mother_email, ''))), LOWER(TRIM(COALESCE(${s}.father_email, '')))))`;
+// are invited. Anyone else on the list is changed by the office.
+const GUARDIAN_EDITABLE = (ps) => `(${ps}.source IS NOT DISTINCT FROM 'typed' AND ${ps}.parent_id IS NULL AND ${ps}.invited_at IS NULL)`;
+
+// Student files hold whatever was imported, so check it really is one address.
+const IS_EMAIL = (e) => `TRIM(${e}) ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'`;
+
+// The office took this address off this student: reading it from the file again
+// would undo that.
+const OFFICE_REMOVED = (s, e) => `EXISTS (SELECT 1 FROM guardian_removals gr WHERE gr.student_id = ${s}.student_id AND gr.email = LOWER(TRIM(${e})))`;
 
 // Everyone staff can reach about student `s`: guardian rows, then the mother
 // and father on the student file, one entry per address (a guardian row wins).
@@ -47,7 +53,7 @@ const STAFF_GUARDIANS = (s) => `COALESCE((
              a.user_id IS NOT NULL AND COALESCE(a.password, '') <> '!' AS has_account,
              a.user_id IS NOT NULL AND a.password = '!' AS invite_pending,
              ps.invited_at,
-             ${GUARDIAN_EDITABLE('ps', s)} AS can_edit
+             ${GUARDIAN_EDITABLE('ps')} AS can_edit
       FROM parent_students ps
       LEFT JOIN LATERAL (
         SELECT u.* FROM users u
@@ -71,7 +77,8 @@ const STAFF_GUARDIANS = (s) => `COALESCE((
       LEFT JOIN LATERAL (
         SELECT u.* FROM users u WHERE LOWER(u.email) = LOWER(TRIM(f.email)) AND u.school = ${s}.school LIMIT 1
       ) a ON TRUE
-      WHERE TRIM(COALESCE(f.email, '')) <> ''
+      WHERE ${IS_EMAIL('f.email')}
+        AND NOT ${OFFICE_REMOVED(s, 'f.email')}
         AND (a.user_id IS NULL OR (a.is_archived IS NOT TRUE AND a.role::text <> 'STUDENT'))
     ) x
     ORDER BY x.email_key, x.src
@@ -812,16 +819,17 @@ const messagingQueries = {
   // The mother and father on the student file become guardian rows, so the
   // invite, the reminder and the grade emails all have one list to read. $1 student_id
   insertGuardianRowsFromFile: `
-    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school)
-    SELECT s.student_id, NULLIF(TRIM(f.name), ''), TRIM(f.email), f.relation, s.school
+    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school, source)
+    SELECT s.student_id, NULLIF(TRIM(f.name), ''), TRIM(f.email), f.relation, s.school, 'file'
     FROM students s
     CROSS JOIN LATERAL (
       SELECT DISTINCT ON (LOWER(TRIM(v.email))) v.*
       FROM (VALUES ('Mother', s.mother_name, s.mother_email), ('Father', s.father_name, s.father_email)) AS v(relation, name, email)
-      WHERE TRIM(COALESCE(v.email, '')) <> ''
+      WHERE ${IS_EMAIL('v.email')}
       ORDER BY LOWER(TRIM(v.email)), v.relation DESC
     ) f
     WHERE s.student_id = $1
+      AND NOT ${OFFICE_REMOVED('s', 'f.email')}
       AND NOT EXISTS (
         SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
         WHERE ps.student_id = s.student_id AND LOWER(TRIM(COALESCE(u.email, ps.parent_email, ''))) = LOWER(TRIM(f.email)))
@@ -829,10 +837,18 @@ const messagingQueries = {
         SELECT 1 FROM users u
         WHERE LOWER(u.email) = LOWER(TRIM(f.email)) AND u.school = s.school AND (u.is_archived IS TRUE OR u.role::text = 'STUDENT'))
   `,
-  // Is this address already someone on this student's list? $3 skips the row being edited.
-  // $1 student_id, $2 email, $3 link_id|null
+  // A row made from the file, not yet invited, whose address has since left the
+  // file: inviting it would write to an address the school corrected. $1 student_id
+  deleteStaleFileGuardians: `
+    DELETE FROM parent_students ps USING students s
+    WHERE ps.student_id = $1 AND s.student_id = ps.student_id
+      AND ps.source = 'file' AND ps.parent_id IS NULL AND ps.invited_at IS NULL
+      AND LOWER(TRIM(COALESCE(ps.parent_email, ''))) NOT IN (LOWER(TRIM(COALESCE(s.mother_email, ''))), LOWER(TRIM(COALESCE(s.father_email, ''))))
+  `,
+  // Is this address already someone on this student's list, or one the office
+  // removed? $3 skips the row being edited. $1 student_id, $2 email, $3 link_id|null
   selectGuardianEmailTaken: `
-    SELECT EXISTS (
+    SELECT EXISTS (SELECT 1 FROM guardian_removals gr WHERE gr.student_id = $1 AND gr.email = LOWER($2)) AS removed, EXISTS (
       SELECT 1 FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
       WHERE ps.student_id = $1 AND ps.parent_student_link_id IS DISTINCT FROM $3::uuid
         AND LOWER(TRIM(COALESCE(u.email, ps.parent_email, ''))) = LOWER($2)
@@ -843,23 +859,23 @@ const messagingQueries = {
   `,
   // $1 student_id, $2 name, $3 email, $4 relation, $5 school
   insertTypedGuardian: `
-    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school, source)
+    VALUES ($1, $2, $3, $4, $5, 'typed')
   `,
   // $1 link_id, $2 school
   selectGuardianForChange: `
-    SELECT ps.student_id, ${GUARDIAN_EDITABLE('ps', 's')} AS can_edit
+    SELECT ps.student_id, ${GUARDIAN_EDITABLE('ps')} AS can_edit
     FROM parent_students ps JOIN students s ON s.student_id = ps.student_id
     WHERE ps.parent_student_link_id = $1 AND s.school = $2
   `,
   // Both re-check the row is still un-invited, so a send in between wins. $1 link_id ...
   updateTypedGuardian: `
     UPDATE parent_students SET parent_name = $2, parent_email = $3, relation = $4
-    WHERE parent_student_link_id = $1 AND parent_id IS NULL AND invited_at IS NULL
+    WHERE parent_student_link_id = $1 AND source = 'typed' AND parent_id IS NULL AND invited_at IS NULL
   `,
   deleteTypedGuardian: `
     DELETE FROM parent_students
-    WHERE parent_student_link_id = $1 AND parent_id IS NULL AND invited_at IS NULL
+    WHERE parent_student_link_id = $1 AND source = 'typed' AND parent_id IS NULL AND invited_at IS NULL
   `,
   // Link rows that have an email but no account. $1 student_id
   selectUnlinkedGuardians: `
@@ -873,14 +889,16 @@ const messagingQueries = {
     WHERE LOWER(email) = LOWER($1) AND school = $2
     LIMIT 1
   `,
-  // $1 link_id, $2 user_id, $3 invited_by, $4 conversation_id, $5 record_invite boolean
+  // Only if the row still says what the send read, so an edit or removal made
+  // while the invites go out wins. $1 link_id, $2 user_id, $3 invited_by,
+  // $4 conversation_id, $5 record_invite boolean, $6 the address that was read
   linkGuardianToUser: `
     UPDATE parent_students
     SET parent_id = $2,
         invited_at = CASE WHEN $5::boolean THEN NOW() ELSE invited_at END,
         invited_by = CASE WHEN $5::boolean THEN $3::uuid ELSE invited_by END,
         invite_conversation_id = CASE WHEN $5::boolean THEN $4::uuid ELSE invite_conversation_id END
-    WHERE parent_student_link_id = $1
+    WHERE parent_student_link_id = $1 AND parent_id IS NULL AND LOWER(TRIM(parent_email)) = LOWER(TRIM($6::text))
     RETURNING parent_student_link_id
   `,
   // $1 link_id, $2 school

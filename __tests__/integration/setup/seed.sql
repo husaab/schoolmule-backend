@@ -2501,3 +2501,13 @@ CREATE INDEX IF NOT EXISTS idx_report_generation_items_pending
 CREATE INDEX IF NOT EXISTS idx_report_generation_items_pending_student
   ON report_generation_items (student_id) WHERE status = 'pending';
 ALTER TABLE report_generation_items ENABLE ROW LEVEL SECURITY;
+
+-- Guardians: who put a row there, and addresses the office took off a student.
+ALTER TABLE parent_students ADD COLUMN IF NOT EXISTS source TEXT CHECK (source IN ('file', 'typed'));
+CREATE TABLE IF NOT EXISTS guardian_removals (
+  student_id  UUID NOT NULL REFERENCES students_all(student_id) ON DELETE CASCADE,
+  email       TEXT NOT NULL,
+  removed_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  removed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (student_id, email)
+);

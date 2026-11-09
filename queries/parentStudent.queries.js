@@ -130,7 +130,8 @@ const parentStudentQueries = {
       parent_name = $2,
       parent_email = $3,
       parent_number = $4,
-      relation = $5
+      relation = $5,
+      source = NULL
     WHERE parent_student_link_id = $6
     RETURNING
       parent_student_link_id,
@@ -148,6 +149,27 @@ const parentStudentQueries = {
   deleteParentStudent: `
     DELETE FROM parent_students
     WHERE parent_student_link_id = $1
+  `,
+
+  // The office took this guardian off the student, or moved the row to another
+  // address: without a record, the next staff message would read the old address
+  // from the student file and invite it again.
+  // $1 link_id, $2 removed_by, $3 new parent_id|null, $4 new parent_email|null (both null on a delete)
+  rememberGuardianRemoval: `
+    INSERT INTO guardian_removals (student_id, email, removed_by)
+    SELECT ps.student_id, LOWER(TRIM(COALESCE(u.email, ps.parent_email))), $2
+    FROM parent_students ps LEFT JOIN users u ON u.user_id = ps.parent_id
+    WHERE ps.parent_student_link_id = $1
+      AND TRIM(COALESCE(u.email, ps.parent_email, '')) <> ''
+      AND LOWER(TRIM(COALESCE(u.email, ps.parent_email))) IS DISTINCT FROM
+          LOWER(TRIM(COALESCE((SELECT email FROM users WHERE user_id = $3::uuid), $4::text)))
+    ON CONFLICT DO NOTHING
+  `,
+
+  // The office linked this address to the student (again). $1 student_id, $2 parent_id|null, $3 parent_email|null
+  forgetGuardianRemoval: `
+    DELETE FROM guardian_removals
+    WHERE student_id = $1 AND email = LOWER(TRIM(COALESCE((SELECT email FROM users WHERE user_id = $2::uuid), $3::text)))
   `,
 
   // Does this user guard at least one current student? Decides whether a
