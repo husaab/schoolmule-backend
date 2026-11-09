@@ -685,6 +685,69 @@ describe('Integration: Messaging routes', () => {
       expect((await startGeneral(asMom, ADMIN_ID)).status).toBe(403);
     });
 
+    describe('a guardian who has not set up their account', () => {
+      const notifier = require('../../../services/messageNotifier');
+      let bilal;
+      let id;
+      const hanaMail = () => getResend().emails.send.mock.calls.map(([e]) => e).filter((e) => e.to[0] === 'hana@example.com');
+      const writeFirst = async (includePreview = 'true') => {
+        const b = await pool.query(`INSERT INTO students (name, grade, school, school_year_id) VALUES ('Bilal Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);
+        bilal = b.rows[0].student_id;
+        await pool.query(`INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)`, [classId, bilal]);
+        await pool.query(`INSERT INTO parent_students (student_id, parent_name, parent_email, relation, school) VALUES ($1, 'Hana Test', 'hana@example.com', 'Mother', 'ALHAADIACADEMY')`, [bilal]);
+        const res = await authenticatedRequest('post', '/api/messaging/conversations', asTeacher)
+          .field('studentId', bilal).field('teacherId', TEACHER_ID).field('title', 'Missing homework').field('includePreview', includePreview)
+          .field('body', 'Please remind Bilal about his planner.');
+        expect(res.status).toBe(201);
+        id = res.body.data.conversation.conversationId;
+      };
+      const writeAgain = async () => {
+        await authenticatedRequest('post', `/api/messaging/conversations/${id}/messages`, asTeacher).field('body', 'One more thing.').expect(201);
+        await pool.query(`UPDATE message_email_jobs SET send_after = NOW() - interval '1 minute' WHERE conversation_id = $1 AND status = 'pending'`, [id]);
+      };
+      const fourDaysLater = async () => {
+        await pool.query(`UPDATE parent_students SET invited_at = invited_at - interval '4 days' WHERE student_id = $1`, [bilal]);
+        await pool.query(`UPDATE messages SET created_at = created_at - interval '4 days' WHERE conversation_id = $1`, [id]);
+      };
+
+      beforeEach(() => getResend().emails.send.mockClear());
+
+      it('gets follow-ups by email, only what is new, with a way in', async () => {
+        await writeFirst();
+        expect(hanaMail()).toHaveLength(1);
+        await writeAgain();
+        await notifier.drainAll();
+        const mail = hanaMail();
+        expect(mail).toHaveLength(2);
+        expect(mail[1].html).toContain('One more thing.');
+        expect(mail[1].html).not.toContain('Please remind Bilal');
+        expect(mail[1].html).toContain('invite=1');
+      });
+
+      it('is reminded once with the messages themselves', async () => {
+        await writeFirst();
+        await writeAgain();
+        await notifier.drainAll();
+        await fourDaysLater();
+        getResend().emails.send.mockClear();
+        expect(await notifier.sendInviteReminders()).toBe(1);
+        const [reminder] = hanaMail();
+        expect(reminder.subject).toMatch(/Still waiting/);
+        expect(reminder.html).toContain('Please remind Bilal about his planner.');
+        expect(reminder.html).toContain('One more thing.');
+        expect(reminder.html).toContain('Missing homework');
+        expect(await notifier.sendInviteReminders()).toBe(0);
+      });
+
+      it('gets no reminder when the teacher left their words out of the invite', async () => {
+        await writeFirst('false');
+        await fourDaysLater();
+        getResend().emails.send.mockClear();
+        expect(await notifier.sendInviteReminders()).toBe(0);
+        expect(hanaMail()).toHaveLength(0);
+      });
+    });
+
     it('a teacher writing about a student with an unlinked guardian invites them once, and the invite lands in the thread', async () => {
       // Bilal: one guardian with an email and no account.
       const b = await pool.query(`INSERT INTO students (name, grade, school, school_year_id) VALUES ('Bilal Test', '6', 'ALHAADIACADEMY', $1) RETURNING student_id`, [yearId]);

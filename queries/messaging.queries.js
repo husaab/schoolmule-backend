@@ -527,7 +527,10 @@ const messagingQueries = {
       EXISTS (SELECT 1 FROM school_classroom_settings scs
          WHERE scs.school = s.school AND scs.enabled AND scs.student_email_from_grade IS NOT NULL
            AND ${GRADE_RANK('s.grade::text')} >= ${GRADE_RANK('scs.student_email_from_grade')}) AS student_email_on,
-      GREATEST(cp.last_emailed_at, cp.last_read_at)::text AS since_exact
+      -- A guardian with no account yet already has what came before their invite.
+      GREATEST(cp.last_emailed_at, cp.last_read_at,
+        CASE WHEN u.password = '!' THEN (SELECT MAX(ps.invited_at) FROM parent_students ps
+          WHERE ps.parent_id = j.recipient_id AND ps.student_id = c.student_id) END)::text AS since_exact
     FROM message_email_jobs j
     JOIN users u ON u.user_id = j.recipient_id
     JOIN conversations c ON c.conversation_id = j.conversation_id
@@ -820,12 +823,15 @@ const messagingQueries = {
   // One reminder, three days after the invite, while still pending.
   selectInviteReminderCandidates: `
     SELECT ps.parent_student_link_id, ps.parent_id, ps.parent_name, ps.school, ps.invite_conversation_id,
-           s.name AS student_name, u.email, u.first_name,
-           ${PERSON_NAME('t')} AS invited_by_name
+           s.name AS student_name, u.email, u.first_name, c.title AS conversation_title,
+           ${PERSON_NAME('t')} AS invited_by_name,
+           -- The invite goes out just after the message that prompted it, so a minute back reaches that message.
+           (ps.invited_at - interval '1 minute')::text AS since_exact
     FROM parent_students ps
     JOIN users u ON u.user_id = ps.parent_id AND u.password = '!'
     JOIN students s ON s.student_id = ps.student_id
     LEFT JOIN users t ON t.user_id = ps.invited_by
+    LEFT JOIN conversations c ON c.conversation_id = ps.invite_conversation_id
     WHERE ps.invited_at IS NOT NULL AND ps.invited_at < NOW() - interval '3 days' AND ps.invite_reminded_at IS NULL
     LIMIT 50
   `,

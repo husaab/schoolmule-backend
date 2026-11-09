@@ -263,6 +263,8 @@ async function inviteUnlinkedGuardians(conv, user, { invite, includePreview, bod
           token: tok[0].token,
           conversationId: conv.conversationId,
         });
+        // The reminder exists to carry the message, so a teacher who kept their words out of the email gets none.
+        if (includePreview === false) await db.query(q.markInviteReminded, [link.parent_student_link_id]);
         results.push({ linkId: link.parent_student_link_id, name, status: 'invited' });
       } catch (error) {
         logger.error({ err: error, linkId: link.parent_student_link_id }, 'Guardian invite failed');

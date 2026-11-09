@@ -8,26 +8,18 @@
 const db = require('../config/database');
 const logger = require('../logger');
 const q = require('../queries/messaging.queries');
-const adminUserQueries = require('../queries/adminUser.queries');
 const schoolQueries = require('../queries/school.queries');
 const { emailAttachments } = require('../utils/attachmentUpload');
 const { schoolSender } = require('./email/senderIdentity');
 const { getSchoolName } = require('../utils/schoolUtils');
 const { getConversationDigestEmailHTML } = require('../templates/emailTemplate');
-const { inviteLink, threadLink, timeLabel } = require('./messageNotifier');
+const { messageLink, timeLabel } = require('./messageNotifier');
 
 function correctionSubject(ctx) {
   const sender = ctx.sender_name || 'SchoolMule';
   const general = Boolean(ctx.includes_student && !ctx.assessment_id && !ctx.classwork_item_id);
   if (ctx.recipient_role === 'STUDENT' || general) return `${sender} corrected a message: ${ctx.title}`;
   return `${sender} corrected a message about ${ctx.student_name}'s ${ctx.title}`;
-}
-
-/** A guardian with no account yet can only get in through a fresh invite link. */
-async function linkFor(ctx, job) {
-  if (!ctx.recipient_invite_pending) return threadLink(ctx.recipient_role, ctx.conversation_id);
-  const { rows: [token] } = await db.query(adminUserQueries.createInviteToken, [job.recipient_user_id]);
-  return inviteLink(token.token, ctx.conversation_id);
 }
 
 async function loadSchoolInfo(school) {
@@ -67,7 +59,8 @@ const messageCorrectionHandler = {
         attachmentCount: attachmentRows.length,
         attachments: files,
       }],
-      link: await linkFor(ctx, job),
+      link: await messageLink(ctx, job.recipient_user_id, ctx.conversation_id),
+      accountSetup: Boolean(ctx.recipient_invite_pending),
       schoolName: getSchoolName(job.school),
       schoolInfo,
     });

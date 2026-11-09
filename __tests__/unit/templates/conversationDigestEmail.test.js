@@ -34,6 +34,17 @@ describe('getConversationDigestEmailHTML', () => {
     expect(html).toContain('corrected version');
   });
 
+  it('asks someone with no account yet to create one rather than reply', () => {
+    const html = getConversationDigestEmailHTML({
+      ...base,
+      accountSetup: true,
+      messages: [{ senderName: 'Ahmed Khan', body: 'Follow-up', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 0 }],
+    });
+    expect(html).toContain('Create your account to reply');
+    expect(html).not.toContain('Reply in SchoolMule');
+    expect(html).toContain('expires in 7 days');
+  });
+
   it('escapes bodies, lists each message, names attachments and links to the thread', () => {
     const html = getConversationDigestEmailHTML({
       ...base,
@@ -83,6 +94,20 @@ describe('getGuardianInviteEmailHTML', () => {
     expect(html).toContain('Hi &lt;Hana&gt;, please…');
     expect(html).toContain('token=t&amp;invite=1');
     expect(html).toContain('Create your account');
+  });
+  it('shows every message waiting in the reminder', () => {
+    const html = getGuardianInviteEmailHTML({
+      ...base,
+      reminder: true,
+      preview: null,
+      messages: [
+        { senderName: 'Ahmed Khan', body: 'Please check <the> planner', sentAtLabel: 'Oct 7, 2:14 PM', attachmentCount: 0 },
+        { senderName: 'Ahmed Khan', body: 'One more thing', sentAtLabel: 'Oct 8, 9:00 AM', attachmentCount: 2 },
+      ],
+    });
+    expect(html).toContain('Please check &lt;the&gt; planner');
+    expect(html).toContain('One more thing');
+    expect(html).toContain('2 attachments');
   });
   it('omits the quote when there is no preview and switches to the reminder heading', () => {
     const html = getGuardianInviteEmailHTML({ ...base, preview: null, reminder: true });

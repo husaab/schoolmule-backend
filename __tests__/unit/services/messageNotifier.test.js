@@ -279,26 +279,50 @@ describe('messageNotifier', () => {
     expect(r.ran("CASE WHEN attempts >= $3 THEN 'failed'")).toHaveLength(0);
   });
 
-  it('skips an invite-pending recipient (nothing to open yet)', async () => {
-    const r = makeRouter({ 'FOR UPDATE SKIP LOCKED': [job()], 'AS recipient_email': [ctx({ recipient_invite_pending: true })] });
+  it('emails a guardian with no account yet, with a link to set one up', async () => {
+    const r = makeRouter({
+      'FOR UPDATE SKIP LOCKED': [job()],
+      'AS recipient_email': [ctx({ recipient_invite_pending: true })],
+      'AS attachment_count': [msg({ body: 'One more thing.' })],
+      'INSERT INTO password_reset_tokens': [{ token: 'tok-f' }],
+    });
     await notifier.drainOnce();
-    expect(mockSend).not.toHaveBeenCalled();
-    expect(r.ran('SET status = $2::text, last_error = $3')[0].params.slice(1)).toEqual(['skipped', 'invite pending']);
+    const email = mockSend.mock.calls[0][0];
+    expect(email.to).toEqual(['parent@example.com']);
+    expect(email.html).toContain('One more thing.');
+    expect(email.html).toContain('token=tok-f');
+    expect(email.html).toContain('Create your account to reply');
+    expect(r.ran('SET status = $2::text, last_error = $3')[0].params[1]).toBe('sent');
   });
 
-  it('sends the one invite reminder and marks the row', async () => {
-    const r = makeRouter({
-      "ps.invite_reminded_at IS NULL": [{ parent_student_link_id: 'link-1', parent_id: 'u1', parent_name: 'Hana Test', school: 'ALHAADIACADEMY', invite_conversation_id: CONVO, student_name: 'Bilal Test', email: 'hana@example.com', first_name: 'Hana', invited_by_name: 'Ahmed Khan' }],
-      'INSERT INTO password_reset_tokens': [{ token: 'tok-r' }],
-      'FROM schools': [{ name: 'Al Haadi Academy' }],
+  describe('the one invite reminder', () => {
+    const candidate = { parent_student_link_id: 'link-1', parent_id: 'u1', parent_name: 'Hana Test', school: 'ALHAADIACADEMY', invite_conversation_id: CONVO, conversation_title: 'Missing homework', since_exact: '2026-10-07 11:59:00+00', student_name: 'Bilal Test', email: 'hana@example.com', first_name: 'Hana', invited_by_name: 'Ahmed Khan' };
+
+    it('carries the messages waiting for them and marks the row', async () => {
+      const r = makeRouter({
+        'ps.invite_reminded_at IS NULL': [candidate],
+        'AS attachment_count': [msg({ body: 'Please check the planner.' }), msg({ message_id: 'm2', body: 'One more thing.', attachment_count: 1 })],
+        'INSERT INTO password_reset_tokens': [{ token: 'tok-r' }],
+        'FROM schools': [{ name: 'Al Haadi Academy' }],
+      });
+      expect(await notifier.sendInviteReminders()).toBe(1);
+      const email = mockSend.mock.calls[0][0];
+      expect(email.to).toEqual(['hana@example.com']);
+      expect(email.subject).toMatch(/Still waiting/);
+      expect(email.html).toContain('token=tok-r');
+      expect(email.html).toContain('Please check the planner.');
+      expect(email.html).toContain('One more thing.');
+      expect(email.html).toContain('1 attachment');
+      expect(r.ran('AS attachment_count')[0].params).toEqual([CONVO, 'u1', candidate.since_exact]);
+      expect(r.ran('SET invite_reminded_at = NOW()')[0].params).toEqual(['link-1']);
     });
-    const n = await notifier.sendInviteReminders();
-    expect(n).toBe(1);
-    const email = mockSend.mock.calls[0][0];
-    expect(email.to).toEqual(['hana@example.com']);
-    expect(email.subject).toMatch(/Still waiting/);
-    expect(email.html).toContain('token=tok-r');
-    expect(r.ran('SET invite_reminded_at = NOW()')[0].params).toEqual(['link-1']);
+
+    it('sends nothing when every message has been taken back', async () => {
+      const r = makeRouter({ 'ps.invite_reminded_at IS NULL': [candidate], 'AS attachment_count': [] });
+      expect(await notifier.sendInviteReminders()).toBe(0);
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(r.ran('SET invite_reminded_at = NOW()')[0].params).toEqual(['link-1']);
+    });
   });
 
   it('requeues on a send failure and lets the retry query decide pending vs failed', async () => {

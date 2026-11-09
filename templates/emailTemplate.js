@@ -277,6 +277,7 @@ function attachmentLine(files, count, fallback) {
 }
 const anyAttached = (lists) => lists.some((files) => Array.isArray(files) && files.some((f) => f.attached));
 
+const INVITE_FINE_PRINT = 'Sign up with this email address and your child will already be linked to you. This link expires in 7 days; if it has expired, ask the school to resend it.';
 const CORRECTED_INTRO = 'This is the corrected version of a message you were emailed earlier. Please use this one.';
 
 function getConversationDigestEmailHTML({
@@ -292,6 +293,7 @@ function getConversationDigestEmailHTML({
   forStudent = false,
   parentsIncluded = true,
   corrected = false,
+  accountSetup = false,
 }) {
   if (forStudent) {
     return studentConversationDigest({ recipientFirstName, className, title, contextLine, messages, link, schoolName, schoolInfo, parentsIncluded, corrected });
@@ -330,7 +332,8 @@ function getConversationDigestEmailHTML({
         ['Class', escapeHtml(className)],
       ]),
       blocks,
-      button('Reply in SchoolMule', link),
+      button(accountSetup ? 'Create your account to reply' : 'Reply in SchoolMule', link),
+      accountSetup ? finePrint(INVITE_FINE_PRINT) : '',
       anyAttached(messages.map((m) => m.attachments))
         ? finePrint("The attached files are also kept in SchoolMule, where only the student's guardians and teachers can open them.")
         : '',
@@ -389,11 +392,14 @@ function studentConversationDigest({ recipientFirstName, className, title, conte
  * heading for the one follow-up sent three days later.
  */
 function getGuardianInviteEmailHTML({
-  recipientFirstName, teacherName, studentFirstName, title, preview, url, schoolName, schoolInfo, reminder = false,
+  recipientFirstName, teacherName, studentFirstName, title, preview, url, schoolName, schoolInfo, reminder = false, messages = [],
 }) {
   const heading = reminder
     ? `Still waiting for you: a message about ${studentFirstName}`
     : `${teacherName} sent you a message about ${studentFirstName}`;
+  const quoted = messages.length
+    ? messages.map((m) => note(`${m.senderName} · ${m.sentAtLabel}`, `${multiline(m.body)}${attachmentLine(m.attachments, m.attachmentCount, 'create your account to view')}`)).join('')
+    : preview ? note(`${teacherName} · ${title}`, multiline(preview)) : facts([['Subject', escapeHtml(title)]]);
   return renderEmail({
     brand: schoolBrand(schoolInfo, schoolName),
     heading,
@@ -403,9 +409,9 @@ function getGuardianInviteEmailHTML({
       paragraph(
         `${escapeHtml(studentFirstName)}'s teacher <strong>${escapeHtml(teacherName)}</strong> wrote to you on SchoolMule, ${escapeHtml(schoolName)}'s parent portal. You don't have an account yet, so the message is waiting for you.`,
       ),
-      preview ? note(`${teacherName} · ${title}`, multiline(preview)) : facts([['Subject', escapeHtml(title)]]),
+      quoted,
       button('Create your account and read the message', url),
-      finePrint('Sign up with this email address and your child will already be linked to you. This link expires in 7 days; if it has expired, ask the school to resend it.'),
+      finePrint(INVITE_FINE_PRINT),
       signOff(schoolName),
     ].join(''),
     footer: schoolContact(schoolInfo, schoolName),

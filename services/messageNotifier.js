@@ -110,11 +110,10 @@ async function processJob(job) {
   }
 
   const readSince = Boolean(ctx.last_read_at) && new Date(ctx.last_read_at) >= new Date(ctx.last_message_at);
-  if (ctx.muted || ctx.recipient_archived || ctx.recipient_invite_pending || !ctx.recipient_email || readSince) {
+  if (ctx.muted || ctx.recipient_archived || !ctx.recipient_email || readSince) {
     const reason = ctx.muted ? 'muted'
       : readSince ? 'read before send'
-        : ctx.recipient_invite_pending ? 'invite pending'
-          : ctx.recipient_archived ? 'recipient archived' : 'no recipient';
+        : ctx.recipient_archived ? 'recipient archived' : 'no recipient';
     await db.query(q.finishJob, [job.job_id, 'skipped', reason]);
     return 'skipped';
   }
@@ -173,7 +172,8 @@ async function processJob(job) {
       attachmentCount: m.attachment_count,
       attachments: files.filter((f) => f.message_id === m.message_id),
     })),
-    link: threadLink(ctx.recipient_role, job.conversation_id),
+    link: await messageLink(ctx, job.recipient_id, job.conversation_id),
+    accountSetup: Boolean(ctx.recipient_invite_pending),
     schoolName,
     schoolInfo,
   });
@@ -204,6 +204,17 @@ async function processJob(job) {
   return 'sent';
 }
 
+/**
+ * Where an email's button goes: the thread, or for a guardian with no account
+ * yet a fresh invite link, since they have no way to sign in.
+ * `ctx` needs recipient_role and recipient_invite_pending.
+ */
+async function messageLink(ctx, recipientId, conversationId) {
+  if (!ctx.recipient_invite_pending) return threadLink(ctx.recipient_role, conversationId);
+  const { rows: [token] } = await db.query(adminUserQueries.createInviteToken, [recipientId]);
+  return inviteLink(token.token, conversationId);
+}
+
 /** Build the invite landing link: set a password, then land in the thread. */
 function inviteLink(token, conversationId) {
   const base = process.env.FRONTEND_URL || '';
@@ -213,7 +224,9 @@ function inviteLink(token, conversationId) {
 
 /**
  * One reminder per invited guardian, three days after the invite, while the
- * account is still pending. Runs once per Toronto day from the worker tick.
+ * account is still pending, carrying the messages waiting for them as they
+ * read now. If every one has been taken back, nothing is left to remind them
+ * of. Runs once per Toronto day from the worker tick.
  * @returns the number of reminders sent
  */
 async function sendInviteReminders() {
@@ -221,6 +234,11 @@ async function sendInviteReminders() {
   let sent = 0;
   for (const link of rows) {
     try {
+      const { rows: waiting } = await db.query(q.selectMessagesForEmail, [link.invite_conversation_id, link.parent_id, link.since_exact]);
+      if (!waiting.length) {
+        await db.query(q.markInviteReminded, [link.parent_student_link_id]);
+        continue;
+      }
       const { rows: tok } = await db.query(adminUserQueries.createInviteToken, [link.parent_id]);
       let schoolInfo = null;
       try {
@@ -239,8 +257,14 @@ async function sendInviteReminders() {
           recipientFirstName: link.first_name || link.parent_name,
           teacherName: link.invited_by_name || 'A teacher',
           studentFirstName,
-          title: 'Your conversation on SchoolMule',
+          title: link.conversation_title || 'Your conversation on SchoolMule',
           preview: null,
+          messages: waiting.map((m) => ({
+            senderName: m.sender_name || 'SchoolMule',
+            body: m.body,
+            sentAtLabel: timeLabel(m.created_at),
+            attachmentCount: m.attachment_count,
+          })),
           url: inviteLink(tok[0].token, link.invite_conversation_id),
           schoolName,
           schoolInfo,
@@ -586,7 +610,7 @@ function stopWorker() {
 }
 
 module.exports = {
-  startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, inviteLink, threadLink, timeLabel, MAX_ATTEMPTS,
+  startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, messageLink, timeLabel, MAX_ATTEMPTS,
   drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick, drainClassroom,
   drainEmailOutbox, replyReminderTick,
 };

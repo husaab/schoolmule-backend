@@ -67,5 +67,6 @@ describe('messageCorrectionHandler', () => {
     const built = await messageCorrectionHandler.build(job, [], { now: new Date() });
     expect(built.message.html).toContain('token=invite-token');
     expect(built.message.html).toContain('invite=1');
+    expect(built.message.html).toContain('Create your account to reply');
   });
 });
