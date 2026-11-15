@@ -14,6 +14,7 @@
 const { computeClassGrade } = require('../../gradeEngine');
 const reportCardQueries = require('../../../queries/reportCard.queries');
 const alHaadiT2Queries = require('../../../queries/alHaadiT2ReportCard.queries');
+const termQueries = require('../../../queries/term.queries');
 const studentViewQueries = require('../../../queries/studentView.queries');
 const q = require('../../../queries/reportEngineData.queries');
 const { text } = require('./format');
@@ -113,11 +114,12 @@ async function buildReportCardSubjects(client, studentId, term) {
 
 /**
  * The school's Term 1 and Term 2 rows for the year implied by `termString`.
- * Mirrors resolveAlHaadiTermPair (reportCard.controller.js:130).
+ * Mirrors resolveAlHaadiTermPair (reportCard.controller.js:144). `studentId`
+ * picks the "Term 2" of that record's school year.
  */
-async function resolveAlHaadiTermPair(client, school, termString) {
+async function resolveAlHaadiTermPair(client, school, termString, studentId) {
   let t2 = null;
-  const { rows: exactRows } = await client.query(alHaadiT2Queries.selectTermByNameAndSchool, [termString, school]);
+  const { rows: exactRows } = await client.query(termQueries.selectTermByNameForStudent, [termString, school, studentId]);
   if (exactRows.length > 0) {
     t2 = exactRows[0];
   } else {
@@ -247,7 +249,7 @@ async function fetchTermFeedback(client, studentId, termRow, termName) {
 
 /** SubjectRow[] for the Al Haadi Term-2 card: terms.t1 / t2 / final filled. */
 async function buildAlHaadiT2Subjects(client, studentId, school, term) {
-  const { t1, t2 } = await resolveAlHaadiTermPair(client, school, term);
+  const { t1, t2 } = await resolveAlHaadiTermPair(client, school, term, studentId);
   const t1Results = await computeTermSubjectResults(client, studentId, t1?.term_id || null);
   const t2Results = await computeTermSubjectResults(client, studentId, t2?.term_id || null);
   const pctsOf = (results) => new Map([...results].map(([subject, r]) => [subject, r.pct]));

@@ -17,7 +17,7 @@ const { text } = require('./format');
  *         has no classes in it (same messages and 422 status as legacy)
  */
 async function buildProgressSubjects(client, studentId, school, term) {
-  const { rows: termRows } = await client.query(termQueries.selectTermByNameAndSchool, [term, school]);
+  const { rows: termRows } = await client.query(termQueries.selectTermByNameForStudent, [term, school, studentId]);
   if (termRows.length === 0) throw new ReportSkip(`Term "${term}" not found for school`);
   const termId = termRows[0].term_id;
 

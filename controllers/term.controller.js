@@ -94,7 +94,7 @@ const getTermByNameAndSchool = async (req, res) => {
   }
 
   try {
-    const { rows } = await db.query(termQueries.selectTermByNameAndSchool, [termName, school]);
+    const { rows } = await db.query(termQueries.selectTermByNameAndSchool, [termName, school, req.schoolYear?.schoolYearId ?? null]);
     
     if (rows.length === 0) {
       return res.status(404).json({

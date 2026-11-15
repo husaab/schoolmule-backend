@@ -144,11 +144,11 @@ async function seedStudent({ name, grade, school = SCHOOL, oen = null, homeroom 
  * A class with one 100-point assessment. `score` null = blank cell,
  * 'missing' = flagged missing (counts 0), undefined = no row at all.
  */
-async function seedClass({ studentId, subject, grade, term, score, school = SCHOOL, teacherName = 'Teacher Sample' }) {
+async function seedClass({ studentId, subject, grade, term, score, school = SCHOOL, teacherName = 'Teacher Sample', termId }) {
   const { rows } = await pool.query(
     `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING class_id`,
-    [school, grade, subject, teacherName, TEACHER_ID, term ? termIds[term] : null, term || null],
+    [school, grade, subject, teacherName, TEACHER_ID, termId ?? (term ? termIds[term] : null), term || null],
   );
   const classId = rows[0].class_id;
   await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [classId, studentId]);
@@ -702,6 +702,68 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     expect(R.skills[0].comment).toBe('Bold choices.');
     expect(R.student.teacherAssistant).toBe('Assistant Other');
     expect(R.learningSkills).toEqual([]);
+  });
+
+  // After a rollover every school year has its own "Term 1" and "Term 2", and
+  // each student has one record per year. A report reads the same-named term
+  // of the record's own year, never last year's (2026-11-14: every grades 1-8
+  // progress report said "not in any Term 1 class").
+  it('8. after a rollover, reports read the term of the student record\'s own year', async () => {
+    // Last year: the seeded Term 1 / Term 2, inserted first.
+    const { rows: [oldYear] } = await pool.query(
+      `SELECT school_year_id FROM school_years WHERE school = $1 AND label = '2025-2026'`, [SCHOOL],
+    );
+    await pool.query('UPDATE terms SET school_year_id = $1 WHERE school = $2', [oldYear.school_year_id, SCHOOL]);
+    // This year: the same names again.
+    const { rows: [newYear] } = await pool.query(
+      `INSERT INTO school_years (school, school_id, label, start_date, end_date, is_active)
+       SELECT school_code, school_id, '2026-2027', '2026-09-07', '2027-06-25', false FROM schools WHERE school_code = $1
+       RETURNING school_year_id`,
+      [SCHOOL],
+    );
+    const newTerm = async (name, start, end) => (await pool.query(
+      `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active, school_year_id)
+       VALUES ($1, $2, $3, $4, '2026-2027', false, $5) RETURNING term_id`,
+      [SCHOOL, name, start, end, newYear.school_year_id],
+    )).rows[0].term_id;
+    const newT1 = await newTerm(T1, '2026-09-02', '2027-01-31');
+    const newT2 = await newTerm(T2, '2027-02-01', '2027-06-30');
+
+    // One child, one record per year.
+    const lastYear = await seedStudent({ name: 'Test Student R', grade: '4' });
+    await pool.query('UPDATE students SET school_year_id = $1 WHERE student_id = $2', [oldYear.school_year_id, lastYear]);
+    await seedClass({ studentId: lastYear, subject: 'French', grade: '4', term: T1, score: 70 });
+    const thisYear = await seedStudent({ name: 'Test Student R', grade: '5' });
+    await pool.query(
+      'UPDATE students SET school_year_id = $1, previous_student_id = $2 WHERE student_id = $3',
+      [newYear.school_year_id, lastYear, thisYear],
+    );
+    await seedClass({ studentId: thisYear, subject: 'Mathematics', grade: '5', term: T1, termId: newT1, score: 80 });
+    await seedClass({ studentId: thisYear, subject: 'Science', grade: '5', term: T1, termId: newT1, score: 60 });
+    await seedClass({ studentId: thisYear, subject: 'Mathematics', grade: '5', term: T2, termId: newT2, score: 90 });
+
+    // Progress report, both paths, both records.
+    for (const [studentId, subjects] of [[thisYear, ['Mathematics', 'Science']], [lastYear, ['French']]]) {
+      progressTemplate.getProgressReportHTML.mockClear();
+      const res = fakeRes();
+      await progressReportsController.generateProgressReport({ body: { studentId, term: T1 } }, res);
+      expect(res.body).toMatchObject({ status: 'success' });
+      expect(lastCall(progressTemplate.getProgressReportHTML).args.progressData.map((p) => p.subject)).toEqual(subjects);
+      const R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+      expect(R.subjects.map((s) => s.name)).toEqual(subjects);
+    }
+
+    // Al Haadi Term 2 card: this year's Term 1 and Term 2 rows.
+    const res = fakeRes();
+    await reportCardController.generateReportCard({ body: { studentId: thisYear, term: T2 } }, res);
+    expect(res.statusCode).toBe(200);
+    const { args: L } = lastCall(alHaadiT2Template.getAlHaadiT2ReportCardHTML);
+    expect(L.subjects).toEqual([
+      expect.objectContaining({ subject: 'Mathematics', t1: 80, t2: 90 }),
+      expect.objectContaining({ subject: 'Science', t1: 60, t2: null }),
+    ]);
+    const R = await assembleReportData({ studentId: thisYear, docType: 'report_card', term: T2 });
+    expect(R.subjects.map((s) => [s.name, s.terms.t1.mark, s.terms.t2.mark])).toEqual([['Mathematics', 80, 90], ['Science', 60, null]]);
   });
 
   it('picks the school year the report date falls in, else the active one', async () => {

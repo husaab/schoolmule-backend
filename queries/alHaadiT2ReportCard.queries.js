@@ -6,20 +6,13 @@
 // and pull the student's classes one term at a time.
 //
 // Term resolution strategy (see resolveAlHaadiTermPair in the controller):
-//   1. Resolve T2 by exact name match on the string the frontend sent.
+//   1. Resolve T2 by exact name match on the string the frontend sent, in the
+//      student record's own school year (term.queries selectTermByNameForStudent).
 //   2. If that misses (name formatting drift), fall back to a LIKE match.
 //   3. Resolve T1 in the same academic_year as T2; fall back to the most
 //      recent '%term 1%' term for the school.
 
 const alHaadiT2ReportCardQueries = {
-  // Exact term lookup. Params: $1 name, $2 school (enum)
-  selectTermByNameAndSchool: `
-    SELECT term_id, name, academic_year, start_date
-    FROM terms
-    WHERE name = $1 AND school = $2
-    LIMIT 1
-  `,
-
   // Fallback lookup by pattern, newest first.
   // Params: $1 school (enum), $2 lowercase LIKE pattern (e.g. '%term 2%')
   selectTermLike: `

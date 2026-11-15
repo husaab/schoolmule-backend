@@ -459,7 +459,7 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
   // 3. Resolve the selected term to its term_id so classes can be scoped to it.
   // A progress report must contain only the classes (and their feedback/work
   // habits) that belong to the term being generated — never a mix of terms.
-  const { rows: termRows } = await db.query(termQueries.selectTermByNameAndSchool, [term, student.school]);
+  const { rows: termRows } = await db.query(termQueries.selectTermByNameForStudent, [term, student.school, studentId]);
   if (termRows.length === 0) {
     throw new ReportSkip(`Term "${term}" not found for school`);
   }

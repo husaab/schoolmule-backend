@@ -26,11 +26,13 @@ const termQueries = {
   `,
 
   /**
-   * Get a single term by name and school
-   * Params: termName, school
+   * Get a single term by name and school. Every school year has its own
+   * "Term 1", so the name alone matches one term per year: the one in
+   * school year $3 wins, else the newest.
+   * Params: termName, school, school_year_id (nullable)
    */
   selectTermByNameAndSchool: `
-    SELECT 
+    SELECT
       t.term_id,
       t.school,
       t.school_id,
@@ -45,6 +47,22 @@ const termQueries = {
     FROM terms t
     LEFT JOIN schools s ON t.school_id = s.school_id
     WHERE t.name = $1 AND t.school = $2
+    ORDER BY (t.school_year_id = $3::uuid) DESC NULLS LAST, t.start_date DESC NULLS LAST
+    LIMIT 1
+  `,
+
+  /**
+   * The term a student's report means by `termName`: the one in the student
+   * record's own school year (each year has its own "Term 1", and each
+   * student one record per year), else the newest of that name.
+   * Params: termName, school, student_id
+   */
+  selectTermByNameForStudent: `
+    SELECT t.term_id, t.name, t.academic_year, t.start_date, t.school_year_id
+    FROM terms t
+    WHERE t.name = $1 AND t.school = $2
+    ORDER BY (t.school_year_id = (SELECT st.school_year_id FROM students st WHERE st.student_id = $3)) DESC NULLS LAST,
+             t.start_date DESC NULLS LAST
     LIMIT 1
   `,
 

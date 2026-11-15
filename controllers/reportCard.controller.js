@@ -11,6 +11,7 @@ const logger = require('../logger');
 const { computeClassGrade } = require('../services/gradeEngine');
 const studentViewQueries = require('../queries/studentView.queries');
 const alHaadiT2Queries = require('../queries/alHaadiT2ReportCard.queries');
+const termQueries = require('../queries/term.queries');
 const classQueries = require('../queries/class.queries');
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, reportCardResult } = require('../services/reportEngine/generate');
@@ -139,13 +140,14 @@ async function calculateSubjectGradesForStudent(studentId) {
  *
  * @param {string} school     school enum value (e.g. 'ALHAADIACADEMY')
  * @param {string} termString human term name, e.g. "Term 2" or "Term 2 2025-2026"
+ * @param {string} studentId  the record whose school year's "Term 2" is meant
  * @returns {Promise<{ t1: object|null, t2: object|null }>}
  */
-async function resolveAlHaadiTermPair(school, termString) {
+async function resolveAlHaadiTermPair(school, termString, studentId) {
   // T2: exact name match first, LIKE fallback for formatting drift.
   let t2 = null;
   const { rows: exactRows } = await db.query(
-    alHaadiT2Queries.selectTermByNameAndSchool, [termString, school]
+    termQueries.selectTermByNameForStudent, [termString, school, studentId]
   );
   if (exactRows.length > 0) {
     t2 = exactRows[0];
@@ -914,7 +916,7 @@ const generateAlHaadiT2ReportCard = async (studentId, term, student, opts = {}) 
 
   // Per-term subject grades via the shared grade engine, merged into
   // { subject, t1, t2, final } rows (rules A/B/E live in mergeTermSubjects).
-  const { t1, t2 } = await resolveAlHaadiTermPair(student.school, term);
+  const { t1, t2 } = await resolveAlHaadiTermPair(student.school, term, studentId);
   const [t1Map, t2Map] = await Promise.all([
     computeTermSubjectGrades(studentId, t1?.term_id || null),
     computeTermSubjectGrades(studentId, t2?.term_id || null),

@@ -284,7 +284,7 @@ describe('assembleReportData — Al Haadi Term 2 three-row card', () => {
   function routes() {
     return [
       ...baseRoutes({ student: studentRow({ school: 'ALHAADIACADEMY', grade: '2' }), school: [schoolRow] }),
-      [alHaadiT2Queries.selectTermByNameAndSchool, ([name]) => (name === 'Term 2' ? [T2] : [])],
+      [termQueries.selectTermByNameForStudent, ([name]) => (name === 'Term 2' ? [T2] : [])],
       [alHaadiT2Queries.selectTerm1ForAcademicYear, [T1]],
       [alHaadiT2Queries.selectStudentClassesForTerm, ([, termId]) => (termId === 'term-1'
         ? [{ class_id: 'math-1', subject: 'Mathematics' }, { class_id: 'pe-1', subject: 'Physical Education' }]
@@ -348,7 +348,7 @@ describe('assembleReportData — Al Haadi Term 2 three-row card', () => {
       ...routes(),
     ]);
     await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 2', client });
-    expect(callsTo(client, alHaadiT2Queries.selectTermByNameAndSchool)).toHaveLength(0);
+    expect(callsTo(client, termQueries.selectTermByNameForStudent)).toHaveLength(0);
     expect(callsTo(client, q.selectStudentClasses).length).toBeGreaterThan(0);
   });
 });
@@ -356,7 +356,7 @@ describe('assembleReportData — Al Haadi Term 2 three-row card', () => {
 describe('Al Haadi term pair + merge rules', () => {
   it('falls back to LIKE lookups when the exact names miss', async () => {
     const client = fakeClient([
-      [alHaadiT2Queries.selectTermByNameAndSchool, []],
+      [termQueries.selectTermByNameForStudent, []],
       [alHaadiT2Queries.selectTermLike, ([, pattern]) => (pattern === '%term 2%'
         ? [{ term_id: 'b', name: 'Term 2 2025-2026', academic_year: null }]
         : [{ term_id: 'a', name: 'Term 1 2025-2026', academic_year: null }])],
@@ -437,7 +437,7 @@ describe('modified marks on a report card', () => {
     }));
     // term id -> rows, one class per term
     const termClient = (t1Rows, t2Rows) => fakeClient([
-      [alHaadiT2Queries.selectTermByNameAndSchool, [{ term_id: 't2', name: 'Term 2', academic_year: '2026' }]],
+      [termQueries.selectTermByNameForStudent, [{ term_id: 't2', name: 'Term 2', academic_year: '2026' }]],
       [alHaadiT2Queries.selectTerm1ForAcademicYear, [{ term_id: 't1', name: 'Term 1', academic_year: '2026' }]],
       [alHaadiT2Queries.selectStudentClassesForTerm, ([, termId]) => [{ class_id: termId === 't1' ? 'c1' : 'c2', subject: 'Math' }]],
       [studentViewQueries.selectScoresForClass, ([classId]) => (classId === 'c1' ? termRows('Math', t1Rows) : termRows('Math', t2Rows))],
@@ -482,7 +482,7 @@ describe('assembleReportData — grades 1-8 progress report', () => {
   function routes() {
     return [
       ...baseRoutes({ student: studentRow({ grade: '6' }), school: [schoolRow] }),
-      [termQueries.selectTermByNameAndSchool, ([name]) => (name === 'Term 1' ? [{ term_id: 'term-1' }] : [])],
+      [termQueries.selectTermByNameForStudent, ([name]) => (name === 'Term 1' ? [{ term_id: 'term-1' }] : [])],
       [q.selectStudentClassesForProgressTerm, ([, termId]) => (termId === 'term-1' ? [
         { class_id: 'c-eng', subject: 'English', teacher_name: 'Teacher Sample', class_grade: '6' },
         { class_id: 'c-sci', subject: 'Science', teacher_name: null, class_grade: '6' },
