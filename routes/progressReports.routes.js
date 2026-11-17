@@ -3,7 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabaseClient');
 const requireStaff = require('../middleware/requireStaff');
 const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths } = require('../middleware/requireReportAccess');
-const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
+const { requirePermission, requirePermissionForStaff, requireStaffAccess } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
 
@@ -19,6 +19,13 @@ const classFeedback = (classIdsOf) => requireGradebookAccess({ keys: ['report_ca
 const paramClass = classFeedback((req) => [req.params.classId]);
 const entriesClasses = (req) => ((req.body && req.body.feedbackEntries) || []).map((e) => e && e.classId);
 const progressReportsController = require('../controllers/progressReports.controller');
+const progressSalaatController = require('../controllers/progressSalaat.controller');
+
+// Salaat (schools.progress_salaat): the homeroom teacher's box on the grades
+// 1-8 progress report. The controller checks the school's switch and who may
+// write (the student's homeroom teacher, or classes.all).
+router.get('/salaat', requireStaffAccess, progressSalaatController.getSalaat);
+router.put('/salaat/:studentId', requireStaffAccess, progressSalaatController.saveSalaat);
 
 // Parent-readable: a parent sees only the children they are linked to, and
 // may open only a file that belongs to one of them.

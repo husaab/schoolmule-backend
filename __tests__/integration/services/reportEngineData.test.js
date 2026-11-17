@@ -451,6 +451,41 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     }
   });
 
+  it('3b. grades 1-8 progress report: a Salaat box after the subjects when the school prints it', async () => {
+    const studentId = await seedStudent({ name: 'Test Student S', grade: '5' });
+    await seedClass({ studentId, subject: 'English', grade: '5', term: T1, teacherName: 'Teacher Sample' });
+
+    // Off (the default): no Salaat box on either path.
+    let R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+    expect(R.subjects.map((s) => s.name)).toEqual(['English']);
+
+    await pool.query(`UPDATE schools SET progress_salaat = TRUE WHERE school_code = $1`, [SCHOOL]);
+    // On but not filled in yet: the box prints empty ("Not Assessed").
+    R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+    expect(R.subjects.map((s) => s.name)).toEqual(['English', 'Salaat']);
+    expect(R.subjects[1]).toMatchObject({ id: 'salaat', workHabits: '', behaviour: '', coreStandards: '', comment: '', mark: null });
+
+    await pool.query(
+      `INSERT INTO progress_report_salaat (student_id, term, work_habit, behavior, comment) VALUES ($1, $2, 'G', 'E', 'Leads the class in prayer.')`,
+      [studentId, T1],
+    );
+    R = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+    expect(R.subjects[1]).toMatchObject({ name: 'Salaat', teacher: R.student.homeroomTeacher, workHabits: 'G', behaviour: 'E', comment: 'Leads the class in prayer.' });
+
+    // The legacy generator prints the same box.
+    const res = fakeRes();
+    await progressReportsController.generateProgressReport({ body: { studentId, term: T1 } }, res);
+    expect(res.body.status).toBe('success');
+    const { args: L } = lastCall(progressTemplate.getProgressReportHTML);
+    expect(L.progressData.map((p) => p.subject)).toEqual(['English', 'Salaat']);
+    expect(L.progressData[1]).toMatchObject({ teacherName: R.subjects[1].teacher, workHabit: 'G', behavior: 'E', comment: 'Leads the class in prayer.' });
+
+    // A kindergarten progress report never gets one.
+    const sk = await seedStudent({ name: 'Test Student SK', grade: 'SK' });
+    const K = await assembleReportData({ studentId: sk, docType: 'progress_report', term: T1 }).catch(() => null);
+    if (K) expect(K.subjects.find((s) => s.name === 'Salaat')).toBeUndefined();
+  });
+
   async function seedJK(docType, studentId) {
     const domain = async (name, sort) => (await pool.query(
       `INSERT INTO jk_skill_domains (document_type, name, sort_order, school) VALUES ($1, $2, $3, $4) RETURNING domain_id`,

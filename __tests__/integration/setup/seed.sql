@@ -30,6 +30,7 @@ CREATE TABLE schools (
   email_reply_to         TEXT[] NOT NULL DEFAULT '{}',
   principal_name         TEXT,
   board_name             TEXT,
+  progress_salaat        BOOLEAN NOT NULL DEFAULT FALSE,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
@@ -513,6 +514,18 @@ CREATE TABLE progress_report_feedback (
   comment                TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(student_id, class_id, term)
+);
+
+-- database/migrations/progress_report_salaat_migration.sql
+CREATE TABLE progress_report_salaat (
+  student_id             UUID NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  term                   TEXT NOT NULL,
+  work_habit             TEXT CHECK (work_habit IN ('E', 'G', 'S', 'N')),
+  behavior               TEXT CHECK (behavior IN ('E', 'G', 'S', 'N')),
+  comment                TEXT,
+  updated_by             UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (student_id, term)
 );
 
 CREATE TABLE report_emails (

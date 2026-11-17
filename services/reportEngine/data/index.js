@@ -39,6 +39,7 @@ const { buildProgressSubjects } = require('./progress');
 const { buildSkills } = require('./skills');
 const { buildComments } = require('./comments');
 const { buildLearningSkills } = require('./learningSkills');
+const { loadSalaat, salaatTeacher, SALAAT_SUBJECT } = require('../../progressSalaat');
 const {
   termLabel,
   termNumber,
@@ -119,6 +120,25 @@ async function assembleReportData({ studentId, docType, term, reportDate = null,
     daysAbsent = await loadDaysAbsent(client, student.student_id);
     date = reportDate || isoDateInTimeZone(school.timezone);
     schoolYear = await resolveSchoolYearLabel(client, student.school, date);
+  }
+
+  // Salaat (schools.progress_salaat): one more box after the subjects on the
+  // grades 1-8 progress report, filled in by the homeroom teacher.
+  if (docType === 'progress_report' && !isKindergarten) {
+    const salaat = await loadSalaat(client, { studentId: student.student_id, school: student.school, term });
+    if (salaat) {
+      subjects.push({
+        id: 'salaat',
+        name: SALAAT_SUBJECT,
+        teacher: text(salaatTeacher(homeroomTeacher)),
+        mark: null,
+        workHabits: salaat.workHabit,
+        behaviour: salaat.behavior,
+        coreStandards: '',
+        comment: salaat.comment,
+        terms: {},
+      });
+    }
   }
 
   const skills = await buildSkills(client, student, docType, term);
