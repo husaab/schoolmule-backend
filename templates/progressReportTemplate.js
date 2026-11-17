@@ -231,8 +231,19 @@ const getProgressReportHTML = (data) => {
             border-top: 1px solid #e2e8f0;
         }
         .rating-legend th {
-            width: 130px;
+            width: 170px;
             white-space: nowrap;
+        }
+        .rating-legend tr:nth-child(odd) td,
+        .rating-legend tr:nth-child(odd) th {
+            background: #f8fafc;
+        }
+        .rating-legend .rating-legend-head {
+            background: #2c5aa0;
+            color: #ffffff;
+        }
+        .rating-legend-title {
+            margin-top: 14px;
         }
         .legend-title {
             font-weight: bold;
@@ -407,7 +418,7 @@ const getProgressReportHTML = (data) => {
     </div>
     
     <div class="legend">
-        <div class="legend-title">Assessment Scale</div>
+        <div class="legend-title">Assessment Legend</div>
         <div class="legend-grid">
             <div class="legend-item">
                 <div class="legend-color rating-E">E</div>
@@ -426,10 +437,25 @@ const getProgressReportHTML = (data) => {
                 <span>Needs Improvement</span>
             </div>
         </div>
+        <div class="legend-title rating-legend-title">Learning Skills &amp; Work Habits</div>
         <table class="rating-legend">
-            <tr><th>Work Habits</th><td>Punctuality, coming prepared, completing classwork and homework on time, staying organized and following instructions.</td></tr>
-            <tr><th>Behavior</th><td>Respect for teachers and classmates, following class and school rules, listening attentively, self-control and cooperating with others.</td></tr>
-            <tr><th>Learning Skills</th><td>Responsibility, organization, independent work, collaboration, initiative and self-regulation.</td></tr>
+            <tr><th class="rating-legend-head">Learning Skill</th><th class="rating-legend-head">Key Expectations</th></tr>
+            <tr><th>Responsibility</th><td>Completes tasks, meets deadlines, and takes responsibility for actions.</td></tr>
+            <tr><th>Independent Work</th><td>Works independently and follows instructions.</td></tr>
+            <tr><th>Organization</th><td>Manages time, materials, and priorities.</td></tr>
+            <tr><th>Collaboration</th><td>Respects others, cooperates, and resolves conflicts positively.</td></tr>
+            <tr><th>Initiative</th><td>Shows curiosity, takes initiative, and embraces challenges.</td></tr>
+            <tr><th>Self-Regulation</th><td>Sets goals, reflects, seeks help, and perseveres.</td></tr>
+        </table>
+        <div class="legend-title rating-legend-title">Student Behaviour &amp; Islamic Conduct</div>
+        <table class="rating-legend">
+            <tr><th class="rating-legend-head">Behaviour Category</th><th class="rating-legend-head">Key Expectations</th></tr>
+            <tr><th>Respect &amp; Kindness</th><td>Speaks politely, shows kindness, and respects teachers and peers.</td></tr>
+            <tr><th>Honesty &amp; Integrity</th><td>Tells the truth, acts fairly, and takes responsibility for mistakes.</td></tr>
+            <tr><th>Self-Discipline</th><td>Follows school rules, controls emotions, and makes positive choices.</td></tr>
+            <tr><th>Islamic Manners (Akhlaq)</th><td>Demonstrates humility, patience, forgiveness, and good manners.</td></tr>
+            <tr><th>Respect for Others</th><td>Respects personal boundaries, differences, and others’ belongings.</td></tr>
+            <tr><th>Positive Conduct</th><td>Uses appropriate language, avoids disruptions, and promotes a peaceful environment.</td></tr>
         </table>
     </div>
     

@@ -50,9 +50,10 @@ describe('Honour Roll templates (real Chromium)', () => {
     // chart off page 1.
     ['report-card-standard', 'report_card', { 1: 6, 4: 7, 8: 7, worst: 2 }, 7],
     ['report-card-t1t2final', 'report_card', { 1: 6, 4: 7, 8: 7, worst: 2 }, 7],
-    // Progress long content: 8 since the rating legend (2026-11-16) — a 575-character
-    // first comment no longer fits page 1, so that card starts page 2 with its heading.
-    ['progress-standard', 'progress_report', { 1: 6, 4: 6, 8: 6, worst: 1 }, 8],
+    // Progress: one page more since 2026-11-16, when page 1 took the school's
+    // assessment legend (scale, learning skills & work habits, behaviour &
+    // Islamic conduct) and the subject cards moved to page 2.
+    ['progress-standard', 'progress_report', { 1: 6, 4: 7, 8: 7, worst: 2 }, 8],
   ])('%s', (key, docType, counts, longCount) => {
     it.each(Object.keys(counts))('prints sample %s on the same number of pages, with no warnings', async (s) => {
       const { pageCount, warnings } = await printed(key, sample(s, docType));
@@ -181,15 +182,13 @@ describe('Honour Roll templates (real Chromium)', () => {
     expect(pages[at]).toMatch(/Teacher Comments:/);
   });
 
-  it('keeps a typical first comment (300 characters, the real median) on page 1 under the rating legend', async () => {
-    const data = sample('8', 'progress_report');
-    const comment = 'Amira participates in class discussions and completes her work carefully. '.repeat(4).trim();
-    expect(comment.length).toBeGreaterThanOrEqual(290);
-    data.subjects = data.subjects.map((s) => ({ ...s, comment }));
-    const { pages } = await printed('progress-standard', data);
-    expect(pages[0]).toMatch(/Learning Skills/);
-    expect(pages[0]).toMatch(/Progress by Subject/);
-    expect(pages[0]).toMatch(/Teacher Comments:/);
+  it("prints the school's whole assessment legend on page 1 and starts the subjects on page 2 with their heading", async () => {
+    const { pages } = await printed('progress-standard', sample('8', 'progress_report'));
+    ['ASSESSMENT LEGEND', 'Needs Improvement', 'LEARNING SKILLS & WORK HABITS', 'Self-Regulation', 'STUDENT BEHAVIOUR & ISLAMIC CONDUCT', 'Islamic Manners (Akhlaq)', 'promotes a peaceful environment']
+      .forEach((t) => expect(pages[0]).toContain(t));
+    expect(pages[0]).not.toMatch(/Progress by Subject/);
+    expect(pages[1]).toMatch(/Progress by Subject/);
+    expect(pages[1]).toMatch(/Teacher Comments:/);
   });
 
   it('prints N/A when a student has no OEN on a report card', async () => {
