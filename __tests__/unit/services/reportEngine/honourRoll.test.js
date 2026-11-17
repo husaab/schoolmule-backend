@@ -50,7 +50,9 @@ describe('Honour Roll templates (real Chromium)', () => {
     // chart off page 1.
     ['report-card-standard', 'report_card', { 1: 6, 4: 7, 8: 7, worst: 2 }, 7],
     ['report-card-t1t2final', 'report_card', { 1: 6, 4: 7, 8: 7, worst: 2 }, 7],
-    ['progress-standard', 'progress_report', { 1: 6, 4: 6, 8: 6, worst: 1 }, 7],
+    // Progress long content: 8 since the rating legend (2026-11-16) — a 575-character
+    // first comment no longer fits page 1, so that card starts page 2 with its heading.
+    ['progress-standard', 'progress_report', { 1: 6, 4: 6, 8: 6, worst: 1 }, 8],
   ])('%s', (key, docType, counts, longCount) => {
     it.each(Object.keys(counts))('prints sample %s on the same number of pages, with no warnings', async (s) => {
       const { pageCount, warnings } = await printed(key, sample(s, docType));
@@ -172,8 +174,20 @@ describe('Honour Roll templates (real Chromium)', () => {
     ['First Term', 'Second Term', 'Final Term'].forEach((t) => expect(pages[1]).toContain(t));
   });
 
-  it('keeps the first long comment on page 1 of the progress report, so its heading is never left alone', async () => {
+  it('never leaves the progress report\'s "Progress by Subject" heading alone at the foot of a page', async () => {
     const { pages } = await printed('progress-standard', longContent('progress_report'));
+    const at = pages.findIndex((p) => /Progress by Subject/.test(p));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(pages[at]).toMatch(/Teacher Comments:/);
+  });
+
+  it('keeps a typical first comment (300 characters, the real median) on page 1 under the rating legend', async () => {
+    const data = sample('8', 'progress_report');
+    const comment = 'Amira participates in class discussions and completes her work carefully. '.repeat(4).trim();
+    expect(comment.length).toBeGreaterThanOrEqual(290);
+    data.subjects = data.subjects.map((s) => ({ ...s, comment }));
+    const { pages } = await printed('progress-standard', data);
+    expect(pages[0]).toMatch(/Learning Skills/);
     expect(pages[0]).toMatch(/Progress by Subject/);
     expect(pages[0]).toMatch(/Teacher Comments:/);
   });

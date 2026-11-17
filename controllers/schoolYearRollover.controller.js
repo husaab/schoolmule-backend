@@ -101,6 +101,8 @@ const executeRollover = async (req, res, next) => {
       const already = await client.query(rolloverQueries.selectAlreadyRolled, [targetYearId]);
       const alreadyRolled = new Set(already.rows.map((r) => r.previous_student_id));
       const source = await client.query(rolloverQueries.selectSourceStudents, [req.user.school, sourceYearId]);
+      const homerooms = await client.query(rolloverQueries.selectSourceHomeroomByGrade, [req.user.school, sourceYearId]);
+      const homeroomByGrade = Object.fromEntries(homerooms.rows.map((r) => [r.grade, r.homeroom_teacher_id]));
 
       for (const s of source.rows) {
         if (exclude.has(s.student_id) || alreadyRolled.has(s.student_id)) continue;
@@ -108,7 +110,7 @@ const executeRollover = async (req, res, next) => {
         const newGrade = (override || GRADE_PROGRESSION[s.grade]) ?? null;
         if (newGrade === null) { summary.studentsGraduated += 1; continue; }
         const inserted = await client.query(rolloverQueries.insertRolledStudent, [
-          s.name, s.homeroom_teacher_id, newGrade, s.oen, req.user.school,
+          s.name, homeroomByGrade[newGrade] ?? null, newGrade, s.oen, req.user.school,
           s.mother_name, s.mother_email, s.mother_number,
           s.father_name, s.father_email, s.father_number, s.emergency_contact,
           targetYearId, s.student_id, s.student_email,

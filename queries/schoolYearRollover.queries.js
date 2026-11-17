@@ -9,6 +9,21 @@ const rolloverQueries = {
     ORDER BY name
   `,
 
+  // Each grade's homeroom teacher in the source year: the one most of that
+  // grade's students had (ties go to the lowest id, so it's stable), never an
+  // archived teacher. A rolled student takes their NEW grade's teacher from
+  // this, because copying their own would keep last year's grade's teacher.
+  // $1 school, $2 source school_year_id
+  selectSourceHomeroomByGrade: `
+    SELECT DISTINCT ON (s.grade) s.grade::text AS grade, s.homeroom_teacher_id
+    FROM students s
+    JOIN users u ON u.user_id = s.homeroom_teacher_id
+    WHERE s.school = $1 AND s.school_year_id = $2 AND s.is_archived = false
+      AND u.is_archived = false
+    GROUP BY s.grade, s.homeroom_teacher_id
+    ORDER BY s.grade, count(*) DESC, s.homeroom_teacher_id
+  `,
+
   selectAlreadyRolled: `
     SELECT previous_student_id
     FROM students

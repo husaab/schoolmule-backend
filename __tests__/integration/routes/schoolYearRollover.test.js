@@ -169,6 +169,51 @@ describe('school year rollover', () => {
     expect(rows[0].n).toBe(1); // not duplicated
   });
 
+  // Regression (2026-11-16): the rollover copied each student's homeroom
+  // teacher into the new year, so a grade 3 child moving up to grade 4 kept
+  // the grade 3 teacher. The new row takes whoever was homeroom for the NEW
+  // grade last year; with no such teacher it is left blank for the office.
+  it("gives each rolled student the homeroom teacher of their new grade, not last year's", async () => {
+    const g3Teacher = '550e8400-e29b-41d4-a716-446655440031';
+    const g4Teacher = '550e8400-e29b-41d4-a716-446655440032';
+    const archivedTeacher = '550e8400-e29b-41d4-a716-446655440033';
+    await pool.query(
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, is_archived) VALUES
+       ($1, 'g3@test.com', 'Grade Three', 'hashed', 'Grade', 'Three', 'ALHAADIACADEMY', 'TEACHER', true, true, false),
+       ($2, 'g4@test.com', 'Grade Four', 'hashed', 'Grade', 'Four', 'ALHAADIACADEMY', 'TEACHER', true, true, false),
+       ($3, 'gone@test.com', 'Gone Teacher', 'hashed', 'Gone', 'Teacher', 'ALHAADIACADEMY', 'TEACHER', true, true, true)`,
+      [g3Teacher, g4Teacher, archivedTeacher]);
+    await pool.query(
+      `INSERT INTO students (name, grade, school, school_year_id, homeroom_teacher_id) VALUES
+       ('Third A', '3', 'ALHAADIACADEMY', $1, $2),
+       ('Third B', '3', 'ALHAADIACADEMY', $1, $2),
+       ('Fourth A', '4', 'ALHAADIACADEMY', $1, $3),
+       ('Fourth B', '4', 'ALHAADIACADEMY', $1, $3),
+       ('Fourth Odd', '4', 'ALHAADIACADEMY', $1, $2),
+       ('Fifth A', '5', 'ALHAADIACADEMY', $1, $4)`,
+      [year25, g3Teacher, g4Teacher, archivedTeacher]);
+    const { rows: held } = await pool.query(`SELECT student_id FROM students WHERE name = 'Fourth Odd'`);
+
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: { [held[0].student_id]: '4' } },
+      classes: { mode: 'skip' }, terms: [], copyPlanner: false, copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+
+    const { rows } = await pool.query(
+      `SELECT name, grade::text, homeroom_teacher_id FROM students WHERE school_year_id = $1 ORDER BY name`, [year26]);
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+    // Up to grade 4: last year's grade 4 teacher (most of grade 4 had them).
+    expect(byName['Third A']).toMatchObject({ grade: '4', homeroom_teacher_id: g4Teacher });
+    expect(byName['Third B']).toMatchObject({ grade: '4', homeroom_teacher_id: g4Teacher });
+    // Kept in grade 4 by an override: still the grade 4 teacher.
+    expect(byName['Fourth Odd']).toMatchObject({ grade: '4', homeroom_teacher_id: g4Teacher });
+    // Up to grade 5: last year's grade 5 teacher is archived, so blank.
+    expect(byName['Fourth A']).toMatchObject({ grade: '5', homeroom_teacher_id: null });
+    // Up to grade 6: nobody homeroomed grade 6 last year, so blank.
+    expect(byName['Fifth A']).toMatchObject({ grade: '6', homeroom_teacher_id: null });
+  });
+
   it('honors exclusions and grade overrides', async () => {
     await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
       students: { mode: 'rollover', excludeStudentIds: [movingKid], gradeOverrides: { [gradKid]: '8' } },

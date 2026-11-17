@@ -134,7 +134,7 @@ const getProgressReportHTML = (data) => {
         
         .assessment-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: 1fr 1fr;
             gap: 15px;
             margin-bottom: 15px;
         }
@@ -217,6 +217,23 @@ const getProgressReportHTML = (data) => {
             margin-bottom: 20px;
         }
         
+        .rating-legend {
+            width: 100%;
+            margin-top: 10px;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .rating-legend th,
+        .rating-legend td {
+            text-align: left;
+            vertical-align: top;
+            padding: 5px 8px;
+            border-top: 1px solid #e2e8f0;
+        }
+        .rating-legend th {
+            width: 130px;
+            white-space: nowrap;
+        }
         .legend-title {
             font-weight: bold;
             color: #2c5aa0;
@@ -409,6 +426,11 @@ const getProgressReportHTML = (data) => {
                 <span>Needs Improvement</span>
             </div>
         </div>
+        <table class="rating-legend">
+            <tr><th>Work Habits</th><td>Punctuality, coming prepared, completing classwork and homework on time, staying organized and following instructions.</td></tr>
+            <tr><th>Behavior</th><td>Respect for teachers and classmates, following class and school rules, listening attentively, self-control and cooperating with others.</td></tr>
+            <tr><th>Learning Skills</th><td>Responsibility, organization, independent work, collaboration, initiative and self-regulation.</td></tr>
+        </table>
     </div>
     
     <div class="progress-section">
@@ -432,12 +454,6 @@ const getProgressReportHTML = (data) => {
                             <div class="assessment-label">Behavior</div>
                             <div class="assessment-value ${subject.behavior ? `rating-${subject.behavior}` : 'rating-empty'}">
                                 ${subject.behavior || 'Not Assessed'}
-                            </div>
-                        </div>
-                        <div class="assessment-item">
-                            <div class="assessment-label">Overall</div>
-                            <div class="assessment-value ${getOverallRating(subject.workHabit, subject.behavior)}">
-                                ${calculateOverallRating(subject.workHabit, subject.behavior)}
                             </div>
                         </div>
                     </div>
@@ -483,28 +499,6 @@ const getProgressReportHTML = (data) => {
 </html>
   `;
 };
-
-// Helper function to calculate overall rating
-function calculateOverallRating(workHabit, behavior) {
-  if (!workHabit && !behavior) return 'Not Assessed';
-  if (!workHabit) return behavior;
-  if (!behavior) return workHabit;
-  
-  const ratings = { 'E': 4, 'G': 3, 'S': 2, 'N': 1 };
-  const average = (ratings[workHabit] + ratings[behavior]) / 2;
-  
-  if (average >= 3.5) return 'E';
-  if (average >= 2.5) return 'G';
-  if (average >= 1.5) return 'S';
-  return 'N';
-}
-
-// Helper function to get CSS class for overall rating
-function getOverallRating(workHabit, behavior) {
-  const overall = calculateOverallRating(workHabit, behavior);
-  if (overall === 'Not Assessed') return 'rating-empty';
-  return `rating-${overall}`;
-}
 
 module.exports = {
   getProgressReportHTML
