@@ -287,13 +287,14 @@ describe('Integration: class identity, options, archive, student avatar', () => 
   });
 
   describe('PATCH /options', () => {
-    it('stores the options and returns all three', async () => {
+    it('stores the options and returns all of them', async () => {
       const res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher)
         .send({ acceptLate: false, showClassAverage: true });
 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({
-        classId, options: { acceptLate: false, emailNewPosts: true, showClassAverage: true },
+        classId,
+        options: { acceptLate: false, emailNewPosts: true, showClassAverage: true, onReportCard: true, reportTeacherName: null },
       });
       expect(await row()).toMatchObject({ accept_late: false, email_new_posts: true, show_class_average: true });
     });
@@ -301,11 +302,40 @@ describe('Integration: class identity, options, archive, student avatar', () => 
     it('changes only what is sent', async () => {
       await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ acceptLate: false });
       const res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ emailNewPosts: false });
-      expect(res.body.data.options).toEqual({ acceptLate: false, emailNewPosts: false, showClassAverage: false });
+      expect(res.body.data.options).toEqual({
+        acceptLate: false, emailNewPosts: false, showClassAverage: false, onReportCard: true, reportTeacherName: null,
+      });
+    });
+
+    it('keeps a class off report cards and sets, tidies and clears the name printed on progress reports', async () => {
+      let res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher)
+        .send({ onReportCard: false, reportTeacherName: '  Salaat   Supervisor ' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.options).toMatchObject({ onReportCard: false, reportTeacherName: 'Salaat Supervisor' });
+      expect(await row()).toMatchObject({ on_report_card: false, report_teacher_name: 'Salaat Supervisor' });
+
+      // Another option leaves both alone.
+      res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ acceptLate: false });
+      expect(res.body.data.options).toMatchObject({ onReportCard: false, reportTeacherName: 'Salaat Supervisor' });
+
+      // Blank or null: the teacher's own name again.
+      for (const reportTeacherName of ['   ', null]) {
+        await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ reportTeacherName: 'Supervisor' });
+        res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ reportTeacherName });
+        expect(res.status).toBe(200);
+        expect(res.body.data.options.reportTeacherName).toBeNull();
+        expect((await row()).report_teacher_name).toBeNull();
+      }
+
+      res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ onReportCard: true });
+      expect(res.body.data.options.onReportCard).toBe(true);
     });
 
     it.each([
       ['a non-boolean', { acceptLate: 'no' }],
+      ['a non-boolean onReportCard', { onReportCard: 'false' }],
+      ['a name that is not text', { reportTeacherName: 7 }],
+      ['a name over 80 characters', { reportTeacherName: 'S'.repeat(81) }],
       ['an empty body', {}],
       ['unknown fields only', { archive: true }],
     ])('rejects %s with 400', async (_label, body) => {
@@ -443,7 +473,7 @@ describe('Integration: class identity, options, archive, student avatar', () => 
         iconKey: 'science', iconUrl: '/class-icons/science.svg', color: 'teal',
         isDefault: { banner: true, icon: true, color: true },
       });
-      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false });
+      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false, onReportCard: true, reportTeacherName: null });
       expect(res.body.data.archivedAt).toBeNull();
     });
 

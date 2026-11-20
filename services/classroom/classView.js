@@ -14,11 +14,18 @@ const bannerPublicUrl = (path) => supabase.storage.from(BANNER_BUCKET).getPublic
 /** ClassIdentity for a classes row (needs subject, grade and the four identity columns). */
 const identityOf = (row) => resolveIdentity(row, { bannerPublicUrl });
 
-/** The three per-class switches; a row that does not carry them has the column defaults. */
+/**
+ * The per-class options; a row that does not carry them has the column
+ * defaults. onReportCard false = progress reports only (report cards leave
+ * the class out); reportTeacherName is printed after the subject on progress
+ * reports instead of the teacher's name (null = the teacher).
+ */
 const optionsOf = (row) => ({
   acceptLate: row.accept_late ?? true,
   emailNewPosts: row.email_new_posts ?? true,
   showClassAverage: row.show_class_average ?? false,
+  onReportCard: row.on_report_card ?? true,
+  reportTeacherName: row.report_teacher_name ?? null,
 });
 
 /** Best-effort delete of an uploaded banner; logs and never throws. */

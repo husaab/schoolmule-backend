@@ -468,7 +468,9 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
 
   // 4. Get the classes the student is enrolled in for this term only
   const { rows: classRows } = await db.query(`
-    SELECT c.class_id, c.subject, c.teacher_name, c.grade as class_grade
+    SELECT c.class_id, c.subject,
+           COALESCE(NULLIF(btrim(c.report_teacher_name), ''), c.teacher_name) AS teacher_name,
+           c.grade as class_grade
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1

@@ -44,6 +44,7 @@ const reportEngineDataQueries = {
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1
+      AND c.on_report_card
   `,
 
   // reportCard.controller.js:52. Params: $1 class_id
@@ -82,7 +83,9 @@ const reportEngineDataQueries = {
   // progressReports.controller.js:448 — the term's classes only.
   // Params: $1 student_id, $2 term_id
   selectStudentClassesForProgressTerm: `
-    SELECT c.class_id, c.subject, c.teacher_name, c.grade as class_grade
+    SELECT c.class_id, c.subject,
+           COALESCE(NULLIF(btrim(c.report_teacher_name), ''), c.teacher_name) AS teacher_name,
+           c.grade as class_grade
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1

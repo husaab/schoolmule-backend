@@ -169,6 +169,7 @@ ORDER BY ${GRADE_RANK('c.grade::text')}, c.subject`,
     '',
     `,
        c.school, c.school_year_id, c.accept_late, c.email_new_posts, c.show_class_average,
+       c.on_report_card, c.report_teacher_name,
        (SELECT sy.is_active FROM school_years sy WHERE sy.school_year_id = c.school_year_id) AS year_is_active`,
   ),
 

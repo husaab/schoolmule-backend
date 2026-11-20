@@ -486,6 +486,60 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     if (K) expect(K.subjects.find((s) => s.name === 'Salaat')).toBeUndefined();
   });
 
+  it('3c. a progress-reports-only class (Salaat) prints its report name on progress reports and never on report cards', async () => {
+    const studentId = await seedStudent({ name: 'Test Student P', grade: '5' });
+    const english = await seedClass({ studentId, subject: 'English', grade: '5', term: T1, score: 80 });
+    const salaat = await seedClass({ studentId, subject: 'Salaat', grade: '5', term: T1, teacherName: 'Teacher Sample' });
+    await seedClass({ studentId, subject: 'English', grade: '5', term: T2, score: 90 });
+    const salaatT2 = await seedClass({ studentId, subject: 'Salaat', grade: '5', term: T2, teacherName: 'Teacher Sample' });
+    await pool.query(
+      `UPDATE classes SET on_report_card = false, report_teacher_name = 'Supervisor' WHERE class_id = ANY($1::uuid[])`,
+      [[salaat, salaatT2]],
+    );
+    await pool.query(
+      `INSERT INTO progress_report_feedback (student_id, class_id, term, work_habit, behavior, comment)
+       VALUES ($1, $2, $3, 'G', 'E', 'Prays on time.')`,
+      [studentId, salaat, T1],
+    );
+    await seedRcFeedback(studentId, english, T1, 'E', 'G', 'Reads every day.');
+    await seedRcFeedback(studentId, salaat, T1, 'E', 'E', 'Never printed.');
+
+    // Progress report, both paths: "Salaat – Supervisor".
+    const P = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+    expect(P.subjects.map((s) => s.name)).toEqual(['English', 'Salaat']);
+    expect(P.subjects[1]).toMatchObject({ teacher: 'Supervisor', workHabits: 'G', behaviour: 'E', comment: 'Prays on time.' });
+    expect(P.subjects[0].teacher).toBe('Teacher Sample');
+    const pres = fakeRes();
+    await progressReportsController.generateProgressReport({ body: { studentId, term: T1 } }, pres);
+    expect(pres.body.status).toBe('success');
+    const { args: LP } = lastCall(progressTemplate.getProgressReportHTML);
+    expect(LP.progressData.map((p) => [p.subject, p.teacherName])).toEqual([['English', 'Teacher Sample'], ['Salaat', 'Supervisor']]);
+
+    // Report card, both paths: no Salaat row (it would print "I"), no Salaat comment.
+    const R = await assembleReportData({ studentId, docType: 'report_card', term: T1 });
+    expect(R.subjects.map((s) => s.name)).toEqual(['English']);
+    const rres = fakeRes();
+    await reportCardController.generateReportCard({ body: { studentId, term: T1 } }, rres);
+    expect(rres.statusCode).toBe(200);
+    const { args: LR } = lastCall(reportCardTemplate.getReportCardHTML);
+    expect(LR.subjects.map((s) => s.subject)).toEqual(['English']);
+    expect(LR.feedbacks.map((f) => f.subject)).toEqual(['English']);
+
+    // Al Haadi's Term 2 card (First / Second / Final rows) leaves it out too.
+    const T2R = await assembleReportData({ studentId, docType: 'report_card', term: T2 });
+    expect(T2R.subjects.map((s) => s.name)).toEqual(['English']);
+
+    // The Report cards page doesn't wait on Salaat comments.
+    const reportCardQueries = require('../../../queries/reportCard.queries');
+    const { rows } = await pool.query(reportCardQueries.selectTermCommentsStatus, [SCHOOL, T1, null]);
+    expect(rows.filter((r) => r.student_id === studentId).map((r) => r.subject)).toEqual(['English']);
+
+    // Back on report cards: Salaat prints again (here as "I": no marks).
+    await pool.query('UPDATE classes SET on_report_card = true WHERE class_id = $1', [salaat]);
+    const again = await assembleReportData({ studentId, docType: 'report_card', term: T1 });
+    expect(again.subjects.map((s) => [s.name, s.mark])).toEqual([['English', 85], ['Salaat', 'I']]);
+  });
+
   async function seedJK(docType, studentId) {
     const domain = async (name, sort) => (await pool.query(
       `INSERT INTO jk_skill_domains (document_type, name, sort_order, school) VALUES ($1, $2, $3, $4) RETURNING domain_id`,

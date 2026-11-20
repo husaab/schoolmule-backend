@@ -68,7 +68,8 @@ const rolloverQueries = {
   selectSourceClasses: `
     SELECT class_id, grade, subject, teacher_name, teacher_id, term_name,
            banner_key, banner_path, icon_key, color,
-           accept_late, email_new_posts, show_class_average
+           accept_late, email_new_posts, show_class_average,
+           on_report_card, report_teacher_name
     FROM classes
     WHERE school = $1 AND school_year_id = $2
     ORDER BY grade, subject
@@ -78,8 +79,9 @@ const rolloverQueries = {
   // an archived class is not archived again in the new year.
   insertRolledClass: `
     INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name, school_year_id,
-                         banner_key, banner_path, icon_key, color, accept_late, email_new_posts, show_class_average)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                         banner_key, banner_path, icon_key, color, accept_late, email_new_posts, show_class_average,
+                         on_report_card, report_teacher_name)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
     RETURNING class_id
   `,
 

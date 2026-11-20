@@ -25,6 +25,8 @@ const classQueries = {
       accept_late,
       email_new_posts,
       show_class_average,
+      on_report_card,
+      report_teacher_name,
       archived_at,
       created_at,
       last_modified_at
@@ -67,6 +69,8 @@ const classQueries = {
       accept_late,
       email_new_posts,
       show_class_average,
+      on_report_card,
+      report_teacher_name,
       archived_at,
       created_at,
       last_modified_at
@@ -97,6 +101,8 @@ const classQueries = {
       accept_late,
       email_new_posts,
       show_class_average,
+      on_report_card,
+      report_teacher_name,
       archived_at,
       created_at,
       last_modified_at
@@ -130,6 +136,8 @@ const classQueries = {
       accept_late,
       email_new_posts,
       show_class_average,
+      on_report_card,
+      report_teacher_name,
       archived_at,
       created_at,
       last_modified_at
@@ -290,6 +298,8 @@ const classQueries = {
         c.accept_late,
         c.email_new_posts,
         c.show_class_average,
+        c.on_report_card,
+        c.report_teacher_name,
         c.archived_at,
         c.created_at,
         c.last_modified_at
@@ -316,6 +326,8 @@ const classQueries = {
         c.accept_late,
         c.email_new_posts,
         c.show_class_average,
+        c.on_report_card,
+        c.report_teacher_name,
         c.archived_at,
         c.created_at,
         c.last_modified_at
@@ -380,7 +392,9 @@ const classQueries = {
           color              = s.color,
           accept_late        = s.accept_late,
           email_new_posts    = s.email_new_posts,
-          show_class_average = s.show_class_average
+          show_class_average = s.show_class_average,
+          on_report_card     = s.on_report_card,
+          report_teacher_name = s.report_teacher_name
       FROM classes s
       WHERE n.class_id = $1 AND s.class_id = $2
     `,

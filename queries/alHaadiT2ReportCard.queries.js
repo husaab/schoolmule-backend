@@ -45,6 +45,7 @@ const alHaadiT2ReportCardQueries = {
     WHERE cs.student_id = $1
       AND c.term_id = $2
       AND c.grade NOT IN ('JK', 'SK')
+      AND c.on_report_card
   `,
 };
 

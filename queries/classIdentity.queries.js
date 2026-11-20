@@ -58,15 +58,19 @@ const classIdentityQueries = {
     SELECT class_id FROM classes WHERE banner_path = $1 LIMIT 1
   `,
 
-  //  A missing option is left alone.  $1 class_id, $2 accept_late, $3 email_new_posts, $4 show_class_average
+  //  A missing option is left alone.  $1 class_id, $2 accept_late, $3 email_new_posts,
+  //  $4 show_class_average, $5 on_report_card, $6 whether report_teacher_name is sent,
+  //  $7 report_teacher_name (null clears it)
   updateOptions: `
     UPDATE classes
-    SET accept_late        = COALESCE($2::boolean, accept_late),
-        email_new_posts    = COALESCE($3::boolean, email_new_posts),
-        show_class_average = COALESCE($4::boolean, show_class_average),
-        last_modified_at   = NOW()
+    SET accept_late         = COALESCE($2::boolean, accept_late),
+        email_new_posts     = COALESCE($3::boolean, email_new_posts),
+        show_class_average  = COALESCE($4::boolean, show_class_average),
+        on_report_card      = COALESCE($5::boolean, on_report_card),
+        report_teacher_name = CASE WHEN $6::boolean THEN $7::text ELSE report_teacher_name END,
+        last_modified_at    = NOW()
     WHERE class_id = $1
-    RETURNING class_id, accept_late, email_new_posts, show_class_average
+    RETURNING class_id, accept_late, email_new_posts, show_class_average, on_report_card, report_teacher_name
   `,
 
   //  Archiving twice keeps the first archive time and person.  $1 class_id, $2 user_id

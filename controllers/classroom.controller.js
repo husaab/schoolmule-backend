@@ -351,13 +351,28 @@ const deleteBanner = resetter(identityQueries.clearBanner, 'remove the class ban
 // POST /api/classroom/classes/:classId/identity/reset: banner, icon and color all back to the subject default.
 const resetIdentity = resetter(identityQueries.resetIdentity, 'reset the class look');
 
-// PATCH /api/classroom/classes/:classId/options  { acceptLate?, emailNewPosts?, showClassAverage? }
+const REPORT_TEACHER_NAME_MAX = 80;
+
+// PATCH /api/classroom/classes/:classId/options
+//   { acceptLate?, emailNewPosts?, showClassAverage?, onReportCard?, reportTeacherName? }
+// reportTeacherName: the name progress reports print after the subject instead
+// of the teacher's ("Salaat – Supervisor"); '' or null goes back to the teacher.
 const updateOptions = async (req, res) => {
   const body = req.body || {};
-  const keys = ['acceptLate', 'emailNewPosts', 'showClassAverage'];
-  if (!keys.some((k) => has(body, k))) return failed(res, 400, 'Send acceptLate, emailNewPosts or showClassAverage');
-  for (const k of keys) {
+  const switches = ['acceptLate', 'emailNewPosts', 'showClassAverage', 'onReportCard'];
+  if (![...switches, 'reportTeacherName'].some((k) => has(body, k))) {
+    return failed(res, 400, 'Send acceptLate, emailNewPosts, showClassAverage, onReportCard or reportTeacherName');
+  }
+  for (const k of switches) {
     if (has(body, k) && typeof body[k] !== 'boolean') return failed(res, 400, `${k} must be true or false`);
+  }
+  const sendsName = has(body, 'reportTeacherName');
+  if (sendsName && body.reportTeacherName != null && typeof body.reportTeacherName !== 'string') {
+    return failed(res, 400, 'reportTeacherName must be text');
+  }
+  const reportTeacherName = sendsName ? String(body.reportTeacherName ?? '').replace(/\s+/g, ' ').trim() || null : null;
+  if (reportTeacherName && reportTeacherName.length > REPORT_TEACHER_NAME_MAX) {
+    return failed(res, 400, `The name on reports can be at most ${REPORT_TEACHER_NAME_MAX} characters`);
   }
   try {
     const { rows } = await db.query(identityQueries.updateOptions, [
@@ -365,6 +380,9 @@ const updateOptions = async (req, res) => {
       has(body, 'acceptLate') ? body.acceptLate : null,
       has(body, 'emailNewPosts') ? body.emailNewPosts : null,
       has(body, 'showClassAverage') ? body.showClassAverage : null,
+      has(body, 'onReportCard') ? body.onReportCard : null,
+      sendsName,
+      reportTeacherName,
     ]);
     if (!rows[0]) return failed(res, 404, 'Class not found');
     return ok(res, { classId: rows[0].class_id, options: optionsOf(rows[0]) });

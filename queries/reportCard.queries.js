@@ -71,6 +71,7 @@ const reportCardQueries = {
     WHERE c.school = $1 AND t.name = $2
       AND ($3::uuid IS NULL OR t.school_year_id = $3)
       AND COALESCE(s.grade::text, '') NOT IN ('JK', 'SK')
+      AND c.on_report_card
     ORDER BY cs.student_id, c.subject
   `,
 

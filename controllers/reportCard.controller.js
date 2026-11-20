@@ -44,6 +44,7 @@ async function calculateSubjectGradesForStudent(studentId) {
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1
+      AND c.on_report_card
   `, [studentId]);
 
   if (classRows.length === 0) {
@@ -773,6 +774,7 @@ const legacyGenerateSingleReportCard = async (studentId, term, opts = {}) => {
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1
+      AND c.on_report_card
   `, [studentId]);
 
   const feedbackRows = [];
