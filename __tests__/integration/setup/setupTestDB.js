@@ -7,7 +7,6 @@ process.env.EMAIL_DELIVER_RESERVED_DOMAINS = 'true';
 
 // All tables in the test schema — order doesn't matter with CASCADE
 const ALL_TABLES = [
-  'progress_report_salaat',
   'modified_marks',
   'report_field_values',
   'report_template_assignments',

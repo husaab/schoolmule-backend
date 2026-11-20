@@ -11,7 +11,6 @@ const supabase = require('../config/supabaseClient');
 const { getProgressReportHTML } = require('../templates/progressReportTemplate');
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, progressReportResult } = require('../services/reportEngine/generate');
-const { loadSalaat, salaatTeacher, SALAAT_SUBJECT } = require('../services/progressSalaat');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Progress-report
@@ -500,20 +499,6 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
       workHabit: feedback ? feedback.work_habit : null,
       behavior: feedback ? feedback.behavior : null,
       comment: feedback ? feedback.comment : null
-    });
-  }
-
-  // 5b. Salaat (schools.progress_salaat): the homeroom teacher's box, last.
-  const salaat = await loadSalaat(db, { studentId, school: student.school, term });
-  if (salaat) {
-    progressData.push({
-      subject: SALAAT_SUBJECT,
-      teacherName: salaatTeacher(homeroomTeacher),
-      classGrade: student.grade,
-      coreStandards: null,
-      workHabit: salaat.workHabit || null,
-      behavior: salaat.behavior || null,
-      comment: salaat.comment || null,
     });
   }
 
