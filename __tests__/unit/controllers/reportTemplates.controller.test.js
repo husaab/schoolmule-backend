@@ -398,7 +398,7 @@ describe('Report templates API', () => {
         // The website is the contact email's domain, as the paper footers print it.
         website: 'www.example.test', principal: '', board: '',
       });
-      expect(res.body.assets).toEqual({ logo: 'https://mock-signed-url.com', principalSignature: null, stamp: 'https://mock-signed-url.com', teacherSignature: null });
+      expect(res.body.assets).toEqual({ logo: 'https://mock-signed-url.com', principalSignature: null, stamp: 'https://mock-signed-url.com', teacherSignature: null, teacherAssistantSignature: null });
       expect(res.body.student.grade).toBe('SK');
       expect(res.body.meta.docType).toBe('report_card');
     });

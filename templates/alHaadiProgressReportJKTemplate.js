@@ -104,6 +104,8 @@ function footerTemplate(schoolInfo, yearFull) {
  * @param {string|null} data.logoDataUri   the school logo, inlined (page header)
  * @param {string|null} data.principalSignatureDataUri  inlined too
  * @param {string|null} data.schoolStampDataUri         inlined too
+ * @param {string|null} [data.teacherSignatureDataUri]    the teacher's saved signature, inlined
+ * @param {string|null} [data.assistantSignatureDataUri]  the teacher assistant's, inlined
  * @param {object} data.student            { name, oen, teacherName, teacherAssistant, daysAbsent }
  * @param {Array}  data.domains            [{ domainId, name, skills: [{ skillId, name }] }]
  * @param {object} data.ratingMap          skillId → rating
@@ -115,6 +117,7 @@ function footerTemplate(schoolInfo, yearFull) {
 function renderAlHaadiProgressReportJK(data) {
   const {
     schoolInfo, logoDataUri, principalSignatureDataUri, schoolStampDataUri,
+    teacherSignatureDataUri = null, assistantSignatureDataUri = null,
     student, domains, ratingMap = {}, comments = {}, reportDate, schoolYearLabel,
   } = data;
   const year = schoolYearWording(schoolYearLabel);
@@ -124,7 +127,7 @@ function renderAlHaadiProgressReportJK(data) {
   const legendRows = LEGEND.map(([term, text]) => `<div><strong>${term}</strong> ${text}</div>`).join('');
   const sections = domains.map((d, i) => sectionHtml(d, i, ratingMap)).join('');
 
-  const principalSignature = principalSignatureDataUri ? `<img src="${principalSignatureDataUri}" alt="" />` : '';
+  const img = (uri) => (uri ? `<img src="${uri}" alt="" />` : '');
   const stamp = schoolStampDataUri ? `<div class="stamp"><img src="${schoolStampDataUri}" alt="" /></div>` : '';
 
   const html = `<!DOCTYPE html>
@@ -211,11 +214,11 @@ function renderAlHaadiProgressReportJK(data) {
 
     <div class="signoff">
       <div class="row">
-        <div class="cell">Teacher's Signature: <span class="sig"></span></div>
-        <div class="cell">${ta ? `Teacher Assistant's Signature: <span class="sig"></span>` : ''}</div>
+        <div class="cell">Teacher's Signature: <span class="sig">${img(teacherSignatureDataUri)}</span></div>
+        <div class="cell">${ta ? `Teacher Assistant's Signature: <span class="sig">${img(assistantSignatureDataUri)}</span>` : ''}</div>
       </div>
       <div class="row">
-        <div class="cell">Principal's Signature: <span class="sig">${principalSignature}</span></div>
+        <div class="cell">Principal's Signature: <span class="sig">${img(principalSignatureDataUri)}</span></div>
         <div class="cell">Date: ${escapeHtml(dateLabel)}</div>
       </div>
       ${stamp}

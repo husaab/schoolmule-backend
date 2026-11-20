@@ -602,6 +602,10 @@ CREATE TABLE jk_teacher_assistants (
   term                   TEXT NOT NULL,
   school                 school NOT NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
+  -- staff_signatures_migration.sql: the assistant is a co-teacher of the Kindergarten class
+  teacher_assistant_user_id UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  no_assistant           BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT jk_teacher_assistants_one_choice CHECK (NOT (no_assistant AND teacher_assistant_user_id IS NOT NULL)),
   UNIQUE(student_id, term)
 );
 
@@ -671,6 +675,10 @@ CREATE TABLE sk_teacher_assistants (
   term                   TEXT NOT NULL,
   school                 school NOT NULL,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
+  -- staff_signatures_migration.sql: the assistant is a co-teacher of the Kindergarten class
+  teacher_assistant_user_id UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  no_assistant           BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT sk_teacher_assistants_one_choice CHECK (NOT (no_assistant AND teacher_assistant_user_id IS NOT NULL)),
   UNIQUE(student_id, term)
 );
 
@@ -1865,6 +1873,7 @@ ALTER TABLE classes  ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS archived_by        UUID REFERENCES users(user_id) ON DELETE SET NULL;
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS avatar     JSONB;
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS photo_path TEXT;
+ALTER TABLE users    ADD COLUMN IF NOT EXISTS signature_path TEXT;  -- staff_signatures_migration.sql
 ALTER TABLE students ADD COLUMN IF NOT EXISTS avatar     JSONB;
 
 -- student_portal_03_announcement_students.sql: the 'student' email kind and

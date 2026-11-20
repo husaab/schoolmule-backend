@@ -384,7 +384,7 @@ describe('extra fields, previews and printing with the engine', () => {
     const data = await admin('get', `${BASE}/preview/data?studentId=${jkStudentId}&docType=progress_report`);
     expect(data.status).toBe(200);
     expect(data.body).toMatchObject({
-      dataVersion: 1,
+      dataVersion: 2,
       meta: { docType: 'progress_report', term: 'Term 1' },
       student: { id: jkStudentId, name: 'Jay Testchild', grade: 'JK' },
       school: { code: SCHOOL, name: 'Al Haadi Academy', address: '1 Sample Road' },
@@ -399,7 +399,7 @@ describe('extra fields, previews and printing with the engine', () => {
     const sample = await admin('get', `${BASE}/preview/sample?key=JK&docType=progress_report`);
     expect(sample.status).toBe(200);
     expect(sample.body.school).toMatchObject({ code: SCHOOL, name: 'Al Haadi Academy', address: '1 Sample Road', phone: '555-0100', website: '', principal: '', board: '' });
-    expect(sample.body.assets).toEqual({ logo: null, principalSignature: null, stamp: null, teacherSignature: null });
+    expect(sample.body.assets).toEqual({ logo: null, principalSignature: null, stamp: null, teacherSignature: null, teacherAssistantSignature: null });
     expect((await admin('get', `${BASE}/preview/sample?key=nope&docType=progress_report`)).status).toBe(400);
 
     const doc = kit.defaultTemplate(JK_PROGRESS.key);

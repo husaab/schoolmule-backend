@@ -7,7 +7,8 @@
  *            the rotated EVALUATION KEY, then LEARNING SKILLS.
  *   Pages 2+ a running header (student name, report date).
  *   Last     "Subjects | Strengths/Next Steps for Improvement" comment table
- *            with the signature row.
+ *            with the signature row: the teacher's, the teacher assistant's
+ *            when there is one, and the principal's (saved signatures inlined).
  *   Every page: the school's address footer and "Page X of Y".
  *
  * Every LEARNING SKILLS row lives in ONE table with fixed columns, so the
@@ -115,11 +116,11 @@ function sectionHtml(section, ratingMap, isFirst) {
   return `<tbody class="section">${banner}${heading}${rows}</tbody>`;
 }
 
-function commentRowsHtml(comments) {
+function commentRowsHtml(comments, commentSpan = 3) {
   return SK_PROGRESS_COMMENT_ROWS.map(
     (row) => `<tr>
       <td class="subject">${escapeHtml(row.label)}${row.caption ? `<div class="caption">${escapeHtml(row.caption)}</div>` : ''}</td>
-      <td class="comment" colspan="3">${escapeHtml((comments[row.key] || '').trim())}</td>
+      <td class="comment" colspan="${commentSpan}">${escapeHtml((comments[row.key] || '').trim())}</td>
     </tr>`
   ).join('');
 }
@@ -148,7 +149,9 @@ function runningHeaderTemplate(studentName, dateLabel) {
  * @param {object} data.schoolInfo        { name, address, phone, email }
  * @param {string|null} data.logoDataUri  the school logo, inlined
  * @param {string|null} data.principalSignatureDataUri  inlined too
- * @param {object} data.student           { name, oen, teacherName, daysAbsent }
+ * @param {string|null} [data.teacherSignatureDataUri]    the teacher's saved signature, inlined
+ * @param {string|null} [data.assistantSignatureDataUri]  the teacher assistant's, inlined
+ * @param {object} data.student           { name, oen, teacherName, teacherAssistant, daysAbsent }
  * @param {Array}  data.subjects          [{ subjectId, name, standards: [{ standardId, name }] }]
  * @param {object} data.ratingMap         standardId → rating
  * @param {object} data.comments          SK_PROGRESS_COMMENT_ROWS key → comment
@@ -157,7 +160,11 @@ function runningHeaderTemplate(studentName, dateLabel) {
  * @returns {{ html: string, pdfOptions: object }}
  */
 function renderAlHaadiProgressReportSK(data) {
-  const { schoolInfo, logoDataUri, principalSignatureDataUri, student, subjects, ratingMap = {}, comments = {}, reportDate, schoolYearLabel } = data;
+  const {
+    schoolInfo, logoDataUri, principalSignatureDataUri, teacherSignatureDataUri = null, assistantSignatureDataUri = null,
+    student, subjects, ratingMap = {}, comments = {}, reportDate, schoolYearLabel,
+  } = data;
+  const ta = String(student.teacherAssistant || '').trim();
   const dateLabel = formatLongDate(reportDate);
   const year = schoolYearWording(schoolYearLabel);
 
@@ -170,7 +177,16 @@ function renderAlHaadiProgressReportSK(data) {
 
   const sections = layoutSubjects(subjects).map((s, i) => sectionHtml(s, ratingMap, i === 0)).join('');
 
-  const principalSignature = principalSignatureDataUri ? `<img src="${principalSignatureDataUri}" alt="" />` : '';
+  const img = (uri) => (uri ? `<img src="${uri}" alt="" />` : '');
+  // With a teacher assistant the signature row holds three label + signature
+  // pairs on finer columns; without one, the paper's two.
+  const commentCols = ta ? [20, 13.4, 20, 13.4, 19.2, 14] : [20, 18.1, 39.4, 22.5];
+  const signatureRow = ta
+    ? `<td>Teacher's Signature:</td><td class="sig">${img(teacherSignatureDataUri)}</td>
+        <td>Teacher Assistant's Signature:</td><td class="sig">${img(assistantSignatureDataUri)}</td>
+        <td>Principal's Signature:</td><td class="sig">${img(principalSignatureDataUri)}</td>`
+    : `<td>Teacher's Signature:</td><td class="sig">${img(teacherSignatureDataUri)}</td>
+        <td>Principal's Signature:</td><td class="sig">${img(principalSignatureDataUri)}</td>`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -256,6 +272,7 @@ function renderAlHaadiProgressReportSK(data) {
       <td class="label">Teacher:</td><td class="value" colspan="2">${escapeHtml(student.teacherName || '')}</td>
       <td class="value">Days Absent:</td><td class="value center">${escapeHtml(student.daysAbsent ?? 0)}</td>
     </tr>
+    ${ta ? `<tr><td class="value" colspan="5">Teacher Assistant:&nbsp; ${escapeHtml(ta)}</td></tr>` : ''}
     ${keyRows}
   </table>
 
@@ -265,13 +282,12 @@ function renderAlHaadiProgressReportSK(data) {
   </table>
 
   <table class="grid comments">
-    <colgroup><col style="width: 20%" /><col style="width: 18.1%" /><col style="width: 39.4%" /><col style="width: 22.5%" /></colgroup>
-    <thead><tr><th>Subjects</th><th colspan="3">Strengths/Next Steps for Improvement</th></tr></thead>
+    <colgroup>${commentCols.map((w) => `<col style="width: ${w}%" />`).join('')}</colgroup>
+    <thead><tr><th>Subjects</th><th colspan="${commentCols.length - 1}">Strengths/Next Steps for Improvement</th></tr></thead>
     <tbody>
-      ${commentRowsHtml(comments)}
+      ${commentRowsHtml(comments, commentCols.length - 1)}
       <tr class="signatures">
-        <td>Teacher's Signature:</td><td class="sig"></td>
-        <td>Principal's Signature:</td><td class="sig">${principalSignature}</td>
+        ${signatureRow}
       </tr>
     </tbody>
   </table>

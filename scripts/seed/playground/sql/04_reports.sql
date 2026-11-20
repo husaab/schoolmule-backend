@@ -427,11 +427,7 @@ SELECT s.student_id, ctx.term_name, sub.k, split_part(s.name, ' ', 1) || sub.bod
   CROSS JOIN (VALUES ('mathematics', ' counts confidently to 50 and is beginning to count by tens.'),
                      ('language_arts', ' recognizes most letters and enjoys sharing books with friends.')) sub(k, body)
  WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'SK' AND pg_temp.rnd('skc:' || s.student_id || sub.k) < 0.6;
-INSERT INTO jk_teacher_assistants (student_id, teacher_assistant_name, term, school)
-SELECT s.student_id, 'Rima Khatib', ctx.term_name, 'PLAYGROUND' FROM students s CROSS JOIN ctx
- WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'JK';
-INSERT INTO sk_teacher_assistants (student_id, teacher_assistant_name, term, school)
-SELECT s.student_id, 'Dalal Youssef', ctx.term_name, 'PLAYGROUND' FROM students s CROSS JOIN ctx
- WHERE s.school_year_id = ctx.year_id AND s.grade::text = 'SK';
+-- The teacher assistant needs no rows: the Kindergarten classes' only
+-- co-teacher (CO_TEACHERS) is every student's assistant by default.
 
 COMMIT;

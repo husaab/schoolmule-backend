@@ -7,9 +7,10 @@ const schoolAssetsQueries = require("../queries/schoolAssets.queries");
 const { createPDFBuffer, launchPDFBrowser } = require('../utils/pdfGenerator');
 const supabase = require('../config/supabaseClient');
 const logger = require("../logger");
+const kindergartenAssistant = require("./kindergartenAssistant.controller");
 const { renderAlHaadiProgressReportJK } = require('../templates/alHaadiProgressReportJKTemplate');
 const { fetchImageDataUri } = require('../templates/printKit');
-const { loadProgressReportContext, parseReportDate } = require('../services/kindergartenProgressReport');
+const { loadProgressReportContext, loadReportCardStaff, parseReportDate } = require('../services/kindergartenProgressReport');
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, kindergartenResult } = require('../services/reportEngine/generate');
 const { ReportSkip } = require('../services/reportEngine/data/errors');
@@ -410,57 +411,11 @@ const bulkUpsertDomainComments = async (req, res) => {
 };
 
 // ============================================================
-// GET /teacher-assistant/:studentId?term=X
+// Teacher assistant: a co-teacher of the student's Kindergarten class
+// (controllers/kindergartenAssistant.controller.js, services/kindergartenStaff.js)
 // ============================================================
-const getTeacherAssistant = async (req, res) => {
-  try {
-    const { studentId } = req.params;
-    const { term } = req.query;
-    if (!term) {
-      return res.status(400).json({ status: 'error', message: 'term is required' });
-    }
-
-    const { rows } = await db.query(jkskQueries.getTeacherAssistant, [studentId, term]);
-    res.json({
-      status: 'success',
-      data: rows[0] ? {
-        id: rows[0].id,
-        studentId: rows[0].student_id,
-        teacherAssistantName: rows[0].teacher_assistant_name,
-        term: rows[0].term
-      } : null
-    });
-  } catch (error) {
-    logger.error('Error fetching JK teacher assistant:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to fetch teacher assistant' });
-  }
-};
-
-// ============================================================
-// POST /teacher-assistant
-// Body: { studentId, teacherAssistantName, term, school }
-// ============================================================
-const upsertTeacherAssistant = async (req, res) => {
-  try {
-    const { studentId, teacherAssistantName, term } = req.body;
-    const { school } = req.user;
-    if (!studentId || !term) {
-      return res.status(400).json({ status: 'error', message: 'studentId and term are required' });
-    }
-
-    const { rows } = await db.query(jkskQueries.upsertTeacherAssistant, [
-      studentId,
-      teacherAssistantName || null,
-      term,
-      school
-    ]);
-
-    res.json({ status: 'success', data: rows[0] });
-  } catch (error) {
-    logger.error('Error upserting JK teacher assistant:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to save teacher assistant' });
-  }
-};
+const getTeacherAssistant = kindergartenAssistant.getTeacherAssistant('JK');
+const upsertTeacherAssistant = kindergartenAssistant.saveTeacherAssistant('JK');
 
 // ============================================================
 // GET /progress-report-comments/:studentId?term=X
@@ -538,17 +493,14 @@ const legacyGenerateSingleJKProgressReport = async (studentId, term, opts = {}) 
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];
 
-  // 2. School info + assets, then the report's date, school year, days absent
-  // and teacher (services/kindergartenProgressReport.js)
+  // 2. School info + assets, then the report's date, school year, days absent,
+  // teacher and teacher assistant (services/kindergartenProgressReport.js)
   const { schoolInfo, schoolAssets } = await fetchSchoolData(student.school);
   const context = await loadProgressReportContext(student, {
     reportDate: opts.reportDate || null,
     timezone: schoolInfo.timezone,
+    term,
   });
-
-  // 3. Teacher assistant
-  const { rows: taRows } = await db.query(jkskQueries.getTeacherAssistant, [studentId, term]);
-  const teacherAssistant = taRows.length > 0 ? taRows[0].teacher_assistant_name : null;
 
   // 4. Domains + skills
   const { rows: domainRows } = await db.query(
@@ -579,21 +531,25 @@ const legacyGenerateSingleJKProgressReport = async (studentId, term, opts = {}) 
 
   // 7. HTML + page furniture
   // Images inlined: a URL that fails to load would print a broken-image icon.
-  const [logoDataUri, principalSignatureDataUri, schoolStampDataUri] = await Promise.all([
+  const [logoDataUri, principalSignatureDataUri, schoolStampDataUri, teacherSignatureDataUri, assistantSignatureDataUri] = await Promise.all([
     fetchImageDataUri(schoolAssets.logoUrl),
     fetchImageDataUri(schoolAssets.principalSignatureUrl),
     fetchImageDataUri(schoolAssets.schoolStampUrl),
+    fetchImageDataUri(context.signatures.teacher),
+    fetchImageDataUri(context.signatures.assistant),
   ]);
   const { html: htmlContent, pdfOptions } = renderAlHaadiProgressReportJK({
     schoolInfo,
     logoDataUri,
     principalSignatureDataUri,
     schoolStampDataUri,
+    teacherSignatureDataUri,
+    assistantSignatureDataUri,
     student: {
       name: student.name,
       oen: student.oen,
       teacherName: context.teacherName,
-      teacherAssistant,
+      teacherAssistant: context.assistantName,
       daysAbsent: context.daysAbsent,
     },
     domains,
@@ -645,16 +601,16 @@ const legacyGenerateSingleJKReportCard = async (studentId, term, opts = {}) => {
   if (studentRows.length === 0) throw new Error('Student not found');
   const student = studentRows[0];
 
-  // 2. Get homeroom teacher
-  const { rows: teacherRows } = await db.query(
-    `SELECT username FROM users WHERE user_id = $1`,
-    [student.homeroom_teacher_id]
-  );
-  const homeroomTeacher = teacherRows.length > 0 ? teacherRows[0].username : 'N/A';
-
-  // 3. Get teacher assistant
-  const { rows: taRows } = await db.query(jkskQueries.getTeacherAssistant, [studentId, term]);
-  const teacherAssistant = taRows.length > 0 ? taRows[0].teacher_assistant_name : null;
+  // 2. School info + assets, then the teacher and teacher assistant (the
+  // progress report's rule) and their saved signatures
+  const { schoolInfo, schoolAssets } = await fetchSchoolData(student.school);
+  const people = await loadReportCardStaff(student, {
+    reportDate: opts.reportDate || null,
+    timezone: schoolInfo.timezone,
+    term,
+  });
+  const homeroomTeacher = people.teacherName || 'N/A';
+  const teacherAssistant = people.assistantName;
 
   // 4. Days of absence
   let daysOfAbsence = 0;
@@ -665,9 +621,6 @@ const legacyGenerateSingleJKReportCard = async (studentId, term, opts = {}) => {
     );
     daysOfAbsence = parseInt(attendanceRows[0]?.days_absent || 0);
   } catch (err) { /* fallback to 0 */ }
-
-  // 5. School info + assets
-  const { schoolInfo, schoolAssets } = await fetchSchoolData(student.school);
 
   // 6. Get domains + skills for report_card
   const { rows: domainRows } = await db.query(
@@ -716,6 +669,7 @@ const legacyGenerateSingleJKReportCard = async (studentId, term, opts = {}) => {
   const htmlContent = getAlHaadiReportCardJKHTML({
     schoolInfo,
     schoolAssets,
+    staffSignatures: people.signatures,
     student: {
       name: student.name,
       grade: student.grade,

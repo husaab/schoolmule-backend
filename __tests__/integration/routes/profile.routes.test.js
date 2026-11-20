@@ -1,4 +1,5 @@
-// The signed-in person's own avatar and photo (/api/profile), and how both
+// The signed-in person's own avatar, photo and (staff) signature
+// (/api/profile), and how avatar and photo
 // ride along in the session (/api/auth/me, login). Synthetic identities only.
 
 jest.mock('resend', () => ({
@@ -214,6 +215,94 @@ describe('Integration: profile (avatar and photo)', () => {
       expect(up.status).toBe(403);
       const del = await authenticatedRequest('delete', '/api/profile/photo', preview);
       expect(del.status).toBe(403);
+    });
+  });
+
+  describe('signature (staff only)', () => {
+    const wave = () => Array.from({ length: 60 }, (_, i) => [40 + i * 8, 100 + 40 * Math.sin((40 + i * 8) / 30)]);
+    const DRAWN = { width: 600, height: 200, strokes: [wave()] };
+    const sigPath = async (id) => (await pool.query(`SELECT signature_path FROM users WHERE user_id = $1`, [id])).rows[0].signature_path;
+    const signedUrl = (path) => `https://mock-signed-url.com/${path}`;
+    const sharp = require('sharp');
+    const paperPhoto = () => sharp(Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="100%" height="100%" fill="#e4e0d8"/>'
+      + '<path d="M150 200 C 250 80, 350 320, 600 180" stroke="#123" stroke-width="9" fill="none"/></svg>',
+    )).jpeg().toBuffer();
+
+    it('starts empty', async () => {
+      const res = await authenticatedRequest('get', '/api/profile/signature', asTeacher);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ signatureUrl: null });
+    });
+
+    it('PUT a drawing: a PNG in the private signatures bucket at <SCHOOL>/<userId>/<uuid>.png', async () => {
+      const res = await authenticatedRequest('put', '/api/profile/signature', asTeacher).send(DRAWN);
+      expect(res.status).toBe(200);
+      const path = await sigPath(TEACHER_ID);
+      expect(path).toMatch(new RegExp(`^ALHAADIACADEMY/${TEACHER_ID}/[0-9a-f-]{36}\\.png$`));
+      expect(supabase.storage.from).toHaveBeenCalledWith('signatures');
+      const [uploadedPath, body, options] = storage().upload.mock.calls[0];
+      expect(uploadedPath).toBe(path);
+      expect(options).toEqual({ contentType: 'image/png', upsert: false });
+      expect((await sharp(body).metadata()).hasAlpha).toBe(true);
+      expect(res.body.data).toEqual({ signatureUrl: signedUrl(path) });
+
+      const get = await authenticatedRequest('get', '/api/profile/signature', asTeacher);
+      expect(get.body.data).toEqual({ signatureUrl: signedUrl(path) });
+    });
+
+    it('POST an uploaded photo: cleaned to a transparent PNG; a new one replaces and removes the old', async () => {
+      await authenticatedRequest('put', '/api/profile/signature', asTeacher).send(DRAWN);
+      const first = await sigPath(TEACHER_ID);
+      const res = await authenticatedRequest('post', '/api/profile/signature', asTeacher)
+        .attach('signature', await paperPhoto(), { filename: 'sig.jpg', contentType: 'image/jpeg' });
+      expect(res.status).toBe(200);
+      const second = await sigPath(TEACHER_ID);
+      expect(second).not.toBe(first);
+      expect(second).toMatch(/\.png$/);
+      expect(storage().remove).toHaveBeenCalledWith([first]);
+      const stored = storage().upload.mock.calls[1][1];
+      const { data, info } = await sharp(stored).raw().toBuffer({ resolveWithObject: true });
+      expect(info.channels).toBe(4);
+      expect(data[3]).toBe(0); // the paper is gone
+    });
+
+    it('DELETE removes it', async () => {
+      await authenticatedRequest('put', '/api/profile/signature', asTeacher).send(DRAWN);
+      const path = await sigPath(TEACHER_ID);
+      const res = await authenticatedRequest('delete', '/api/profile/signature', asTeacher);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ signatureUrl: null });
+      expect(await sigPath(TEACHER_ID)).toBeNull();
+      expect(storage().remove).toHaveBeenCalledWith([path]);
+    });
+
+    it('refuses an empty drawing, a blank photo and a non-image, storing nothing', async () => {
+      const empty = await authenticatedRequest('put', '/api/profile/signature', asTeacher).send({ width: 600, height: 200, strokes: [] });
+      expect(empty.status).toBe(400);
+      expect(empty.body.message).toBe('Draw your signature first');
+      const blank = await authenticatedRequest('post', '/api/profile/signature', asTeacher)
+        .attach('signature', await sharp({ create: { width: 400, height: 200, channels: 3, background: '#ffffff' } }).png().toBuffer(), { filename: 'blank.png', contentType: 'image/png' });
+      expect(blank.status).toBe(400);
+      const text = await authenticatedRequest('post', '/api/profile/signature', asTeacher)
+        .attach('signature', Buffer.from('not an image, just words'), { filename: 'sig.png', contentType: 'image/png' });
+      expect(text.status).toBe(400);
+      expect(storage().upload).not.toHaveBeenCalled();
+      expect(await sigPath(TEACHER_ID)).toBeNull();
+    });
+
+    it('is staff only: parents and students get 403', async () => {
+      for (const as of [asParent, asStudent]) {
+        expect((await authenticatedRequest('get', '/api/profile/signature', as)).status).toBe(403);
+        expect((await authenticatedRequest('put', '/api/profile/signature', as).send(DRAWN)).status).toBe(403);
+      }
+    });
+
+    it('an admin "view as" preview cannot change the signature', async () => {
+      const preview = { ...asTeacher, impersonator: { userId: ADMIN_ID, username: 'Office Admin', fullName: 'Office Admin' } };
+      expect((await authenticatedRequest('put', '/api/profile/signature', preview).send(DRAWN)).status).toBe(403);
+      expect((await authenticatedRequest('delete', '/api/profile/signature', preview)).status).toBe(403);
+      expect(await sigPath(TEACHER_ID)).toBeNull();
     });
   });
 

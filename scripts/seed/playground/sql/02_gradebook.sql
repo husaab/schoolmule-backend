@@ -369,7 +369,7 @@ INSERT INTO classes (class_id, school, grade, subject, teacher_name, teacher_id,
 SELECT c.class_id, 'PLAYGROUND', c.grade::"GRADE", c.subject, u.first_name || ' ' || u.last_name, c.teacher_id,
        ctx.term_id, ctx.term_name, ctx.year_id, c.show_avg, pg_temp.at(ctx.term_start - 14, '10:00')
   FROM cls c JOIN users u ON u.user_id = c.teacher_id CROSS JOIN ctx;
-INSERT INTO class_teachers (class_id, teacher_id) VALUES ('b0fecec9-1ac8-7da0-5664-6eccc322338c', '799f4f61-7f78-4306-b5a2-badefc8de37d');
+INSERT INTO class_teachers (class_id, teacher_id) VALUES ('b0fecec9-1ac8-7da0-5664-6eccc322338c', '799f4f61-7f78-4306-b5a2-badefc8de37d'), ('cc2b0c6c-05bf-396d-a534-f576e83c5722', 'c947d025-38eb-28f3-f837-c4bfee612489'), ('109c731a-b656-b2a1-d99e-34dbee4edbeb', 'c947d025-38eb-28f3-f837-c4bfee612489');
 INSERT INTO class_students (class_id, student_id, enrolled_at, created_at)
 SELECT c.class_id, s.student_id, pg_temp.at(ctx.term_start - 7, '10:00'), pg_temp.at(ctx.term_start - 7, '10:00')
   FROM cls c CROSS JOIN ctx

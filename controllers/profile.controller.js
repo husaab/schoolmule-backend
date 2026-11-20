@@ -1,8 +1,9 @@
 /*
   controllers/profile.controller.js
-  The signed-in person's own avatar and photo (/api/profile). Open to every
-  verified role, students included (the student fence allows this prefix);
-  every query is keyed on the caller's own user id, never an id from the client.
+  The signed-in person's own avatar, photo and (staff) signature
+  (/api/profile). Open to every verified role, students included (the student
+  fence allows this prefix); every query is keyed on the caller's own user id,
+  never an id from the client.
 */
 
 const { v4: uuidv4 } = require('uuid');
@@ -12,6 +13,7 @@ const logger = require('../logger');
 const q = require('../queries/profile.queries');
 const { AVATAR_ERROR, validateAvatar } = require('../utils/avatar');
 const { BUCKET, STUDENT_PHOTOS_OFF, photosAllowed, signedPhotoUrl, removePhotoObject } = require('../services/profile/photos');
+const signatures = require('../services/profile/signatures');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
@@ -106,4 +108,74 @@ const deletePhoto = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, setAvatar, setPhoto, deletePhoto };
+// ── My signature (staff only: the routes sit behind requireStaffAccess) ────
+
+// GET /api/profile/signature -> { signatureUrl }
+const getSignature = async (req, res) => {
+  try {
+    const { rows } = await db.query(q.selectSignaturePath, [req.user.userId]);
+    if (!rows[0]) return failed(res, 404, ACCOUNT_NOT_FOUND);
+    return ok(res, { signatureUrl: await signatures.signedSignatureUrl(rows[0].signature_path) });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to load the signature');
+    return failed(res, 500, 'Error loading your signature');
+  }
+};
+
+/** Makes the PNG with `make`, stores it, points the row at it and removes the old one. */
+async function saveSignature(req, res, make) {
+  const { userId, school } = req.user;
+  let png;
+  try {
+    png = await make();
+  } catch (error) {
+    if (error instanceof signatures.SignatureError) return failed(res, error.status, error.message);
+    logger.error({ err: error }, 'Failed to make a signature image');
+    return failed(res, 500, 'Error saving your signature');
+  }
+
+  let path;
+  try {
+    path = await signatures.storeSignaturePng({ school, userId, png, newId: uuidv4 });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to store a signature');
+    return failed(res, 500, 'Error saving your signature');
+  }
+
+  try {
+    const { rows } = await db.query(q.updateSignaturePath, [userId, path]);
+    if (!rows[0]) {
+      await signatures.removeSignatureObject(path);
+      return failed(res, 404, ACCOUNT_NOT_FOUND);
+    }
+    await signatures.removeSignatureObject(rows[0].old_signature_path);
+    return ok(res, { signatureUrl: await signatures.signedSignatureUrl(path) });
+  } catch (error) {
+    await signatures.removeSignatureObject(path);
+    logger.error({ err: error }, 'Failed to save a signature');
+    return failed(res, 500, 'Error saving your signature');
+  }
+}
+
+// PUT /api/profile/signature  { width, height, strokes } (drawn) -> { signatureUrl }
+const saveDrawnSignature = (req, res) => saveSignature(req, res, () => signatures.drawingToPng(req.body));
+
+// POST /api/profile/signature  (multipart "signature", a photo or scan) -> { signatureUrl }
+const uploadSignature = (req, res) => saveSignature(req, res, () => signatures.uploadToPng(req.image.buffer));
+
+// DELETE /api/profile/signature -> { signatureUrl: null }
+const deleteSignature = async (req, res) => {
+  try {
+    const { rows } = await db.query(q.updateSignaturePath, [req.user.userId, null]);
+    if (!rows[0]) return failed(res, 404, ACCOUNT_NOT_FOUND);
+    await signatures.removeSignatureObject(rows[0].old_signature_path);
+    return ok(res, { signatureUrl: null });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to remove the signature');
+    return failed(res, 500, 'Error removing your signature');
+  }
+};
+
+module.exports = {
+  getProfile, setAvatar, setPhoto, deletePhoto, getSignature, saveDrawnSignature, uploadSignature, deleteSignature,
+};

@@ -1,5 +1,5 @@
-// What a JK/SK progress report prints about when and who
-// (services/kindergartenProgressReport.js).
+// What a JK/SK progress report prints about when (services/
+// kindergartenProgressReport.js); who is queries/kindergartenStaff.queries.js.
 
 // The school year a date falls in; else the latest one that had started by
 // then (a summer date reports on the year just ended); else the latest.
@@ -23,31 +23,7 @@ const countDaysAbsent = `
     AND attendance_date <= $3::date
 `;
 
-const selectHomeroomTeacherName = `SELECT username FROM users WHERE user_id = $1`;
-
-// The teacher of the grade's Kindergarten class that year ("Junior
-// Kindergarten", "Senior Kindergarten"), preferring one the student is
-// enrolled in. $1 student, $2 grade, $3 school year (or null), $4 school.
-const selectKindergartenClassTeacherName = `
-  SELECT COALESCE(NULLIF(TRIM(u.username), ''), c.teacher_name) AS teacher_name
-  FROM classes c
-  LEFT JOIN users u ON u.user_id = c.teacher_id
-  WHERE c.school::text = $4::text
-    AND c.grade::text = $2::text
-    AND c.archived_at IS NULL
-    AND c.subject ILIKE '%kindergarten%'
-    AND ($3::uuid IS NULL OR c.school_year_id = $3::uuid)
-    AND COALESCE(NULLIF(TRIM(u.username), ''), c.teacher_name) IS NOT NULL
-  ORDER BY EXISTS (
-             SELECT 1 FROM class_students cs WHERE cs.class_id = c.class_id AND cs.student_id = $1
-           ) DESC,
-           c.created_at
-  LIMIT 1
-`;
-
 module.exports = {
   selectSchoolYearForDate,
   countDaysAbsent,
-  selectHomeroomTeacherName,
-  selectKindergartenClassTeacherName,
 };

@@ -114,6 +114,29 @@ describe('SK progress report', () => {
     const { html } = render({ principalSignatureDataUri: 'data:image/png;base64,SIG' });
     expect(html).toContain('<img src="data:image/png;base64,SIG"');
   });
+
+  it("prints the teacher's saved signature in the teacher's box", () => {
+    const { html } = render({ teacherSignatureDataUri: 'data:image/png;base64,TEACHER' });
+    expect(html).toMatch(/Teacher's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,TEACHER"/);
+    expect(html).not.toContain('Teacher Assistant');
+    // The paper's four columns.
+    expect(html).toContain('<col style="width: 39.4%" />');
+  });
+
+  it('names the teacher assistant under the teacher and adds their signature box', () => {
+    const { html } = render({
+      student: { name: 'Sample Student', oen: '1', teacherName: 'Sample Teacher', teacherAssistant: 'Sample <Assistant>', daysAbsent: 0 },
+      teacherSignatureDataUri: 'data:image/png;base64,TEACHER',
+      assistantSignatureDataUri: 'data:image/png;base64,ASSISTANT',
+      principalSignatureDataUri: 'data:image/png;base64,SIG',
+    });
+    expect(html).toContain('Teacher Assistant:&nbsp; Sample &lt;Assistant&gt;');
+    expect(html).toMatch(/Teacher Assistant's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,ASSISTANT"/);
+    expect(html).toMatch(/Principal's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,SIG"/);
+    // Six columns: the comments span the five after the subject.
+    expect(html).toContain('<th colspan="5">Strengths/Next Steps for Improvement</th>');
+    expect(html).toContain('<td class="comment" colspan="5">');
+  });
 });
 
 describe('JK progress report', () => {
@@ -174,10 +197,50 @@ describe('JK progress report', () => {
     expect(render({ logoDataUri: null }).pdfOptions.headerTemplate).toBe('');
   });
 
+  it("fills the teacher's and the teacher assistant's boxes with their saved signatures", () => {
+    const { html } = render({ teacherSignatureDataUri: 'data:image/png;base64,TEACHER', assistantSignatureDataUri: 'data:image/png;base64,ASSISTANT' });
+    expect(html).toContain('Teacher\'s Signature: <span class="sig"><img src="data:image/png;base64,TEACHER"');
+    expect(html).toContain('Teacher Assistant\'s Signature: <span class="sig"><img src="data:image/png;base64,ASSISTANT"');
+    expect(render().html).toContain('Teacher\'s Signature: <span class="sig"></span>');
+  });
+
   it('prints the principal signature and school stamp when the school has them', () => {
     const { html } = render({ principalSignatureDataUri: 'data:image/png;base64,SIG', schoolStampDataUri: 'data:image/png;base64,STAMP' });
     expect(html).toContain('<img src="data:image/png;base64,SIG"');
     expect(html).toContain('<div class="stamp"><img src="data:image/png;base64,STAMP"');
     expect(render().html).not.toContain('class="stamp"');
+  });
+});
+
+describe('JK/SK report cards (legacy)', () => {
+  const { getAlHaadiReportCardJKHTML } = require('../../../templates/alHaadiReportCardJKTemplate');
+  const { getAlHaadiReportCardSKHTML } = require('../../../templates/alHaadiReportCardSKTemplate');
+  const cards = [
+    ['JK', (d) => getAlHaadiReportCardJKHTML({ ...d, domains: [], ratingMapTerm1: {}, ratingMapTerm2: {}, commentMap: {}, learningSkills: {} })],
+    ['SK', (d) => getAlHaadiReportCardSKHTML({ ...d, subjects: [], ratingMapTerm1: {}, ratingMapTerm2: {}, commentMap: {} })],
+  ];
+  const base = (student, staffSignatures) => ({
+    schoolInfo: SCHOOL,
+    schoolAssets: { principalSignatureUrl: 'https://example.test/principal.png' },
+    staffSignatures,
+    student: { name: 'Sample Student', grade: 'JK', oen: '1', homeroomTeacher: 'Sample Teacher', daysOfAbsence: 0, ...student },
+    term: 'Term 1',
+    generatedDate: '2026-11-20',
+  });
+
+  it.each(cards)("%s: the teacher's own signature under Teacher's Signature, never the principal's", (_, html) => {
+    const out = html(base({ teacherAssistant: '' }, { teacher: 'https://example.test/teacher.png', assistant: null }));
+    expect(out).toContain('src="https://example.test/teacher.png" alt="Teacher Signature"');
+    expect(out).not.toContain('src="https://example.test/principal.png" alt="Teacher Signature"');
+    expect(out).toContain('src="https://example.test/principal.png" alt="Principal Signature"');
+    expect(out).not.toContain("Teacher Assistant's Signature:");
+  });
+
+  it.each(cards)('%s: a teacher assistant signature line only when there is one', (_, html) => {
+    const out = html(base({ teacherAssistant: 'Sample Assistant' }, { teacher: null, assistant: 'https://example.test/assistant.png' }));
+    expect(out).toContain('Teacher: Sample Teacher & Sample Assistant');
+    expect(out).toContain("Teacher Assistant's Signature:");
+    expect(out).toContain('src="https://example.test/assistant.png" alt="Teacher Assistant Signature"');
+    expect(out).not.toContain('alt="Teacher Signature"');
   });
 });

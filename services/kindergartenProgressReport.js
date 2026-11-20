@@ -1,14 +1,17 @@
 /**
  * What the JK and SK progress reports print beyond ratings and comments:
  * the report date, the school year it falls in, the days absent that year,
- * and the teacher's name. Shared by controllers/jk.controller.js,
- * controllers/sk.controller.js and the report engine's ReportData
- * (services/reportEngine/data/index.js), so both print the same values.
+ * and the teacher and teacher assistant (names + saved signatures; the
+ * report cards name the same people, loadReportCardStaff). Shared by
+ * controllers/jk.controller.js, controllers/sk.controller.js and the report
+ * engine's ReportData (services/reportEngine/data/index.js), so both print
+ * the same values.
  */
 
 const db = require('../config/database');
 const logger = require('../logger');
 const queries = require('../queries/kindergartenProgressReport.queries');
+const { resolveKindergartenStaff, staffSignatureUrls } = require('./kindergartenStaff');
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_TIMEZONE = 'America/Toronto';
@@ -42,22 +45,32 @@ function parseReportDate(body) {
   return { reportDate: raw };
 }
 
-// Most JK/SK students have no homeroom teacher set. The report then names
-// their grade's Kindergarten class teacher, never an Arabic/French/Quran
-// teacher: a blank is better than the wrong name, and many students aren't
-// enrolled in the Kindergarten class itself.
-async function teacherNameFor(student, schoolYearId, client) {
-  if (student.homeroom_teacher_id) {
-    const { rows } = await client.query(queries.selectHomeroomTeacherName, [student.homeroom_teacher_id]);
-    if (rows[0]?.username) return rows[0].username;
+/** The school year a date falls in (else the latest started by then), or null. */
+async function schoolYearForDate(client, school, date) {
+  const { rows } = await client.query(queries.selectSchoolYearForDate, [school, date]);
+  return rows[0] || null;
+}
+
+/**
+ * The teacher and teacher assistant a JK/SK document names, and the signed
+ * URLs of their saved signatures (services/kindergartenStaff.js). A
+ * signature that can't be loaded prints blank; it never fails a report.
+ * @returns {Promise<{ teacherName: string, assistantName: string,
+ *   signatures: { teacher: string|null, assistant: string|null } }>}
+ */
+async function loadKindergartenStaff(student, { term, schoolYearId, client = db }) {
+  const staff = await resolveKindergartenStaff(client, student, { term, schoolYearId });
+  let signatures = { teacher: null, assistant: null };
+  try {
+    signatures = await staffSignatureUrls(staff);
+  } catch (err) {
+    logger.warn({ err, studentId: student.student_id }, 'Could not load staff signatures for a kindergarten document');
   }
-  const { rows } = await client.query(queries.selectKindergartenClassTeacherName, [
-    student.student_id,
-    student.grade,
-    schoolYearId,
-    student.school,
-  ]);
-  return rows[0]?.teacher_name || '';
+  return {
+    teacherName: staff.teacher?.name || '',
+    assistantName: staff.assistant?.name || '',
+    signatures,
+  };
 }
 
 /**
@@ -66,15 +79,16 @@ async function teacherNameFor(student, schoolYearId, client) {
  * @param {object} opts
  * @param {string|null} opts.reportDate  YYYY-MM-DD, or null for today
  * @param {string|null} opts.timezone    the school's timezone
+ * @param {string|null} [opts.term]      the report's term (the assistant is chosen per term)
  * @param {{ query: Function }} [opts.client]  a pg pool or client (default:
  *        the app pool); the report engine passes its own
- * @returns {Promise<{reportDate: string, schoolYearLabel: string|null, daysAbsent: number, teacherName: string}>}
+ * @returns {Promise<{reportDate: string, schoolYearLabel: string|null, schoolYearId: string|null,
+ *   daysAbsent: number, teacherName: string, assistantName: string,
+ *   signatures: { teacher: string|null, assistant: string|null }}>}
  */
-async function loadProgressReportContext(student, { reportDate = null, timezone = null, client = db } = {}) {
+async function loadProgressReportContext(student, { reportDate = null, timezone = null, term = null, client = db } = {}) {
   const date = reportDate || todayIn(timezone);
-
-  const { rows: yearRows } = await client.query(queries.selectSchoolYearForDate, [student.school, date]);
-  const year = yearRows[0] || null;
+  const year = await schoolYearForDate(client, student.school, date);
 
   // Absences in that school year up to the report date (all of them before
   // a school year exists).
@@ -87,13 +101,34 @@ async function loadProgressReportContext(student, { reportDate = null, timezone 
     logger.warn({ err, studentId: student.student_id }, 'Could not count days absent for a progress report');
   }
 
-  const teacherName = await teacherNameFor(student, year?.school_year_id || null, client);
+  const people = await loadKindergartenStaff(student, { term, schoolYearId: year?.school_year_id || null, client });
 
-  return { reportDate: date, schoolYearLabel: year?.label || null, daysAbsent, teacherName };
+  return {
+    reportDate: date,
+    schoolYearLabel: year?.label || null,
+    schoolYearId: year?.school_year_id || null,
+    daysAbsent,
+    teacherName: people.teacherName,
+    assistantName: people.assistantName,
+    signatures: people.signatures,
+  };
+}
+
+/**
+ * Who a JK/SK report card names (same rule as the progress report), in the
+ * school year of its report date.
+ * @returns {Promise<{ teacherName: string, assistantName: string,
+ *   signatures: { teacher: string|null, assistant: string|null } }>}
+ */
+async function loadReportCardStaff(student, { reportDate = null, timezone = null, term = null, client = db } = {}) {
+  const date = reportDate || todayIn(timezone);
+  const year = await schoolYearForDate(client, student.school, date);
+  return loadKindergartenStaff(student, { term, schoolYearId: year?.school_year_id || null, client });
 }
 
 module.exports = {
   isValidReportDate,
   parseReportDate,
   loadProgressReportContext,
+  loadReportCardStaff,
 };

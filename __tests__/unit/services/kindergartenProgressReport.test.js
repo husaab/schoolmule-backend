@@ -13,18 +13,24 @@ const STUDENT = {
 };
 
 // Answers each query by what it reads, and records the calls.
-function answer({ year = null, days = 0, homeroom = null, classTeacher = null } = {}) {
+function answer({ year = null, days = 0, homeroom = null, classTeacher = null, coTeachers = [], choice = null } = {}) {
   const calls = [];
   db.query.mockImplementation((sql, params) => {
     calls.push({ sql, params });
     if (sql.includes('FROM school_years')) return Promise.resolve({ rows: year ? [year] : [] });
     if (sql.includes('FROM general_attendance')) return Promise.resolve({ rows: [{ days }] });
-    if (sql.includes('FROM users WHERE user_id')) return Promise.resolve({ rows: homeroom ? [{ username: homeroom }] : [] });
-    if (sql.includes('FROM classes c')) return Promise.resolve({ rows: classTeacher ? [{ teacher_name: classTeacher }] : [] });
+    if (sql.includes('FROM class_teachers')) return Promise.resolve({ rows: coTeachers });
+    if (sql.includes('FROM classes c')) {
+      return Promise.resolve({ rows: classTeacher ? [{ class_id: 'class-k', teacher_id: 'teacher-k', teacher_name: classTeacher, teacher_signature_path: null }] : [] });
+    }
+    if (sql.includes('_teacher_assistants')) return Promise.resolve({ rows: choice ? [choice] : [] });
+    if (sql.includes('FROM users')) return Promise.resolve({ rows: homeroom ? [{ user_id: 'u-1', name: homeroom, signature_path: null }] : [] });
     return Promise.resolve({ rows: [] });
   });
   return calls;
 }
+
+const NOBODY = { assistantName: '', signatures: { teacher: null, assistant: null } };
 
 const YEAR = { school_year_id: 'year-1', label: '2026-2027', start_date: '2026-09-07', end_date: '2027-06-25' };
 
@@ -48,7 +54,9 @@ describe('loadProgressReportContext', () => {
     const calls = answer({ year: YEAR, days: 5, classTeacher: 'Class Teacher' });
     const ctx = await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14' });
 
-    expect(ctx).toEqual({ reportDate: '2026-11-14', schoolYearLabel: '2026-2027', daysAbsent: 5, teacherName: 'Class Teacher' });
+    expect(ctx).toEqual({
+      reportDate: '2026-11-14', schoolYearLabel: '2026-2027', schoolYearId: 'year-1', daysAbsent: 5, teacherName: 'Class Teacher', ...NOBODY,
+    });
     const yearCall = calls.find((c) => c.sql.includes('FROM school_years'));
     expect(yearCall.params).toEqual(['TESTSCHOOL', '2026-11-14']);
     const absences = calls.find((c) => c.sql.includes('FROM general_attendance'));
@@ -74,14 +82,16 @@ describe('loadProgressReportContext', () => {
     const calls = answer({ year: YEAR, homeroom: 'Homeroom Teacher', classTeacher: 'Class Teacher' });
     const ctx = await loadProgressReportContext({ ...STUDENT, homeroom_teacher_id: 'u-1' }, { reportDate: '2026-11-14' });
     expect(ctx.teacherName).toBe('Homeroom Teacher');
-    expect(calls.some((c) => c.sql.includes('FROM classes c'))).toBe(false);
+    // The Kindergarten class is still read (its co-teachers are the assistants),
+    // preferring one the homeroom teacher teaches.
+    expect(calls.find((c) => c.sql.includes('FROM classes c')).params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', 'u-1']);
   });
 
   it("otherwise names the grade's Kindergarten class teacher for that year, or nobody", async () => {
     const calls = answer({ year: YEAR, classTeacher: 'Class Teacher' });
     expect((await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14' })).teacherName).toBe('Class Teacher');
     const classCall = calls.find((c) => c.sql.includes('FROM classes c'));
-    expect(classCall.params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL']);
+    expect(classCall.params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', null]);
     expect(classCall.sql).toContain("ILIKE '%kindergarten%'");
 
     answer({ year: YEAR, classTeacher: null });
@@ -93,9 +103,33 @@ describe('loadProgressReportContext', () => {
     db.query.mockClear();
     const client = { query: jest.fn(async (sql) => ({ rows: sql.includes('FROM school_years') ? [YEAR] : sql.includes('general_attendance') ? [{ days: 3 }] : [] })) };
     const ctx = await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14', client });
-    expect(ctx).toEqual({ reportDate: '2026-11-14', schoolYearLabel: '2026-2027', daysAbsent: 3, teacherName: '' });
+    expect(ctx).toEqual({ reportDate: '2026-11-14', schoolYearLabel: '2026-2027', schoolYearId: 'year-1', daysAbsent: 3, teacherName: '', ...NOBODY });
     expect(client.query).toHaveBeenCalledTimes(3);
     expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("names the class's only co-teacher as the assistant, and signs both saved signatures", async () => {
+    answer({
+      year: YEAR,
+      homeroom: 'Homeroom Teacher',
+      classTeacher: 'Class Teacher',
+      coTeachers: [{ user_id: 'u-2', name: 'Co Teacher', signature_path: 'TESTSCHOOL/u-2/b.png' }],
+    });
+    const ctx = await loadProgressReportContext({ ...STUDENT, homeroom_teacher_id: 'u-1' }, { reportDate: '2026-11-14', term: 'Term 1' });
+    expect(ctx.teacherName).toBe('Homeroom Teacher');
+    expect(ctx.assistantName).toBe('Co Teacher');
+    expect(ctx.signatures).toEqual({ teacher: null, assistant: 'https://mock-signed-url.com/TESTSCHOOL/u-2/b.png' });
+  });
+
+  it('prints no assistant when one was turned off for the term', async () => {
+    answer({
+      year: YEAR,
+      classTeacher: 'Class Teacher',
+      coTeachers: [{ user_id: 'u-2', name: 'Co Teacher', signature_path: null }],
+      choice: { teacher_assistant_user_id: null, no_assistant: true },
+    });
+    const ctx = await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14', term: 'Term 1' });
+    expect(ctx.assistantName).toBe('');
   });
 
   it('defaults the report date to today where the school is', async () => {

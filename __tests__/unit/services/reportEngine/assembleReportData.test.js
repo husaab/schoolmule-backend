@@ -21,6 +21,7 @@ const jkQueries = require('../../../../queries/jk.queries');
 const skQueries = require('../../../../queries/sk.queries');
 const q = require('../../../../queries/reportEngineData.queries');
 const kq = require('../../../../queries/kindergartenProgressReport.queries');
+const sq = require('../../../../queries/kindergartenStaff.queries');
 const { SK_PROGRESS_COMMENT_ROWS } = require('../../../../templates/kindergartenProgressComments');
 
 const SID = '11111111-1111-4111-8111-111111111111';
@@ -185,6 +186,7 @@ describe('assembleReportData — grades 1-8 report card', () => {
       principalSignature: null,
       stamp: 'https://signed.example.test/stamps/sample.png',
       teacherSignature: null,
+      teacherAssistantSignature: null,
     });
     expect(data.student).toEqual({
       id: SID,
@@ -248,7 +250,7 @@ describe('assembleReportData — grades 1-8 report card', () => {
   it('gives null assets when the signed-URL call or the asset read fails', async () => {
     supabase._mockStorage.createSignedUrl.mockResolvedValue({ data: null, error: { message: 'nope' } });
     const data = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 1', client: fakeClient(routes()) });
-    expect(data.assets).toEqual({ logo: null, principalSignature: null, stamp: null, teacherSignature: null });
+    expect(data.assets).toEqual({ logo: null, principalSignature: null, stamp: null, teacherSignature: null, teacherAssistantSignature: null });
 
     const failing = fakeClient([[schoolAssetsQueries.getSchoolAssetsBySchoolCode, () => new Error('no table')], ...routes()]);
     const data2 = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 1', client: failing });
@@ -521,17 +523,30 @@ describe('assembleReportData — grades 1-8 progress report', () => {
 });
 
 /**
- * What the JK/SK progress context reads (services/kindergartenProgressReport):
- * the year the report date falls in, that year's absences, the homeroom
- * teacher else the grade's Kindergarten class teacher.
+ * What a JK/SK document reads about when and who (services/
+ * kindergartenProgressReport, services/kindergartenStaff): the year the
+ * report date falls in, that year's absences, the homeroom teacher else the
+ * grade's Kindergarten class teacher, that class's co-teachers (the teacher
+ * assistant) and the saved choice for the term.
  */
 const KG_YEAR = { school_year_id: 'year-1', label: '2025-2026', start_date: '2025-09-02', end_date: '2026-06-26' };
-function progressContextRoutes({ year = [KG_YEAR], days = 2, homeroom = [{ username: 'Homeroom Teacher' }], classTeacher = [] } = {}) {
+const CO_TEACHER = { user_id: 'co-1', name: 'Assistant Sample', signature_path: 'ALHAADIACADEMY/co-1/sig.png' };
+function progressContextRoutes({
+  year = [KG_YEAR],
+  days = 2,
+  homeroom = [{ user_id: TEACHER_ID, name: 'Homeroom Teacher', signature_path: 'ALHAADIACADEMY/t/sig.png' }],
+  kClass = [{ class_id: 'class-k', teacher_id: 'k-teacher', teacher_name: 'Class Teacher', teacher_signature_path: null }],
+  coTeachers = [CO_TEACHER],
+  choice = () => [],
+} = {}) {
   return [
     [kq.selectSchoolYearForDate, year],
     [kq.countDaysAbsent, [{ days }]],
-    [kq.selectHomeroomTeacherName, homeroom],
-    [kq.selectKindergartenClassTeacherName, classTeacher],
+    [sq.selectStaffMember, homeroom],
+    [sq.selectKindergartenClass, kClass],
+    [sq.selectCoTeachers, coTeachers],
+    [sq.selectAssistantChoice('jk_teacher_assistants'), choice],
+    [sq.selectAssistantChoice('sk_teacher_assistants'), choice],
   ];
 }
 
@@ -542,7 +557,6 @@ describe('assembleReportData — JK', () => {
     return [
       ...progressContextRoutes(),
       ...baseRoutes({ student: jkStudent, school: [schoolRow] }),
-      [jkQueries.getTeacherAssistant, ([, term]) => (term === 'Term 1' ? [{ teacher_assistant_name: 'Assistant Sample' }] : [])],
       [jkQueries.getSkillDomainsByDocumentType, ([dt]) => (dt === docType ? [
         { domain_id: 'd1', document_type: dt, domain_name: 'Belonging', domain_sort_order: 1, skill_id: 's1', skill_name: 'Shares', skill_description: 'Shares toys', skill_sort_order: 1 },
         { domain_id: 'd1', document_type: dt, domain_name: 'Belonging', domain_sort_order: 1, skill_id: 's2', skill_name: 'Waits', skill_description: null, skill_sort_order: 2 },
@@ -574,6 +588,12 @@ describe('assembleReportData — JK', () => {
     expect(data.student).toMatchObject({ grade: 'JK', gradeLabel: 'Junior Kindergarten', gradeNumber: -1, teacherAssistant: 'Assistant Sample', firstName: 'Sample', lastName: 'Kid' });
     // The progress context: that year's absences, homeroom teacher, the year the date falls in.
     expect(data.student).toMatchObject({ homeroomTeacher: 'Homeroom Teacher', daysAbsent: 2 });
+    // The teacher's and the assistant's saved signatures (the Kindergarten class's only co-teacher).
+    expect(data.assets).toMatchObject({
+      teacherSignature: 'https://mock-signed-url.com/ALHAADIACADEMY/t/sig.png',
+      teacherAssistantSignature: 'https://mock-signed-url.com/ALHAADIACADEMY/co-1/sig.png',
+    });
+    expect(callsTo(client, sq.selectAssistantChoice('jk_teacher_assistants'))[0][1]).toEqual([SID, 'Term 1']);
     expect(data.meta).toMatchObject({ reportDate: '2026-03-02', schoolYear: '2025 - 2026' });
     expect(callsTo(client, kq.countDaysAbsent)[0][1]).toEqual([SID, '2025-09-02', '2026-03-02']);
     // …not the report cards' all-time count, 'N/A' teacher or active-year rule.
@@ -606,7 +626,7 @@ describe('assembleReportData — JK', () => {
 
   it('progress report: no homeroom → the Kindergarten class teacher; no school year → none printed', async () => {
     const client = fakeClient([
-      ...progressContextRoutes({ year: [], days: 5, homeroom: [], classTeacher: [{ teacher_name: 'Class Teacher' }] }),
+      ...progressContextRoutes({ year: [], days: 5, homeroom: [] }),
       ...routes('progress_report'),
     ]);
     const data = await assembleReportData({ studentId: SID, docType: 'progress_report', term: 'Term 1', reportDate: '2026-03-02', client });
@@ -614,18 +634,21 @@ describe('assembleReportData — JK', () => {
     expect(data.meta.schoolYear).toBe('');
     // Every absence up to the date when there's no school year.
     expect(callsTo(client, kq.countDaysAbsent)[0][1]).toEqual([SID, null, '2026-03-02']);
-    expect(callsTo(client, kq.selectKindergartenClassTeacherName)[0][1]).toEqual([SID, 'JK', null, 'ALHAADIACADEMY']);
+    expect(callsTo(client, sq.selectKindergartenClass)[0][1]).toEqual([SID, 'JK', null, 'ALHAADIACADEMY', TEACHER_ID]);
   });
 
   it('report card: the six learning skills in legacy order, no free comments', async () => {
     const client = fakeClient(routes('report_card'));
     const data = await assembleReportData({ studentId: SID, docType: 'report_card', term: 'Term 2', client });
 
-    // The report card keeps the legacy card's teacher, absences and year.
-    expect(data.student).toMatchObject({ homeroomTeacher: 'Teacher Sample', daysAbsent: 3 });
+    // The report card keeps the legacy card's absences and year, and names
+    // the progress report's teacher and assistant (Term 2: no saved choice →
+    // the class's only co-teacher).
+    expect(data.student).toMatchObject({ homeroomTeacher: 'Homeroom Teacher', teacherAssistant: 'Assistant Sample', daysAbsent: 3 });
     expect(data.meta.schoolYear).toBe('2026 - 2027');
     expect(callsTo(client, kq.countDaysAbsent)).toHaveLength(0);
-    expect(data.student.teacherAssistant).toBe('');
+    expect(callsTo(client, q.selectHomeroomTeacherName)).toHaveLength(0);
+    expect(data.assets.teacherAssistantSignature).toBe('https://mock-signed-url.com/ALHAADIACADEMY/co-1/sig.png');
     expect(data.skills[0].items[0]).toEqual({ id: 's1', name: 'Shares', description: 'Shares toys', rating: 'B', t1: 'D', t2: 'B' });
     // Domain comments are read for the report's own term.
     expect(data.skills[0].comment).toBe('');
@@ -653,7 +676,6 @@ describe('assembleReportData — SK', () => {
     return [
       ...progressContextRoutes(),
       ...baseRoutes({ student: skStudent, school: [schoolRow] }),
-      [skQueries.getTeacherAssistant, [{ teacher_assistant_name: null }]],
       [skQueries.getSubjectsByDocumentType, ([dt]) => (dt === docType ? [
         { subject_id: 'sub-lit', document_type: dt, subject_name: 'Literacy - Reading', subject_sort_order: 1, standard_id: 'st-1', standard_name: 'Knows letters', standard_description: 'Upper and lower case', standard_sort_order: 1 },
         { subject_id: 'sub-math', document_type: dt, subject_name: 'Mathematics', subject_sort_order: 2, standard_id: 'st-2', standard_name: 'Counts', standard_description: null, standard_sort_order: 1 },
@@ -674,8 +696,12 @@ describe('assembleReportData — SK', () => {
   }
 
   it('progress report: subjects → standards, subject comments, the nine Strengths/Next Steps rows', async () => {
-    const data = await assembleReportData({ studentId: SID, docType: 'progress_report', term: 'Term 2', client: fakeClient(routes('progress_report')) });
+    const client = fakeClient([...progressContextRoutes({ choice: () => [{ teacher_assistant_user_id: null, no_assistant: true }] }), ...routes('progress_report')]);
+    const data = await assembleReportData({ studentId: SID, docType: 'progress_report', term: 'Term 2', client });
+    // "No assistant" was chosen for the term: none prints, nor their signature.
     expect(data.student).toMatchObject({ grade: 'SK', gradeLabel: 'Senior Kindergarten', gradeNumber: 0, teacherAssistant: '' });
+    expect(data.assets.teacherAssistantSignature).toBeNull();
+    expect(callsTo(client, sq.selectAssistantChoice('sk_teacher_assistants'))[0][1]).toEqual([SID, 'Term 2']);
     expect(data.student).toMatchObject({ homeroomTeacher: 'Homeroom Teacher', daysAbsent: 2 });
     expect(data.skills).toEqual([
       { id: 'sub-lit', name: 'Literacy - Reading', comment: '', items: [{ id: 'st-1', name: 'Knows letters', description: 'Upper and lower case', rating: 'E', t1: 'P', t2: 'E' }] },

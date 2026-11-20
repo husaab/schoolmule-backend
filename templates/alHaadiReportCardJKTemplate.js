@@ -60,7 +60,7 @@ function getAcademicYear() {
 
 const getAlHaadiReportCardJKHTML = (data) => {
   const {
-    schoolInfo, schoolAssets, student, term, domains,
+    schoolInfo, schoolAssets, staffSignatures = {}, student, term, domains,
     ratingMapTerm1, ratingMapTerm2, commentMap, learningSkills, generatedDate
   } = data;
   const { name, grade, oen, homeroomTeacher, teacherAssistant, daysOfAbsence } = student;
@@ -483,9 +483,13 @@ const getAlHaadiReportCardJKHTML = (data) => {
     <div class="footer">
       <div class="footer-signatures">
         <div class="signature-block">
-          ${schoolAssets?.principalSignatureUrl ? `<img src="${schoolAssets.principalSignatureUrl}" alt="Teacher Signature" class="signature-image" />` : ''}
+          ${staffSignatures.teacher ? `<img src="${staffSignatures.teacher}" alt="Teacher Signature" class="signature-image" />` : ''}
           <div class="signature-line">Teacher's Signature:</div>
         </div>
+        ${teacherAssistant ? `<div class="signature-block">
+          ${staffSignatures.assistant ? `<img src="${staffSignatures.assistant}" alt="Teacher Assistant Signature" class="signature-image" />` : ''}
+          <div class="signature-line">Teacher Assistant's Signature:</div>
+        </div>` : ''}
         <div class="signature-block">
           ${schoolAssets?.principalSignatureUrl ? `<img src="${schoolAssets.principalSignatureUrl}" alt="Principal Signature" class="signature-image" />` : ''}
           <div class="signature-line">Principal's Signature:</div>

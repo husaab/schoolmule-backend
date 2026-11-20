@@ -10,8 +10,6 @@ const supabase = require('../../../config/supabaseClient');
 const logger = require('../../../logger');
 const studentQueries = require('../../../queries/student.queries');
 const schoolAssetsQueries = require('../../../queries/schoolAssets.queries');
-const jkQueries = require('../../../queries/jk.queries');
-const skQueries = require('../../../queries/sk.queries');
 const q = require('../../../queries/reportEngineData.queries');
 const { schoolWebsite } = require('../../../templates/printKit');
 const { ReportSkip } = require('./errors');
@@ -48,17 +46,6 @@ async function loadDaysAbsent(client, studentId) {
   } catch (err) {
     return 0;
   }
-}
-
-/** The JK/SK teacher assistant saved for the term; '' for other grades. */
-async function loadTeacherAssistant(client, studentId, grade, term) {
-  const g = gradeText(grade);
-  const sql = g === 'JK' ? jkQueries.getTeacherAssistant
-    : g === 'SK' ? skQueries.getTeacherAssistant
-      : null;
-  if (!sql) return '';
-  const { rows } = await client.query(sql, [studentId, term]);
-  return rows.length > 0 ? text(rows[0].teacher_assistant_name) : '';
 }
 
 /**
@@ -112,10 +99,12 @@ async function signAsset(path) {
  * Logo, principal's signature and stamp as 1-hour signed URLs (null when
  * missing). Read by school_id when the school row exists (JK/SK/progress
  * paths), else by school code (the grades 1-8 report card path) — one
- * school_assets row either way, since school_id is its key.
+ * school_assets row either way, since school_id is its key. The teacher's and
+ * the teacher assistant's signatures are per student: assembleReportData
+ * fills them for JK/SK (services/kindergartenStaff.js).
  */
 async function loadAssets(client, school) {
-  const assets = { logo: null, principalSignature: null, stamp: null, teacherSignature: null };
+  const assets = { logo: null, principalSignature: null, stamp: null, teacherSignature: null, teacherAssistantSignature: null };
   try {
     const { rows } = school.schoolId
       ? await client.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [school.schoolId])
@@ -151,7 +140,6 @@ module.exports = {
   loadStudent,
   loadHomeroomTeacher,
   loadDaysAbsent,
-  loadTeacherAssistant,
   loadSchool,
   loadAssets,
   resolveSchoolYearLabel,

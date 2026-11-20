@@ -16,20 +16,21 @@
 // in, the days absent in that year up to the date, and the homeroom teacher
 // else the grade's Kindergarten class teacher: those come from the same
 // services/kindergartenProgressReport.loadProgressReportContext the legacy
-// generators call. Every other document keeps the all-time absence count,
-// 'N/A' teacher and the active-year rule.
+// generators call. Every JK/SK document names that teacher and the teacher
+// assistant (a co-teacher of the Kindergarten class) and prints their saved
+// signatures (services/kindergartenStaff.js). Every other document keeps the
+// all-time absence count, 'N/A' teacher and the active-year rule.
 //
 // __tests__/integration/services/reportEngineData.test.js pins the assembler
 // and the legacy generators side by side.
 
 const db = require('../../../config/database');
-const { loadProgressReportContext } = require('../../kindergartenProgressReport');
+const { loadProgressReportContext, loadReportCardStaff } = require('../../kindergartenProgressReport');
 const { ReportSkip } = require('./errors');
 const {
   loadStudent,
   loadHomeroomTeacher,
   loadDaysAbsent,
-  loadTeacherAssistant,
   loadSchool,
   loadAssets,
   resolveSchoolYearLabel,
@@ -54,7 +55,9 @@ const {
   text,
 } = require('./format');
 
-const DATA_VERSION = 1;
+// 2: assets.teacherSignature is filled and assets.teacherAssistantSignature
+// added (JK/SK); the JK/SK report cards name the Kindergarten class teacher.
+const DATA_VERSION = 2;
 const DOC_TYPES = ['report_card', 'progress_report'];
 const KINDERGARTEN = new Set(['JK', 'SK']);
 
@@ -78,7 +81,7 @@ function buildSubjects(client, student, docType, term) {
  * @param {string}  args.term        the term name, e.g. "Term 1"
  * @param {string|null} [args.reportDate]  YYYY-MM-DD; default today in the school's timezone
  * @param {{ query: Function }} [args.client]  a pg pool or client (default: the app pool)
- * @returns {Promise<object>} ReportData (dataVersion 1)
+ * @returns {Promise<object>} ReportData (dataVersion 2)
  * @throws {ReportSkip} bad arguments (400), no such student (404), and the
  *         grades 1-8 progress report's "term not found" / "no classes" (422)
  */
@@ -99,26 +102,37 @@ async function assembleReportData({ studentId, docType, term, reportDate = null,
   // any other work, as they do in the legacy generator.
   const subjects = isKindergarten ? [] : await buildSubjects(client, student, docType, term);
 
-  const teacherAssistant = await loadTeacherAssistant(client, student.student_id, grade, term);
   const school = await loadSchool(client, student.school);
   const assets = await loadAssets(client, school);
 
   let homeroomTeacher;
+  let teacherAssistant = '';
   let daysAbsent;
   let date;
   let schoolYear;
   if (kindergartenProgress) {
-    const context = await loadProgressReportContext(student, { reportDate, timezone: school.timezone, client });
+    const context = await loadProgressReportContext(student, { reportDate, timezone: school.timezone, term, client });
     homeroomTeacher = context.teacherName;
+    teacherAssistant = context.assistantName;
+    assets.teacherSignature = context.signatures.teacher;
+    assets.teacherAssistantSignature = context.signatures.assistant;
     daysAbsent = context.daysAbsent;
     date = context.reportDate;
     // No school year at all: the legacy report prints none.
     schoolYear = context.schoolYearLabel ? formatSchoolYearLabel(context.schoolYearLabel) : '';
   } else {
-    homeroomTeacher = await loadHomeroomTeacher(client, student.homeroom_teacher_id);
     daysAbsent = await loadDaysAbsent(client, student.student_id);
     date = reportDate || isoDateInTimeZone(school.timezone);
     schoolYear = await resolveSchoolYearLabel(client, student.school, date);
+    if (isKindergarten) {
+      const people = await loadReportCardStaff(student, { reportDate: date, timezone: school.timezone, term, client });
+      homeroomTeacher = people.teacherName || 'N/A';
+      teacherAssistant = people.assistantName;
+      assets.teacherSignature = people.signatures.teacher;
+      assets.teacherAssistantSignature = people.signatures.assistant;
+    } else {
+      homeroomTeacher = await loadHomeroomTeacher(client, student.homeroom_teacher_id);
+    }
   }
 
   const skills = await buildSkills(client, student, docType, term);

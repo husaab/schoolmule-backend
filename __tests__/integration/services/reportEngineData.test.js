@@ -79,6 +79,8 @@ const { JK_PROGRESS_COMMENT_ROWS, SK_PROGRESS_COMMENT_ROWS } = require('../../..
 
 const SCHOOL = 'ALHAADIACADEMY';
 const TEACHER_ID = '7a1f0c2e-1d3b-4c5a-9e8f-000000000001';
+// A co-teacher of the Kindergarten classes: the teacher assistant.
+const ASSISTANT_ID = '7a1f0c2e-1d3b-4c5a-9e8f-000000000002';
 const T1 = 'Term 1';
 const T2 = 'Term 2';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -117,9 +119,10 @@ async function seedSchool() {
     [SCHOOL],
   );
   await pool.query(
-    `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
-     VALUES ($1, 'teacher.sample@example.test', 'Teacher Sample', 'hashed', 'Teacher', 'Sample', $2, 'TEACHER', true, true)`,
-    [TEACHER_ID, SCHOOL],
+    `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school, signature_path)
+     VALUES ($1, 'teacher.sample@example.test', 'Teacher Sample', 'hashed', 'Teacher', 'Sample', $2, 'TEACHER', true, true, 'ALHAADIACADEMY/teacher/sig.png'),
+            ($3, 'assistant.sample@example.test', 'Assistant Sample', 'hashed', 'Assistant', 'Sample', $2, 'TEACHER', true, true, 'ALHAADIACADEMY/assistant/sig.png')`,
+    [TEACHER_ID, SCHOOL, ASSISTANT_ID],
   );
   const term = async (name, start, end, active) => (await pool.query(
     `INSERT INTO terms (school, name, start_date, end_date, academic_year, is_active)
@@ -144,6 +147,18 @@ async function seedStudent({ name, grade, school = SCHOOL, oen = null, homeroom 
  * A class with one 100-point assessment. `score` null = blank cell,
  * 'missing' = flagged missing (counts 0), undefined = no row at all.
  */
+/** Puts a class in the school year a report dated today belongs to (the Kindergarten class lookup is per year). */
+async function inTodaysYear(classId) {
+  await pool.query(
+    `UPDATE classes SET school_year_id = (
+       SELECT school_year_id FROM school_years WHERE school = $1
+        ORDER BY (CURRENT_DATE BETWEEN start_date AND end_date) DESC, (start_date <= CURRENT_DATE) DESC, start_date DESC
+        LIMIT 1)
+     WHERE class_id = $2`,
+    [SCHOOL, classId],
+  );
+}
+
 async function seedClass({ studentId, subject, grade, term, score, school = SCHOOL, teacherName = 'Teacher Sample', termId }) {
   const { rows } = await pool.query(
     `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
@@ -198,7 +213,14 @@ function expectCommonParity(L, R) {
   expect(R.assets.logo).toBe(assets.logoUrl ?? null);
   expect(R.assets.principalSignature).toBe(assets.principalSignatureUrl ?? null);
   expect(R.assets.stamp).toBe(assets.schoolStampUrl ?? null);
-  expect(R.assets.teacherSignature).toBeNull();
+  // JK/SK report cards print the teacher's and the assistant's saved signatures.
+  if ('staffSignatures' in L) {
+    expect(R.assets.teacherSignature).toBe(L.staffSignatures.teacher);
+    expect(R.assets.teacherAssistantSignature).toBe(L.staffSignatures.assistant);
+  } else {
+    expect(R.assets.teacherSignature).toBeNull();
+    expect(R.assets.teacherAssistantSignature).toBeNull();
+  }
 
   expect(R.student.name).toBe(L.student.name);
   expect(R.student.grade).toBe(String(L.student.grade));
@@ -233,6 +255,8 @@ function expectKindergartenProgressParity(L, R, commentRows) {
   expect(L.logoDataUri).toBe(inlined(R.assets.logo));
   expect(L.principalSignatureDataUri).toBe(inlined(R.assets.principalSignature));
   if ('schoolStampDataUri' in L) expect(L.schoolStampDataUri).toBe(inlined(R.assets.stamp));
+  expect(L.teacherSignatureDataUri).toBe(inlined(R.assets.teacherSignature));
+  expect(L.assistantSignatureDataUri).toBe(inlined(R.assets.teacherAssistantSignature));
 
   expect(R.student.name).toBe(L.student.name);
   expect(R.student.oen).toBe(L.student.oen ?? '');
@@ -534,10 +558,6 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
       `INSERT INTO jk_domain_comments (student_id, domain_id, term, comment, school) VALUES ($1, $2, $3, 'Shares readily.', $4)`,
       [studentId, d1, T1, SCHOOL],
     );
-    await pool.query(
-      `INSERT INTO jk_teacher_assistants (student_id, teacher_assistant_name, term, school) VALUES ($1, 'Assistant Sample', $2, $3)`,
-      [studentId, T1, SCHOOL],
-    );
     return { d1, d2 };
   }
 
@@ -550,6 +570,8 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
       `UPDATE classes SET school_year_id = (SELECT school_year_id FROM school_years WHERE school = $1 AND label = '2025-2026') WHERE class_id = $2`,
       [SCHOOL, kgClass],
     );
+    // Its only co-teacher is every student's assistant.
+    await pool.query(`INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2)`, [kgClass, ASSISTANT_ID]);
     await pool.query(
       `INSERT INTO jk_progress_report_comments (student_id, term, section_type, comment, school)
        VALUES ($1, $2, 'socio_emotional', '  Settles in <well>.  ', $3), ($1, $2, 'academic_achievement', 'Counts to 20.', $3)`,
@@ -572,6 +594,10 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
 
     // The fixture really exercises the rules.
     expect(L.student).toMatchObject({ teacherName: 'Teacher Sample', teacherAssistant: 'Assistant Sample', daysAbsent: 2 });
+    expect(R.assets).toMatchObject({
+      teacherSignature: 'https://mock-signed-url.com/ALHAADIACADEMY/teacher/sig.png',
+      teacherAssistantSignature: 'https://mock-signed-url.com/ALHAADIACADEMY/assistant/sig.png',
+    });
     expect(L.schoolYearLabel).toBe('2025-2026');
     expect(R.meta).toMatchObject({ reportDate, schoolYear: '2025 - 2026' });
     expect(R.comments.map((c) => [c.label, c.text])).toEqual([
@@ -691,6 +717,11 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     await learning(T2, 'Responsibility', 'S');
     await learning(T2, 'Self-Regulation', 'N');
 
+    // The JK class (this year) and its co-teacher, the assistant.
+    const kgClass = await seedClass({ studentId, subject: 'Junior Kindergarten', grade: 'JK' });
+    await inTodaysYear(kgClass);
+    await pool.query(`INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2)`, [kgClass, ASSISTANT_ID]);
+
     // Through the report-card handler: it routes JK students to the JK generator.
     const res = fakeRes();
     await reportCardController.generateReportCard({ body: { studentId, term: T1 } }, res);
@@ -719,6 +750,13 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     expect(R.learningSkills.find((s) => s.name === 'Responsibility')).toMatchObject({ rating: 'E', t1: 'E', t2: 'S' });
     expect(R.learningSkills.find((s) => s.name === 'Self-Regulation')).toMatchObject({ rating: '', t1: '', t2: 'N' });
     expect(R.comments).toEqual([]);
+    // The progress report's people, and their saved signatures (not the principal's).
+    expect(R.student).toMatchObject({ homeroomTeacher: 'Teacher Sample', teacherAssistant: 'Assistant Sample' });
+    expect(L.staffSignatures).toEqual({
+      teacher: 'https://mock-signed-url.com/ALHAADIACADEMY/teacher/sig.png',
+      assistant: 'https://mock-signed-url.com/ALHAADIACADEMY/assistant/sig.png',
+    });
+    expect(html).toContain("Teacher Assistant's Signature:");
   });
 
   it('7. SK report card', async () => {
@@ -739,9 +777,19 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
       `INSERT INTO sk_subject_comments (student_id, subject_id, term, comment, school) VALUES ($1, $2, $3, 'Bold choices.', $4)`,
       [studentId, arts, T2, SCHOOL],
     );
+    // Two co-teachers: no default; Term 2's pick is the assistant.
+    const skClass = await seedClass({ studentId, subject: 'Senior Kindergarten', grade: 'SK' });
+    await inTodaysYear(skClass);
+    const OTHER_ID = '7a1f0c2e-1d3b-4c5a-9e8f-000000000003';
     await pool.query(
-      `INSERT INTO sk_teacher_assistants (student_id, teacher_assistant_name, term, school) VALUES ($1, 'Assistant Other', $2, $3)`,
-      [studentId, T2, SCHOOL],
+      `INSERT INTO users (user_id, email, username, password, first_name, last_name, school, role, is_verified, is_verified_school)
+       VALUES ($1, 'assistant.other@example.test', 'Assistant Other', 'hashed', 'Assistant', 'Other', $2, 'TEACHER', true, true)`,
+      [OTHER_ID, SCHOOL],
+    );
+    await pool.query(`INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2), ($1, $3)`, [skClass, ASSISTANT_ID, OTHER_ID]);
+    await pool.query(
+      `INSERT INTO sk_teacher_assistants (student_id, term, school, teacher_assistant_user_id) VALUES ($1, $2, $3, $4)`,
+      [studentId, T2, SCHOOL, OTHER_ID],
     );
 
     await skController.generateSingleSKReportCard(studentId, T2);
@@ -755,6 +803,7 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     expect(R.skills[0].items[0]).toMatchObject({ rating: 'E', t1: 'G', t2: 'E' });
     expect(R.skills[0].comment).toBe('Bold choices.');
     expect(R.student.teacherAssistant).toBe('Assistant Other');
+    expect(R.assets.teacherAssistantSignature).toBeNull(); // Assistant Other saved none
     expect(R.learningSkills).toEqual([]);
   });
 

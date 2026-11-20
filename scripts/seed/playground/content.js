@@ -61,8 +61,14 @@ const subjectsFor = (grade) => {
   const social = Number(grade) >= 7 ? 'History & Geography' : 'Social Studies';
   return ['Math', 'Language Arts', 'Science', social, 'French', 'Arabic', 'Islamic Studies', 'Physical Education', 'Art'];
 };
-// Co-teachers (class_teachers): Bilal Hamdan helps in Grade 5 Science.
-const CO_TEACHERS = [{ grade: '5', subject: 'Science', key: 'g4' }];
+// Co-teachers (class_teachers): Bilal Hamdan helps in Grade 5 Science, and
+// Ruqayya Hashemi is the teacher assistant in both Kindergarten classes (the
+// class's only co-teacher prints as the assistant on JK/SK reports).
+const CO_TEACHERS = [
+  { grade: '5', subject: 'Science', key: 'g4' },
+  { grade: 'JK', subject: 'Kindergarten', key: 'ar2' },
+  { grade: 'SK', subject: 'Kindergarten', key: 'ar2' },
+];
 // Classes whose students and parents see the class average.
 const SHOW_AVERAGE = [['5', 'Math'], ['7', 'Science']];
 

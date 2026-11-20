@@ -123,26 +123,7 @@ const upsertSubjectComment = `
   RETURNING *
 `;
 
-// -- Teacher Assistants --
-
-const getTeacherAssistant = `
-  SELECT
-    id,
-    student_id,
-    teacher_assistant_name,
-    term
-  FROM sk_teacher_assistants
-  WHERE student_id = $1 AND term = $2
-`;
-
-const upsertTeacherAssistant = `
-  INSERT INTO sk_teacher_assistants (student_id, teacher_assistant_name, term, school)
-  VALUES ($1, $2, $3, $4)
-  ON CONFLICT (student_id, term)
-  DO UPDATE SET
-    teacher_assistant_name = EXCLUDED.teacher_assistant_name
-  RETURNING *
-`;
+// -- Teacher Assistants: queries/kindergartenStaff.queries.js --
 
 // -- Progress Report Comments (Academic Achievement / Socio-Emotional) --
 
@@ -211,8 +192,6 @@ module.exports = {
   upsertStandardAssessment,
   getSubjectCommentsForStudent,
   upsertSubjectComment,
-  getTeacherAssistant,
-  upsertTeacherAssistant,
   getProgressReportCommentsForStudent,
   upsertProgressReportComment,
   getStandardAssessmentsForStudents,
