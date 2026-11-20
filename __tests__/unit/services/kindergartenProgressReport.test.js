@@ -84,14 +84,14 @@ describe('loadProgressReportContext', () => {
     expect(ctx.teacherName).toBe('Homeroom Teacher');
     // The Kindergarten class is still read (its co-teachers are the assistants),
     // preferring one the homeroom teacher teaches.
-    expect(calls.find((c) => c.sql.includes('FROM classes c')).params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', 'u-1']);
+    expect(calls.find((c) => c.sql.includes('FROM classes c')).params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', 'u-1', null]);
   });
 
   it("otherwise names the grade's Kindergarten class teacher for that year, or nobody", async () => {
     const calls = answer({ year: YEAR, classTeacher: 'Class Teacher' });
     expect((await loadProgressReportContext(STUDENT, { reportDate: '2026-11-14' })).teacherName).toBe('Class Teacher');
     const classCall = calls.find((c) => c.sql.includes('FROM classes c'));
-    expect(classCall.params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', null]);
+    expect(classCall.params).toEqual(['stu-1', 'JK', 'year-1', 'TESTSCHOOL', null, null]);
     expect(classCall.sql).toContain("ILIKE '%kindergarten%'");
 
     answer({ year: YEAR, classTeacher: null });

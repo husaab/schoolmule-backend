@@ -634,7 +634,7 @@ describe('assembleReportData — JK', () => {
     expect(data.meta.schoolYear).toBe('');
     // Every absence up to the date when there's no school year.
     expect(callsTo(client, kq.countDaysAbsent)[0][1]).toEqual([SID, null, '2026-03-02']);
-    expect(callsTo(client, sq.selectKindergartenClass)[0][1]).toEqual([SID, 'JK', null, 'ALHAADIACADEMY', TEACHER_ID]);
+    expect(callsTo(client, sq.selectKindergartenClass)[0][1]).toEqual([SID, 'JK', null, 'ALHAADIACADEMY', TEACHER_ID, 'Term 1']);
   });
 
   it('report card: the six learning skills in legacy order, no free comments', async () => {

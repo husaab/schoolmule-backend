@@ -4,6 +4,8 @@
  *   teacher    the student's homeroom teacher, else the teacher of the
  *              grade's Kindergarten class that year (most JK/SK students
  *              have no homeroom). Never an Arabic/French/Quran teacher.
+ *              With one Kindergarten class per term, the one set to the
+ *              document's term.
  *   assistant  a co-teacher (Class → Settings → Teachers) of that
  *              Kindergarten class. By default the class's only co-teacher
  *              (none when it has several or none); a teacher can pick
@@ -59,7 +61,7 @@ async function resolveKindergartenStaff(client, student, { term = null, schoolYe
   }
 
   const { rows: classRows } = await client.query(q.selectKindergartenClass, [
-    student.student_id, g, schoolYearId || null, student.school, student.homeroom_teacher_id || null,
+    student.student_id, g, schoolYearId || null, student.school, student.homeroom_teacher_id || null, term || null,
   ]);
   const kClass = classRows[0] || null;
   if (!teacher && kClass) {

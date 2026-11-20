@@ -73,7 +73,7 @@ describe('resolveKindergartenStaff', () => {
   it('reads the grade’s own table and passes the year and homeroom to the class lookup', async () => {
     const c = client();
     await staff.resolveKindergartenStaff(c, { ...STUDENT, grade: 'JK', homeroom_teacher_id: 'h-1' }, { term: 'Term 2', schoolYearId: 'year-9' });
-    expect(c.query).toHaveBeenCalledWith(q.selectKindergartenClass, ['stu-1', 'JK', 'year-9', 'TESTSCHOOL', 'h-1']);
+    expect(c.query).toHaveBeenCalledWith(q.selectKindergartenClass, ['stu-1', 'JK', 'year-9', 'TESTSCHOOL', 'h-1', 'Term 2']);
     expect(c.query).toHaveBeenCalledWith(q.selectAssistantChoice('jk_teacher_assistants'), ['stu-1', 'Term 2']);
   });
 

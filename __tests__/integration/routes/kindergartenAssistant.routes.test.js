@@ -99,6 +99,24 @@ describe('Integration: kindergarten teacher assistant', () => {
     expect(back.body.data).toMatchObject({ selection: 'default', effective: null });
   });
 
+  it("with one Kindergarten class per term, uses the class set to the document's term", async () => {
+    // The class from beforeEach is the older Term 2 copy (as a rollover makes
+    // it); the Term 1 class is newer and has its own co-teacher.
+    await pool.query(`UPDATE classes SET term_name = 'Term 2' WHERE class_id = $1`, [classId]);
+    await coTeach(CO_A);
+    const { rows: [t1] } = await pool.query(
+      `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, school_year_id, term_name, created_at)
+       SELECT school, grade, 'SENIOR KINDERGARTEN', teacher_name, teacher_id, school_year_id, 'Term 1', NOW() + INTERVAL '1 day'
+       FROM classes WHERE class_id = $1 RETURNING class_id`,
+      [classId],
+    );
+    await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [t1.class_id, studentId]);
+    await pool.query('INSERT INTO class_teachers (class_id, teacher_id) VALUES ($1, $2)', [t1.class_id, CO_B]);
+
+    expect((await get(asLead, 'Term 1')).body.data).toMatchObject({ classId: t1.class_id, effective: { userId: CO_B } });
+    expect((await get(asLead, 'Term 2')).body.data).toMatchObject({ classId, effective: { userId: CO_A } });
+  });
+
   it('refuses someone who is not a co-teacher of the class', async () => {
     await coTeach(CO_A);
     const res = await post({ mode: 'user', assistantUserId: OUTSIDER });

@@ -9,10 +9,12 @@ const selectStaffMember = `
 `;
 
 // The grade's Kindergarten class that year ("Junior Kindergarten", "Senior
-// Kindergarten"): one the student is enrolled in first, then one the
+// Kindergarten"): one the student is enrolled in first, then one set to the
+// document's term (a school can keep one class per term, e.g. Al Haadi's
+// Term 1 and Term 2 copies, each with its own co-teachers), then one the
 // homeroom teacher teaches, then the oldest. Never an Arabic/French/Quran
 // class. $1 student, $2 grade, $3 school year (or null), $4 school,
-// $5 homeroom teacher (or null).
+// $5 homeroom teacher (or null), $6 term name (or null).
 const selectKindergartenClass = `
   SELECT c.class_id,
          c.teacher_id,
@@ -29,6 +31,7 @@ const selectKindergartenClass = `
   ORDER BY EXISTS (
              SELECT 1 FROM class_students cs WHERE cs.class_id = c.class_id AND cs.student_id = $1
            ) DESC,
+           ($6::text IS NOT NULL AND c.term_name = $6::text) DESC,
            (c.teacher_id IS NOT DISTINCT FROM $5::uuid) DESC,
            c.created_at
   LIMIT 1
