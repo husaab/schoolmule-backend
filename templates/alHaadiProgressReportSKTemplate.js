@@ -8,7 +8,8 @@
  *   Pages 2+ a running header (student name, report date).
  *   Last     "Subjects | Strengths/Next Steps for Improvement" comment table
  *            with the signature row: the teacher's, the teacher assistant's
- *            when there is one, and the principal's (saved signatures inlined).
+ *            and the principal's (saved signatures inlined; an empty box is
+ *            signed by hand).
  *   Every page: the school's address footer and "Page X of Y".
  *
  * Every LEARNING SKILLS row lives in ONE table with fixed columns, so the
@@ -178,14 +179,11 @@ function renderAlHaadiProgressReportSK(data) {
   const sections = layoutSubjects(subjects).map((s, i) => sectionHtml(s, ratingMap, i === 0)).join('');
 
   const img = (uri) => (uri ? `<img src="${uri}" alt="" />` : '');
-  // With a teacher assistant the signature row holds three label + signature
-  // pairs on finer columns; without one, the paper's two.
-  const commentCols = ta ? [20, 13.4, 20, 13.4, 19.2, 14] : [20, 18.1, 39.4, 22.5];
-  const signatureRow = ta
-    ? `<td>Teacher's Signature:</td><td class="sig">${img(teacherSignatureDataUri)}</td>
+  // The signature row: three label + signature pairs (the teacher's, the
+  // teacher assistant's, the principal's), with or without an assistant.
+  const commentCols = [20, 13.4, 20, 13.4, 19.2, 14];
+  const signatureRow = `<td>Teacher's Signature:</td><td class="sig">${img(teacherSignatureDataUri)}</td>
         <td>Teacher Assistant's Signature:</td><td class="sig">${img(assistantSignatureDataUri)}</td>
-        <td>Principal's Signature:</td><td class="sig">${img(principalSignatureDataUri)}</td>`
-    : `<td>Teacher's Signature:</td><td class="sig">${img(teacherSignatureDataUri)}</td>
         <td>Principal's Signature:</td><td class="sig">${img(principalSignatureDataUri)}</td>`;
 
   const html = `<!DOCTYPE html>
@@ -272,7 +270,7 @@ function renderAlHaadiProgressReportSK(data) {
       <td class="label">Teacher:</td><td class="value" colspan="2">${escapeHtml(student.teacherName || '')}</td>
       <td class="value">Days Absent:</td><td class="value center">${escapeHtml(student.daysAbsent ?? 0)}</td>
     </tr>
-    ${ta ? `<tr><td class="value" colspan="5">Teacher Assistant:&nbsp; ${escapeHtml(ta)}</td></tr>` : ''}
+    <tr><td class="label" colspan="2">Teacher Assistant:</td><td class="value" colspan="3">${escapeHtml(ta)}</td></tr>
     ${keyRows}
   </table>
 

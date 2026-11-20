@@ -118,9 +118,13 @@ describe('SK progress report', () => {
   it("prints the teacher's saved signature in the teacher's box", () => {
     const { html } = render({ teacherSignatureDataUri: 'data:image/png;base64,TEACHER' });
     expect(html).toMatch(/Teacher's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,TEACHER"/);
-    expect(html).not.toContain('Teacher Assistant');
-    // The paper's four columns.
-    expect(html).toContain('<col style="width: 39.4%" />');
+  });
+
+  it('prints the teacher assistant box and signature box even without an assistant, empty', () => {
+    const { html } = render();
+    expect(html).toContain('<td class="label" colspan="2">Teacher Assistant:</td><td class="value" colspan="3"></td>');
+    expect(html).toContain('Teacher Assistant\'s Signature:</td><td class="sig"></td>');
+    expect(html).toContain('<th colspan="5">Strengths/Next Steps for Improvement</th>');
   });
 
   it('names the teacher assistant under the teacher and adds their signature box', () => {
@@ -130,7 +134,7 @@ describe('SK progress report', () => {
       assistantSignatureDataUri: 'data:image/png;base64,ASSISTANT',
       principalSignatureDataUri: 'data:image/png;base64,SIG',
     });
-    expect(html).toContain('Teacher Assistant:&nbsp; Sample &lt;Assistant&gt;');
+    expect(html).toContain('<td class="label" colspan="2">Teacher Assistant:</td><td class="value" colspan="3">Sample &lt;Assistant&gt;</td>');
     expect(html).toMatch(/Teacher Assistant's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,ASSISTANT"/);
     expect(html).toMatch(/Principal's Signature:<\/td><td class="sig"><img src="data:image\/png;base64,SIG"/);
     // Six columns: the comments span the five after the subject.
@@ -233,14 +237,26 @@ describe('JK/SK report cards (legacy)', () => {
     expect(out).toContain('src="https://example.test/teacher.png" alt="Teacher Signature"');
     expect(out).not.toContain('src="https://example.test/principal.png" alt="Teacher Signature"');
     expect(out).toContain('src="https://example.test/principal.png" alt="Principal Signature"');
-    expect(out).not.toContain("Teacher Assistant's Signature:");
   });
 
-  it.each(cards)('%s: a teacher assistant signature line only when there is one', (_, html) => {
+  it('JK: a teacher assistant signature line only when there is one', () => {
+    const html = cards[0][1];
     const out = html(base({ teacherAssistant: 'Sample Assistant' }, { teacher: null, assistant: 'https://example.test/assistant.png' }));
     expect(out).toContain('Teacher: Sample Teacher & Sample Assistant');
     expect(out).toContain("Teacher Assistant's Signature:");
     expect(out).toContain('src="https://example.test/assistant.png" alt="Teacher Assistant Signature"');
     expect(out).not.toContain('alt="Teacher Signature"');
+    expect(html(base({ teacherAssistant: '' }, {}))).not.toContain("Teacher Assistant's Signature:");
+  });
+
+  it('SK: the teacher assistant has its own box and signature line, even when there is none', () => {
+    const html = cards[1][1];
+    const out = html(base({ teacherAssistant: 'Sample Assistant' }, { teacher: null, assistant: 'https://example.test/assistant.png' }));
+    expect(out).toContain('<td>Teacher: Sample Teacher</td>');
+    expect(out).toContain('<td>Teacher Assistant: Sample Assistant</td>');
+    expect(out).toContain('src="https://example.test/assistant.png" alt="Teacher Assistant Signature"');
+    const alone = html(base({ teacherAssistant: '' }, {}));
+    expect(alone).toContain('<td>Teacher Assistant: </td>');
+    expect(alone).toContain("Teacher Assistant's Signature:");
   });
 });

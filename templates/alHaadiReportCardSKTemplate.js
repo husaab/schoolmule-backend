@@ -331,7 +331,8 @@ const getAlHaadiReportCardSKHTML = (data) => {
         </tr>
         <tr>
           <td class="label-cell">Grade: Senior Kindergarten</td>
-          <td colspan="2">Teacher: ${homeroomTeacher}${teacherAssistant ? ' & ' + teacherAssistant : ''}</td>
+          <td>Teacher: ${homeroomTeacher}</td>
+          <td>Teacher Assistant: ${teacherAssistant || ''}</td>
         </tr>
         <tr>
           <td class="label-cell">Board: Private</td>
@@ -377,10 +378,10 @@ const getAlHaadiReportCardSKHTML = (data) => {
           ${staffSignatures.teacher ? `<img src="${staffSignatures.teacher}" alt="Teacher Signature" class="signature-image" />` : ''}
           <div class="signature-line">Teacher's Signature:</div>
         </div>
-        ${teacherAssistant ? `<div class="signature-block">
+        <div class="signature-block">
           ${staffSignatures.assistant ? `<img src="${staffSignatures.assistant}" alt="Teacher Assistant Signature" class="signature-image" />` : ''}
           <div class="signature-line">Teacher Assistant's Signature:</div>
-        </div>` : ''}
+        </div>
         <div class="signature-block">
           ${schoolAssets?.principalSignatureUrl ? `<img src="${schoolAssets.principalSignatureUrl}" alt="Principal Signature" class="signature-image" />` : ''}
           <div class="signature-line">Principal's Signature:</div>
