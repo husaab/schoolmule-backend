@@ -14,6 +14,7 @@ const {
   getWeeklySummary,
 } = require('../controllers/parentPortal.controller');
 const classroom = require('../controllers/parentClassroom.controller');
+const meetings = require('../controllers/meetings.controller');
 
 const router = express.Router();
 
@@ -41,6 +42,15 @@ router.get('/summary', getSummary);
 router.get('/calendar', getCalendar);
 router.get('/recent-publications', getRecentPublications);
 router.post('/recent-publications/seen', markPublicationsSeen);
+
+// Parent–teacher meetings: the children's teachers' open times; book, move, cancel.
+// Each child is checked against the parent's links inside the booking itself.
+router.param('eventId', meetings.uuidParam('event'));
+router.param('bookingId', meetings.uuidParam('booking'));
+router.get('/meetings', meetings.parentMeetings);
+router.post('/meetings/:eventId/bookings', meetings.parentBook);
+router.patch('/meetings/:eventId/bookings/:bookingId', meetings.parentMove);
+router.delete('/meetings/:eventId/bookings/:bookingId', meetings.parentCancel);
 
 router.get('/students/:studentId/grades', verifyParentOwnsStudent, getStudentGrades);
 router.get('/students/:studentId/attendance', verifyParentOwnsStudent, getStudentAttendance);

@@ -42,6 +42,11 @@ const HANDLERS = {
   report_email: () => require('../reportEmails').reportEmailHandler,
   report_generation_done: () => require('../reportGeneration/doneEmail').reportGenerationDoneHandler,
   message_correction: () => require('../messageCorrections').messageCorrectionHandler,
+  ptm_invite: () => require('../meetings/emails').inviteHandler,
+  ptm_family_update: () => require('../meetings/emails').familyUpdateHandler,
+  ptm_reminder: () => require('../meetings/emails').reminderHandler,
+  ptm_last_call: () => require('../meetings/emails').lastCallHandler,
+  ptm_teacher_list: () => require('../meetings/emails').teacherListHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).

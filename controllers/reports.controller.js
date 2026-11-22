@@ -173,7 +173,8 @@ const generateStudentSummaryReport = async (req, res) => {
  * One student's summary for every class they're in that term, as one PDF: a
  * first page with each class's term grade, then each class's own summary page
  * (the same page the one-class report prints). A teacher without report_cards
- * gets only the classes they teach; none of them is a 403.
+ * gets only the classes they teach (the student's homeroom teacher gets them
+ * all); none of them is a 403.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -204,7 +205,12 @@ const generateStudentTermSummaryReport = async (req, res) => {
     if (enrolled.length === 0) {
       return res.status(404).json({ status: 'error', message: `${student.name} isn't in any ${term.name} classes` });
     }
-    const classes = enrolled.filter((cls) => classAccessGranted(req, cls, ['report_cards']));
+    // A homeroom teacher sees all their homeroom student's classes (parent–teacher
+    // meetings: "All classes"); anyone else, the classes the class rule allows.
+    const homeroom = Boolean(req.access?.isStaffView && student.homeroom_teacher_id && student.homeroom_teacher_id === req.user.userId);
+    const classes = homeroom
+      ? enrolled.filter((cls) => cls.school === school)
+      : enrolled.filter((cls) => classAccessGranted(req, cls, ['report_cards']));
     if (classes.length === 0) {
       return res.status(403).json({ status: 'failed', message: 'Not authorized for these classes' });
     }

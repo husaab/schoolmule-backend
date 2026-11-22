@@ -27,6 +27,7 @@ const scheduler = require('./classroom/scheduler');
 const classroom = require('./classroom/classroomNotifier');
 const outbox = require('./email/outbox');
 const replyReminders = require('./replyReminders');
+const meetingsScheduler = require('./meetings/scheduler');
 const push = require('./push/pushQueue');
 const { threadPath } = require('../utils/appPaths');
 const { isEffectivelyModified } = require('../utils/modifiedMark');
@@ -518,6 +519,20 @@ async function replyReminderTick(now = new Date()) {
 }
 
 /**
+ * Parent–teacher meetings (services/meetings/scheduler): opens booking when
+ * it's due (queuing every invitation at once) and queues the reminders,
+ * "times still open" and teachers' lists. Never throws.
+ */
+async function meetingsTick(now = new Date()) {
+  try {
+    return await meetingsScheduler.runSchedule(now);
+  } catch (error) {
+    logger.error({ err: error }, 'Parent–teacher meetings tick failed');
+    return null;
+  }
+}
+
+/**
  * Sends due email_outbox rows (the parents' "New Grades Posted", the reply
  * reminders), first in the tick: a teacher may be watching the publish
  * window. Never throws.
@@ -565,6 +580,7 @@ async function runTick() {
     // Push first: a notification is a second's work and someone is waiting for it.
     await push.drain();
     await replyReminderTick();
+    await meetingsTick();
     more = (await drainEmailOutbox()) >= outbox.DRAIN_LIMIT;
     await classroomTick();
     if (!disabledReason) await remindIfDue();
@@ -588,6 +604,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
   classroom.resetScheduleState();
   outbox.resetOutboxState();
   replyReminders.resetScheduleState();
+  meetingsScheduler.resetScheduleState();
   // A restart part-way through the day must not re-run the reminder sweep.
   lastReminderDate = torontoDate();
   timer = setInterval(runTick, intervalMs);
@@ -612,5 +629,5 @@ function stopWorker() {
 module.exports = {
   startWorker, stopWorker, drainOnce, drainAll, processJob, sendInviteReminders, messageLink, timeLabel, MAX_ATTEMPTS,
   drainAnnouncements, processAnnouncementJob, ANNOUNCEMENT_BATCH, promoteScheduled, classroomTick, drainClassroom,
-  drainEmailOutbox, replyReminderTick,
+  drainEmailOutbox, replyReminderTick, meetingsTick,
 };

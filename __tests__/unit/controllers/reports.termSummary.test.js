@@ -43,9 +43,9 @@ const classRow = (class_id, subject, teacher_id = OTHER_TEACHER) => ({
 const TERM = '33333333-3333-4333-8333-333333333333';
 const url = (studentId, query = `?termId=${TERM}`) => `/api/reports/student-summary/${studentId}${query}`;
 
-/** Queues the reads up to the class list; returns the student. */
-const queueLookups = (classes) => {
-  const student = buildStudentRow({ student_id: STUDENT, school: TEST_SCHOOL, name: 'Sample Student' });
+/** Queues the reads up to the class list; returns the student (no homeroom teacher unless given). */
+const queueLookups = (classes, { homeroom = null } = {}) => {
+  const student = buildStudentRow({ student_id: STUDENT, school: TEST_SCHOOL, name: 'Sample Student', homeroom_teacher_id: homeroom });
   mockQueryResponse([student]);
   mockQueryResponse([buildTermRow({ term_id: TERM, name: 'Term 1' })]);
   mockQueryResponse(classes);
@@ -129,6 +129,18 @@ describe('POST /api/reports/student-summary/:studentId (all classes)', () => {
     expect(puppeteer.__page.pdf).toHaveBeenCalledTimes(2);
     // Only the taught class is read.
     expect(db.query.mock.calls.find(([sql]) => sql.includes('FROM assessments\n  WHERE class_id = ANY'))[1]).toEqual([[CLASS_A]]);
+  });
+
+  it("gives the student's homeroom teacher every class, even without report_cards (meetings: All classes)", async () => {
+    const token = mockTeacherUser();
+    giveRole(TEST_TEACHER_USER_ID, ['students']);
+    const student = queueLookups([classRow(CLASS_A, 'Math'), classRow(CLASS_B, 'Science')], { homeroom: TEST_TEACHER_USER_ID });
+    queueContent([CLASS_A, CLASS_B]);
+
+    const res = await request(app).post(url(student.student_id)).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(puppeteer.__page.pdf).toHaveBeenCalledTimes(3);
   });
 
   it('refuses a teacher without report_cards who teaches none of them', async () => {

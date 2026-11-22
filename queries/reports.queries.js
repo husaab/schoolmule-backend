@@ -7,7 +7,7 @@ const getSchoolInfoByCode = `
 
 // Get student information
 const getStudentById = `
-  SELECT student_id, name, grade, school
+  SELECT student_id, name, grade, school, homeroom_teacher_id
   FROM students
   WHERE student_id = $1
 `;
