@@ -30,6 +30,7 @@ const FEATURES = [
   ['/api/analytics', 'Analytics'],
   ['/api/agendas', 'Agendas'],
   ['/api/patch-notes', "What's new"],
+  ['/api/tours', 'Guided tours'],
   ['/api/jk', 'JK/SK grading'],
   ['/api/sk', 'JK/SK grading'],
   ['/api/admin/student-accounts', 'Student accounts'],

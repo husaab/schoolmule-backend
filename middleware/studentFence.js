@@ -8,6 +8,7 @@
 const STUDENT_ALLOWED = Object.freeze([
   '/api/student',                // the student portal API (requireStudent inside)
   '/api/profile',                // the caller's own avatar and photo
+  '/api/tours',                  // the caller's own guided-tour progress (keyed on req.user)
   '/api/observe/client-events',  // browser error reports (tokenOnly mount)
   '/api/auth/apple/connect',     // linking the caller's own Apple ID (keyed on req.user)
   '/api/auth/delete-user',       // deleting the caller's own account (keyed on req.user)

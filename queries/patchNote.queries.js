@@ -1,7 +1,7 @@
 const patchNoteQueries = {
   selectByRole: `
     SELECT patch_note_id, title, body, version, category, target_roles,
-           image_url, published_at, auto_dismiss_at, created_by, created_at, updated_at
+           image_url, tour_id, published_at, auto_dismiss_at, created_by, created_at, updated_at
     FROM patch_notes
     WHERE published_at <= NOW()
       AND $1 = ANY(target_roles)
@@ -10,7 +10,7 @@ const patchNoteQueries = {
 
   selectUnread: `
     SELECT pn.patch_note_id, pn.title, pn.body, pn.version, pn.category,
-           pn.target_roles, pn.image_url, pn.published_at, pn.auto_dismiss_at
+           pn.target_roles, pn.image_url, pn.tour_id, pn.published_at, pn.auto_dismiss_at
     FROM patch_notes pn
     WHERE pn.published_at <= NOW()
       AND $1 = ANY(pn.target_roles)
@@ -34,8 +34,8 @@ const patchNoteQueries = {
 
   create: `
     INSERT INTO patch_notes
-      (title, body, version, category, target_roles, image_url, published_at, auto_dismiss_at, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $7::timestamptz + INTERVAL '7 days', $8)
+      (title, body, version, category, target_roles, image_url, published_at, auto_dismiss_at, created_by, tour_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $7::timestamptz + INTERVAL '7 days', $8, $9)
     RETURNING *
   `,
 
@@ -49,6 +49,8 @@ const patchNoteQueries = {
       image_url = COALESCE($6, image_url),
       published_at = COALESCE($7::timestamptz, published_at),
       auto_dismiss_at = COALESCE($7::timestamptz, published_at) + INTERVAL '7 days',
+      -- $9 says whether the request set tour_id at all, so it can be cleared to null.
+      tour_id = CASE WHEN $9::boolean THEN $10 ELSE tour_id END,
       updated_at = NOW()
     WHERE patch_note_id = $8
     RETURNING *
@@ -60,7 +62,7 @@ const patchNoteQueries = {
 
   selectAll: `
     SELECT patch_note_id, title, body, version, category, target_roles,
-           image_url, published_at, auto_dismiss_at, created_by, created_at, updated_at
+           image_url, tour_id, published_at, auto_dismiss_at, created_by, created_at, updated_at
     FROM patch_notes
     ORDER BY published_at DESC
   `,

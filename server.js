@@ -32,6 +32,7 @@ const reportEmailRoutes = require("./routes/reportEmails.routes")
 const reportGenerationRoutes = require("./routes/reportGeneration.routes");
 const teacherAttendanceRoutes = require("./routes/teacherAttendance.routes")
 const patchNoteRoutes = require("./routes/patchNote.routes")
+const tourRoutes = require("./routes/tour.routes");
 const jkRoutes = require("./routes/jk.routes")
 const skRoutes = require("./routes/sk.routes")
 const registrationRoutes = require("./routes/registration.routes")
@@ -180,6 +181,7 @@ app.use("/api/report-emails", reportEmailRoutes);
 app.use("/api/report-generation", reportGenerationRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);
 app.use("/api/patch-notes", patchNoteRoutes);
+app.use("/api/tours", tourRoutes);
 app.use("/api/jk", jkRoutes);
 app.use("/api/sk", skRoutes);
 app.use("/api/registration", registrationRoutes);

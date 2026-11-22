@@ -347,6 +347,7 @@ CREATE TABLE patch_notes (
   category               TEXT,
   target_roles           TEXT[] NOT NULL,
   image_url              TEXT,
+  tour_id                TEXT,
   published_at           TIMESTAMPTZ NOT NULL,
   auto_dismiss_at        TIMESTAMPTZ,
   created_by             UUID REFERENCES users(user_id),
@@ -534,6 +535,34 @@ CREATE TABLE patch_note_dismissals (
   user_id                UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
   last_seen_patch_note_id UUID REFERENCES patch_notes(patch_note_id),
   dismissed_at           TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Guided tours (user_tours_migration.sql)
+CREATE TABLE user_tour_progress (
+  user_id          UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  tour_id          TEXT NOT NULL,
+  version          INT  NOT NULL DEFAULT 1,
+  status           TEXT NOT NULL CHECK (status IN ('offered','in_progress','completed','dismissed')),
+  step_index       INT  NOT NULL DEFAULT 0,
+  step_id          TEXT,
+  snoozed_until    TIMESTAMPTZ,
+  first_offered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at     TIMESTAMPTZ,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, tour_id)
+);
+
+CREATE TABLE user_tour_events (
+  event_id    BIGSERIAL PRIMARY KEY,
+  user_id     UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  tour_id     TEXT NOT NULL,
+  version     INT  NOT NULL DEFAULT 1,
+  event       TEXT NOT NULL CHECK (event IN ('offered','started','step','paused','resumed','completed','dismissed','snoozed')),
+  step_id     TEXT,
+  step_index  INT,
+  role        TEXT,
+  platform    TEXT CHECK (platform IN ('web','app')),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ─── JK Tables (Junior Kindergarten) ─────────────────────────

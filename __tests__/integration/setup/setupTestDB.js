@@ -102,6 +102,8 @@ const ALL_TABLES = [
   'jk_skill_domains',
   'report_emails',
   'school_assets',
+  'user_tour_events',
+  'user_tour_progress',
   'patch_note_dismissals',
   'patch_notes',
   'staff_work_schedules',

@@ -6,6 +6,16 @@ const logger = require("../logger");
 // D5): a restricted admin never can.
 const { isFullAdmin } = require("../services/access/access");
 
+// A guided tour the note can start ("Take the tour"): a tour id from the
+// client's catalog, or nothing.
+const { TOUR_ID_PATTERN } = require("../services/tours/tourProgress");
+const readTourId = (value) => {
+  if (value === undefined) return { set: false, value: null };
+  if (value === null || value === "") return { set: true, value: null };
+  if (typeof value !== "string" || !TOUR_ID_PATTERN.test(value)) return { error: "Invalid tour id" };
+  return { set: true, value };
+};
+
 const toCamel = (row) => ({
   patchNoteId: row.patch_note_id,
   title: row.title,
@@ -14,6 +24,7 @@ const toCamel = (row) => ({
   category: row.category,
   targetRoles: row.target_roles,
   imageUrl: row.image_url,
+  tourId: row.tour_id ?? null,
   publishedAt: row.published_at,
   autoDismissAt: row.auto_dismiss_at,
   createdBy: row.created_by,
@@ -71,9 +82,11 @@ const createPatchNote = async (req, res) => {
     if (!title || !body || !version || !category || !targetRoles || targetRoles.length === 0) {
       return res.status(400).json({ status: "failed", message: "Missing required fields" });
     }
+    const tour = readTourId(req.body.tourId);
+    if (tour.error) return res.status(400).json({ status: "failed", message: tour.error });
     const pubDate = publishedAt || new Date().toISOString();
     const { rows } = await db.query(patchNoteQueries.create, [
-      title, body, version, category, targetRoles, imageUrl || null, pubDate, req.user.userId,
+      title, body, version, category, targetRoles, imageUrl || null, pubDate, req.user.userId, tour.value,
     ]);
     return res.status(201).json({ status: "success", data: toCamel(rows[0]) });
   } catch (error) {
@@ -89,10 +102,12 @@ const updatePatchNote = async (req, res) => {
     }
     const { id } = req.params;
     const { title, body, version, category, targetRoles, imageUrl, publishedAt } = req.body;
+    const tour = readTourId(req.body.tourId);
+    if (tour.error) return res.status(400).json({ status: "failed", message: tour.error });
     const { rows } = await db.query(patchNoteQueries.update, [
       title || null, body || null, version || null, category || null,
       targetRoles || null, imageUrl !== undefined ? imageUrl : null,
-      publishedAt || null, id,
+      publishedAt || null, id, tour.set, tour.value,
     ]);
     if (rows.length === 0) {
       return res.status(404).json({ status: "failed", message: "Patch note not found" });

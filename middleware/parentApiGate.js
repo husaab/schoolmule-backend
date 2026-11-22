@@ -24,6 +24,7 @@ const PARENT_ALLOWED = [
   '/api/terms',
   '/api/calendar-events',
   '/api/patch-notes',
+  '/api/tours',
   '/api/school-years',
   '/api/schools',
   '/api/school-assets',
