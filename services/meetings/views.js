@@ -204,13 +204,17 @@ function teacherView(state, people, teacherId, now = new Date()) {
 function setupView(state, people, now = new Date()) {
   const audience = [...people.students.values()].filter((s) => [...s.teacherIds].some((t) => S.takingPart(state, people, t)));
   const families = new Set(audience.map((s) => people.familyOf.get(s.id)));
-  const accounts = new Map();
+  // How each family will get in, counted per family (not per address): a
+  // parent with a working account books with one tap; a family whose parents
+  // only have an address (or an account never set up) creates one first; a
+  // family with no address on file can't be invited (the office books them).
+  const reach = new Map();
   for (const s of audience) {
-    for (const g of s.guardians) {
-      if (!g.email) continue;
-      const prev = accounts.get(g.email);
-      accounts.set(g.email, prev === 'live' ? 'live' : (g.userId && !g.pending ? 'live' : 'new'));
-    }
+    const key = people.familyOf.get(s.id);
+    // An address only on the student file becomes an invitation when booking opens.
+    const onFile = [s.file?.mother?.email, s.file?.father?.email].some((e) => e && S.EMAIL_RE.test(e)) ? 1 : 0;
+    const rank = Math.max(reach.get(key) ?? 0, onFile, ...s.guardians.filter((g) => g.email).map((g) => (g.userId && !g.pending ? 2 : 1)));
+    reach.set(key, rank);
   }
   const teachers = [...people.teachers.values()].sort((a, b) => a.name.localeCompare(b.name)).map((t) => {
     const settings = state.settings.get(t.id);
@@ -266,8 +270,9 @@ function setupView(state, people, now = new Date()) {
     teachers,
     stats: {
       families: families.size,
-      oneTap: [...accounts.values()].filter((v) => v === 'live').length,
-      createAccount: [...accounts.values()].filter((v) => v === 'new').length,
+      oneTap: [...reach.values()].filter((v) => v === 2).length,
+      createAccount: [...reach.values()].filter((v) => v === 1).length,
+      noEmail: [...reach.values()].filter((v) => v === 0).length,
       times: teachers.filter((t) => t.takingPart).reduce((n, t) => n + t.times, 0),
       bookings: state.bookings.length,
       familiesBooked: [...families].filter((f) => bookedFamilies.has(f)).length,

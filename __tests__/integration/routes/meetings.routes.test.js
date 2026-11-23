@@ -115,6 +115,8 @@ describe('Integration: parent–teacher meetings', () => {
     expect(setup.teachers.map((t) => t.name)).toEqual(['Mr. Omar Farouk', 'Ms. Layla Saleh', 'Ms. Noor Khalil'].sort());
     expect(setup.teachers.find((t) => t.teacherId === FAROUK).families).toBe(2);
     expect(setup.days[0].timesPerTeacher).toBe(12);
+    // Counted per family: the Haddads and the Nassers have accounts; the Mansours only an address on the student file.
+    expect(setup.stats).toMatchObject({ families: 3, oneTap: 2, createAccount: 1, noEmail: 0 });
 
     // Maghrib for everyone on Monday.
     expect((await office('post', `/events/${eventId}/days/${mon}/breaks`).send({ start: H(16, 40), end: H(17), label: 'Maghrib' })).status).toBe(201);
