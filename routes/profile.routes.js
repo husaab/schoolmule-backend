@@ -15,6 +15,7 @@ router.use(requireLiveQrCard);
 const PHOTO_MAX_BYTES = 2 * 1024 * 1024;
 
 router.get("/", controller.getProfile);
+router.put("/phone", controller.setPhone);
 router.put("/avatar", controller.setAvatar);
 router.post("/photo", singleImage({ field: "photo", maxBytes: PHOTO_MAX_BYTES }), controller.setPhoto);
 router.delete("/photo", controller.deletePhoto);

@@ -15,6 +15,8 @@ const toUser = (row) => ({
   staffTitle: row.staff_title ?? null,
   /** Staff only: Mr. | Ms. | Mrs. | Dr. before the name parents see ("Ms. Doha Chahade"); null = plain name. */
   honorific: row.honorific ?? null,
+  /** Their own number, optional (Settings or Admin → Users); null when not set or not selected. */
+  phone: row.phone ?? null,
   isVerified: row.is_verified,
   isVerifiedSchool: row.is_verified_school,
   isArchived: row.is_archived,

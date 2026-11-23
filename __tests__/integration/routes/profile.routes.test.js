@@ -58,11 +58,30 @@ describe('Integration: profile (avatar and photo)', () => {
     await user(STUDENT_USER_ID, 'amal.haddad@example.com', 'Amal', 'Haddad', 'STUDENT');
   });
 
+  describe('phone', () => {
+    it('saves, tidies and clears your own number', async () => {
+      const put = await authenticatedRequest('put', '/api/profile/phone', asTeacher).send({ phone: ' 416  555-0100 ' });
+      expect(put.status).toBe(200);
+      expect(put.body.data).toEqual({ phone: '416 555-0100' });
+      expect((await authenticatedRequest('get', '/api/profile', asTeacher)).body.data.phone).toBe('416 555-0100');
+
+      expect((await authenticatedRequest('put', '/api/profile/phone', asTeacher).send({ phone: 'call me' })).status).toBe(400);
+      expect((await authenticatedRequest('put', '/api/profile/phone', asTeacher).send({})).status).toBe(400);
+      const cleared = await authenticatedRequest('put', '/api/profile/phone', asTeacher).send({ phone: '' });
+      expect(cleared.body.data).toEqual({ phone: null });
+    });
+
+    it('parents can add one; student logins cannot', async () => {
+      expect((await authenticatedRequest('put', '/api/profile/phone', asParent).send({ phone: '647-555-0199' })).body.data).toEqual({ phone: '647-555-0199' });
+      expect((await authenticatedRequest('put', '/api/profile/phone', asStudent).send({ phone: '647-555-0199' })).status).toBe(403);
+    });
+  });
+
   describe('avatar', () => {
     it('starts neutral', async () => {
       const res = await authenticatedRequest('get', '/api/profile', asTeacher);
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: true });
+      expect(res.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: true, phone: null });
     });
 
     it('PUT stores the avatar and /api/auth/me returns it', async () => {
@@ -319,7 +338,7 @@ describe('Integration: profile (avatar and photo)', () => {
       expect((await dbUser(STUDENT_USER_ID)).photo_path).toBeNull();
 
       const profile = await authenticatedRequest('get', '/api/profile', asStudent);
-      expect(profile.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: false });
+      expect(profile.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: false, phone: null });
     });
 
     it('are accepted when the school turns them on, and DELETE clears them', async () => {
@@ -343,7 +362,7 @@ describe('Integration: profile (avatar and photo)', () => {
       await studentPhotos(false);
 
       const profile = await authenticatedRequest('get', '/api/profile', asStudent);
-      expect(profile.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: false });
+      expect(profile.body.data).toEqual({ avatar: null, photoUrl: null, photosAllowed: false, phone: null });
       expect((await dbUser(STUDENT_USER_ID)).photo_path).not.toBeNull();
     });
 

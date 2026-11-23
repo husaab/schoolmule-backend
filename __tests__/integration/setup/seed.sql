@@ -56,6 +56,7 @@ CREATE TABLE users (
   last_login_at          TIMESTAMPTZ,
   google_sub             TEXT,
   apple_sub              TEXT,
+  phone                  TEXT CONSTRAINT users_phone_ck CHECK (phone IS NULL OR length(phone) BETWEEN 7 AND 40),  -- user_phone_migration.sql
   apple_refresh_token    TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
   last_modified_at       TIMESTAMPTZ DEFAULT NOW(),
@@ -2621,6 +2622,7 @@ CREATE TABLE IF NOT EXISTS ptm_teachers (
   taking_part   BOOLEAN NOT NULL DEFAULT TRUE,
   slot_minutes  SMALLINT CHECK (slot_minutes IS NULL OR slot_minutes BETWEEN 5 AND 60),
   room          TEXT,
+  call_from     TEXT CONSTRAINT ptm_teachers_call_from_ck CHECK (call_from IS NULL OR length(call_from) BETWEEN 7 AND 40),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (event_id, teacher_id)
 );

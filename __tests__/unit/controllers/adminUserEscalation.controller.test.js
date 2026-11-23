@@ -150,27 +150,27 @@ describe('Users page escalation guards', () => {
       const set = await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: 'Ms.' }));
       expect(set.status).toBe(200);
       expect(set.body.data.honorific).toBe('Ms.');
-      expect(updateParams().slice(9)).toEqual([true, 'Ms.']);
+      expect(updateParams().slice(9, 11)).toEqual([true, 'Ms.']);
 
       db.query.mockClear();
       mockQueryResponse([target({ honorific: 'Ms.' })]);
       mockQueryResponse([target()]);
       await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: '' }));
-      expect(updateParams().slice(9)).toEqual([true, null]);
+      expect(updateParams().slice(9, 11)).toEqual([true, null]);
     });
 
     it('keeps the stored title when a form sends none', async () => {
       mockQueryResponse([target({ honorific: 'Mr.' })]);
       mockQueryResponse([target({ honorific: 'Mr.' })]);
       await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit());
-      expect(updateParams().slice(9)).toEqual([false, null]);
+      expect(updateParams().slice(9, 11)).toEqual([false, null]);
     });
 
     it('drops the title when someone becomes a parent, and refuses an unknown one', async () => {
       mockQueryResponse([target({ honorific: 'Ms.' })]);
       mockQueryResponse([target({ role: 'PARENT' })]);
       await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ role: 'PARENT', honorific: 'Ms.' }));
-      expect(updateParams().slice(9)).toEqual([true, null]);
+      expect(updateParams().slice(9, 11)).toEqual([true, null]);
 
       db.query.mockClear();
       const bad = await authenticatedRequest('patch', `/api/admin/users/${TEST_TEACHER_USER_ID}`).send(edit({ honorific: 'Sir' }));

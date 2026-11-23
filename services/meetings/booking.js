@@ -31,6 +31,7 @@ const outbox = require('../email/outbox');
 const S = require('./state');
 const { overlaps, timeLabel } = require('./slots');
 const { cutoffAt, torontoAt, phaseOf, weekday, instantLabel } = require('./time');
+const { cleanPhone } = require('../../utils/phone');
 
 class MeetingError extends Error {
   constructor(status, code, message, extra = {}) {
@@ -130,16 +131,6 @@ function checkTime({ state, people, actor, item, now, extra = [], exceptBookingI
     throw new MeetingError(409, 'FAMILY_BUSY', `There's already a meeting at ${timeLabel(clash.start_min)} (${who})`);
   }
   return { day, slot, studentIds, teacher };
-}
-
-const PHONE_RE = /^\+?[0-9().\-\s]+(?:\s*(?:x|ext\.?)\s*[0-9]+)?$/i;
-
-/** A phone number as typed, tidied, or null if it isn't one. */
-function cleanPhone(raw) {
-  const text = String(raw ?? '').replace(/\s+/g, ' ').trim();
-  const digits = text.replace(/\D/g, '').length;
-  if (text.length > 40 || digits < 7 || digits > 20 || !PHONE_RE.test(text)) return null;
-  return text;
 }
 
 /**

@@ -4,12 +4,20 @@
 const profileQueries = {
   //  $1 user_id
   selectProfile: `
-    SELECT user_id, school, role, avatar, photo_path
+    SELECT user_id, school, role, avatar, photo_path, phone
     FROM users
     WHERE user_id = $1
   `,
 
   //  $1 user_id, $2 avatar (JSON text, or NULL for the neutral avatar)
+  //  $1 user_id, $2 phone (tidied) or NULL
+  updatePhone: `
+    UPDATE users
+    SET phone = $2, last_modified_at = NOW()
+    WHERE user_id = $1
+    RETURNING phone
+  `,
+
   updateAvatar: `
     UPDATE users
     SET avatar = $2::jsonb, last_modified_at = NOW()

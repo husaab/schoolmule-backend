@@ -1,6 +1,6 @@
 /*
   controllers/profile.controller.js
-  The signed-in person's own avatar, photo and (staff) signature
+  The signed-in person's own avatar, photo, phone number and (staff) signature
   (/api/profile). Open to every verified role, students included (the student
   fence allows this prefix); every query is keyed on the caller's own user id,
   never an id from the client.
@@ -14,13 +14,14 @@ const q = require('../queries/profile.queries');
 const { AVATAR_ERROR, validateAvatar } = require('../utils/avatar');
 const { BUCKET, STUDENT_PHOTOS_OFF, photosAllowed, signedPhotoUrl, removePhotoObject } = require('../services/profile/photos');
 const signatures = require('../services/profile/signatures');
+const { readPhone } = require('../utils/phone');
 
 const ok = (res, data) => res.status(200).json({ status: 'success', data });
 const failed = (res, status, message) => res.status(status).json({ status: 'failed', message });
 
 const ACCOUNT_NOT_FOUND = 'Account not found';
 
-// GET /api/profile -> { avatar, photoUrl, photosAllowed }
+// GET /api/profile -> { avatar, photoUrl, photosAllowed, phone }
 const getProfile = async (req, res) => {
   try {
     const { rows } = await db.query(q.selectProfile, [req.user.userId]);
@@ -31,10 +32,28 @@ const getProfile = async (req, res) => {
       avatar: user.avatar ?? null,
       photoUrl: allowed ? await signedPhotoUrl(user.photo_path) : null,
       photosAllowed: allowed,
+      phone: user.phone ?? null,
     });
   } catch (error) {
     logger.error({ err: error }, 'Failed to load the profile');
     return failed(res, 500, 'Error loading your profile');
+  }
+};
+
+// PUT /api/profile/phone  { phone: string | null } -> { phone }
+// Staff and parents (not student logins). Optional: null or '' clears it.
+const setPhone = async (req, res) => {
+  if (String(req.user.role) === 'STUDENT') return failed(res, 403, 'Students can’t add a phone number');
+  const read = readPhone(req.body);
+  if (!read.provided) return failed(res, 400, 'Enter a phone number');
+  if (read.error) return failed(res, 400, read.error);
+  try {
+    const { rows } = await db.query(q.updatePhone, [req.user.userId, read.value]);
+    if (!rows[0]) return failed(res, 404, ACCOUNT_NOT_FOUND);
+    return ok(res, { phone: rows[0].phone ?? null });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to save the phone number');
+    return failed(res, 500, 'Error saving your phone number');
   }
 };
 
@@ -177,5 +196,5 @@ const deleteSignature = async (req, res) => {
 };
 
 module.exports = {
-  getProfile, setAvatar, setPhoto, deletePhoto, getSignature, saveDrawnSignature, uploadSignature, deleteSignature,
+  getProfile, setPhone, setAvatar, setPhoto, deletePhoto, getSignature, saveDrawnSignature, uploadSignature, deleteSignature,
 };

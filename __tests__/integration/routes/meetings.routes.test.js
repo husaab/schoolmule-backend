@@ -295,9 +295,9 @@ describe('Integration: parent–teacher meetings', () => {
 
     await deliverQueuedEmails(pool);
     const confirm = sent().find((m) => m.to[0] === 'amal.parent@example.com');
-    expect(confirm.html).toContain('Adam · Phone call · 647 555 0199');
+    expect(confirm.html).toContain('Adam · Phone call to 647 555 0199');
     const ics = confirm.attachments.find((a) => a.filename === 'meetings.ics').content.toString();
-    expect(ics).toContain('LOCATION:Phone call · 647 555 0199');
+    expect(ics).toContain('LOCATION:Phone call to 647 555 0199');
     expect(ics).toContain('DESCRIPTION:Ms. Layla Saleh will call you at 647 555 0199.');
 
     // Switching to in person keeps the time; the email says what changed.
@@ -310,6 +310,30 @@ describe('Integration: parent–teacher meetings', () => {
     // A parent's own change lists their meetings as they now stand.
     expect(update.html).toContain('Adam · Grade 5 room');
     expect(update.html).not.toContain('Phone call');
+
+    // The teacher's number: their account's, unless they set one for these meetings.
+    await pool.query("UPDATE users SET phone = '905-555-0111' WHERE user_id = $1", [SALEH]);
+    await asParent(AMAL, 'patch', `/meetings/${eventId}/bookings/${bookingId}`).send({ mode: 'phone', phone: '647 555 0199' });
+    let mine2 = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
+    expect(mine2.bookings[0]).toMatchObject({ mode: 'phone', callFrom: '905-555-0111' });
+    const callFrom = await asTeacher(SALEH, 'put', `/events/${eventId}/my-call-from`).send({ callFrom: '905-555-0122' });
+    expect(callFrom.status).toBe(200);
+    expect(callFrom.body.data).toMatchObject({ callFrom: '905-555-0122', myPhone: '905-555-0111' });
+    expect((await asTeacher(SALEH, 'put', `/events/${eventId}/my-call-from`).send({ callFrom: 'nope' })).body.code).toBe('BAD_PHONE');
+    mine2 = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
+    expect(mine2.bookings[0].callFrom).toBe('905-555-0122');
+    const setupNow = (await office('get', `/events/${eventId}`)).body.data;
+    expect(setupNow.teachers.find((t) => t.teacherId === SALEH)).toMatchObject({ callFrom: '905-555-0122', phone: '905-555-0111' });
+    getResend().emails.send.mockClear();
+    await deliverQueuedEmails(pool);
+    const withFrom = sent().find((m) => m.to[0] === 'amal.parent@example.com');
+    expect(withFrom.html).toContain('Phone call to 647 555 0199 from 905-555-0122');
+    // (Calendar files fold long lines; unfold before reading.)
+    expect(withFrom.attachments.find((a) => a.filename === 'meetings.ics').content.toString().replace(/\r?\n[ \t]/g, ''))
+      .toContain('DESCRIPTION:Ms. Layla Saleh will call you at 647 555 0199 from 905-555-0122.');
+    // Back to in person for the rest.
+    await asParent(AMAL, 'patch', `/meetings/${eventId}/bookings/${bookingId}`).send({ mode: 'in_person' });
+    await deliverQueuedEmails(pool);
 
     // The office turns phone calls off: parents can't choose one; the office still can.
     expect((await office('put', `/events/${eventId}`).send({ allowPhone: false })).status).toBe(200);

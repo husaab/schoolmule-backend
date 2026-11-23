@@ -11,7 +11,7 @@ const adminUserQueries = {
   //  role::text so the filter parses even before the enum has 'STUDENT'.
   selectUsersBySchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+      user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
@@ -23,9 +23,15 @@ const adminUserQueries = {
 
   //  $1 = user_id, $2 = school. Any role: the controller answers 404 for a
   //  STUDENT login on the Users page routes (they live on Student accounts).
+  //  $1 user_id, $2 school, $3 phone (tidied) | null
+  updatePhoneInSchool: `
+    UPDATE users SET phone = $3, last_modified_at = NOW()
+    WHERE user_id = $1 AND school = $2
+    RETURNING phone
+  `,
   selectUserInSchool: `
     SELECT
-      user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+      user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
       is_verified, is_verified_school, is_archived, archived_at,
       avatar, photo_path, created_at, last_modified_at,
       (password = '!') AS invite_pending,
@@ -96,7 +102,7 @@ const adminUserQueries = {
        is_verified, is_verified_school, staff_role_id, honorific, created_at, last_modified_at)
     VALUES
       (gen_random_uuid(), $1, $2, '!', $3, $4, $5, $6, true, true, $7, $8, NOW(), NOW())
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               true AS invite_pending,
@@ -112,6 +118,7 @@ const adminUserQueries = {
   //  controller clears it for a PARENT and checks who may change it).
   //  $10 = whether to set the title, $11 = honorific|null (a form that
   //  doesn't send one keeps the stored title).
+  //  $12 = whether to set the phone, $13 = phone|null (likewise kept when not sent).
   updateUserInSchool: `
     UPDATE users
     SET first_name = $1::text,
@@ -122,9 +129,10 @@ const adminUserQueries = {
         staff_title = $7,
         staff_role_id = CASE WHEN $8::boolean THEN $9::uuid ELSE staff_role_id END,
         honorific = CASE WHEN $10::boolean THEN $11::text ELSE honorific END,
+        phone = CASE WHEN $12::boolean THEN $13::text ELSE phone END,
         last_modified_at = NOW()
     WHERE user_id = $5 AND school = $6 AND is_archived = false AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,
@@ -158,7 +166,7 @@ const adminUserQueries = {
         is_verified_school = false,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = false AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,
@@ -176,7 +184,7 @@ const adminUserQueries = {
         is_verified_school = true,
         last_modified_at = NOW()
     WHERE user_id = $1 AND school = $2 AND is_archived = true AND role::text <> 'STUDENT'
-    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific,
+    RETURNING user_id, email, username, first_name, last_name, school, role, staff_title, honorific, phone,
               is_verified, is_verified_school, is_archived, archived_at,
               created_at, last_modified_at,
               (password = '!') AS invite_pending,

@@ -213,6 +213,29 @@ describe('Integration: Admin Users Routes', () => {
       }));
     });
 
+    it('takes a phone number on invite too', async () => {
+      const res = await authenticatedRequest('post', '/api/admin/users').send({
+        firstName: 'Rana', lastName: 'Phone', email: 'rana.phone@example.com', role: 'TEACHER', phone: '416-555-0177',
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.data.phone).toBe('416-555-0177');
+    });
+
+    it('saves, keeps and clears a phone number', async () => {
+      const base = { firstName: 'Tina', lastName: 'Teacher', role: 'TEACHER', isVerifiedSchool: true };
+      const set = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({ ...base, phone: '(905) 555-0142' });
+      expect(set.status).toBe(200);
+      expect(set.body.data.phone).toBe('(905) 555-0142');
+      // A form that doesn't send it keeps it.
+      const kept = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send(base);
+      expect(kept.body.data.phone).toBe('(905) 555-0142');
+      const detail = await authenticatedRequest('get', `/api/admin/users/${TEACHER_ID}`);
+      expect(detail.body.data.phone).toBe('(905) 555-0142');
+      expect((await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({ ...base, phone: '12' })).status).toBe(400);
+      const cleared = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({ ...base, phone: null });
+      expect(cleared.body.data.phone).toBeNull();
+    });
+
     it('saves and clears a staff title shown to parents', async () => {
       const set = await authenticatedRequest('patch', `/api/admin/users/${TEACHER_ID}`).send({
         firstName: 'Tina', lastName: 'Admin', role: 'ADMIN', isVerifiedSchool: true, staffTitle: '  Vice Principal ',

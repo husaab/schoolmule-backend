@@ -11,7 +11,9 @@
 // - planFor / openTimes / roomFor / placeFor / orphans: the computed views
 //   every page and email reads, so they always agree with what booking
 //   accepts.
-// - phoneFor: the number to suggest for a phone call meeting.
+// - phoneFor: the number to suggest for a phone call meeting; callFromFor:
+//   the number a teacher calls families from (familyPlaceFor says both).
+
 
 const q = require('../../queries/meetings.queries');
 const { selectCurrentTerm } = require('../../queries/termScope');
@@ -73,7 +75,7 @@ function familiesOf(studentIds, guardianRows) {
   return familyOf;
 }
 
-/** A guardian's number: their own on the link, else the file's for their address, else for their relation. */
+/** A guardian's number: on the link or their account, else the file's for their address, else for their relation. */
 function guardianPhone(student, own, email, relation) {
   if (own) return own;
   const { mother, father } = student.file;
@@ -111,7 +113,7 @@ async function loadPeople(client, event) {
     if (!student || !u) continue;
     if (!teachers.has(l.teacher_id)) {
       teachers.set(l.teacher_id, {
-        id: l.teacher_id, name: u.name || u.email, firstName: u.first_name, email: u.email,
+        id: l.teacher_id, name: u.name || u.email, firstName: u.first_name, email: u.email, phone: u.phone || null,
         studentIds: new Set(), homeroomIds: new Set(), subjectsByStudent: new Map(), classesByStudent: new Map(), subjects: new Set(),
       });
     }
@@ -147,7 +149,7 @@ async function loadPeople(client, event) {
       name: u?.name || g.parent_name || null,
       firstName: u?.first_name || firstNameOf(g.parent_name) || null,
       relation: g.relation,
-      phone: guardianPhone(student, g.parent_number, email, g.relation),
+      phone: guardianPhone(student, g.parent_number || u?.phone, email, g.relation),
       pending: u ? Boolean(u.invite_pending) : true,
       hasAccount: Boolean(u),
     });
@@ -213,6 +215,18 @@ const isPhone = (b) => b.mode === 'phone';
 /** Where a booking happens, in one line: "Grade 5 room", or "Phone call · 416-555-0100". */
 function placeFor(state, people, b) {
   return isPhone(b) ? `Phone call · ${b.phone}` : roomFor(state, people, b.teacher_id, b.student_ids);
+}
+
+/** The number a teacher calls families from: this event's "Number I'll call from", else their account's. */
+function callFromFor(state, people, teacherId) {
+  return state.settings.get(teacherId)?.call_from || people.teachers.get(teacherId)?.phone || null;
+}
+
+/** Where a booking happens, as its family reads it: the room, or "Phone call to 416-… from 905-…". */
+function familyPlaceFor(state, people, b) {
+  if (!isPhone(b)) return roomFor(state, people, b.teacher_id, b.student_ids);
+  const from = callFromFor(state, people, b.teacher_id);
+  return `Phone call to ${b.phone}${from ? ` from ${from}` : ''}`;
 }
 
 /**
@@ -285,6 +299,8 @@ module.exports = {
   roomFor,
   isPhone,
   placeFor,
+  familyPlaceFor,
+  callFromFor,
   phoneFor,
   orphans,
   teachesLabel,

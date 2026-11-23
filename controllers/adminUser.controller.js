@@ -26,6 +26,7 @@ const escalation = require("../services/access/escalation");
 const { sessionAccess } = require("../services/access/access");
 const { invalidateUser } = require("../services/access/accessStore");
 const staffRoleQueries = require("../queries/staffRole.queries");
+const { readPhone } = require("../utils/phone");
 
 const ROLES = ["ADMIN", "TEACHER", "PARENT"];
 // Roles an admin may preview. A full admin is never previewed (it shows the
@@ -227,6 +228,8 @@ const inviteUser = async (req, res) => {
   if (!verdict.ok) return refuse(res, verdict);
   const honorific = readHonorific(req.body, role);
   if (honorific.error) return res.status(400).json({ status: "failed", message: honorific.error });
+  const phone = readPhone(req.body);
+  if (phone.error) return res.status(400).json({ status: "failed", message: phone.error });
 
   let created;
   try {
@@ -237,6 +240,10 @@ const inviteUser = async (req, res) => {
       honorific.value ?? null,
     ]);
     created = rows[0];
+    if (phone.provided && phone.value) {
+      const { rows: [withPhone] } = await db.query(adminUserQueries.updatePhoneInSchool, [created.user_id, req.user.school, phone.value]);
+      created = { ...created, phone: withPhone?.phone ?? null };
+    }
   } catch (error) {
     if (error.code === "23505") {
       return res.status(409).json({ status: "failed", message: "An account with this email already exists" });
@@ -313,6 +320,8 @@ const updateUser = async (req, res) => {
   }
   const honorific = readHonorific(req.body, role);
   if (honorific.error) return res.status(400).json({ status: "failed", message: honorific.error });
+  const phone = readPhone(req.body);
+  if (phone.error) return res.status(400).json({ status: "failed", message: phone.error });
   try {
     const { rows: found } = await db.query(adminUserQueries.selectUserInSchool, [id, school]);
     const target = found[0];
@@ -341,6 +350,7 @@ const updateUser = async (req, res) => {
       firstName, lastName, role, isVerifiedSchool, id, school, role === "ADMIN" ? staffTitle : null,
       setRole.provided, setRole.id ?? null,
       honorific.provided, honorific.value ?? null,
+      phone.provided, phone.value ?? null,
     ]);
     if (rows.length === 0) {
       return res.status(404).json({ status: "failed", message: "User not found" });
