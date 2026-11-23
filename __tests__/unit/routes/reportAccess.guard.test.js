@@ -8,6 +8,9 @@ const { mockParentUser, mockTeacherUser, TEST_PARENT_USER_ID, TEST_SCHOOL } = re
 
 const STUDENT = '77777777-7777-4777-8777-777777777777';
 const PATH = 'ALHAADIACADEMY/John_Smith_Term_1_report_card.pdf';
+// A report row emailed to the family after it was generated, and one generated again since its send.
+const SENT = { file_path: PATH, generated_at: '2026-11-20T15:00:00.000Z', email_sent: true, email_sent_at: '2026-11-21T15:00:00.000Z' };
+const UNSENT = { file_path: PATH, generated_at: '2026-11-22T15:00:00.000Z', email_sent: true, email_sent_at: '2026-11-21T15:00:00.000Z' };
 
 describe('report-card and progress-report routes', () => {
   beforeEach(() => db._reset());
@@ -37,10 +40,11 @@ describe('report-card and progress-report routes', () => {
 
     it('lets a parent list a linked child and scopes the school to the token, not the query', async () => {
       db.query.mockResolvedValueOnce({ rows: [{ parent_student_link_id: 'link' }] }); // link check
-      db.query.mockResolvedValueOnce({ rows: [{ file_path: PATH }] });                // report cards
+      db.query.mockResolvedValueOnce({ rows: [SENT, UNSENT] });                       // report cards
       const res = await authenticatedRequest('get', url, mockParentUser());
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual([{ file_path: PATH }]);
+      // Only what has been emailed to the family since it was generated.
+      expect(res.body.data).toEqual([SENT]);
       const linkCall = db.query.mock.calls.find(([sql]) => /FROM parent_students/.test(sql));
       expect(linkCall[1]).toEqual([STUDENT, TEST_PARENT_USER_ID]);
       const listCall = db.query.mock.calls.find(([sql]) => /FROM report_cards/.test(sql));
@@ -69,10 +73,10 @@ describe('report-card and progress-report routes', () => {
 
     it('lets a parent list a linked child', async () => {
       db.query.mockResolvedValueOnce({ rows: [{ parent_student_link_id: 'link' }] });
-      db.query.mockResolvedValueOnce({ rows: [{ file_path: PATH }] });
+      db.query.mockResolvedValueOnce({ rows: [SENT, UNSENT] });
       const res = await authenticatedRequest('get', url, mockParentUser());
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual([{ file_path: PATH }]);
+      expect(res.body.data).toEqual([SENT]);
     });
 
     it('refuses a parent who is not linked to the student', async () => {

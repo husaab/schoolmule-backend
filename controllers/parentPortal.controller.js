@@ -13,7 +13,6 @@ const engine = require('../services/analyticsEngine');
 const stats = require('../utils/statsUtils');
 const parentPortalQueries = require('../queries/parentPortal.queries');
 const parentStudentQueries = require('../queries/parentStudent.queries');
-const progressReportQueries = require('../queries/progressReports.queries');
 const schoolCalendarQueries = require('../queries/schoolCalendar.queries');
 const aiWeeklySummary = require('../services/aiWeeklySummary.service');
 const { academicYearToRange } = require('../utils/agendaCalendar');
@@ -117,9 +116,10 @@ const getSummary = async (req, res) => {
       children.map(async (row) => {
         const cross = matrix ? matrix.students.get(row.student_id) : null;
         const att = attendance.get(row.student_id) || null;
+        // Only comments the school has released (the report was emailed to the family).
         const { rows: fbRows } = await db.query(
-          progressReportQueries.getStudentProgressReportFeedback,
-          [row.student_id],
+          parentPortalQueries.selectReleasedProgressFeedbackByStudent,
+          [row.student_id, req.schoolYear?.schoolYearId ?? null],
         );
         const latest = fbRows
           .slice()
@@ -306,14 +306,18 @@ const getStudentAttendance = async (req, res) => {
 // Progress-report feedback, report-card feedback and generated progress
 // report PDFs for one child, across all classes and terms.
 // ────────────────────────────────────────────────────────────────────
+// A term's comments, ratings and PDF reach parents once that student's report
+// has been emailed to the family; drafts and unsent reports stay with the
+// school. Scoped to the selected school year.
 const getStudentFeedback = async (req, res) => {
   const { studentId } = req.params;
+  const yearId = req.schoolYear?.schoolYearId ?? null;
 
   try {
     const [progressFb, reportCardFb, progressReports] = await Promise.all([
-      db.query(progressReportQueries.getStudentProgressReportFeedback, [studentId]),
-      db.query(parentPortalQueries.selectReportCardFeedbackByStudent, [studentId]),
-      db.query(progressReportQueries.getStudentProgressReports, [studentId]),
+      db.query(parentPortalQueries.selectReleasedProgressFeedbackByStudent, [studentId, yearId]),
+      db.query(parentPortalQueries.selectReleasedReportCardFeedbackByStudent, [studentId, yearId]),
+      db.query(parentPortalQueries.selectSentProgressReportsByStudent, [studentId, yearId]),
     ]);
 
     return res.status(200).json({

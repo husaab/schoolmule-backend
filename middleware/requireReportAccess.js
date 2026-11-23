@@ -3,8 +3,10 @@
 // already scope their queries to req.user.school); a parent must hold a
 // parent_students link to the student. A signed URL is minted only for a
 // path that is a report row of the caller's school and, for a parent, of a
-// child they are linked to — so nobody can turn an arbitrary storage path
-// into a download link.
+// child they are linked to and emailed to the family since it was last
+// generated (sentToFamily: the file a parent opens is the one the family
+// was sent; a report the school hasn't sent stays with the school) — so
+// nobody can turn an arbitrary storage path into a download link.
 
 const db = require('../config/database');
 const parentStudentQueries = require('../queries/parentStudent.queries');
@@ -17,20 +19,31 @@ const OWNERSHIP_SQL = {
   report_cards: `
     SELECT 1 FROM report_cards r
     WHERE r.file_path = $1 AND r.school = $2
-      AND ($3::uuid IS NULL OR EXISTS (
-        SELECT 1 FROM parent_students ps WHERE ps.student_id = r.student_id AND ps.parent_id = $3))
+      AND ($3::uuid IS NULL OR (r.email_sent AND r.email_sent_at >= r.generated_at AND EXISTS (
+        SELECT 1 FROM parent_students ps WHERE ps.student_id = r.student_id AND ps.parent_id = $3)))
     LIMIT 1
   `,
   progress_reports: `
     SELECT 1 FROM progress_reports r
     WHERE r.file_path = $1 AND r.school = $2
-      AND ($3::uuid IS NULL OR EXISTS (
-        SELECT 1 FROM parent_students ps WHERE ps.student_id = r.student_id AND ps.parent_id = $3))
+      AND ($3::uuid IS NULL OR (r.email_sent AND r.email_sent_at >= r.generated_at AND EXISTS (
+        SELECT 1 FROM parent_students ps WHERE ps.student_id = r.student_id AND ps.parent_id = $3)))
     LIMIT 1
   `,
 };
 
 const isParent = (req) => req.user?.role === 'PARENT';
+
+/**
+ * A report row a parent may see: emailed to the family since it was last
+ * generated. Regenerating keeps email_sent, so a row sent last year (or before
+ * a correction) doesn't make the new file the family's.
+ */
+const sentToFamily = (row) =>
+  Boolean(row.email_sent && row.email_sent_at && row.generated_at && new Date(row.email_sent_at) >= new Date(row.generated_at));
+
+/** The rows of a report listing the caller may see: all for staff, sent ones for a parent. */
+const visibleReports = (req, rows) => (isParent(req) ? rows.filter(sentToFamily) : rows);
 
 /**
  * Parent must be linked to the student named by `pickStudentId(req)`; staff
@@ -95,4 +108,4 @@ const requireOwnReportPaths = (pick) => (req, res, next) => {
   return next();
 };
 
-module.exports = { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths, isOwnReportPath };
+module.exports = { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPaths, isOwnReportPath, sentToFamily, visibleReports };

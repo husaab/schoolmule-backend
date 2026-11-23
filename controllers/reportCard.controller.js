@@ -18,6 +18,7 @@ const { withReportEngine, reportEngineSession, reportCardResult } = require('../
 const { ReportSkip } = require('../services/reportEngine/data/errors');
 const reportSubjects = require('../services/reportEngine/data/subjects');
 const { modifiedSummary, uniqueLabels } = require('../utils/modifiedMark');
+const { visibleReports } = require('../middleware/requireReportAccess');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Report-card
@@ -1095,9 +1096,10 @@ const getGeneratedReportCardsByStudentId = async (req, res) => {
       [studentId, term, school]
     );
 
+    // A parent sees a report card only once it has been emailed to the family.
     return res.status(200).json({
       status: 'success',
-      data: rows
+      data: visibleReports(req, rows)
     });
   } catch (err) {
     logger.error({ err }, "Error fetching generated report cards");

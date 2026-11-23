@@ -12,6 +12,7 @@ const { getProgressReportHTML } = require('../templates/progressReportTemplate')
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, progressReportResult } = require('../services/reportEngine/generate');
 const { applySubjectLayout, loadSubjectLayout } = require('../services/reportEngine/subjectLayout');
+const { visibleReports } = require('../middleware/requireReportAccess');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Progress-report
@@ -270,10 +271,11 @@ const getStudentProgressReports = async (req, res) => {
     }
 
     const result = await db.query(progressReportsQueries.getStudentProgressReports, [studentId]);
-    
+
+    // A parent sees a progress report only once it has been emailed to the family.
     res.json({
       status: 'success',
-      data: result.rows
+      data: visibleReports(req, result.rows)
     });
   } catch (error) {
     logger.error('Error fetching student progress reports:', error);

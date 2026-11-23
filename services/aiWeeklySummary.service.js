@@ -21,7 +21,6 @@ const logger = require('../logger');
 const engine = require('./analyticsEngine');
 const aiQueries = require('../queries/aiWeeklySummary.queries');
 const parentPortalQueries = require('../queries/parentPortal.queries');
-const progressReportQueries = require('../queries/progressReports.queries');
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 const MODEL = 'gpt-4o-mini';
@@ -149,7 +148,8 @@ async function gatherWeekFacts({ school, studentId, termId, engineName, weekStar
       weekStart,
       weekEnd,
     ]),
-    db.query(progressReportQueries.getStudentProgressReportFeedback, [studentId]),
+    // Only released comments: the summary goes to parents.
+    db.query(parentPortalQueries.selectReleasedProgressFeedbackByStudent, [studentId, null]),
   ]);
 
   if (attendanceResult.status === 'fulfilled') {
