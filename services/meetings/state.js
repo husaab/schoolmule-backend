@@ -8,8 +8,10 @@
 //   (live, on-report-card, current-term classes, plus homeroom), the
 //   students, their guardians, and the families (students joined by a shared
 //   guardian, account or address).
-// - planFor / openTimes / roomFor / orphans: the computed views every page
-//   and email reads, so they always agree with what booking accepts.
+// - planFor / openTimes / roomFor / placeFor / orphans: the computed views
+//   every page and email reads, so they always agree with what booking
+//   accepts.
+// - phoneFor: the number to suggest for a phone call meeting.
 
 const q = require('../../queries/meetings.queries');
 const { selectCurrentTerm } = require('../../queries/termScope');
@@ -71,6 +73,18 @@ function familiesOf(studentIds, guardianRows) {
   return familyOf;
 }
 
+/** A guardian's number: their own on the link, else the file's for their address, else for their relation. */
+function guardianPhone(student, own, email, relation) {
+  if (own) return own;
+  const { mother, father } = student.file;
+  if (email && mother.email === email && mother.phone) return mother.phone;
+  if (email && father.email === email && father.phone) return father.phone;
+  const rel = lower(relation);
+  if (rel === 'mother' && !mother.email && mother.phone) return mother.phone;
+  if (rel === 'father' && !father.email && father.phone) return father.phone;
+  return null;
+}
+
 async function loadPeople(client, event) {
   const { school, school_year_id: yearId } = event;
   const { rows: [term] } = await client.query(selectCurrentTerm, [school, yearId]);
@@ -87,6 +101,7 @@ async function loadPeople(client, event) {
   const studentMap = new Map(students.rows.map((s) => [s.student_id, {
     id: s.student_id, name: s.name, firstName: firstNameOf(s.name), lastName: lastNameOf(s.name), grade: s.grade,
     homeroomTeacherId: s.homeroom_teacher_id, teacherIds: new Set(), guardians: [],
+    file: { mother: { email: lower(s.mother_email), phone: s.mother_number }, father: { email: lower(s.father_email), phone: s.father_number } },
   }]));
 
   const teachers = new Map();
@@ -132,6 +147,7 @@ async function loadPeople(client, event) {
       name: u?.name || g.parent_name || null,
       firstName: u?.first_name || firstNameOf(g.parent_name) || null,
       relation: g.relation,
+      phone: guardianPhone(student, g.parent_number, email, g.relation),
       pending: u ? Boolean(u.invite_pending) : true,
       hasAccount: Boolean(u),
     });
@@ -192,6 +208,33 @@ function roomFor(state, people, teacherId, studentIds) {
   return `${gradeLabel(oldest)} room`;
 }
 
+const isPhone = (b) => b.mode === 'phone';
+
+/** Where a booking happens, in one line: "Grade 5 room", or "Phone call · 416-555-0100". */
+function placeFor(state, people, b) {
+  return isPhone(b) ? `Phone call · ${b.phone}` : roomFor(state, people, b.teacher_id, b.student_ids);
+}
+
+/**
+ * The number to suggest for a phone call. A parent: the number they gave
+ * last, else their own on file, else the one the family gave last. The
+ * office (userId null): the family's last, else any guardian's on file.
+ */
+function phoneFor(state, people, studentIds, userId = null) {
+  const family = new Set(familyStudents(people, studentIds));
+  const given = state.bookings
+    .filter((b) => isPhone(b) && b.phone && b.student_ids.some((id) => family.has(id)))
+    .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+  const guardians = [...family].flatMap((id) => people.students.get(id)?.guardians || []);
+  if (userId) {
+    return given.find((b) => b.booked_by === userId)?.phone
+      || guardians.find((g) => g.userId === userId && g.phone)?.phone
+      || given[0]?.phone
+      || null;
+  }
+  return given[0]?.phone || guardians.find((g) => g.phone)?.phone || null;
+}
+
 /** Bookings the current setup no longer has a time for (hours, breaks, length or days changed). */
 function orphans(state) {
   const out = [];
@@ -240,6 +283,9 @@ module.exports = {
   planFor,
   openTimes,
   roomFor,
+  isPhone,
+  placeFor,
+  phoneFor,
   orphans,
   teachesLabel,
 };

@@ -123,11 +123,11 @@ function familyDays(state, people, childIds) {
         items: bookings.map((b) => {
           const teacher = people.teachers.get(b.teacher_id);
           const subject = teacher ? subjectFor(teacher, b.student_ids) : '';
-          const room = S.roomFor(state, people, b.teacher_id, b.student_ids);
           return {
             time: timeLabel(b.start_min),
             title: [teacher?.name || 'Teacher', subject].filter(Boolean).join(' · '),
-            sub: [kidNames(people, b.student_ids), room].filter(Boolean).join(' · '),
+            sub: [kidNames(people, b.student_ids), S.placeFor(state, people, b)].filter(Boolean).join(' · '),
+            byPhone: S.isPhone(b),
           };
         }),
       };
@@ -195,6 +195,7 @@ const inviteHandler = {
       dayLines: days.map((d) => dayLine(d, dayWindow(state, people, d))),
       datesShort: datesShort(days),
       slotMinutes: state.event.slot_minutes,
+      allowPhone: state.event.allow_phone,
       changesLabel: state.event.cutoff_min == null ? 'Until the meeting starts' : `Until ${timeLabel(state.event.cutoff_min)} the evening before`,
       link: link.url,
       planLink: plan.url,
@@ -217,12 +218,23 @@ const inviteHandler = {
 
 // ── ptm_family_update ──────────────────────────────────────
 
+const howLabel = (mode, phone) => (mode === 'phone' ? `a phone call${phone ? ` to ${phone}` : ''}` : 'in person');
+
+/** Did a change switch in person ↔ phone, or the number? (Older payloads have no mode: unchanged.) */
+const howChanged = (c) => c.fromMode != null && c.mode != null
+  && (c.fromMode !== c.mode || (c.mode === 'phone' && (c.fromPhone || null) !== (c.phone || null)));
+const timeChanged = (c) => c.fromDay !== c.day || c.fromStart !== c.start;
+
 function changeLine(c) {
   const when = (day, start) => (day ? `${T.shortDay(day)} at ${timeLabel(start)}` : timeLabel(start));
   const kids = c.studentNames ? ` (${c.studentNames})` : '';
-  if (c.type === 'moved') return `${c.teacherName}${kids}: moved from ${when(c.fromDay, c.fromStart)} to ${when(c.day, c.start)}`;
+  if (c.type === 'moved') {
+    if (!timeChanged(c)) return `${c.teacherName}${kids}, ${when(c.day, c.start)}: now ${howLabel(c.mode, c.phone)}`;
+    const now = howChanged(c) ? `, now ${howLabel(c.mode, c.phone)}` : '';
+    return `${c.teacherName}${kids}: moved from ${when(c.fromDay, c.fromStart)} to ${when(c.day, c.start)}${now}`;
+  }
   if (c.type === 'cancelled') return `${c.teacherName}${kids}, ${when(c.day, c.start)}: cancelled`;
-  return `${c.teacherName}${kids}: booked for ${when(c.day, c.start)}`;
+  return `${c.teacherName}${kids}: booked for ${when(c.day, c.start)}${c.mode === 'phone' ? ', a phone call' : ''}`;
 }
 
 /** The current meetings as calendar events, and a cancel file for any cancelled since. */
@@ -234,8 +246,9 @@ function calendarAttachments(state, people, days, changes, schoolName, now) {
     date: d.day.day_date,
     start: b.start_min,
     end: b.end_min,
-    summary: `Meeting with ${people.teachers.get(b.teacher_id)?.name || 'a teacher'} (${kidNames(people, b.student_ids)})`,
-    location: [S.roomFor(state, people, b.teacher_id, b.student_ids), schoolName].filter(Boolean).join(', '),
+    summary: `${S.isPhone(b) ? 'Phone call' : 'Meeting'} with ${people.teachers.get(b.teacher_id)?.name || 'a teacher'} (${kidNames(people, b.student_ids)})`,
+    location: S.isPhone(b) ? `Phone call · ${b.phone}` : [S.roomFor(state, people, b.teacher_id, b.student_ids), schoolName].filter(Boolean).join(', '),
+    description: S.isPhone(b) ? `${people.teachers.get(b.teacher_id)?.name || 'The teacher'} will call you at ${b.phone}.` : undefined,
   })));
   if (current.length) {
     attachments.push({ filename: 'meetings.ics', content: Buffer.from(calendarFile({ events: current, now })), contentType: 'text/calendar; charset=utf-8; method=PUBLISH' });
@@ -288,13 +301,14 @@ function collapseChanges(changes) {
     }
     if (c.type === 'moved') {
       byBooking.set(c.bookingId, prev.type === 'booked'
-        ? { ...c, type: 'booked', fromDay: null, fromStart: null, fromEnd: null }
-        : { ...c, fromDay: prev.fromDay, fromStart: prev.fromStart, fromEnd: prev.fromEnd });
+        ? { ...c, type: 'booked', fromDay: null, fromStart: null, fromEnd: null, fromMode: null, fromPhone: null }
+        : { ...c, fromDay: prev.fromDay, fromStart: prev.fromStart, fromEnd: prev.fromEnd, fromMode: prev.fromMode, fromPhone: prev.fromPhone });
       continue;
     }
     byBooking.set(c.bookingId, { ...c });
   }
-  return [...byBooking.values()];
+  // Moved and moved back (or switched and switched back): nothing to say.
+  return [...byBooking.values()].filter((c) => c.type !== 'moved' || timeChanged(c) || howChanged(c));
 }
 
 const familyUpdateHandler = {
@@ -381,7 +395,8 @@ const reminderHandler = {
       dayLabel: T.longDay(today.day.day_date),
       firstTime: today.items[0].time,
       items: today.items,
-      where: schoolInfo?.address ? [schoolInfo.name || schoolName, schoolInfo.address].join(', ') : null,
+      // The school's address, unless every meeting that day is a phone call.
+      where: schoolInfo?.address && today.items.some((it) => !it.byPhone) ? [schoolInfo.name || schoolName, schoolInfo.address].join(', ') : null,
       laterLines: later,
       link: link.url,
       cutoffLabel: state.event.cutoff_min != null && now < cutoff ? `by ${timeLabel(state.event.cutoff_min)} tonight` : null,
@@ -472,7 +487,7 @@ const teacherListHandler = {
           at: b.start_min,
           time: timeLabel(b.start_min),
           title: `${b.student_ids.map((id) => people.students.get(id)?.name).filter(Boolean).join(' & ')} · ${subjectFor(teacher, b.student_ids) || 'Meeting'}`,
-          sub: [guardians.slice(0, 2).join(' & '), S.roomFor(state, people, teacherId, b.student_ids)].filter(Boolean).join(' · '),
+          sub: [guardians.slice(0, 2).join(' & '), S.placeFor(state, people, b)].filter(Boolean).join(' · '),
         };
       }),
       ...plan.breaks.filter((br) => br.start >= plan.start && br.start < plan.end).map((br) => ({

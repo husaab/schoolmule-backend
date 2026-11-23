@@ -236,7 +236,13 @@ const getFamilies = handle(async (req, res) => {
 
 const bookingItems = (body = {}) => (Array.isArray(body.items) ? body.items : [body]).map((i) => ({
   teacherId: i.teacherId, dayId: i.dayId, startMin: intOrNull(i.startMin), studentIds: Array.isArray(i.studentIds) ? i.studentIds : [],
+  mode: i.mode, phone: i.phone,
 }));
+
+/** A change to a meeting: a new time (dayId + startMin) and/or how it happens (mode, phone). */
+const changeBody = (body = {}) => ({
+  dayId: body.dayId ?? undefined, startMin: intOrNull(body.startMin) ?? undefined, mode: body.mode, phone: body.phone,
+});
 
 const officeBook = handle(async (req, res) => {
   const ids = await booking.book({ school: req.user.school, eventId: req.params.eventId, user: req.user, kind: 'office', items: bookingItems(req.body) });
@@ -246,7 +252,7 @@ const officeBook = handle(async (req, res) => {
 const officeMove = handle(async (req, res) => {
   await booking.move({
     school: req.user.school, eventId: req.params.eventId, user: req.user, kind: 'office',
-    bookingId: req.params.bookingId, dayId: req.body?.dayId, startMin: intOrNull(req.body?.startMin),
+    bookingId: req.params.bookingId, ...changeBody(req.body),
   });
   return ok(res, { bookingId: req.params.bookingId });
 });
@@ -338,7 +344,7 @@ const parentBook = handle(async (req, res) => {
 const parentMove = handle(async (req, res) => {
   await booking.move({
     school: req.user.school, eventId: req.params.eventId, user: req.user, kind: 'parent',
-    bookingId: req.params.bookingId, dayId: req.body?.dayId, startMin: intOrNull(req.body?.startMin),
+    bookingId: req.params.bookingId, ...changeBody(req.body),
   });
   const { state, people } = await readEvent(req);
   return ok(res, { event: V.parentView(state, people, req.user.userId) });

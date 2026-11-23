@@ -266,6 +266,74 @@ describe('Integration: parent–teacher meetings', () => {
     expect(cancelled.attachments.map((a) => a.filename)).toEqual(['cancelled.ics']);
   });
 
+  it('a family can choose a phone call: the number is kept, the teacher sees it, and switching keeps the time', async () => {
+    const { eventId, mon } = await createEvent();
+    await office('post', `/events/${eventId}/schedule`).send({});
+    await deliverQueuedEmails(pool);
+    getResend().emails.send.mockClear();
+    await pool.query("UPDATE parent_students SET parent_number = '416-555-0100' WHERE parent_id = $1", [AMAL]);
+
+    // The number on file is suggested.
+    let view = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
+    expect(view).toMatchObject({ allowPhone: true, phone: '416-555-0100' });
+
+    const book = (body) => asParent(AMAL, 'post', `/meetings/${eventId}/bookings`).send({ teacherId: SALEH, dayId: mon, startMin: H(15, 30), studentIds: [adam], ...body });
+    expect((await book({ mode: 'phone' })).body.code).toBe('BAD_PHONE');
+    expect((await book({ mode: 'phone', phone: 'call me' })).body.code).toBe('BAD_PHONE');
+    expect((await book({ mode: 'video' })).body.code).toBe('BAD_MODE');
+    const made = await book({ mode: 'phone', phone: ' 647 555  0199 ' });
+    expect(made.status).toBe(201);
+    const [bookingId] = made.body.data.bookingIds;
+    expect(made.body.data.event.bookings[0]).toMatchObject({ bookingId, mode: 'phone', phone: '647 555 0199', room: null });
+    // Next time, the number they gave.
+    expect(made.body.data.event.phone).toBe('647 555 0199');
+
+    // The teacher sees the number to call.
+    const mine = (await asTeacher(SALEH, 'get', '/mine')).body.data.events[0];
+    const slot = mine.days[0].slots.find((s) => s.start === H(15, 30));
+    expect(slot.booking).toMatchObject({ mode: 'phone', phone: '647 555 0199', room: null });
+
+    await deliverQueuedEmails(pool);
+    const confirm = sent().find((m) => m.to[0] === 'amal.parent@example.com');
+    expect(confirm.html).toContain('Adam · Phone call · 647 555 0199');
+    const ics = confirm.attachments.find((a) => a.filename === 'meetings.ics').content.toString();
+    expect(ics).toContain('LOCATION:Phone call · 647 555 0199');
+    expect(ics).toContain('DESCRIPTION:Ms. Layla Saleh will call you at 647 555 0199.');
+
+    // Switching to in person keeps the time; the email says what changed.
+    getResend().emails.send.mockClear();
+    const switched = await asParent(AMAL, 'patch', `/meetings/${eventId}/bookings/${bookingId}`).send({ mode: 'in_person' });
+    expect(switched.status).toBe(200);
+    expect(switched.body.data.event.bookings[0]).toMatchObject({ start: H(15, 30), mode: 'in_person', phone: null, room: 'Grade 5 room' });
+    await deliverQueuedEmails(pool);
+    const update = sent().find((m) => m.to[0] === 'amal.parent@example.com');
+    // A parent's own change lists their meetings as they now stand.
+    expect(update.html).toContain('Adam · Grade 5 room');
+    expect(update.html).not.toContain('Phone call');
+
+    // The office turns phone calls off: parents can't choose one; the office still can.
+    expect((await office('put', `/events/${eventId}`).send({ allowPhone: false })).status).toBe(200);
+    view = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
+    expect(view.allowPhone).toBe(false);
+    const refused = await asParent(AMAL, 'post', `/meetings/${eventId}/bookings`).send({ teacherId: FAROUK, dayId: mon, startMin: H(15, 30), studentIds: [adam], mode: 'phone', phone: '416-555-0100' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('NO_PHONE');
+    const byOffice = await office('post', `/events/${eventId}/bookings`).send({ teacherId: FAROUK, dayId: mon, startMin: H(15, 40), studentIds: [adam, lina], mode: 'phone', phone: '416-555-0100' });
+    expect(byOffice.status).toBe(201);
+    const board = await office('get', `/events/${eventId}/board?dayId=${mon}`);
+    const cell = board.body.data.columns.find((c) => c.teacherId === FAROUK).cells.find((c) => c.start === H(15, 40));
+    expect(cell.booking).toMatchObject({ mode: 'phone', phone: '416-555-0100', room: null });
+
+    // The office switches it to in person: the family is told what changed.
+    await deliverQueuedEmails(pool);
+    getResend().emails.send.mockClear();
+    const [officeBookingId] = byOffice.body.data.bookingIds;
+    expect((await office('patch', `/events/${eventId}/bookings/${officeBookingId}`).send({ mode: 'in_person' })).status).toBe(200);
+    await deliverQueuedEmails(pool);
+    const told = sent().find((m) => m.to[0] === 'amal.parent@example.com');
+    expect(told.html).toContain('Mr. Omar Farouk (Adam &amp; Lina), Mon, Feb 1 at 3:40 PM: now in person');
+  });
+
   it('sends the evening-before reminder, the teachers\' lists and "times still open" once each', async () => {
     const { eventId, mon } = await createEvent();
     await office('put', `/events/${eventId}`).send({ lastCallAt: torontoAt('2027-01-31', H(10)).toISOString() });

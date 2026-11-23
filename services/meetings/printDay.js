@@ -98,7 +98,7 @@ async function printDay({ school, eventId, teacherId, dayId }) {
       title: b.student_ids.map((id) => people.students.get(id)?.name).filter(Boolean).join(' & '),
       sub: [
         [...new Set(b.student_ids.flatMap((id) => people.students.get(id)?.guardians.map((g) => g.name).filter(Boolean) || []))].slice(0, 2).join(' & '),
-        S.roomFor(state, people, teacherId, b.student_ids),
+        S.placeFor(state, people, b),
       ].filter(Boolean).join(' · '),
     })),
     ...plan.breaks.map((br) => ({ at: br.start, time: timeLabel(br.start), title: `Break until ${timeLabel(br.end)}`, muted: true })),

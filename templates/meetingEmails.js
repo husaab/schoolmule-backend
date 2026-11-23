@@ -5,7 +5,7 @@
 // here) and ready-made labels ('4:00 PM', 'Monday, November 30').
 //
 // An item: { time, title, sub } — "4:00 PM", "Ms. Layla Saleh · Homeroom",
-// "Adam · Grade 5 room".
+// "Adam · Grade 5 room" (or "Adam · Phone call · 416-555-0100").
 
 const {
   schoolBrand, escapeHtml, paragraph, finePrint, button, buttonRow, note, facts, signOff, schoolContact, renderEmail,
@@ -53,13 +53,14 @@ const linesHtml = (lines) => lines.map(escapeHtml).join('<br>');
  * @param {string[]} p.dayLines                    "Monday, Nov 30, 3:30–7:30 PM"
  * @param {string} p.datesShort                   "Mon Nov 30 & Tue Dec 1"
  * @param {number} p.slotMinutes
+ * @param {boolean} [p.allowPhone]                families may choose a phone call
  * @param {string} p.changesLabel                 "Until 8 PM the evening before"
  * @param {boolean} p.createAccount               no account yet: create one first
  */
-function inviteEmail({ firstName, children, dayLines, datesShort, slotMinutes, changesLabel, link, planLink, createAccount, schoolName, schoolInfo }) {
+function inviteEmail({ firstName, children, dayLines, datesShort, slotMinutes, allowPhone = false, changesLabel, link, planLink, createAccount, schoolName, schoolInfo }) {
   const subject = `Book your parent–teacher meetings · ${datesShort}`;
   const whose = children.length === 1 ? `${children[0].name}'s teachers` : "your children's teachers";
-  const intro = paragraph(`Booking is now open for meetings with ${escapeHtml(whose)}. Each meeting is ${slotMinutes} minutes, in person. Times are first come, first served.`);
+  const intro = paragraph(`Booking is now open for meetings with ${escapeHtml(whose)}. Each meeting is ${slotMinutes} minutes, ${allowPhone ? 'in person or by phone (you choose when you book)' : 'in person'}. Times are first come, first served.`);
   const rows = facts([
     ...children.map((c) => [c.name, escapeHtml(c.detail)]),
     ['Days', linesHtml(dayLines)],

@@ -11,7 +11,7 @@ const EVENT_COLS = `
   e.event_id, e.school, e.school_year_id, e.title, e.status, e.slot_minutes, e.opens_at, e.opened_at,
   e.cutoff_min, e.use_grade_room, e.siblings_share, e.teachers_edit_hours,
   e.email_invite, e.email_last_call, e.last_call_at, e.last_call_sent_at, e.email_reminder, e.reminder_min,
-  e.email_teacher_list, e.created_at, e.updated_at`;
+  e.email_teacher_list, e.allow_phone, e.created_at, e.updated_at`;
 
 module.exports = {
   // ── Events ──────────────────────────────────────────────────
@@ -38,12 +38,12 @@ module.exports = {
   `,
   // $1 event_id, $2 title, $3 slot_minutes, $4 cutoff_min|null, $5 use_grade_room, $6 siblings_share,
   // $7 teachers_edit_hours, $8 email_invite, $9 email_last_call, $10 last_call_at|null, $11 email_reminder,
-  // $12 reminder_min, $13 email_teacher_list, $14 opens_at|null, $15 user_id
+  // $12 reminder_min, $13 email_teacher_list, $14 opens_at|null, $15 user_id, $16 allow_phone
   updateEvent: `
     UPDATE ptm_events SET
       title = $2, slot_minutes = $3, cutoff_min = $4, use_grade_room = $5, siblings_share = $6,
       teachers_edit_hours = $7, email_invite = $8, email_last_call = $9, last_call_at = $10,
-      email_reminder = $11, reminder_min = $12, email_teacher_list = $13,
+      email_reminder = $11, reminder_min = $12, email_teacher_list = $13, allow_phone = $16,
       opens_at = CASE WHEN status = 'open' THEN opens_at ELSE $14 END,
       updated_by = $15, updated_at = NOW()
     WHERE event_id = $1
@@ -156,17 +156,18 @@ module.exports = {
   // $1 event_id
   selectBookings: `
     SELECT b.booking_id, b.event_id, b.day_id, b.teacher_id, b.start_min, b.end_min, b.booked_by, b.by_office,
-           b.sequence, b.created_at, b.updated_at,
+           b.mode, b.phone, b.sequence, b.created_at, b.updated_at,
            COALESCE(array_agg(bs.student_id ORDER BY bs.student_id) FILTER (WHERE bs.student_id IS NOT NULL), '{}') AS student_ids
     FROM ptm_bookings b LEFT JOIN ptm_booking_students bs ON bs.booking_id = b.booking_id
     WHERE b.event_id = $1
     GROUP BY b.booking_id
     ORDER BY b.start_min
   `,
-  // $1 event_id, $2 day_id, $3 teacher_id, $4 start_min, $5 end_min, $6 booked_by, $7 by_office
+  // $1 event_id, $2 day_id, $3 teacher_id, $4 start_min, $5 end_min, $6 booked_by, $7 by_office,
+  // $8 mode ('in_person' | 'phone'), $9 phone|null
   insertBooking: `
-    INSERT INTO ptm_bookings (event_id, day_id, teacher_id, start_min, end_min, booked_by, by_office)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO ptm_bookings (event_id, day_id, teacher_id, start_min, end_min, booked_by, by_office, mode, phone)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT (teacher_id, day_id, start_min) DO NOTHING
     RETURNING booking_id
   `,
@@ -177,9 +178,10 @@ module.exports = {
     ON CONFLICT DO NOTHING
     RETURNING student_id
   `,
-  // $1 booking_id, $2 day_id, $3 start_min, $4 end_min
+  // A new time and/or a new way to meet. $1 booking_id, $2 day_id, $3 start_min, $4 end_min, $5 mode, $6 phone|null
   moveBooking: `
-    UPDATE ptm_bookings SET day_id = $2, start_min = $3, end_min = $4, sequence = sequence + 1, updated_at = NOW()
+    UPDATE ptm_bookings SET day_id = $2, start_min = $3, end_min = $4, mode = $5, phone = $6,
+      sequence = sequence + 1, updated_at = NOW()
     WHERE booking_id = $1 RETURNING booking_id
   `,
   // $1 booking_id
@@ -217,7 +219,9 @@ module.exports = {
   `,
   // $1 school, $2 school_year_id
   selectStudents: `
-    SELECT student_id, name, grade::text AS grade, homeroom_teacher_id
+    SELECT student_id, name, grade::text AS grade, homeroom_teacher_id,
+           NULLIF(TRIM(mother_email), '') AS mother_email, NULLIF(TRIM(mother_number), '') AS mother_number,
+           NULLIF(TRIM(father_email), '') AS father_email, NULLIF(TRIM(father_number), '') AS father_number
     FROM students WHERE school = $1 AND school_year_id = $2
   `,
   // People by id: teachers (names as parents see them) and guardians. $1 uuid[]
@@ -231,7 +235,7 @@ module.exports = {
   // $1 school, $2 school_year_id
   selectGuardianRows: `
     SELECT ps.parent_student_link_id, ps.student_id, ps.parent_id, NULLIF(TRIM(ps.parent_name), '') AS parent_name,
-           NULLIF(TRIM(ps.parent_email), '') AS parent_email, ps.relation,
+           NULLIF(TRIM(ps.parent_email), '') AS parent_email, ps.relation, NULLIF(TRIM(ps.parent_number), '') AS parent_number,
            u.email AS user_email, u.password = '!' AS invite_pending, u.is_archived, u.role::text AS user_role,
            NULLIF(TRIM(u.first_name), '') AS user_first_name
     FROM parent_students ps

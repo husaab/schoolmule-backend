@@ -16,7 +16,10 @@
 //   that time;
 // - siblings share one meeting only when the school allows it;
 // - parents: only their own children, only while the event is open and
-//   before the day's cutoff. The office books any family, any time.
+//   before the day's cutoff. The office books any family, any time;
+// - in person or a phone call (mode), with the number the teacher calls.
+//   Parents choose a phone call only while the office allows them
+//   (allow_phone); the office can always book one.
 //
 // Each change queues the family's update email (outbox kind
 // ptm_family_update) inside the same transaction.
@@ -129,6 +132,32 @@ function checkTime({ state, people, actor, item, now, extra = [], exceptBookingI
   return { day, slot, studentIds, teacher };
 }
 
+const PHONE_RE = /^\+?[0-9().\-\s]+(?:\s*(?:x|ext\.?)\s*[0-9]+)?$/i;
+
+/** A phone number as typed, tidied, or null if it isn't one. */
+function cleanPhone(raw) {
+  const text = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  const digits = text.replace(/\D/g, '').length;
+  if (text.length > 40 || digits < 7 || digits > 20 || !PHONE_RE.test(text)) return null;
+  return text;
+}
+
+/**
+ * How a meeting happens: { mode, phone }. A field left out keeps the
+ * booking's current value (`current`, when changing one).
+ */
+function howOf(item, event, actor, current = null) {
+  const mode = item.mode === undefined || item.mode === null ? (current?.mode || 'in_person') : item.mode;
+  if (mode !== 'in_person' && mode !== 'phone') throw new MeetingError(400, 'BAD_MODE', 'Choose in person or a phone call');
+  if (mode === 'in_person') return { mode, phone: null };
+  if (actor.kind === 'parent' && !event.allow_phone && current?.mode !== 'phone') {
+    throw new MeetingError(409, 'NO_PHONE', 'These meetings are in person only');
+  }
+  const phone = cleanPhone(item.phone === undefined ? current?.phone : item.phone);
+  if (!phone) throw new MeetingError(400, 'BAD_PHONE', 'Enter the phone number the teacher should call');
+  return { mode, phone };
+}
+
 /** A change as the family's email reads it (kept in the outbox payload: a cancelled booking is gone). */
 function changeOf(state, people, type, b, { from = null } = {}) {
   const day = state.days.find((d) => d.day_id === b.day_id);
@@ -143,10 +172,14 @@ function changeOf(state, people, type, b, { from = null } = {}) {
     day: day?.day_date || null,
     start: b.start_min,
     end: b.end_min,
-    room: S.roomFor(state, people, b.teacher_id, b.student_ids),
+    mode: b.mode || 'in_person',
+    phone: b.phone || null,
+    room: S.isPhone(b) ? null : S.roomFor(state, people, b.teacher_id, b.student_ids),
     fromDay: fromDay?.day_date || null,
     fromStart: from ? from.start_min : null,
     fromEnd: from ? from.end_min : null,
+    fromMode: from ? from.mode || 'in_person' : null,
+    fromPhone: from ? from.phone || null : null,
   };
 }
 
@@ -181,16 +214,17 @@ async function queueFamilyUpdate(client, { state, people, studentIds, changes, b
   return outbox.enqueue(client, rows);
 }
 
-async function insertBooking(client, state, { teacherId, day, slot, studentIds, actor }) {
+async function insertBooking(client, state, { teacherId, day, slot, studentIds, actor, how }) {
   const { rows: [row] } = await client.query(q.insertBooking, [
-    state.event.event_id, day.day_id, teacherId, slot.start, slot.end, actor.userId, actor.kind === 'office',
+    state.event.event_id, day.day_id, teacherId, slot.start, slot.end, actor.userId, actor.kind === 'office', how.mode, how.phone,
   ]);
   if (!row) throw new MeetingError(409, 'TIME_TAKEN', 'Someone just booked that time. Please pick another.');
   const { rows: added } = await client.query(q.insertBookingStudents, [row.booking_id, state.event.event_id, teacherId, studentIds]);
   if (added.length !== studentIds.length) throw new MeetingError(409, 'ALREADY_BOOKED', 'Already booked with this teacher');
   return {
     booking_id: row.booking_id, event_id: state.event.event_id, day_id: day.day_id, teacher_id: teacherId,
-    start_min: slot.start, end_min: slot.end, student_ids: studentIds, sequence: 0,
+    start_min: slot.start, end_min: slot.end, student_ids: studentIds, sequence: 0, mode: how.mode, phone: how.phone,
+    booked_by: actor.userId, updated_at: new Date(),
   };
 }
 
@@ -200,7 +234,7 @@ const actorFor = (people, user, kind) => ({
 
 /**
  * Book one or more meetings at once (Plan my visit books several): all or
- * nothing. items: [{ teacherId, dayId, startMin, studentIds }].
+ * nothing. items: [{ teacherId, dayId, startMin, studentIds, mode?, phone? }].
  * @returns {Promise<string[]>} the new booking ids
  */
 async function book({ school, eventId, user, kind, items, now = new Date() }) {
@@ -211,8 +245,9 @@ async function book({ school, eventId, user, kind, items, now = new Date() }) {
     const actor = actorFor(people, user, kind);
     const made = [];
     for (const item of items) {
+      const how = howOf(item, state.event, actor);
       const { day, slot, studentIds } = checkTime({ state, people, actor, item, now, extra: made });
-      made.push(await insertBooking(client, state, { teacherId: item.teacherId, day, slot, studentIds, actor }));
+      made.push(await insertBooking(client, state, { teacherId: item.teacherId, day, slot, studentIds, actor, how }));
     }
     await queueFamilyUpdate(client, {
       state, people, studentIds: made.flatMap((b) => b.student_ids),
@@ -239,19 +274,31 @@ function checkParentCanChange(state, actor, booking, now) {
   }
 }
 
-/** Move a meeting to another of the same teacher's times. */
-async function move({ school, eventId, user, kind, bookingId, dayId, startMin, now = new Date() }) {
+/**
+ * Change a meeting: another of the same teacher's times, and/or in person ↔
+ * a phone call (or a new number). Anything left out stays as it is.
+ */
+async function move({ school, eventId, user, kind, bookingId, dayId, startMin, mode, phone, now = new Date() }) {
   return withEvent(school, eventId, async ({ client, state, people }) => {
     const actor = actorFor(people, user, kind);
     const booking = bookingFor(state, actor, bookingId);
     checkParentCanChange(state, actor, booking, now);
-    if (booking.day_id === dayId && booking.start_min === startMin) return bookingId;
-    const { day, slot } = checkTime({
-      state, people, actor, now, exceptBookingId: bookingId,
-      item: { teacherId: booking.teacher_id, dayId, startMin, studentIds: booking.student_ids },
-    });
-    await client.query(q.moveBooking, [bookingId, day.day_id, slot.start, slot.end]);
-    const moved = { ...booking, day_id: day.day_id, start_min: slot.start, end_min: slot.end, sequence: booking.sequence + 1 };
+    const how = howOf({ mode, phone }, state.event, actor, booking);
+    const toDay = dayId ?? booking.day_id;
+    const toStart = startMin ?? booking.start_min;
+    const sameTime = booking.day_id === toDay && booking.start_min === toStart;
+    const sameHow = how.mode === (booking.mode || 'in_person') && how.phone === (booking.phone || null);
+    if (sameTime && sameHow) return bookingId;
+    const { day, slot } = sameTime
+      ? { day: state.days.find((d) => d.day_id === booking.day_id), slot: { start: booking.start_min, end: booking.end_min } }
+      : checkTime({
+        state, people, actor, now, exceptBookingId: bookingId,
+        item: { teacherId: booking.teacher_id, dayId: toDay, startMin: toStart, studentIds: booking.student_ids },
+      });
+    await client.query(q.moveBooking, [bookingId, day.day_id, slot.start, slot.end, how.mode, how.phone]);
+    const moved = {
+      ...booking, day_id: day.day_id, start_min: slot.start, end_min: slot.end, mode: how.mode, phone: how.phone, sequence: booking.sequence + 1,
+    };
     await queueFamilyUpdate(client, {
       state, people, studentIds: booking.student_ids,
       changes: [changeOf(state, people, 'moved', moved, { from: booking })], byOffice: kind === 'office', actorId: user.userId,
@@ -278,4 +325,5 @@ async function cancel({ school, eventId, user, kind, bookingId, now = new Date()
 
 module.exports = {
   MeetingError, FAMILY_UPDATE, withEvent, checkTime, changeOf, queueFamilyUpdate, childrenOf, book, move, cancel, joinNames,
+  cleanPhone, howOf,
 };

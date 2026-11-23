@@ -2587,6 +2587,7 @@ CREATE TABLE IF NOT EXISTS ptm_events (
   email_reminder       BOOLEAN NOT NULL DEFAULT TRUE,
   reminder_min         SMALLINT NOT NULL DEFAULT 1080 CHECK (reminder_min BETWEEN 0 AND 1439),
   email_teacher_list   BOOLEAN NOT NULL DEFAULT TRUE,
+  allow_phone          BOOLEAN NOT NULL DEFAULT TRUE,
   created_by           UUID REFERENCES users(user_id) ON DELETE SET NULL,
   updated_by           UUID REFERENCES users(user_id) ON DELETE SET NULL,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2666,11 +2667,15 @@ CREATE TABLE IF NOT EXISTS ptm_bookings (
   end_min      SMALLINT NOT NULL CHECK (end_min BETWEEN 1 AND 1440),
   booked_by    UUID REFERENCES users(user_id) ON DELETE SET NULL,
   by_office    BOOLEAN NOT NULL DEFAULT FALSE,
+  -- ptm_phone_calls_migration.sql
+  mode         TEXT NOT NULL DEFAULT 'in_person' CONSTRAINT ptm_bookings_mode_ck CHECK (mode IN ('in_person', 'phone')),
+  phone        TEXT,
   -- Bumped on every move, for calendar updates (ICS SEQUENCE).
   sequence     INT NOT NULL DEFAULT 0,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT ptm_bookings_window_ck CHECK (end_min > start_min),
+  CONSTRAINT ptm_bookings_phone_ck CHECK (mode <> 'phone' OR (phone IS NOT NULL AND length(phone) BETWEEN 7 AND 40)),
   -- One family per teacher time (overlaps are checked in the transaction).
   CONSTRAINT ptm_bookings_teacher_time UNIQUE (teacher_id, day_id, start_min)
 );

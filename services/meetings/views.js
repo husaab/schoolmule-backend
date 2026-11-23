@@ -36,8 +36,16 @@ function eventView(state, now) {
     emailReminder: e.email_reminder,
     reminderMin: e.reminder_min,
     emailTeacherList: e.email_teacher_list,
+    allowPhone: e.allow_phone,
   };
 }
+
+/** How a booking happens, for every page: in person in `room`, or a phone call to `phone`. */
+const howView = (state, people, b) => ({
+  mode: S.isPhone(b) ? 'phone' : 'in_person',
+  phone: S.isPhone(b) ? b.phone : null,
+  room: S.isPhone(b) ? null : S.roomFor(state, people, b.teacher_id, b.student_ids),
+});
 
 const dayBase = (state, day, now) => ({
   dayId: day.day_id,
@@ -62,6 +70,8 @@ function parentView(state, people, userId, now = new Date()) {
   const family = new Set([...S.familyStudents(people, [...childIds]), ...childIds]);
   return {
     ...eventView(state, now),
+    // The number a phone call meeting suggests (theirs from the last one, else the file's).
+    phone: S.phoneFor(state, people, [...childIds], userId),
     days: state.days.map((day) => ({ ...dayBase(state, day, now), window: dayWindow(state, people, day) })),
     children: kids.map((s) => ({
       studentId: s.id, name: s.name, firstName: s.firstName, grade: s.grade, gradeLabel: S.gradeLabel(s.grade),
@@ -99,7 +109,7 @@ function parentView(state, people, userId, now = new Date()) {
           start: b.start_min,
           end: b.end_min,
           studentIds: b.student_ids,
-          room: S.roomFor(state, people, b.teacher_id, b.student_ids),
+          ...howView(state, people, b),
           canChange: now < T.cutoffAt(state.event, day),
           byOffice: b.by_office,
         };
@@ -113,7 +123,7 @@ function parentView(state, people, userId, now = new Date()) {
 function bookingView(state, people, teacher, b) {
   return {
     bookingId: b.booking_id,
-    room: S.roomFor(state, people, teacher.id, b.student_ids),
+    ...howView(state, people, b),
     byOffice: b.by_office,
     students: b.student_ids.map((id) => {
       const s = people.students.get(id);
@@ -279,7 +289,7 @@ function boardView(state, people, dayId, now = new Date()) {
             booking: {
               bookingId: b.booking_id, byOffice: b.by_office, studentIds: b.student_ids,
               family: kids[0]?.lastName || 'Family', kids: joinNames(kids.map((k) => k.firstName)),
-              room: S.roomFor(state, people, t.id, b.student_ids),
+              ...howView(state, people, b),
             },
           };
         }
@@ -341,6 +351,7 @@ function familiesView(state, people, query = '') {
         bookedStudentIds: studentIds.filter((id) => state.bookings.some((b) => b.teacher_id === teacher.id && b.student_ids.includes(id))),
       })),
       bookings: state.bookings.filter((b) => b.student_ids.some((id) => ids.has(id))).length,
+      phone: S.phoneFor(state, people, [...ids]),
     });
     if (out.length >= 25) break;
   }

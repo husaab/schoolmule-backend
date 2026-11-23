@@ -103,6 +103,7 @@ function updateSettings({ school, eventId, userId, body }) {
       bool(body.teachersEditHours, e.teachers_edit_hours), bool(body.emailInvite, e.email_invite),
       bool(body.emailLastCall, e.email_last_call), next.lastCallAt, bool(body.emailReminder, e.email_reminder),
       next.reminderMin, bool(body.emailTeacherList, e.email_teacher_list), next.opensAt, userId,
+      bool(body.allowPhone, e.allow_phone),
     ]);
   });
 }
