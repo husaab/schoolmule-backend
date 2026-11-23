@@ -23,7 +23,15 @@ const RUN_COLUMNS = `
    AND GREATEST(r.queued_at, (SELECT MAX(f.finished_at) FROM report_generation_items f WHERE f.run_id = r.run_id))
        < NOW() - interval '5 minutes') AS stalled`;
 
+// A run a page still lists (r = report_generation_runs): not dismissed, and
+// running or finished lately. Shared with the admin overview's counts.
+const LISTED_RUN = `r.dismissed_at IS NULL
+      AND (r.finished_at IS NULL
+           OR r.finished_at > NOW() - CASE WHEN r.student_count = 1 THEN interval '1 minute' ELSE interval '14 days' END)`;
+
 const reportGenerationQueries = {
+  LISTED_RUN,
+
   // One Generate at a time per school, report and term, so two presses at
   // once can't both queue the same student. $1 key text
   lockRuns: `SELECT pg_advisory_xact_lock(hashtext($1))`,
@@ -67,9 +75,7 @@ const reportGenerationQueries = {
     LEFT JOIN users u ON u.user_id = r.created_by
     WHERE r.school = $1 AND r.school_year_id IS NOT DISTINCT FROM $2::uuid
       AND r.report_type = $3 AND r.term = $4
-      AND r.dismissed_at IS NULL
-      AND (r.finished_at IS NULL
-           OR r.finished_at > NOW() - CASE WHEN r.student_count = 1 THEN interval '1 minute' ELSE interval '14 days' END)
+      AND ${LISTED_RUN}
     ORDER BY r.created_at, r.run_id`,
 
   // Runs by id, in the caller's school. $1 run ids, $2 school

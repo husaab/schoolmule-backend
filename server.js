@@ -8,6 +8,7 @@ const userRoutes = require("./routes/user.routes");
 const adminUserRoutes = require("./routes/adminUser.routes");
 const adminApprovalRoutes = require("./routes/adminApproval.routes");
 const adminStudentRequestRoutes = require("./routes/adminStudentRequest.routes");
+const adminOverviewRoutes = require("./routes/adminOverview.routes");
 const studentRoutes = require("./routes/student.routes")
 const classRoutes = require("./routes/class.routes")
 const assessmentRoutes = require("./routes/assessment.routes")
@@ -159,6 +160,7 @@ app.use("/api/admin/roles", staffRoleRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/admin/approvals", adminApprovalRoutes);
 app.use("/api/admin/student-requests", adminStudentRequestRoutes);
+app.use("/api/admin/overview", adminOverviewRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/classes", classRoutes);
 app.use("/api/assessments", assessmentRoutes);

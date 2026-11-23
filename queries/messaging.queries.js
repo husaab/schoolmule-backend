@@ -19,17 +19,13 @@ const { inCurrentTerm, selectCurrentTerm } = require('./termScope');
 const { GRADE_RANK } = require('../utils/gradeRank');
 const { studentAvatarSql, studentPhotoSql } = require('../utils/avatar');
 const { PERSON_NAME } = require('./personName');
+// A real address on the student file, and one the office hasn't removed
+// (shared with the admin overview's "no guardian" count).
+const { IS_EMAIL, OFFICE_REMOVED } = require('./guardianSql');
 
 // A typed-in guardian stays editable from the New message window until they
 // are invited. Anyone else on the list is changed by the office.
 const GUARDIAN_EDITABLE = (ps) => `(${ps}.source IS NOT DISTINCT FROM 'typed' AND ${ps}.parent_id IS NULL AND ${ps}.invited_at IS NULL)`;
-
-// Student files hold whatever was imported, so check it really is one address.
-const IS_EMAIL = (e) => `TRIM(${e}) ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'`;
-
-// The office took this address off this student: reading it from the file again
-// would undo that.
-const OFFICE_REMOVED = (s, e) => `EXISTS (SELECT 1 FROM guardian_removals gr WHERE gr.student_id = ${s}.student_id AND gr.email = LOWER(TRIM(${e})))`;
 
 // Everyone staff can reach about student `s`: guardian rows, then the mother
 // and father on the student file, one entry per address (a guardian row wins).

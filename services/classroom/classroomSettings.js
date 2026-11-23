@@ -64,9 +64,12 @@ const toSettings = (row) => ({
   updatedAt: iso(row.updated_at),
 });
 
-/** ClassroomSettings for a school: the saved row, or the defaults. */
-async function getSettings(school) {
-  const { rows } = await db.query(q.selectSettings, [school]);
+/**
+ * ClassroomSettings for a school: the saved row, or the defaults. `client`
+ * reads on a checked-out client instead of the pool (the admin overview).
+ */
+async function getSettings(school, client = db) {
+  const { rows } = await client.query(q.selectSettings, [school]);
   return rows[0] ? toSettings(rows[0]) : { ...DEFAULTS, studentEmailDomains: [], updatedAt: null };
 }
 

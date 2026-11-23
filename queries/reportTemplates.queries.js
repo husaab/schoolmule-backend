@@ -6,13 +6,18 @@
 // statement that takes an id also takes the school, so another school's id
 // reads as missing.
 
+// Whether the draft differs from what is published (never published counts).
+// t = report_templates, v = its published report_template_versions row
+// (LEFT JOIN). Shared with the admin overview's count.
+const HAS_UNPUBLISHED_CHANGES = '(v.version_id IS NULL OR v.doc IS DISTINCT FROM t.draft_doc)';
+
 // One template row as the designer lists it: no docs, only whether the draft
 // differs from what is published (compared in Postgres, so the docs never
 // leave the database for a list).
 const SUMMARY_COLUMNS = `
     t.template_id, t.name, t.doc_type, t.base_key, t.draft_rev, t.updated_at,
     t.published_version_id, v.version_no AS published_version_no, v.published_at,
-    (v.version_id IS NULL OR v.doc IS DISTINCT FROM t.draft_doc) AS has_unpublished_changes,
+    ${HAS_UNPUBLISHED_CHANGES} AS has_unpublished_changes,
     (SELECT COUNT(*)::int FROM report_template_assignments a WHERE a.template_id = t.template_id) AS assigned_count`;
 
 // $1 school
@@ -359,6 +364,7 @@ const clearEngineProgressReport = `
   `;
 
 module.exports = {
+  HAS_UNPUBLISHED_CHANGES,
   listTemplates,
   selectTemplateSummary,
   selectTemplateDetail,
