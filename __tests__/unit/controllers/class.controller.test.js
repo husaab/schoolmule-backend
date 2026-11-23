@@ -100,7 +100,7 @@ describe('Class Controller', () => {
         iconKey: 'quran', iconUrl: '/class-icons/quran.svg', color: 'emerald',
         isDefault: { banner: true, icon: true, color: true },
       });
-      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false, onReportCard: true, reportTeacherName: null });
+      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false, onReportCard: true, reportTeacherName: null, progressCommentsOnly: false, progressGoals: null });
       expect(res.body.data.archivedAt).toBeNull();
     });
 
@@ -117,7 +117,7 @@ describe('Class Controller', () => {
         family: 'math', bannerKey: 'art', color: 'rose', iconKey: 'math',
         isDefault: { banner: false, icon: true, color: false },
       });
-      expect(res.body.data.options).toEqual({ acceptLate: false, emailNewPosts: true, showClassAverage: true, onReportCard: true, reportTeacherName: null });
+      expect(res.body.data.options).toEqual({ acceptLate: false, emailNewPosts: true, showClassAverage: true, onReportCard: true, reportTeacherName: null, progressCommentsOnly: false, progressGoals: null });
       expect(res.body.data.archivedAt).toBe('2026-10-01T12:00:00.000Z');
     });
 

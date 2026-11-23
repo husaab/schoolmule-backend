@@ -58,7 +58,8 @@ describe('school year rollover', () => {
     await pool.query(`UPDATE students SET avatar = $2::jsonb WHERE student_id = $1`, [movingKid, JSON.stringify(spec)]);
     await pool.query(
       `UPDATE classes SET banner_key = 'art', icon_key = 'science', color = 'purple', accept_late = FALSE,
-              email_new_posts = FALSE, show_class_average = TRUE, archived_at = NOW()
+              email_new_posts = FALSE, show_class_average = TRUE, archived_at = NOW(), on_report_card = FALSE,
+              report_teacher_name = 'Supervisor', progress_comments_only = TRUE, progress_goals = 'Pray well.'
        WHERE school_year_id = $1`, [year25]);
 
     const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
@@ -73,7 +74,8 @@ describe('school year rollover', () => {
     const { rows: [cls] } = await pool.query(`SELECT * FROM classes WHERE school_year_id = $1`, [year26]);
     expect(cls).toMatchObject({
       banner_key: 'art', banner_path: null, icon_key: 'science', color: 'purple', accept_late: false,
-      email_new_posts: false, show_class_average: true, archived_at: null,
+      email_new_posts: false, show_class_average: true, archived_at: null, on_report_card: false,
+      report_teacher_name: 'Supervisor', progress_comments_only: true, progress_goals: 'Pray well.',
     });
     const { rows: [kid] } = await pool.query(`SELECT avatar FROM students WHERE school_year_id = $1`, [year26]);
     expect(kid.avatar).toEqual(spec);

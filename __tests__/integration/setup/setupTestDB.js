@@ -120,6 +120,7 @@ const ALL_TABLES = [
   'parent_students',
   'staff',
   'class_comment_banks',
+  'report_subject_layouts',
   'class_teachers',
   'class_students',
   'assessments',

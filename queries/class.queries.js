@@ -27,6 +27,8 @@ const classQueries = {
       show_class_average,
       on_report_card,
       report_teacher_name,
+      progress_comments_only,
+      progress_goals,
       archived_at,
       created_at,
       last_modified_at
@@ -71,6 +73,8 @@ const classQueries = {
       show_class_average,
       on_report_card,
       report_teacher_name,
+      progress_comments_only,
+      progress_goals,
       archived_at,
       created_at,
       last_modified_at
@@ -103,6 +107,8 @@ const classQueries = {
       show_class_average,
       on_report_card,
       report_teacher_name,
+      progress_comments_only,
+      progress_goals,
       archived_at,
       created_at,
       last_modified_at
@@ -138,6 +144,8 @@ const classQueries = {
       show_class_average,
       on_report_card,
       report_teacher_name,
+      progress_comments_only,
+      progress_goals,
       archived_at,
       created_at,
       last_modified_at
@@ -300,6 +308,8 @@ const classQueries = {
         c.show_class_average,
         c.on_report_card,
         c.report_teacher_name,
+        c.progress_comments_only,
+        c.progress_goals,
         c.archived_at,
         c.created_at,
         c.last_modified_at
@@ -328,6 +338,8 @@ const classQueries = {
         c.show_class_average,
         c.on_report_card,
         c.report_teacher_name,
+        c.progress_comments_only,
+        c.progress_goals,
         c.archived_at,
         c.created_at,
         c.last_modified_at
@@ -394,7 +406,9 @@ const classQueries = {
           email_new_posts    = s.email_new_posts,
           show_class_average = s.show_class_average,
           on_report_card     = s.on_report_card,
-          report_teacher_name = s.report_teacher_name
+          report_teacher_name = s.report_teacher_name,
+          progress_comments_only = s.progress_comments_only,
+          progress_goals     = s.progress_goals
       FROM classes s
       WHERE n.class_id = $1 AND s.class_id = $2
     `,

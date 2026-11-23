@@ -140,6 +140,7 @@ const executeRollover = async (req, res, next) => {
           c.banner_key, c.banner_path, c.icon_key, c.color,
           c.accept_late, c.email_new_posts, c.show_class_average,
           c.on_report_card ?? true, c.report_teacher_name ?? null,
+          c.progress_comments_only ?? false, c.progress_goals ?? null,
         ]);
         await client.query(rolloverQueries.copyClassTeachers, [rows[0].class_id, c.class_id]);
         await client.query(commentBankQueries.copyCommentBank, [rows[0].class_id, c.class_id, req.user.userId]);

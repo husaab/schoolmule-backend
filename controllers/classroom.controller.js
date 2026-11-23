@@ -352,27 +352,38 @@ const deleteBanner = resetter(identityQueries.clearBanner, 'remove the class ban
 const resetIdentity = resetter(identityQueries.resetIdentity, 'reset the class look');
 
 const REPORT_TEACHER_NAME_MAX = 80;
+const PROGRESS_GOALS_MAX = 1000;
 
 // PATCH /api/classroom/classes/:classId/options
-//   { acceptLate?, emailNewPosts?, showClassAverage?, onReportCard?, reportTeacherName? }
+//   { acceptLate?, emailNewPosts?, showClassAverage?, onReportCard?, reportTeacherName?,
+//     progressCommentsOnly?, progressGoals? }
 // reportTeacherName: the name progress reports print after the subject instead
 // of the teacher's ("Salaat – Supervisor"); '' or null goes back to the teacher.
+// progressCommentsOnly: the progress report prints progressGoals (the same for
+// every student) and the teacher's comment, with no ratings (Salaat).
 const updateOptions = async (req, res) => {
   const body = req.body || {};
-  const switches = ['acceptLate', 'emailNewPosts', 'showClassAverage', 'onReportCard'];
-  if (![...switches, 'reportTeacherName'].some((k) => has(body, k))) {
-    return failed(res, 400, 'Send acceptLate, emailNewPosts, showClassAverage, onReportCard or reportTeacherName');
+  const switches = ['acceptLate', 'emailNewPosts', 'showClassAverage', 'onReportCard', 'progressCommentsOnly'];
+  const texts = ['reportTeacherName', 'progressGoals'];
+  if (![...switches, ...texts].some((k) => has(body, k))) {
+    return failed(res, 400, `Send ${[...switches, ...texts].join(', ')}`);
   }
   for (const k of switches) {
     if (has(body, k) && typeof body[k] !== 'boolean') return failed(res, 400, `${k} must be true or false`);
   }
-  const sendsName = has(body, 'reportTeacherName');
-  if (sendsName && body.reportTeacherName != null && typeof body.reportTeacherName !== 'string') {
-    return failed(res, 400, 'reportTeacherName must be text');
+  for (const k of texts) {
+    if (has(body, k) && body[k] != null && typeof body[k] !== 'string') return failed(res, 400, `${k} must be text`);
   }
+  const sendsName = has(body, 'reportTeacherName');
   const reportTeacherName = sendsName ? String(body.reportTeacherName ?? '').replace(/\s+/g, ' ').trim() || null : null;
   if (reportTeacherName && reportTeacherName.length > REPORT_TEACHER_NAME_MAX) {
     return failed(res, 400, `The name on reports can be at most ${REPORT_TEACHER_NAME_MAX} characters`);
+  }
+  // A paragraph: line breaks kept, ends trimmed.
+  const sendsGoals = has(body, 'progressGoals');
+  const progressGoals = sendsGoals ? String(body.progressGoals ?? '').replace(/\r\n?/g, '\n').trim() || null : null;
+  if (progressGoals && progressGoals.length > PROGRESS_GOALS_MAX) {
+    return failed(res, 400, `The goals paragraph can be at most ${PROGRESS_GOALS_MAX} characters`);
   }
   try {
     const { rows } = await db.query(identityQueries.updateOptions, [
@@ -383,6 +394,9 @@ const updateOptions = async (req, res) => {
       has(body, 'onReportCard') ? body.onReportCard : null,
       sendsName,
       reportTeacherName,
+      has(body, 'progressCommentsOnly') ? body.progressCommentsOnly : null,
+      sendsGoals,
+      progressGoals,
     ]);
     if (!rows[0]) return failed(res, 404, 'Class not found');
     return ok(res, { classId: rows[0].class_id, options: optionsOf(rows[0]) });

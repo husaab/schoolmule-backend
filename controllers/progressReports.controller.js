@@ -11,6 +11,7 @@ const supabase = require('../config/supabaseClient');
 const { getProgressReportHTML } = require('../templates/progressReportTemplate');
 // Report engine (REPORT_ENGINE): see services/reportEngine/generate.js.
 const { withReportEngine, reportEngineSession, progressReportResult } = require('../services/reportEngine/generate');
+const { applySubjectLayout, loadSubjectLayout } = require('../services/reportEngine/subjectLayout');
 
 /**
  * Resolve a class's own term name (canonical, via the terms FK). Progress-report
@@ -469,7 +470,8 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
   const { rows: classRows } = await db.query(`
     SELECT c.class_id, c.subject,
            COALESCE(NULLIF(btrim(c.report_teacher_name), ''), c.teacher_name) AS teacher_name,
-           c.grade as class_grade
+           c.grade as class_grade,
+           c.progress_comments_only, c.progress_goals
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1
@@ -482,7 +484,7 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
   }
 
   // 5. Get progress report feedback for each class
-  const progressData = [];
+  let progressData = [];
   for (const classInfo of classRows) {
     const { rows: feedbackRows } = await db.query(
       progressReportsQueries.getProgressReportFeedback,
@@ -490,17 +492,23 @@ const legacyGenerateSingleProgressReport = async (studentId, term, opts = {}) =>
     );
 
     const feedback = feedbackRows.length > 0 ? feedbackRows[0] : null;
-    
+    // A goals-and-comment class (Salaat) prints its goals and the comment only.
+    const commentsOnly = classInfo.progress_comments_only === true;
+
     progressData.push({
       subject: classInfo.subject,
       teacherName: classInfo.teacher_name,
       classGrade: classInfo.class_grade,
-      coreStandards: feedback ? feedback.core_standards : null,
-      workHabit: feedback ? feedback.work_habit : null,
-      behavior: feedback ? feedback.behavior : null,
-      comment: feedback ? feedback.comment : null
+      coreStandards: feedback && !commentsOnly ? feedback.core_standards : null,
+      workHabit: feedback && !commentsOnly ? feedback.work_habit : null,
+      behavior: feedback && !commentsOnly ? feedback.behavior : null,
+      comment: feedback ? feedback.comment : null,
+      commentsOnly,
+      goals: commentsOnly ? classInfo.progress_goals : null,
     });
   }
+  // The school's subject headings, when it has them (else A to Z, no headings).
+  progressData = applySubjectLayout(progressData, await loadSubjectLayout(db, student.school), 'subject');
 
   // 6. Get school information (if available)
   const { rows: schoolRows } = await db.query(`

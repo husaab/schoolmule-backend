@@ -529,6 +529,78 @@ describe('Integration: ReportData assembler matches the legacy generators', () =
     expect(again.subjects.map((s) => [s.name, s.mark])).toEqual([['English', 85], ['Salaat', 'I']]);
   });
 
+  it('3c. a goals-and-comment class (Salaat) and the school\'s subject headings, on both paths', async () => {
+    const studentId = await seedStudent({ name: 'Test Student Q', grade: '2' });
+    const english = await seedClass({ studentId, subject: 'English', grade: '2', term: T1 });
+    await seedClass({ studentId, subject: 'Math', grade: '2', term: T1 });
+    await seedClass({ studentId, subject: 'Art', grade: '2', term: T1 });
+    const salaat = await seedClass({ studentId, subject: 'Salaat', grade: '2', term: T1, teacherName: 'Teacher Sample' });
+    const goals = 'Salah is a special gift.\nIt deserves our time.';
+    await pool.query(
+      `UPDATE classes SET on_report_card = false, report_teacher_name = 'Supervisor',
+              progress_comments_only = true, progress_goals = $2 WHERE class_id = $1`,
+      [salaat, goals],
+    );
+    // The rating still saved (it picked the comment) but never prints.
+    await pool.query(
+      `INSERT INTO progress_report_feedback (student_id, class_id, term, core_standards, work_habit, behavior, comment)
+       VALUES ($1, $2, $3, 'Meeting Common Core Standards', 'G', 'E', 'Is making very good progress.'),
+              ($1, $4, $3, 'Meeting Common Core Standards', 'E', 'G', 'Reads every day.')`,
+      [studentId, salaat, T1, english],
+    );
+
+    // No layout yet: A to Z, no headings; Salaat already goals and comment only.
+    let P = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+    expect(P.subjects.map((s) => s.name)).toEqual(['Art', 'English', 'Math', 'Salaat']);
+    expect(P.subjects.every((s) => s.section === undefined)).toBe(true);
+    expect(P.subjects[3]).toMatchObject({
+      teacher: 'Supervisor', commentsOnly: true, goals, comment: 'Is making very good progress.',
+      workHabits: '', behaviour: '', coreStandards: '',
+    });
+    expect(P.subjects[1]).toMatchObject({ workHabits: 'E', behaviour: 'G', coreStandards: 'Meeting Common Core Standards' });
+    expect(P.subjects[1].commentsOnly).toBeUndefined();
+
+    // The school's headings: its order, its names, the rest under "Other Subjects".
+    const sections = [
+      { heading: 'Language & Literacy', subjects: [{ name: 'English Language Arts', classes: ['English'] }] },
+      { heading: 'Religious Studies', subjects: [{ name: 'Salaat', classes: [] }] },
+      { heading: 'The Arts', subjects: [{ name: 'Visual Arts', classes: ['Art', 'Arts'] }] },
+    ];
+    await pool.query('INSERT INTO report_subject_layouts (school, sections) VALUES ($1, $2::jsonb)', [SCHOOL, JSON.stringify(sections)]);
+    try {
+      P = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+      expect(P.subjects.map((s) => [s.section, s.name])).toEqual([
+        ['Language & Literacy', 'English Language Arts'],
+        ['Religious Studies', 'Salaat'],
+        ['The Arts', 'Visual Arts'],
+        ['Other Subjects', 'Math'],
+      ]);
+
+      // Legacy: the same order, names, headings and Salaat box.
+      const res = fakeRes();
+      await progressReportsController.generateProgressReport({ body: { studentId, term: T1 } }, res);
+      expect(res.body.status).toBe('success');
+      const { args: L, html } = lastCall(progressTemplate.getProgressReportHTML);
+      expect(L.progressData.map((p) => [p.section, p.subject])).toEqual(P.subjects.map((s) => [s.section, s.name]));
+      expect(L.progressData[1]).toMatchObject({
+        commentsOnly: true, goals, comment: 'Is making very good progress.', workHabit: null, behavior: null, coreStandards: null,
+      });
+      expect(html).toContain('Expectations/Goals:');
+      expect(html).toContain('subject-section-heading">Religious Studies');
+
+      // Another school's layout never applies.
+      await pool.query('DELETE FROM report_subject_layouts WHERE school = $1', [SCHOOL]);
+      P = await assembleReportData({ studentId, docType: 'progress_report', term: T1 });
+      expect(P.subjects.map((s) => s.name)).toEqual(['Art', 'English', 'Math', 'Salaat']);
+    } finally {
+      await pool.query('DELETE FROM report_subject_layouts WHERE school = $1', [SCHOOL]);
+    }
+
+    // Report cards ignore both: Salaat stays off, the class names stay.
+    const R = await assembleReportData({ studentId, docType: 'report_card', term: T1 });
+    expect(R.subjects.map((s) => s.name)).toEqual(['Art', 'English', 'Math']);
+  });
+
   async function seedJK(docType, studentId) {
     const domain = async (name, sort) => (await pool.query(
       `INSERT INTO jk_skill_domains (document_type, name, sort_order, school) VALUES ($1, $2, $3, $4) RETURNING domain_id`,

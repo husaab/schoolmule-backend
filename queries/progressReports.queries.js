@@ -42,7 +42,8 @@ const getStudentProgressReportFeedback = `
     prf.created_at,
     c.subject,
     c.grade as class_grade,
-    c.teacher_name
+    c.teacher_name,
+    c.progress_comments_only
   FROM progress_report_feedback prf
   JOIN classes c ON prf.class_id = c.class_id
   WHERE prf.student_id = $1

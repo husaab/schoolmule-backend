@@ -294,7 +294,7 @@ describe('Integration: class identity, options, archive, student avatar', () => 
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({
         classId,
-        options: { acceptLate: false, emailNewPosts: true, showClassAverage: true, onReportCard: true, reportTeacherName: null },
+        options: { acceptLate: false, emailNewPosts: true, showClassAverage: true, onReportCard: true, reportTeacherName: null, progressCommentsOnly: false, progressGoals: null },
       });
       expect(await row()).toMatchObject({ accept_late: false, email_new_posts: true, show_class_average: true });
     });
@@ -304,6 +304,7 @@ describe('Integration: class identity, options, archive, student avatar', () => 
       const res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ emailNewPosts: false });
       expect(res.body.data.options).toEqual({
         acceptLate: false, emailNewPosts: false, showClassAverage: false, onReportCard: true, reportTeacherName: null,
+        progressCommentsOnly: false, progressGoals: null,
       });
     });
 
@@ -331,9 +332,32 @@ describe('Integration: class identity, options, archive, student avatar', () => 
       expect(res.body.data.options.onReportCard).toBe(true);
     });
 
+    it('prints a class as goals and comment only, and sets, tidies and clears its goals paragraph', async () => {
+      let res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher)
+        .send({ progressCommentsOnly: true, progressGoals: '  Salah is a gift.\r\nEvery effort counts.  ' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.options).toMatchObject({ progressCommentsOnly: true, progressGoals: 'Salah is a gift.\nEvery effort counts.' });
+      expect(await row()).toMatchObject({ progress_comments_only: true, progress_goals: 'Salah is a gift.\nEvery effort counts.' });
+
+      // Another option leaves both alone.
+      res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ acceptLate: false });
+      expect(res.body.data.options).toMatchObject({ progressCommentsOnly: true, progressGoals: 'Salah is a gift.\nEvery effort counts.' });
+
+      for (const progressGoals of ['  ', null]) {
+        res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ progressGoals });
+        expect(res.body.data.options.progressGoals).toBeNull();
+      }
+      res = await authenticatedRequest('patch', `${BASE}/${classId}/options`, asTeacher).send({ progressCommentsOnly: false });
+      expect(res.body.data.options.progressCommentsOnly).toBe(false);
+      expect((await row()).progress_comments_only).toBe(false);
+    });
+
     it.each([
       ['a non-boolean', { acceptLate: 'no' }],
       ['a non-boolean onReportCard', { onReportCard: 'false' }],
+      ['a non-boolean progressCommentsOnly', { progressCommentsOnly: 1 }],
+      ['goals that are not text', { progressGoals: ['Salah'] }],
+      ['goals over 1000 characters', { progressGoals: 'S'.repeat(1001) }],
       ['a name that is not text', { reportTeacherName: 7 }],
       ['a name over 80 characters', { reportTeacherName: 'S'.repeat(81) }],
       ['an empty body', {}],
@@ -473,7 +497,7 @@ describe('Integration: class identity, options, archive, student avatar', () => 
         iconKey: 'science', iconUrl: '/class-icons/science.svg', color: 'teal',
         isDefault: { banner: true, icon: true, color: true },
       });
-      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false, onReportCard: true, reportTeacherName: null });
+      expect(res.body.data.options).toEqual({ acceptLate: true, emailNewPosts: true, showClassAverage: false, onReportCard: true, reportTeacherName: null, progressCommentsOnly: false, progressGoals: null });
       expect(res.body.data.archivedAt).toBeNull();
     });
 
@@ -510,7 +534,8 @@ describe('Integration: class identity, options, archive, student avatar', () => 
     it('duplicating a class copies identity and options (not the archive)', async () => {
       await pool.query(
         `UPDATE classes SET banner_key = 'math', icon_key = 'art', color = 'rose', accept_late = FALSE,
-                email_new_posts = FALSE, show_class_average = TRUE, archived_at = NOW() WHERE class_id = $1`,
+                email_new_posts = FALSE, show_class_average = TRUE, archived_at = NOW(), on_report_card = FALSE,
+                report_teacher_name = 'Supervisor', progress_comments_only = TRUE, progress_goals = 'Pray well.' WHERE class_id = $1`,
         [classId],
       );
       const termId = (await pool.query(
@@ -526,7 +551,8 @@ describe('Integration: class identity, options, archive, student avatar', () => 
       const copyId = res.body.data.classId;
       expect(await row(copyId)).toMatchObject({
         banner_key: 'math', icon_key: 'art', color: 'rose', accept_late: false,
-        email_new_posts: false, show_class_average: true, archived_at: null,
+        email_new_posts: false, show_class_average: true, archived_at: null, on_report_card: false,
+        report_teacher_name: 'Supervisor', progress_comments_only: true, progress_goals: 'Pray well.',
       });
       const got = await authenticatedRequest('get', `/api/classes/${copyId}`, asAdmin);
       expect(got.body.data.identity).toMatchObject({ bannerKey: 'math', iconKey: 'art', color: 'rose' });

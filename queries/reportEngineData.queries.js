@@ -85,7 +85,8 @@ const reportEngineDataQueries = {
   selectStudentClassesForProgressTerm: `
     SELECT c.class_id, c.subject,
            COALESCE(NULLIF(btrim(c.report_teacher_name), ''), c.teacher_name) AS teacher_name,
-           c.grade as class_grade
+           c.grade as class_grade,
+           c.progress_comments_only, c.progress_goals
     FROM class_students cs
     JOIN classes c ON cs.class_id = c.class_id
     WHERE cs.student_id = $1

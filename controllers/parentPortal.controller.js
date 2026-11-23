@@ -67,6 +67,8 @@ const mapProgressFeedback = (row) => ({
   workHabit: row.work_habit,
   behavior: row.behavior,
   comment: row.comment,
+  // Goals-and-comment class (Salaat): its rating only picked the comment.
+  commentsOnly: row.progress_comments_only === true,
   createdAt: row.created_at,
 });
 

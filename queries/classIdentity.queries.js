@@ -68,9 +68,12 @@ const classIdentityQueries = {
         show_class_average  = COALESCE($4::boolean, show_class_average),
         on_report_card      = COALESCE($5::boolean, on_report_card),
         report_teacher_name = CASE WHEN $6::boolean THEN $7::text ELSE report_teacher_name END,
+        progress_comments_only = COALESCE($8::boolean, progress_comments_only),
+        progress_goals      = CASE WHEN $9::boolean THEN $10::text ELSE progress_goals END,
         last_modified_at    = NOW()
     WHERE class_id = $1
-    RETURNING class_id, accept_late, email_new_posts, show_class_average, on_report_card, report_teacher_name
+    RETURNING class_id, accept_late, email_new_posts, show_class_average, on_report_card, report_teacher_name,
+              progress_comments_only, progress_goals
   `,
 
   //  Archiving twice keeps the first archive time and person.  $1 class_id, $2 user_id

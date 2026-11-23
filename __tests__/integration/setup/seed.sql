@@ -1898,6 +1898,8 @@ ALTER TABLE classes  ADD COLUMN IF NOT EXISTS email_new_posts    BOOLEAN NOT NUL
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS show_class_average BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS on_report_card     BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS report_teacher_name TEXT;
+ALTER TABLE classes  ADD COLUMN IF NOT EXISTS progress_comments_only BOOLEAN NOT NULL DEFAULT FALSE;  -- progress_report_layout_migration.sql
+ALTER TABLE classes  ADD COLUMN IF NOT EXISTS progress_goals     TEXT;
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
 ALTER TABLE classes  ADD COLUMN IF NOT EXISTS archived_by        UUID REFERENCES users(user_id) ON DELETE SET NULL;
 ALTER TABLE users    ADD COLUMN IF NOT EXISTS avatar     JSONB;
@@ -2360,6 +2362,14 @@ CREATE TABLE IF NOT EXISTS student_views (
 );
 
 -- database/migrations/class_comment_banks_migration.sql
+-- Progress reports grouped under headings (progress_report_layout_migration.sql).
+CREATE TABLE IF NOT EXISTS report_subject_layouts (
+  school     school PRIMARY KEY,
+  sections   JSONB NOT NULL,
+  updated_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS class_comment_banks (
   class_id       UUID PRIMARY KEY REFERENCES classes(class_id) ON DELETE CASCADE,
   core_standards JSONB NOT NULL,

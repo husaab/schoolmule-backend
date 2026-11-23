@@ -166,6 +166,8 @@ const getStudentOverview = async (req, res) => {
             workHabit: r.work_habit,
             behavior: r.behavior,
             comment: r.comment,
+            // Goals-and-comment class (Salaat): its rating only picked the comment.
+            commentsOnly: r.progress_comments_only === true,
           })),
         },
       },

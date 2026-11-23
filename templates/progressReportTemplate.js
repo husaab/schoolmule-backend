@@ -131,6 +131,17 @@ const getProgressReportHTML = (data) => {
         .subject-content {
             padding: 15px;
         }
+
+        /* The school's subject headings (Report templates → Subject headings). */
+        .subject-section-heading {
+            font-size: 15px;
+            font-weight: bold;
+            color: #2c5aa0;
+            border-bottom: 1px solid #2c5aa0;
+            padding-bottom: 4px;
+            margin: 18px 0 10px;
+            page-break-after: avoid;
+        }
         
         .assessment-grid {
             display: grid;
@@ -462,12 +473,31 @@ const getProgressReportHTML = (data) => {
     <div class="progress-section">
         <div class="section-title">Progress by Subject</div>
         
-        ${progressData.map(subject => `
+        ${progressData.map((subject, i) => `
+            ${subject.section && subject.section !== (progressData[i - 1] || {}).section ? `
+            <div class="subject-section-heading">${escapeHtml(subject.section)}</div>
+            ` : ''}
             <div class="subject-card">
                 <div class="subject-header">
                     ${subject.subject}
                     ${subject.teacherName ? ` - ${subject.teacherName}` : ''}
                 </div>
+                ${subject.commentsOnly ? `
+                <div class="subject-content">
+                    ${subject.goals ? `
+                    <div class="standards-section">
+                        <div class="standards-label">Expectations/Goals:</div>
+                        <div class="standards-value">${formatCommentHTML(subject.goals)}</div>
+                    </div>
+                    ` : ''}
+                    ${subject.comment ? `
+                    <div class="comment-section">
+                        <div class="comment-label">Teacher Comments:</div>
+                        <div class="comment-text">${formatCommentHTML(subject.comment)}</div>
+                    </div>
+                    ` : ''}
+                </div>
+                ` : `
                 <div class="subject-content">
                     <div class="assessment-grid">
                         <div class="assessment-item">
@@ -498,6 +528,7 @@ const getProgressReportHTML = (data) => {
                     </div>
                     ` : ''}
                 </div>
+                `}
             </div>
         `).join('')}
     </div>

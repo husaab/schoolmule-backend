@@ -26,6 +26,8 @@ const optionsOf = (row) => ({
   showClassAverage: row.show_class_average ?? false,
   onReportCard: row.on_report_card ?? true,
   reportTeacherName: row.report_teacher_name ?? null,
+  progressCommentsOnly: row.progress_comments_only ?? false,
+  progressGoals: row.progress_goals ?? null,
 });
 
 /** Best-effort delete of an uploaded banner; logs and never throws. */

@@ -3,6 +3,7 @@ const rateLimit = require('express-rate-limit');
 const requireStaff = require('../middleware/requireStaff');
 const { requirePermission } = require('../middleware/access');
 const controller = require('../controllers/reportTemplates.controller');
+const subjectLayout = require('../controllers/reportSubjectLayout.controller');
 
 const router = express.Router();
 
@@ -51,6 +52,11 @@ router.post('/preview/pdf', designer, previewPdfLimiter, controller.previewPdf);
 // Extra field values per student.
 router.get('/field-values', fieldValues, controller.getFieldValues);
 router.put('/field-values', fieldValues, controller.putFieldValues);
+
+// The school's subject headings on progress reports.
+router.get('/subject-layout', designer, subjectLayout.getSubjectLayout);
+router.put('/subject-layout', designer, subjectLayout.putSubjectLayout);
+router.delete('/subject-layout', designer, subjectLayout.deleteSubjectLayout);
 
 // Templates.
 router.get('/', designer, controller.listTemplates);
