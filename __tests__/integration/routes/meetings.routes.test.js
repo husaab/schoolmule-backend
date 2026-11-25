@@ -313,26 +313,22 @@ describe('Integration: parent–teacher meetings', () => {
     expect(update.html).toContain('Adam · Grade 5 room');
     expect(update.html).not.toContain('Phone call');
 
-    // The teacher's number: their account's, unless they set one for these meetings.
+    // The teacher calls the family; a teacher's own number is never shown, even one on their account.
     await pool.query("UPDATE users SET phone = '905-555-0111' WHERE user_id = $1", [SALEH]);
     await asParent(AMAL, 'patch', `/meetings/${eventId}/bookings/${bookingId}`).send({ mode: 'phone', phone: '647 555 0199' });
-    let mine2 = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
-    expect(mine2.bookings[0]).toMatchObject({ mode: 'phone', callFrom: '905-555-0111' });
-    const callFrom = await asTeacher(SALEH, 'put', `/events/${eventId}/my-call-from`).send({ callFrom: '905-555-0122' });
-    expect(callFrom.status).toBe(200);
-    expect(callFrom.body.data).toMatchObject({ callFrom: '905-555-0122', myPhone: '905-555-0111' });
-    expect((await asTeacher(SALEH, 'put', `/events/${eventId}/my-call-from`).send({ callFrom: 'nope' })).body.code).toBe('BAD_PHONE');
-    mine2 = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
-    expect(mine2.bookings[0].callFrom).toBe('905-555-0122');
+    const mine2 = (await asParent(AMAL, 'get', '/meetings')).body.data.events[0];
+    expect(mine2.bookings[0]).toMatchObject({ mode: 'phone', phone: '647 555 0199' });
+    expect(JSON.stringify(mine2)).not.toContain('905-555-0111');
+    expect((await asTeacher(SALEH, 'put', `/events/${eventId}/my-call-from`).send({ callFrom: '905-555-0122' })).status).toBe(404);
     const setupNow = (await office('get', `/events/${eventId}`)).body.data;
-    expect(setupNow.teachers.find((t) => t.teacherId === SALEH)).toMatchObject({ callFrom: '905-555-0122', phone: '905-555-0111' });
+    expect(JSON.stringify(setupNow.teachers)).not.toContain('905-555-0111');
     getResend().emails.send.mockClear();
     await deliverQueuedEmails(pool);
-    const withFrom = sent().find((m) => m.to[0] === 'amal.parent@example.com');
-    expect(withFrom.html).toContain('Phone call to 647 555 0199 from 905-555-0122');
-    // (Calendar files fold long lines; unfold before reading.)
-    expect(withFrom.attachments.find((a) => a.filename === 'meetings.ics').content.toString().replace(/\r?\n[ \t]/g, ''))
-      .toContain('DESCRIPTION:Ms. Layla Saleh will call you at 647 555 0199 from 905-555-0122.');
+    const noFrom = sent().find((m) => m.to[0] === 'amal.parent@example.com');
+    expect(noFrom.html).toContain('Phone call to 647 555 0199');
+    expect(noFrom.html).not.toContain('905-555-0111');
+    expect(noFrom.attachments.find((a) => a.filename === 'meetings.ics').content.toString().replace(/\r?\n[ \t]/g, ''))
+      .toContain('DESCRIPTION:Ms. Layla Saleh will call you at 647 555 0199.');
     // Back to in person for the rest.
     await asParent(AMAL, 'patch', `/meetings/${eventId}/bookings/${bookingId}`).send({ mode: 'in_person' });
     await deliverQueuedEmails(pool);

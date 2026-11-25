@@ -199,7 +199,6 @@ const teacherBody = (b = {}) => ({
   takingPart: b.takingPart,
   slotMinutes: b.slotMinutes === undefined ? undefined : intOrNull(b.slotMinutes),
   room: b.room,
-  ...(Object.prototype.hasOwnProperty.call(b, 'callFrom') ? { callFrom: b.callFrom } : {}),
   days: Array.isArray(b.days) ? b.days.map((d) => ({
     dayId: d.dayId,
     works: Boolean(d.works),
@@ -293,13 +292,6 @@ const setMyHours = handle(async (req, res) => {
   return ok(res, V.teacherView(state, people, req.user.userId));
 });
 
-/** A teacher's "Number I'll call from" for these meetings (allowed even when the office sets the hours). */
-const setMyCallFrom = handle(async (req, res) => {
-  await setup.setCallFrom({ school: req.user.school, eventId: req.params.eventId, teacherId: req.user.userId, body: { callFrom: req.body?.callFrom ?? null } });
-  const { state, people } = await readEvent(req);
-  return ok(res, V.teacherView(state, people, req.user.userId));
-});
-
 const closeMyTimes = handle(async (req, res) => {
   const breakId = await setup.addBreak({
     school: req.user.school, eventId: req.params.eventId, dayId: req.body?.dayId, teacherId: req.user.userId,
@@ -369,6 +361,6 @@ module.exports = {
   listEvents, createEvent, getEvent, updateEvent, deleteEvent, scheduleEvent, unscheduleEvent,
   addDay, updateDay, deleteDay, addBreak, deleteBreak, setTeacher, closeTeacherTimes,
   getBoard, getFamilies, officeBook, officeMove, officeCancel, sendLastCall,
-  myMeetings, setMyHours, setMyCallFrom, closeMyTimes, reopenMyTimes, printMyDay,
+  myMeetings, setMyHours, closeMyTimes, reopenMyTimes, printMyDay,
   parentMeetings, parentBook, parentMove, parentCancel,
 };

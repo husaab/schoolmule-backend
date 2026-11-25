@@ -131,13 +131,12 @@ module.exports = {
 
   // ── Teachers' own settings ──────────────────────────────────
   // $1 event_id
-  selectTeacherSettings: 'SELECT teacher_id, taking_part, slot_minutes, room, call_from FROM ptm_teachers WHERE event_id = $1',
-  // $1 event_id, $2 teacher_id, $3 taking_part, $4 slot_minutes|null, $5 room|null, $6 call_from|null
+  selectTeacherSettings: 'SELECT teacher_id, taking_part, slot_minutes, room FROM ptm_teachers WHERE event_id = $1',
+  // $1 event_id, $2 teacher_id, $3 taking_part, $4 slot_minutes|null, $5 room|null
   upsertTeacherSettings: `
-    INSERT INTO ptm_teachers (event_id, teacher_id, taking_part, slot_minutes, room, call_from) VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO ptm_teachers (event_id, teacher_id, taking_part, slot_minutes, room) VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT (event_id, teacher_id) DO UPDATE
-      SET taking_part = EXCLUDED.taking_part, slot_minutes = EXCLUDED.slot_minutes, room = EXCLUDED.room,
-          call_from = EXCLUDED.call_from, updated_at = NOW()
+      SET taking_part = EXCLUDED.taking_part, slot_minutes = EXCLUDED.slot_minutes, room = EXCLUDED.room, updated_at = NOW()
   `,
   // $1 event_id
   selectTeacherDays: `

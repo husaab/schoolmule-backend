@@ -18,7 +18,6 @@ for (const name of ['eventId', 'dayId', 'breakId', 'teacherId', 'bookingId']) ro
 // A teacher's own.
 router.get('/mine', c.myMeetings);
 router.put('/events/:eventId/my-hours', c.setMyHours);
-router.put('/events/:eventId/my-call-from', c.setMyCallFrom);
 router.post('/events/:eventId/my-closed', c.closeMyTimes);
 router.delete('/events/:eventId/my-closed/:breakId', c.reopenMyTimes);
 router.post('/events/:eventId/print', c.printMyDay);

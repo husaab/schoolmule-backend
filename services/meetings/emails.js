@@ -237,10 +237,9 @@ function changeLine(c) {
   return `${c.teacherName}${kids}: booked for ${when(c.day, c.start)}${c.mode === 'phone' ? ', a phone call' : ''}`;
 }
 
-/** "Ms. Saleh will call you at 416-… from 905-…." */
-function callLine(state, people, b) {
-  const from = S.callFromFor(state, people, b.teacher_id);
-  return `${people.teachers.get(b.teacher_id)?.name || 'The teacher'} will call you at ${b.phone}${from ? ` from ${from}` : ''}.`;
+/** "Ms. Saleh will call you at 416-555-0100." */
+function callLine(people, b) {
+  return `${people.teachers.get(b.teacher_id)?.name || 'The teacher'} will call you at ${b.phone}.`;
 }
 
 /** The current meetings as calendar events, and a cancel file for any cancelled since. */
@@ -254,7 +253,7 @@ function calendarAttachments(state, people, days, changes, schoolName, now) {
     end: b.end_min,
     summary: `${S.isPhone(b) ? 'Phone call' : 'Meeting'} with ${people.teachers.get(b.teacher_id)?.name || 'a teacher'} (${kidNames(people, b.student_ids)})`,
     location: S.isPhone(b) ? S.familyPlaceFor(state, people, b) : [S.roomFor(state, people, b.teacher_id, b.student_ids), schoolName].filter(Boolean).join(', '),
-    description: S.isPhone(b) ? callLine(state, people, b) : undefined,
+    description: S.isPhone(b) ? callLine(people, b) : undefined,
   })));
   if (current.length) {
     attachments.push({ filename: 'meetings.ics', content: Buffer.from(calendarFile({ events: current, now })), contentType: 'text/calendar; charset=utf-8; method=PUBLISH' });

@@ -11,8 +11,8 @@
 // - planFor / openTimes / roomFor / placeFor / orphans: the computed views
 //   every page and email reads, so they always agree with what booking
 //   accepts.
-// - phoneFor: the number to suggest for a phone call meeting; callFromFor:
-//   the number a teacher calls families from (familyPlaceFor says both).
+// - phoneFor: the number to suggest for a phone call meeting. The teacher
+//   calls the family at it; a teacher's own number is never asked for or shown.
 
 
 const q = require('../../queries/meetings.queries');
@@ -217,16 +217,9 @@ function placeFor(state, people, b) {
   return isPhone(b) ? `Phone call · ${b.phone}` : roomFor(state, people, b.teacher_id, b.student_ids);
 }
 
-/** The number a teacher calls families from: this event's "Number I'll call from", else their account's. */
-function callFromFor(state, people, teacherId) {
-  return state.settings.get(teacherId)?.call_from || people.teachers.get(teacherId)?.phone || null;
-}
-
-/** Where a booking happens, as its family reads it: the room, or "Phone call to 416-… from 905-…". */
+/** Where a booking happens, as its family reads it: the room, or "Phone call to 416-555-0100". */
 function familyPlaceFor(state, people, b) {
-  if (!isPhone(b)) return roomFor(state, people, b.teacher_id, b.student_ids);
-  const from = callFromFor(state, people, b.teacher_id);
-  return `Phone call to ${b.phone}${from ? ` from ${from}` : ''}`;
+  return isPhone(b) ? `Phone call to ${b.phone}` : roomFor(state, people, b.teacher_id, b.student_ids);
 }
 
 /**
@@ -300,7 +293,6 @@ module.exports = {
   isPhone,
   placeFor,
   familyPlaceFor,
-  callFromFor,
   phoneFor,
   orphans,
   teachesLabel,

@@ -110,8 +110,6 @@ function parentView(state, people, userId, now = new Date()) {
           end: b.end_min,
           studentIds: b.student_ids,
           ...howView(state, people, b),
-          // A phone call: the number the teacher calls from (only on the family's own phone calls).
-          callFrom: S.isPhone(b) ? S.callFromFor(state, people, b.teacher_id) : null,
           canChange: now < T.cutoffAt(state.event, day),
           byOffice: b.by_office,
         };
@@ -192,9 +190,6 @@ function teacherView(state, people, teacherId, now = new Date()) {
     ownSlotMinutes: own?.slot_minutes ?? null,
     teacherSlotMinutes: S.lengthFor(state, teacherId),
     room: own?.room || null,
-    // "Number I'll call from" for these meetings, and the number on their account.
-    callFrom: own?.call_from || null,
-    myPhone: teacher?.phone || null,
     days: teacherDaysView(state, people, teacherId, now),
   };
 }
@@ -244,8 +239,6 @@ function setupView(state, people, now = new Date()) {
       takingPart,
       slotMinutes: settings?.slot_minutes ?? null,
       room: settings?.room ?? null,
-      callFrom: settings?.call_from ?? null,
-      phone: t.phone || null,
       times,
       perTime: times ? Math.round((demand / times) * 10) / 10 : null,
       bookings: state.bookings.filter((b) => b.teacher_id === t.id).length,

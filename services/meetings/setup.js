@@ -13,7 +13,6 @@ const S = require('./state');
 const { timeLabel } = require('./slots');
 const { shortDay } = require('./time');
 const { MeetingError, withEvent, changeOf, queueFamilyUpdate } = require('./booking');
-const { readPhone } = require('../../utils/phone');
 
 const isMin = (v, max = 1440) => Number.isInteger(v) && v >= 0 && v <= max;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -185,7 +184,7 @@ function deleteBreak({ school, eventId, breakId, teacherId = null }) {
 
 /**
  * Replace a teacher's own settings. body: { takingPart?, slotMinutes|null?,
- * room|null?, callFrom|null?, days?: [{ dayId, works, start|null, end|null, breaks?: [{ start, end, label }] }] }.
+ * room|null?, days?: [{ dayId, works, start|null, end|null, breaks?: [{ start, end, label }] }] }.
  * A teacher editing themselves (`self`) can't change takingPart or room.
  */
 function setTeacher({ school, eventId, teacherId, body, userId, self = false }) {
@@ -194,13 +193,12 @@ function setTeacher({ school, eventId, teacherId, body, userId, self = false }) 
     if (self && !state.event.teachers_edit_hours) {
       throw new MeetingError(403, 'HOURS_LOCKED', 'The office sets meeting hours for these meetings');
     }
-    const current = state.settings.get(teacherId) || { taking_part: true, slot_minutes: null, room: null, call_from: null };
+    const current = state.settings.get(teacherId) || { taking_part: true, slot_minutes: null, room: null };
     const slotMinutes = body.slotMinutes !== undefined ? body.slotMinutes : current.slot_minutes;
     if (slotMinutes !== null) checkLength(slotMinutes);
     const takingPart = self ? current.taking_part : bool(body.takingPart, current.taking_part);
     const room = self ? current.room : (body.room !== undefined ? cleanLabel(body.room) : current.room);
-    const callFrom = readCallFrom(body, current);
-    await client.query(q.upsertTeacherSettings, [eventId, teacherId, takingPart, slotMinutes, room, callFrom]);
+    await client.query(q.upsertTeacherSettings, [eventId, teacherId, takingPart, slotMinutes, room]);
 
     for (const d of Array.isArray(body.days) ? body.days : []) {
       const day = state.days.find((x) => x.day_id === d.dayId);
@@ -219,28 +217,6 @@ function setTeacher({ school, eventId, teacherId, body, userId, self = false }) 
         }
       }
     }
-  });
-}
-
-/** "Number I'll call from" in a body, else the current one. */
-function readCallFrom(body, current) {
-  const read = readPhone(body, 'callFrom');
-  if (read.error) throw new MeetingError(400, 'BAD_PHONE', read.error);
-  return read.provided ? read.value : (current.call_from ?? null);
-}
-
-/**
- * A teacher's "Number I'll call from" for these meetings, on its own: a
- * teacher can set it even when the office sets their hours. null = the
- * number on their account.
- */
-function setCallFrom({ school, eventId, teacherId, body }) {
-  return guarded(school, eventId, async ({ client, state, people }) => {
-    if (!people.teachers.has(teacherId)) throw new MeetingError(404, 'TEACHER_NOT_FOUND', "This teacher has no students' families to meet");
-    const current = state.settings.get(teacherId) || { taking_part: true, slot_minutes: null, room: null, call_from: null };
-    await client.query(q.upsertTeacherSettings, [
-      eventId, teacherId, current.taking_part, current.slot_minutes, current.room, readCallFrom(body, current),
-    ]);
   });
 }
 
@@ -267,5 +243,5 @@ function deleteEvent({ school, eventId, userId }) {
 }
 
 module.exports = {
-  createEvent, updateSettings, addDay, updateDay, deleteDay, addBreak, deleteBreak, setTeacher, setCallFrom, deleteEvent, guarded,
+  createEvent, updateSettings, addDay, updateDay, deleteDay, addBreak, deleteBreak, setTeacher, deleteEvent, guarded,
 };
