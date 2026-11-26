@@ -3,6 +3,7 @@ const router = express.Router();
 const skController = require('../controllers/sk.controller');
 const { requirePermission, requireStaffAccess } = require('../middleware/access');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
+const { guardKindergartenComments } = require('../middleware/commentRules');
 
 // RBAC. The SK set-up (what gets rated) is part of report cards; the
 // ratings and comments of a student are their gradebook: the teachers who
@@ -40,7 +41,9 @@ router.post('/assessments/bulk', entryStudents, skController.bulkUpsertAssessmen
 
 // Subject Comments (narrative - report card only)
 router.get('/subject-comments/:studentId', paramStudent, skController.getSubjectComments);
-router.post('/subject-comments/bulk', entryStudents, skController.bulkUpsertSubjectComments);
+// Comments answer to the school's review lock for the term (report-comments).
+// Subject comments print on both documents, so either lock holds them.
+router.post('/subject-comments/bulk', entryStudents, guardKindergartenComments(['report_card', 'progress_report'], 'skSubject'), skController.bulkUpsertSubjectComments);
 
 // Teacher Assistant
 router.get('/teacher-assistant/:studentId', paramStudent, skController.getTeacherAssistant);
@@ -48,7 +51,7 @@ router.post('/teacher-assistant', bodyStudent, skController.upsertTeacherAssista
 
 // Progress Report Comments (Academic Achievement / Socio-Emotional)
 router.get('/progress-report-comments/:studentId', paramStudent, skController.getProgressReportComments);
-router.post('/progress-report-comments/bulk', entryStudents, skController.bulkUpsertProgressReportComments);
+router.post('/progress-report-comments/bulk', entryStudents, guardKindergartenComments(['progress_report'], 'skProgress'), skController.bulkUpsertProgressReportComments);
 
 // SK Progress Report Generation
 router.post('/progress-report/generate', ...reportStudents, skController.generateProgressReport);

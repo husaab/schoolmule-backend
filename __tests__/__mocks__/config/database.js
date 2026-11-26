@@ -49,6 +49,28 @@ function defaultSchoolYearRow(params) {
   };
 }
 
+// The comment guards (middleware/commentRules.js) look a class's or a term's
+// review lock and word limit up before every save of report card or progress
+// report comments. As with school_years above, that lookup is answered
+// without consuming a slot from the general queue, so the tests of those save
+// routes keep queueing only their own controller's queries: by default every
+// class asked about is open with no limits, and no term is locked. A test of
+// the guards themselves opts in with mockCommentRulesResponseOnce.
+const isClassRulesQuery = (sql) => typeof sql === 'string' && /^\s*SELECT\s+r\.ord::int AS ord, c\.class_id, c\.school/i.test(sql);
+const isLockedTermsQuery = (sql) => typeof sql === 'string' && /^\s*SELECT\s+DISTINCT t\.name\s+FROM report_comment_term_locks/i.test(sql);
+const isCommentRulesQuery = (sql) => isClassRulesQuery(sql) || isLockedTermsQuery(sql);
+
+function defaultCommentRules(sql, params) {
+  if (!isClassRulesQuery(sql)) return { rows: [], rowCount: 0 };
+  const [classIds = [], kinds = []] = Array.isArray(params) ? params : [];
+  const rows = classIds.flatMap((classId, i) =>
+    kinds.map((kind) => ({
+      ord: i + 1, class_id: classId, school: 'ALHAADIACADEMY', grade: '5', term_id: null, kind,
+      locked: false, lock_scope: null, min_words: null, max_words: null,
+    })));
+  return { rows, rowCount: rows.length };
+}
+
 const mockClient = {
   query: jest.fn(),
   release: jest.fn(),
@@ -63,6 +85,7 @@ const mockClient = {
 // own controller query, shifting everything else out of order.
 let responseQueue = [];
 let schoolYearsQueue = [];
+let commentRulesQueue = [];
 
 function runNext(entry, sql, params) {
   if (entry.type === 'reject') return Promise.reject(entry.value);
@@ -76,6 +99,12 @@ function baseImplementation(sql, params) {
       return runNext(schoolYearsQueue.shift(), sql, params);
     }
     return Promise.resolve(defaultSchoolYearRow(params));
+  }
+  if (isCommentRulesQuery(sql)) {
+    if (commentRulesQueue.length > 0) {
+      return runNext(commentRulesQueue.shift(), sql, params);
+    }
+    return Promise.resolve(defaultCommentRules(sql, params));
   }
   if (responseQueue.length > 0) {
     return runNext(responseQueue.shift(), sql, params);
@@ -115,6 +144,16 @@ query.mockSchoolYearsRejectionOnce = (value) => {
   return query;
 };
 
+// The comment guards' lookup, answered precisely (see isCommentRulesQuery).
+query.mockCommentRulesResponseOnce = (value) => {
+  commentRulesQueue.push({ type: 'resolve', value });
+  return query;
+};
+query.mockCommentRulesRejectionOnce = (value) => {
+  commentRulesQueue.push({ type: 'reject', value });
+  return query;
+};
+
 const db = {
   query,
   connect: jest.fn().mockResolvedValue(mockClient),
@@ -123,6 +162,7 @@ const db = {
   _reset() {
     responseQueue = [];
     schoolYearsQueue = [];
+    commentRulesQueue = [];
     this.query.mockReset();
     this.query.mockImplementation(baseImplementation);
     this.connect.mockReset().mockResolvedValue(mockClient);

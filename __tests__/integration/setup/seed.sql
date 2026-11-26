@@ -2380,6 +2380,36 @@ CREATE TABLE IF NOT EXISTS class_comment_banks (
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Report comment rules (report_comment_rules_migration.sql): word limits per
+-- school and document, a term-wide review lock, and a class's exception to it.
+CREATE TABLE IF NOT EXISTS report_comment_limits (
+  school     school NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('report_card', 'progress_report')),
+  min_words  INTEGER CHECK (min_words IS NULL OR min_words BETWEEN 1 AND 2000),
+  max_words  INTEGER CHECK (max_words IS NULL OR max_words BETWEEN 1 AND 2000),
+  updated_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (school, kind),
+  CHECK (min_words IS NULL OR max_words IS NULL OR min_words <= max_words)
+);
+
+CREATE TABLE IF NOT EXISTS report_comment_term_locks (
+  term_id   UUID NOT NULL REFERENCES terms(term_id) ON DELETE CASCADE,
+  kind      TEXT NOT NULL CHECK (kind IN ('report_card', 'progress_report')),
+  locked_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (term_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS report_comment_class_locks (
+  class_id UUID NOT NULL REFERENCES classes(class_id) ON DELETE CASCADE,
+  kind     TEXT NOT NULL CHECK (kind IN ('report_card', 'progress_report')),
+  locked   BOOLEAN NOT NULL,
+  set_by   UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  set_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (class_id, kind)
+);
+
 -- Student soft delete (student_soft_delete_migration.sql): the table is
 -- students_all and `students` is a view of the rows that aren't deleted. Last,
 -- so every foreign key above was created against the table.

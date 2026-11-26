@@ -6,6 +6,7 @@ const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPat
 const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
+const { guardClassComments } = require('../middleware/commentRules');
 
 // RBAC: progress reports are `report_cards` (school-wide); a class's teacher
 // feedback is open to that class's teachers too.
@@ -18,6 +19,11 @@ const ownStudents = requireStudentAccess({
 const classFeedback = (classIdsOf) => requireGradebookAccess({ keys: ['report_cards'], classIds: classIdsOf });
 const paramClass = classFeedback((req) => [req.params.classId]);
 const entriesClasses = (req) => ((req.body && req.body.feedbackEntries) || []).map((e) => e && e.classId);
+// Saving or deleting comments also answers to the school's review lock and word limit.
+const commentRules = (entriesOf) => guardClassComments('progress_report', entriesOf);
+const paramEntry = (req) => [{ classId: req.params.classId, studentId: req.params.studentId, comment: req.body && req.body.comment }];
+const paramEntryRemoved = (req) => [{ classId: req.params.classId, studentId: req.params.studentId }];
+const bodyEntries = (req) => (Array.isArray(req.body && req.body.feedbackEntries) ? req.body.feedbackEntries : []);
 const progressReportsController = require('../controllers/progressReports.controller');
 
 // Parent-readable: a parent sees only the children they are linked to, and
@@ -44,9 +50,9 @@ router.use(requireStaff);
 
 // Progress Report Feedback Routes
 router.get('/feedback/student/:studentId/class/:classId', paramClass, progressReportsController.getProgressReportFeedback);
-router.post('/feedback/student/:studentId/class/:classId', paramClass, progressReportsController.upsertProgressReportFeedback);
-router.put('/feedback/student/:studentId/class/:classId', paramClass, progressReportsController.upsertProgressReportFeedback);
-router.delete('/feedback/student/:studentId/class/:classId', paramClass, progressReportsController.deleteProgressReportFeedback);
+router.post('/feedback/student/:studentId/class/:classId', paramClass, commentRules(paramEntry), progressReportsController.upsertProgressReportFeedback);
+router.put('/feedback/student/:studentId/class/:classId', paramClass, commentRules(paramEntry), progressReportsController.upsertProgressReportFeedback);
+router.delete('/feedback/student/:studentId/class/:classId', paramClass, commentRules(paramEntryRemoved), progressReportsController.deleteProgressReportFeedback);
 
 // Get all feedback for a student across all classes
 router.get('/feedback/student/:studentId', reportCards, progressReportsController.getStudentProgressReportFeedback);
@@ -55,7 +61,7 @@ router.get('/feedback/student/:studentId', reportCards, progressReportsControlle
 router.get('/feedback/class/:classId', paramClass, progressReportsController.getClassProgressReportFeedback);
 
 // Bulk upsert feedback for multiple students
-router.post('/feedback/bulk', classFeedback(entriesClasses), progressReportsController.upsertBulkProgressReportFeedback);
+router.post('/feedback/bulk', classFeedback(entriesClasses), commentRules(bodyEntries), progressReportsController.upsertBulkProgressReportFeedback);
 
 // Progress Report Records Routes
 router.post('/reports', reportCards, requireOwnReportPaths((req) => req.body && req.body.filePath), progressReportsController.createProgressReport);

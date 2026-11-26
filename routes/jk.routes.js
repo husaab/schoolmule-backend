@@ -3,6 +3,7 @@ const router = express.Router();
 const jkController = require('../controllers/jk.controller');
 const { requirePermission, requireStaffAccess } = require('../middleware/access');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
+const { guardKindergartenComments } = require('../middleware/commentRules');
 
 // RBAC. The JK set-up (what gets rated) is part of report cards; the
 // ratings and comments of a student are their gradebook: the teachers who
@@ -44,11 +45,12 @@ router.post('/learning-skills/bulk', entryStudents, jkController.bulkUpsertLearn
 
 // Domain Comments (narrative - report card only)
 router.get('/domain-comments/:studentId', paramStudent, jkController.getDomainComments);
-router.post('/domain-comments/bulk', entryStudents, jkController.bulkUpsertDomainComments);
+// Comments answer to the school's review lock for the term (report-comments).
+router.post('/domain-comments/bulk', entryStudents, guardKindergartenComments(['report_card'], 'jkDomain'), jkController.bulkUpsertDomainComments);
 
 // Progress Report Comments (Academic Achievement / Socio-Emotional)
 router.get('/progress-report-comments/:studentId', paramStudent, jkController.getProgressReportComments);
-router.post('/progress-report-comments/bulk', entryStudents, jkController.bulkUpsertProgressReportComments);
+router.post('/progress-report-comments/bulk', entryStudents, guardKindergartenComments(['progress_report'], 'jkProgress'), jkController.bulkUpsertProgressReportComments);
 
 // Teacher Assistant
 router.get('/teacher-assistant/:studentId', paramStudent, jkController.getTeacherAssistant);

@@ -28,6 +28,7 @@ const reportsRoutes = require("./routes/reports.routes")
 const progressReportsRoutes = require("./routes/progressReports.routes")
 const commentBankRoutes = require("./routes/commentBank.routes")
 const excludedAssessmentRoutes = require("./routes/excludedAssessment.routes")
+const reportCommentsRoutes = require("./routes/reportComments.routes");
 const schoolAssetRoutes = require("./routes/schoolAssets.routes")
 const reportEmailRoutes = require("./routes/reportEmails.routes")
 const reportGenerationRoutes = require("./routes/reportGeneration.routes");
@@ -179,6 +180,7 @@ app.use("/api/progress-reports", progressReportsRoutes);
 app.use("/api/comment-banks", commentBankRoutes);
 app.use("/api/excluded-assessments", excludedAssessmentRoutes);
 app.use("/api/school-assets", schoolAssetRoutes);
+app.use("/api/report-comments", reportCommentsRoutes);
 app.use("/api/report-emails", reportEmailRoutes);
 app.use("/api/report-generation", reportGenerationRoutes);
 app.use("/api/teacher-attendance", teacherAttendanceRoutes);

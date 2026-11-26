@@ -5,6 +5,7 @@ const { requireStudentReportAccess, requireReportFileAccess, requireOwnReportPat
 const { requirePermission, requirePermissionForStaff } = require('../middleware/access');
 const requireGradebookAccess = require('../middleware/requireGradebookAccess');
 const requireStudentAccess = require('../middleware/requireStudentAccess');
+const { guardClassComments } = require('../middleware/commentRules');
 const { generateReportCard, upsertFeedback, getFeedback, getClassFeedback, upsertBulkFeedback, generateReportCardsBulk, getGeneratedReportCards, deleteReportCard, deleteReportCardsBulk, getGeneratedReportCardsByStudentId, getTermCommentsStatus} = require('../controllers/reportCard.controller');
 
 const router = express.Router();
@@ -19,6 +20,10 @@ const ownStudents = requireStudentAccess({
 });
 const classFeedback = (classIdsOf) => requireGradebookAccess({ keys: ['report_cards'], classIds: classIdsOf });
 const entriesClasses = (req) => ((req.body && req.body.feedbackEntries) || []).map((e) => e && e.classId);
+// Saving comments also answers to the school's review lock and word limit.
+const commentRules = (entriesOf) => guardClassComments('report_card', entriesOf);
+const bodyEntry = (req) => [req.body || {}];
+const bodyEntries = (req) => (Array.isArray(req.body && req.body.feedbackEntries) ? req.body.feedbackEntries : []);
 
 // Parent-readable: a parent sees only the children they are linked to, and
 // may open only a file that belongs to one of them.
@@ -43,10 +48,10 @@ router.get('/signed-url', requirePermissionForStaff('report_cards'), requireRepo
 router.use(requireStaff);
 
 router.post('/generate', reportCards, ownStudents, generateReportCard);
-router.post('/feedback', classFeedback((req) => [req.body && req.body.classId]), upsertFeedback);
+router.post('/feedback', classFeedback((req) => [req.body && req.body.classId]), commentRules(bodyEntry), upsertFeedback);
 router.get('/feedback', classFeedback((req) => [req.query.classId]), getFeedback);
 router.get('/feedback/class/:classId', classFeedback((req) => [req.params.classId]), getClassFeedback);
-router.post('/feedback/bulk', classFeedback(entriesClasses), upsertBulkFeedback);
+router.post('/feedback/bulk', classFeedback(entriesClasses), commentRules(bodyEntries), upsertBulkFeedback);
 router.post('/generate/bulk', reportCards, ownStudents, generateReportCardsBulk);
 router.get('/view', reportCards, getGeneratedReportCards);
 // Whose report card comments are in for the term (the report cards page, before generating).

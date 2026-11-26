@@ -71,9 +71,9 @@ describe('Report Card Controller', () => {
       expect(res.status).toBe(200);
       // the upsert (2nd controller db.query call) must have been called with the CLASS
       // term, not 'Term 2'. Filter out the resolveSchoolYear middleware's own
-      // (globally-mounted) lookup and the class guard's, so this stays robust
-      // to those extra calls.
-      const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years') && !sql.includes('access:gradebook'));
+      // (globally-mounted) lookup, the class guard's and the comment rules
+      // guard's, so this stays robust to those extra calls.
+      const controllerCalls = db.query.mock.calls.filter(([sql]) => !sql.includes('FROM school_years') && !sql.includes('access:gradebook') && !sql.includes('report_comment_term_locks'));
       const upsertCall = controllerCalls[1];
       // No commentDetails sent: null and false keep whatever details are saved.
       expect(upsertCall[1]).toEqual(['sid', 'cid', 'Term 1', 'G', null, null, null, false]);

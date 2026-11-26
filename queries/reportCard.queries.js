@@ -1,3 +1,5 @@
+const { wordCountSql } = require('../utils/wordCount');
+
 const reportCardQueries = {
   // $7 comment_details (jsonb or null), $8 whether the entry carried them:
   // an entry without them (older app builds) keeps what is saved.
@@ -53,7 +55,8 @@ const reportCardQueries = {
 
   // Every class a grade 1-8 student takes in the term, and whether its
   // teacher has entered the report card's work habits, behaviour and comment
-  // for them (what the class's Report card comments page counts as done).
+  // for them (what the class's Report card comments page counts as done). A
+  // comment under the school's minimum words is not finished either.
   // Feedback is stored under the class's own term name. JK and SK cards are
   // skills-based and print no class comments, so they're left out.
   // $1 school, $2 term name, $3 school year (null = any).
@@ -61,13 +64,15 @@ const reportCardQueries = {
     SELECT cs.student_id, c.class_id, c.subject, c.teacher_name,
       (NULLIF(btrim(f.work_habits), '') IS NOT NULL
         AND NULLIF(btrim(f.behavior), '') IS NOT NULL
-        AND NULLIF(btrim(f.comment), '') IS NOT NULL) AS complete
+        AND NULLIF(btrim(f.comment), '') IS NOT NULL
+        AND (l.min_words IS NULL OR ${wordCountSql('f.comment')} >= l.min_words)) AS complete
     FROM classes c
     JOIN terms t ON t.term_id = c.term_id
     JOIN class_students cs ON cs.class_id = c.class_id
     JOIN students s ON s.student_id = cs.student_id
     LEFT JOIN report_card_feedback f
       ON f.student_id = cs.student_id AND f.class_id = c.class_id AND f.term = t.name
+    LEFT JOIN report_comment_limits l ON l.school = c.school AND l.kind = 'report_card'
     WHERE c.school = $1 AND t.name = $2
       AND ($3::uuid IS NULL OR t.school_year_id = $3)
       AND COALESCE(s.grade::text, '') NOT IN ('JK', 'SK')
