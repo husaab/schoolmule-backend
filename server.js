@@ -43,6 +43,7 @@ const registrationPublicRoutes = require("./routes/registrationPublic.routes")
 const googleSheetsPublicRoutes = require("./routes/googleSheetsPublic.routes")
 const financePublicRoutes = require("./routes/financePublic.routes")
 const financeRoutes = require("./routes/finance.routes")
+const paymentsRoutes = require("./routes/payments.routes")
 const schedulePublicRoutes = require("./routes/schedulePublic.routes")
 const studentViewRoutes = require("./routes/studentView.routes")
 const analyticsRoutes = require("./routes/analytics.routes")
@@ -216,6 +217,7 @@ app.use("/api/classroom", classroomRoutes);
 app.use("/api/student", studentPortalRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/finance", financeRoutes);
+app.use("/api/payments", paymentsRoutes);
 app.use("/api/report-templates", reportTemplateRoutes);
 
 // Global error handler — must be after all routes
