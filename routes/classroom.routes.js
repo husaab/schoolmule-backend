@@ -103,7 +103,9 @@ router.get("/classes/:classId/copy-sources", requireClassOwnership, classwork.co
 router.post("/classes/:classId/copy", requireClassOwnership, classwork.copyFromClass);
 
 // Regrouping gradebook columns (Grades → Assessments & categories): move one
-// into, between or out of categories, or turn one into a category.
+// into, between or out of categories, or turn one into a category. A new,
+// empty category is what a form's "Counts toward → New category…" makes.
+router.post("/classes/:classId/categories", requireClassOwnership, gradebookStructure.createCategory);
 router.post("/classes/:classId/assessments/:assessmentId/move", requireClassOwnership, gradebookStructure.moveAssessment);
 router.post("/classes/:classId/assessments/:assessmentId/make-category", requireClassOwnership, gradebookStructure.makeCategory);
 

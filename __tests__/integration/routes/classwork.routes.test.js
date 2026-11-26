@@ -31,7 +31,7 @@ const asStudent = {
 };
 
 const BASE = '/api/classroom';
-const D2 = 'Add a category in Grades → Assessments & categories first, or fill an existing column.';
+const D2 = 'This class has no categories yet. Add one, or let this count on its own.';
 const GRADES_EXIST = 'This column already has published grades. Unpublish or clear them in Grades first.';
 const STANDALONE_MOVE = 'This column counts on its own in Grades. Move it in Grades → Assessments & categories.';
 const MIGRATION = path.resolve(__dirname, '../../../database/migrations/student_portal_20_classwork.sql');
@@ -401,6 +401,87 @@ describe('Integration: classwork', () => {
       const res = await call('post', `${BASE}/classes/${mathId}/items`, asOtherTeacher).send({ kind: 'assessment', title: 'Fractions test' });
       expect(res.status).toBe(400);
       expect(res.body.message).toBe(D2);
+    });
+
+    it('an assessment that counts on its own is a top-level column with its own points, in a class with no categories too', async () => {
+      const item = await createItem(mathId, {
+        kind: 'assessment', title: 'Fractions test', date: '2026-11-20', gradebook: { mode: 'standalone', maxScore: 30, weightPoints: 15 },
+      }, asOtherTeacher);
+      expect(item.gradebook).toMatchObject({ categoryId: null, categoryName: null, maxScore: 30, weightPoints: 15 });
+      const col = (await pool.query(
+        `SELECT parent_assessment_id, COALESCE(is_parent, FALSE) AS is_parent, weight_points::float AS w, max_score::float AS max, sort_order
+         FROM assessments WHERE assessment_id = $1`, [item.gradebook.assessmentId],
+      )).rows[0];
+      expect(col).toEqual({ parent_assessment_id: null, is_parent: false, w: 15, max: 30, sort_order: 1 });
+      // The column's own Classwork row is the item: no second one.
+      expect(await itemsOf(item.gradebook.assessmentId)).toHaveLength(1);
+
+      // It goes after the class's other top-level rows, and the categories keep their points.
+      const quizOnItsOwn = await createItem(sciId, {
+        kind: 'assignment', title: 'Science fair project', gradebook: { mode: 'standalone', maxScore: 50, weightPoints: 10 },
+      });
+      const sci = (await pool.query(`SELECT sort_order FROM assessments WHERE assessment_id = $1`, [quizOnItsOwn.gradebook.assessmentId])).rows[0];
+      expect(sci.sort_order).toBe(4);
+      expect(await topLevelTotal(sciId)).toBe(110);
+      expect((await weights(homeworkId)).map((r) => r.w)).toEqual([5, 5, 5, 5]);
+
+      const bad = await call('post', `${BASE}/classes/${mathId}/items`, asOtherTeacher)
+        .send({ kind: 'assessment', title: 'No worth', gradebook: { mode: 'standalone', maxScore: 30 } });
+      expect(bad.status).toBe(400);
+      expect(bad.body.message).toBe('Worth must be more than 0 and at most 100');
+    });
+
+    it('PATCH to "on its own" takes a column out of its category, which keeps its points; then changes its worth and out of in place', async () => {
+      const item = await createItem(sciId, homeworkAssignment());
+      expect((await weights(homeworkId)).map((r) => r.w)).toEqual([4, 4, 4, 4, 4]);
+
+      const out = await call('patch', `${BASE}/items/${item.itemId}`).send({ gradebook: { mode: 'standalone', maxScore: 10, weightPoints: 8 } });
+      expect(out.status).toBe(200);
+      expect(out.body.data.gradebook).toMatchObject({ assessmentId: item.gradebook.assessmentId, categoryId: null, maxScore: 10, weightPoints: 8 });
+      expect((await weights(homeworkId)).map((r) => r.w)).toEqual([5, 5, 5, 5]);
+      expect(await topLevelTotal(sciId)).toBe(108);
+
+      const again = await call('patch', `${BASE}/items/${item.itemId}`).send({ gradebook: { mode: 'standalone', maxScore: 20, weightPoints: 12.5 } });
+      expect(again.status).toBe(200);
+      expect(again.body.data.gradebook).toMatchObject({ categoryId: null, maxScore: 20, weightPoints: 12.5 });
+      expect(await topLevelTotal(sciId)).toBe(112.5);
+
+      // An ungraded item becomes a column of its own the same way.
+      const reading = await createItem(sciId, { kind: 'assignment', title: 'Reading log', gradebook: { mode: 'none' } });
+      const graded = await call('patch', `${BASE}/items/${reading.itemId}`).send({ gradebook: { mode: 'standalone', maxScore: 5, weightPoints: 2 } });
+      expect(graded.status).toBe(200);
+      expect(graded.body.data.gradebook).toMatchObject({ categoryId: null, maxScore: 5, weightPoints: 2 });
+    });
+
+    it('PATCH changes the out of and worth of an assessment that already counts on its own, in place', async () => {
+      // A column made in Grades, on its own: its Classwork row is a plain assessment.
+      const midterm = await assessment(mathId, 'Midterm', { weight: 60, max: 50, sort: 1 });
+      const plain = (await itemsOf(midterm))[0];
+      await pool.query(`INSERT INTO student_assessments (student_id, assessment_id, score) VALUES ($1, $2, 41)`, [amalId, midterm]);
+
+      const res = await call('patch', `${BASE}/items/${plain.item_id}`, asOtherTeacher)
+        .send({ title: 'Midterm exam', gradebook: { mode: 'standalone', maxScore: 80, weightPoints: 45 } });
+      expect(res.status).toBe(200);
+      expect(res.body.data.gradebook).toMatchObject({ assessmentId: midterm, categoryId: null, maxScore: 80, weightPoints: 45 });
+      const col = (await pool.query(
+        `SELECT name, parent_assessment_id, weight_points::float AS w, max_score::float AS max, sort_order FROM assessments WHERE assessment_id = $1`, [midterm],
+      )).rows[0];
+      expect(col).toEqual({ name: 'Midterm exam', parent_assessment_id: null, w: 45, max: 80, sort_order: 1 });
+      // The same column, the same Classwork row, and the score in it is still there.
+      expect((await itemsOf(midterm)).map((r) => r.item_id)).toEqual([plain.item_id]);
+      expect((await pool.query(`SELECT score::float AS score FROM student_assessments WHERE assessment_id = $1`, [midterm])).rows).toEqual([{ score: 41 }]);
+
+      // An edit that sends no gradebook leaves the column exactly as it is.
+      const rename = await call('patch', `${BASE}/items/${plain.item_id}`, asOtherTeacher).send({ title: 'Midterm' });
+      expect(rename.status).toBe(200);
+      expect(rename.body.data.gradebook).toMatchObject({ categoryId: null, maxScore: 80, weightPoints: 45 });
+    });
+
+    it('GET items says how many of the class\'s 100 points are taken', async () => {
+      const sci = await call('get', `${BASE}/classes/${sciId}/items`);
+      expect(sci.body.data.pointsUsed).toBe(100);
+      const math = await call('get', `${BASE}/classes/${mathId}/items`, asOtherTeacher);
+      expect(math.body.data.pointsUsed).toBe(0);
     });
 
     it('scheduled needs a future publishAt; promoteScheduledItems posts it once it is due', async () => {

@@ -60,6 +60,7 @@ const listItems = async (req, res) => {
       items: await items.withClassAverages(itemRes.rows.map(items.toItemSummary), classId),
       categories: ctx.categoryRows.map(items.toCategoryOption),
       linkableColumns: ctx.columnRows.map(items.toColumnOption),
+      pointsUsed: ctx.pointsUsed,
     });
   } catch (error) {
     return fail(res, error, 'Error loading the classwork', { classId });

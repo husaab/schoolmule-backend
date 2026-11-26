@@ -13,13 +13,16 @@
 const q = require('../../queries/classwork.queries');
 const assessmentQueries = require('../../queries/assessment.queries');
 const { round2 } = require('./weights');
-const { httpError } = require('./classworkItems');
+const { httpError, parseWeightPoints, nextTopLevelSortOrder, toCategoryOption } = require('./classworkItems');
 
 const CATEGORY_MOVE_MESSAGE = "A category can't move. Move the assessments inside it one at a time.";
 const NOT_A_CATEGORY_MESSAGE = "Choose one of this class's categories.";
 const MAKE_CATEGORY_MESSAGE = 'Only an assessment that counts on its own can become a multiple assessment.';
 const NOT_FOUND_MESSAGE = 'That assessment is not in this class.';
 const CHANGED_MESSAGE = 'This assessment just changed. Reload the page and try again.';
+const CATEGORY_NAME_MAX = 200;
+const CATEGORY_NAME_MESSAGE = 'Give the category a name';
+const CATEGORY_NAME_LONG_MESSAGE = `Keep the name to ${CATEGORY_NAME_MAX} characters`;
 
 const lower = (v) => (typeof v === 'string' ? v.toLowerCase() : v);
 
@@ -93,6 +96,25 @@ async function makeCategory(client, { classId, assessmentId }) {
   return { categoryId };
 }
 
+/**
+ * A new, empty category (a "multiple assessment" with nothing in it yet),
+ * made from a "Counts toward" picker so the teacher never leaves the form
+ * they are in. It goes after the class's other top-level rows. An empty
+ * category counts toward no one's grade until it holds a scored column.
+ * Returns the CategoryOption the pickers list.
+ * @param {{ classId: string, name: unknown, weightPoints: unknown }} input
+ */
+async function createCategory(client, { classId, name, weightPoints }) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed) throw httpError(400, CATEGORY_NAME_MESSAGE);
+  if (trimmed.length > CATEGORY_NAME_MAX) throw httpError(400, CATEGORY_NAME_LONG_MESSAGE);
+  const weight = parseWeightPoints(weightPoints);
+  if (weight.error) throw httpError(400, weight.error);
+  const { rows } = await client.query(assessmentQueries.createAssessment, [
+    classId, trimmed, null, null, true, await nextTopLevelSortOrder(client, classId), null, weight.value, null]);
+  return toCategoryOption({ ...rows[0], child_count: 0 });
+}
+
 /** The shape every assessment route answers with (assessment.controller.js). */
 const toAssessmentPayload = (a) => ({
   assessmentId: a.assessment_id,
@@ -116,5 +138,6 @@ async function listClassAssessments(client, classId) {
 
 module.exports = {
   CATEGORY_MOVE_MESSAGE, NOT_A_CATEGORY_MESSAGE, MAKE_CATEGORY_MESSAGE, NOT_FOUND_MESSAGE, CHANGED_MESSAGE,
-  moveAssessment, makeCategory, listClassAssessments, toAssessmentPayload,
+  CATEGORY_NAME_MESSAGE, CATEGORY_NAME_LONG_MESSAGE,
+  moveAssessment, makeCategory, createCategory, listClassAssessments, toAssessmentPayload,
 };

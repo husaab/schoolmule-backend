@@ -1,5 +1,5 @@
 // validateItemInput: every rule of the classwork item form, one assertion each.
-const { validateItemInput, D2_MESSAGE } = require('../../../services/classroom/classworkItems');
+const { validateItemInput, D2_MESSAGE, WEIGHT_MESSAGE } = require('../../../services/classroom/classworkItems');
 
 const HOMEWORK = 'aaaaaaaa-0000-4000-8000-000000000001';
 const TESTS = 'aaaaaaaa-0000-4000-8000-000000000002';
@@ -43,11 +43,31 @@ describe('validateItemInput: kind and gradebook', () => {
   it('an assessment in a class with no categories gets the D2 message', () => {
     expect(errorOf(assessment({ gradebook: { mode: 'none' } }), ctx({ categories: [] }))).toBe(D2_MESSAGE);
   });
-  it('the D2 message is the brief\'s copy', () => {
-    expect(D2_MESSAGE).toBe('Add a category in Grades → Assessments & categories first, or fill an existing column.');
+  it('the D2 message names both ways out', () => {
+    expect(D2_MESSAGE).toBe('This class has no categories yet. Add one, or let this count on its own.');
   });
-  it('an assessment must count toward a category', () => {
-    expect(errorOf(assessment({ gradebook: { mode: 'none' } }))).toMatch(/category/i);
+  it('an assessment must count toward a category or on its own', () => {
+    expect(errorOf(assessment({ gradebook: { mode: 'none' } }))).toMatch(/category.*on its own/i);
+  });
+  it('an assessment can count on its own, in a class with no categories too', () => {
+    const gb = { mode: 'standalone', maxScore: 30, weightPoints: 15 };
+    expect(valueOf(assessment({ gradebook: gb })).gradebook).toEqual(gb);
+    expect(valueOf(assessment({ gradebook: gb }), ctx({ categories: [] })).gradebook).toEqual(gb);
+  });
+  it('an assignment or quiz can count on its own', () => {
+    const gb = { mode: 'standalone', maxScore: 10, weightPoints: 5 };
+    expect(valueOf(assignment({ gradebook: gb })).gradebook).toEqual(gb);
+    expect(valueOf({ kind: 'quiz', title: 'Cells quiz', gradebook: gb }).gradebook).toEqual(gb);
+  });
+  it('on its own needs an out of', () => {
+    expect(errorOf(assessment({ gradebook: { mode: 'standalone', weightPoints: 15 } }))).toMatch(/Out of must be more than 0/);
+  });
+  it.each([[0], [-5], [100.01], ['lots'], [''], [null], [true], [undefined]])('on its own refuses a worth of %p', (weightPoints) => {
+    expect(errorOf(assessment({ gradebook: { mode: 'standalone', maxScore: 30, weightPoints } }))).toBe(WEIGHT_MESSAGE);
+  });
+  it('a worth is kept to two decimals, and may be the whole class', () => {
+    expect(valueOf(assessment({ gradebook: { mode: 'standalone', maxScore: 30, weightPoints: '12.345' } })).gradebook.weightPoints).toBe(12.35);
+    expect(valueOf(assessment({ gradebook: { mode: 'standalone', maxScore: 30, weightPoints: 100 } })).gradebook.weightPoints).toBe(100);
   });
   it('an assessment cannot just fill an existing column', () => {
     expect(errorOf(assessment({ gradebook: { mode: 'existing', assessmentId: COLUMN } }))).toMatch(/category/i);

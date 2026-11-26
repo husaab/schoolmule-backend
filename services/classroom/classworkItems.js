@@ -14,7 +14,7 @@ const supabase = require('../../config/supabaseClient');
 const logger = require('../../logger');
 const q = require('../../queries/classwork.queries');
 const assessmentQueries = require('../../queries/assessment.queries');
-const { rescaleForInsert, rescaleForRemoval } = require('./weights');
+const { rescaleForInsert, rescaleForRemoval, round2 } = require('./weights');
 const { BUCKET, SIGNED_URL_TTL, youtubeIdOf } = require('../../utils/classworkUpload');
 const { signedUrlMap } = require('../../utils/attachmentUpload');
 const engine = require('../analyticsEngine');
@@ -32,9 +32,12 @@ const TITLE_MAX = 200;
 const INSTRUCTIONS_MAX = 20000;
 const MAX_AUDIENCE = 500;
 const MAX_SCORE_LIMIT = 10000;
+// The class is 100 points: nothing in it is worth more.
+const MAX_WEIGHT_POINTS = 100;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const D2_MESSAGE = 'Add a category in Grades → Assessments & categories first, or fill an existing column.';
+const D2_MESSAGE = 'This class has no categories yet. Add one, or let this count on its own.';
+const WEIGHT_MESSAGE = 'Worth must be more than 0 and at most 100';
 const GRADES_EXIST_MESSAGE = 'This column already has published grades. Unpublish or clear them in Grades first.';
 const STANDALONE_MOVE_MESSAGE = 'This column counts on its own in Grades. Move it in Grades → Assessments & categories.';
 const COLUMN_TAKEN_MESSAGE = 'Another item already fills that gradebook column. Choose another column.';
@@ -88,6 +91,24 @@ function gradebookDate(value) {
   return null;
 }
 
+/** A number a form sent, or NaN ('' / null / true are not numbers). */
+const formNumber = (v) => (v === '' || v === null || v === undefined || typeof v === 'boolean' ? NaN : Number(v));
+
+/** "Out of" → { value } or { error }. */
+function parseMaxScore(raw) {
+  const maxScore = formNumber(raw);
+  if (!Number.isFinite(maxScore) || maxScore <= 0) return fail('Out of must be more than 0');
+  if (maxScore > MAX_SCORE_LIMIT) return fail('Out of must be 10,000 or less');
+  return { value: maxScore };
+}
+
+/** Points of the class's 100 (a category's, or a column's that counts on its own) → { value } or { error }. */
+function parseWeightPoints(raw) {
+  const points = round2(formNumber(raw));
+  if (!Number.isFinite(points) || points <= 0 || points > MAX_WEIGHT_POINTS) return fail(WEIGHT_MESSAGE);
+  return { value: points };
+}
+
 /** gradebook input → a normalized choice, or { error }. */
 function parseGradebook(gb, { kind, categories, linkableColumns, current }) {
   if (!gb || typeof gb !== 'object') return fail('Choose how this counts in the gradebook');
@@ -96,10 +117,17 @@ function parseGradebook(gb, { kind, categories, linkableColumns, current }) {
     if (categories.length === 0) return fail(D2_MESSAGE);
     const categoryId = lower(gb.categoryId);
     if (!categories.some((c) => lower(c.assessmentId) === categoryId)) return fail("Choose one of this class's categories");
-    const maxScore = gb.maxScore === '' || gb.maxScore === null || typeof gb.maxScore === 'boolean' ? NaN : Number(gb.maxScore);
-    if (!Number.isFinite(maxScore) || maxScore <= 0) return fail('Out of must be more than 0');
-    if (maxScore > MAX_SCORE_LIMIT) return fail('Out of must be 10,000 or less');
-    return { value: { mode: 'category', categoryId, maxScore } };
+    const max = parseMaxScore(gb.maxScore);
+    if (max.error) return max;
+    return { value: { mode: 'category', categoryId, maxScore: max.value } };
+  }
+  // A column of its own, outside every category, worth its own share of the class's 100 points.
+  if (gb.mode === 'standalone') {
+    const max = parseMaxScore(gb.maxScore);
+    if (max.error) return max;
+    const weight = parseWeightPoints(gb.weightPoints);
+    if (weight.error) return weight;
+    return { value: { mode: 'standalone', maxScore: max.value, weightPoints: weight.value } };
   }
   if (gb.mode === 'existing') {
     const assessmentId = lower(gb.assessmentId);
@@ -178,8 +206,8 @@ function validateItemInput(input, ctx) {
   } else {
     gradebook = cur && cur.assessmentId ? { mode: 'keep' } : { mode: 'none' };
   }
-  if (kind === 'assessment' && gradebook.mode !== 'category' && gradebook.mode !== 'keep') {
-    return fail(categories.length === 0 ? D2_MESSAGE : 'Choose a category for this assessment');
+  if (kind === 'assessment' && !['category', 'standalone', 'keep'].includes(gradebook.mode)) {
+    return fail(categories.length === 0 ? D2_MESSAGE : 'Choose a category for this assessment, or let it count on its own');
   }
 
   const status = pick('status', 'posted');
@@ -328,6 +356,7 @@ function toCurrent(row, studentIds) {
     assessmentId: row.assessment_id ?? null,
     categoryId: row.category_id ?? null,
     maxScore: num(row.max_score),
+    weightPoints: num(row.weight_points),
     quiz: quizSettingsOf(row),
   };
 }
@@ -344,13 +373,16 @@ const toTopic = (r) => ({ topicId: r.topic_id, name: r.name, sortOrder: Number(r
 
 /** What validateItemInput needs to know about a class. `runner` is the pool or a client. */
 async function loadContext(runner, classId) {
-  const [cats, cols, roster, topics] = await Promise.all([
+  const [cats, cols, roster, topics, totals] = await Promise.all([
     runner.query(q.selectCategories, [classId]),
     runner.query(q.selectLinkableColumns, [classId]),
     runner.query(q.selectRosterIds, [classId]),
     runner.query(q.selectTopics, [classId]),
+    runner.query(q.selectTopLevelTotals, [classId]),
   ]);
   return {
+    // Of the class's 100 points: what its categories and the columns that count on their own add up to.
+    pointsUsed: round2(Number(totals.rows[0]?.points_used) || 0),
     categoryRows: cats.rows,
     columnRows: cols.rows,
     topicRows: topics.rows,
@@ -426,6 +458,31 @@ async function addColumnUnderCategory(client, { classId, categoryId, title, maxS
   return rows[0].assessment_id; // the insert trigger has given it a kind='assessment' item
 }
 
+/** Where a new top-level row (a category, or a column that counts on its own) goes: after the class's others. */
+async function nextTopLevelSortOrder(client, classId) {
+  return (await one(client, q.selectTopLevelTotals, [classId])).next_sort_order;
+}
+
+/** A new column that counts on its own (in no category), worth `weightPoints` of the class's 100. Returns the assessment id. */
+async function addStandaloneColumn(client, { classId, title, maxScore, weightPoints, date }) {
+  const { rows } = await client.query(assessmentQueries.createAssessment, [
+    classId, title, null, null, false, await nextTopLevelSortOrder(client, classId), maxScore, weightPoints, date]);
+  return rows[0].assessment_id; // the insert trigger has given it a kind='assessment' item
+}
+
+/**
+ * Takes a column out of its category to count on its own, worth
+ * `weightPoints`. The category keeps its points: its remaining columns grow
+ * back to fill it (an emptied category stays, as it does when its last
+ * column is deleted).
+ */
+async function leaveCategory(client, { assessmentId, classId, fromCategoryId, weightPoints }) {
+  // The category before its columns, as every other writer locks them.
+  await client.query(q.lockCategoriesInOrder, [[lower(fromCategoryId)]]);
+  await client.query(q.reparentAssessment, [assessmentId, null, weightPoints, await nextTopLevelSortOrder(client, classId)]);
+  await refillCategory(client, fromCategoryId);
+}
+
 /** The category's remaining columns grow back to fill it. */
 async function refillCategory(client, categoryId) {
   const parent = await one(client, `SELECT assessment_id, weight_points FROM assessments WHERE assessment_id = $1 FOR UPDATE`, [categoryId]);
@@ -485,6 +542,11 @@ async function createItem(client, { classId, userId, value }) {
       classId, categoryId: value.gradebook.categoryId, title: value.title,
       maxScore: value.gradebook.maxScore, date: gradebookDate(value),
     });
+  } else if (value.gradebook.mode === 'standalone') {
+    assessmentId = await addStandaloneColumn(client, {
+      classId, title: value.title, maxScore: value.gradebook.maxScore,
+      weightPoints: value.gradebook.weightPoints, date: gradebookDate(value),
+    });
   } else if (value.gradebook.mode === 'existing') {
     assessmentId = value.gradebook.assessmentId;
     await client.query(q.renameAssessment, [value.title, gradebookDate(value), assessmentId]);
@@ -524,6 +586,9 @@ function columnChoiceDiffers(gb, cur) {
   if (gb.mode === 'category') {
     return !cur.assessmentId || gb.categoryId !== lower(cur.categoryId ?? '') || gb.maxScore !== cur.maxScore;
   }
+  if (gb.mode === 'standalone') {
+    return !cur.assessmentId || Boolean(cur.categoryId) || gb.maxScore !== cur.maxScore || gb.weightPoints !== cur.weightPoints;
+  }
   return true; // another existing column
 }
 
@@ -556,6 +621,12 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   const dropping = Boolean(assessmentId) && target.mode === 'none';
   const switching = Boolean(assessmentId) && target.mode === 'existing';
   const moving = Boolean(assessmentId) && target.mode === 'category' && lower(target.categoryId) !== lower(row.category_id ?? '');
+  // "On its own": the column it has leaves its category, or (already on its own) takes the points the form sent.
+  const leaving = Boolean(assessmentId) && target.mode === 'standalone' && Boolean(row.category_id);
+  const reweighing = Boolean(assessmentId) && target.mode === 'standalone' && !row.category_id
+    && target.weightPoints !== cur.weightPoints;
+  // The choices that carry an "Out of" for the column.
+  const setsMax = target.mode === 'category' || target.mode === 'standalone';
   let gradebookChanged = false;
 
   // Grades on the students' work (drafts, or published through Classwork)
@@ -578,7 +649,7 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   if (cur.kind !== 'quiz' && value.kind === 'quiz' && (await one(client, quizQueries.selectHasStudentWork, [itemId]))?.has_work) {
     throw httpError(409, WORK_BEFORE_QUIZ_MESSAGE, QUIZ_KIND_CODE);
   }
-  const newMax = target.mode === 'category' ? target.maxScore : null;
+  const newMax = setsMax ? target.maxScore : null;
   const maxChanges = Boolean(assessmentId) && newMax !== null && newMax !== cur.maxScore;
   if (assessmentId && (dropping || switching || leavesTurnIn || maxChanges)) {
     const work = await one(client, q.selectGradedWork, [itemId]);
@@ -595,7 +666,7 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   // putting it in a category would take them out of the class's 100.
   if (moving && !row.category_id) throw httpError(409, STANDALONE_MOVE_MESSAGE);
 
-  const willBeLinked = target.mode === 'keep' || target.mode === 'category' || target.mode === 'existing';
+  const willBeLinked = target.mode === 'keep' || setsMax || target.mode === 'existing';
   // The item's own columns first, so a kind change is in place before any
   // column is removed (the delete trigger only removes plain-assessment rows).
   await client.query(q.updateItem, [
@@ -612,13 +683,19 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
     assessmentId = null;
   }
 
-  const newlyLinked = !assessmentId && (target.mode === 'category' || target.mode === 'existing');
+  const newlyLinked = !assessmentId && (setsMax || target.mode === 'existing');
   if (newlyLinked) {
-    assessmentId = target.mode === 'category'
-      ? await addColumnUnderCategory(client, {
+    if (target.mode === 'category') {
+      assessmentId = await addColumnUnderCategory(client, {
         classId, categoryId: target.categoryId, title: value.title, maxScore: target.maxScore, date: gradebookDate(value),
-      })
-      : target.assessmentId;
+      });
+    } else if (target.mode === 'standalone') {
+      assessmentId = await addStandaloneColumn(client, {
+        classId, title: value.title, maxScore: target.maxScore, weightPoints: target.weightPoints, date: gradebookDate(value),
+      });
+    } else {
+      assessmentId = target.assessmentId;
+    }
     await client.query(q.movePlainItemAttachments, [assessmentId, itemId]);
     await client.query(q.deletePlainItemOf, [assessmentId, itemId]);
     await client.query(q.setItemAssessment, [itemId, assessmentId]);
@@ -626,11 +703,17 @@ async function updateItem(client, { classId, userId, row, cur, value }) {
   } else if (moving) {
     await moveColumn(client, { assessmentId, classId, fromCategoryId: row.category_id, toCategoryId: target.categoryId });
     gradebookChanged = true;
+  } else if (leaving) {
+    await leaveCategory(client, { assessmentId, classId, fromCategoryId: row.category_id, weightPoints: target.weightPoints });
+    gradebookChanged = true;
+  } else if (reweighing) {
+    await client.query(q.updateAssessmentWeight, [target.weightPoints, assessmentId]);
+    gradebookChanged = true;
   }
 
   if (assessmentId) {
     const setDate = newlyLinked || value.kind !== cur.kind || (value.kind === 'assessment' ? value.date !== cur.date : value.dueAt !== cur.dueAt);
-    const maxScore = target.mode === 'category' ? target.maxScore : null;
+    const maxScore = setsMax ? target.maxScore : null;
     await client.query(q.updateLinkedAssessment, [assessmentId, value.title, setDate, gradebookDate(value), maxScore]);
     if (maxScore !== null && maxScore !== cur.maxScore) gradebookChanged = true;
     // A quiz with questions is out of its points, whatever the form sent (T23).
@@ -866,9 +949,9 @@ async function signedFileUrl(filePath) {
 }
 
 module.exports = {
-  ITEM_KINDS, SUBMISSION_MODES, STATUSES, D2_MESSAGE, GRADES_EXIST_MESSAGE, STANDALONE_MOVE_MESSAGE,
+  ITEM_KINDS, SUBMISSION_MODES, STATUSES, D2_MESSAGE, WEIGHT_MESSAGE, GRADES_EXIST_MESSAGE, STANDALONE_MOVE_MESSAGE,
   GRADED_WORK_CODE, GRADED_WORK_MESSAGE, DRAFT_ABOVE_MAX_CODE,
-  httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput,
+  httpError, isCalendarDate, torontoDate, gradebookDate, validateItemInput, parseWeightPoints, nextTopLevelSortOrder,
   toAttachment, toItemSummary, toItem, toCurrent, toCategoryOption, toColumnOption, toTopic,
   loadContext, loadItem, loadAttachments, withClassAverages,
   createItem, updateItem, deleteItem, inTransaction, copyClasswork, copyAttachments, copyQuizContent, signedFileUrl, notifyPosted,

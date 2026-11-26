@@ -1,10 +1,11 @@
 /*
   controllers/gradebookStructure.controller.js
   Regrouping gradebook columns (Grades → Assessments & categories) for the
-  class's teachers and admins; the routes run requireClassOwnership. Both
-  answer with the class's whole assessment list, since a move changes the
-  points of up to three rows and may remove an empty category. The flows
-  live in services/classroom/assessmentStructure.js.
+  class's teachers and admins; the routes run requireClassOwnership. Move and
+  make-category answer with the class's whole assessment list, since a move
+  changes the points of up to three rows and may remove an empty category;
+  a new category answers with itself. The flows live in
+  services/classroom/assessmentStructure.js.
 */
 
 const logger = require('../logger');
@@ -61,4 +62,20 @@ const makeCategory = async (req, res) => {
   }
 };
 
-module.exports = { moveAssessment, makeCategory };
+// POST /api/classroom/classes/:classId/categories  { name, weightPoints }
+// A new, empty category, for the "New category…" of a "Counts toward" picker.
+const createCategory = async (req, res) => {
+  const { classId, school } = req.class;
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  try {
+    const category = await inTransaction((client) => structure.createCategory(client, {
+      classId, name: body.name, weightPoints: body.weightPoints,
+    }));
+    engine.invalidateCache(school);
+    return res.status(201).json({ status: 'success', data: category });
+  } catch (error) {
+    return fail(res, error, "The category couldn't be added", { classId });
+  }
+};
+
+module.exports = { moveAssessment, makeCategory, createCategory };

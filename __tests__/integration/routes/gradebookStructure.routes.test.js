@@ -163,6 +163,53 @@ describe('Integration: regrouping gradebook columns', () => {
     expect(await row(participatingId)).toMatchObject({ parent_assessment_id: null, w: 10 });
   });
 
+  it('adds an empty category from a "Counts toward" picker: after the others, listed for Classwork, and no Classwork row of its own', async () => {
+    const res = await authenticatedRequest('post', `${BASE}/classes/${mathId}/categories`, asOtherTeacher).send({ name: '  Projects ', weightPoints: '25' });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toEqual({ assessmentId: expect.any(String), name: 'Projects', weightPoints: 25, childCount: 0 });
+
+    const made = (await pool.query(
+      `SELECT parent_assessment_id, is_parent, max_score, weight_points::float AS w, sort_order FROM assessments WHERE assessment_id = $1`,
+      [res.body.data.assessmentId],
+    )).rows[0];
+    const lastBefore = (await pool.query(
+      `SELECT COALESCE(MAX(sort_order), 0)::int AS s FROM assessments WHERE class_id = $1 AND parent_assessment_id IS NULL AND assessment_id <> $2`,
+      [mathId, res.body.data.assessmentId],
+    )).rows[0].s;
+    expect(made).toEqual({ parent_assessment_id: null, is_parent: true, max_score: null, w: 25, sort_order: lastBefore + 1 });
+    expect((await pool.query(`SELECT 1 FROM classwork_items WHERE assessment_id = $1`, [res.body.data.assessmentId])).rows).toHaveLength(0);
+
+    const listed = await authenticatedRequest('get', `${BASE}/classes/${mathId}/items`, asOtherTeacher);
+    expect(listed.body.data.categories.map((c) => c.name)).toContain('Projects');
+
+    // A new assessment can go straight into it, and takes all of its points.
+    const item = await authenticatedRequest('post', `${BASE}/classes/${mathId}/items`, asOtherTeacher).send({
+      kind: 'assessment', title: 'Bridge project', gradebook: { mode: 'category', categoryId: res.body.data.assessmentId, maxScore: 40 },
+    });
+    expect(item.status).toBe(201);
+    expect(item.body.data.gradebook).toMatchObject({ categoryId: res.body.data.assessmentId, maxScore: 40, weightPoints: 25 });
+  });
+
+  it('a new category needs a name and a worth between 0 and 100', async () => {
+    const post = (body) => authenticatedRequest('post', `${BASE}/classes/${sciId}/categories`, asTeacher).send(body);
+    const before = (await pool.query(`SELECT COUNT(*)::int AS n FROM assessments`)).rows[0].n;
+    for (const [body, message] of [
+      [{ weightPoints: 10 }, 'Give the category a name'],
+      [{ name: '   ', weightPoints: 10 }, 'Give the category a name'],
+      [{ name: 'x'.repeat(201), weightPoints: 10 }, 'Keep the name to 200 characters'],
+      [{ name: 'Labs' }, 'Worth must be more than 0 and at most 100'],
+      [{ name: 'Labs', weightPoints: 0 }, 'Worth must be more than 0 and at most 100'],
+      [{ name: 'Labs', weightPoints: 101 }, 'Worth must be more than 0 and at most 100'],
+    ]) {
+      const res = await post(body);
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe(message);
+    }
+    expect((await pool.query(`SELECT COUNT(*)::int AS n FROM assessments`)).rows[0].n).toBe(before);
+    // Another class's teacher is refused.
+    expect((await authenticatedRequest('post', `${BASE}/classes/${sciId}/categories`, asOtherTeacher).send({ name: 'Labs', weightPoints: 10 })).status).toBe(403);
+  });
+
   it("is the class's teachers' to do: another teacher is refused, and a column of another class is not found", async () => {
     expect((await move(participatingId, homeworkId, asOtherTeacher)).status).toBe(403);
     expect((await makeCategory(participatingId, asOtherTeacher)).status).toBe(403);

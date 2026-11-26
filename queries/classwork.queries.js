@@ -149,6 +149,15 @@ ORDER BY i.created_at, i.item_id`,
     WHERE p.class_id = $1 AND COALESCE(p.is_parent, FALSE)
     ORDER BY p.sort_order NULLS LAST, p.created_at, p.assessment_id`,
 
+  //  What the class's top-level rows (categories and columns that count on
+  //  their own) add up to, of the class's 100 points, and where the next
+  //  top-level row goes in the list. $1 class_id
+  selectTopLevelTotals: `
+    SELECT COALESCE(SUM(weight_points), 0)::float AS points_used,
+           COALESCE(MAX(sort_order), 0)::int + 1 AS next_sort_order
+    FROM assessments
+    WHERE class_id = $1 AND parent_assessment_id IS NULL`,
+
   //  Leaf columns an assignment or quiz may fill: no other item has taken
   //  them over (their item, if any, is still a plain assessment). $1 class_id
   selectLinkableColumns: `
