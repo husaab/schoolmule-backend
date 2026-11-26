@@ -22,6 +22,14 @@ const app = getApp();
 const mockClassGuard = () =>
   mockQueryResponse([{ class_id: 'guarded-class', school: TEST_SCHOOL, teacher_id: 'some-teacher', is_co_teacher: false }]);
 
+// The lead or co-teacher named in a request is looked up as staff of the school.
+const mockStaffOfSchool = (found = true) => mockQueryResponse(found ? [{ '?column?': 1 }] : []);
+// The enrolment guard's answer for one student.
+const mockEnrollmentFit = (studentId, fit = {}) =>
+  mockQueryResponse([{ student_id: studentId, same_school: true, same_year: true, ...fit }]);
+const wroteTo = (table) => require('../../../config/database').query.mock.calls
+  .some(([sql]) => new RegExp(`INSERT INTO ${table}`).test(String(sql)));
+
 function authGet(url) {
   const token = mockAdminUser();
   return request(app).get(url).set('Authorization', `Bearer ${token}`);
@@ -215,9 +223,17 @@ describe('Class Controller', () => {
 
   // ── createClass ──────────────────────────────────────────────
   describe('POST /api/classes', () => {
+    it('should return 404 when the lead teacher is not staff of the school', async () => {
+      mockStaffOfSchool(false);
+      const res = await authPost('/api/classes').send(buildCreateClassBody());
+      expect(res.status).toBe(404);
+      expect(res.body.message).toBe('Teacher not found');
+    });
+
     it('should return 201 and auto-enroll the grade by default', async () => {
       const row = buildClassRow();
       // Transaction: BEGIN, createClass, enrollAllInGrade, COMMIT
+      mockStaffOfSchool();
       mockTransactionSequence([
         { rows: [row] },
         { rows: [], rowCount: 24 }, // enrollAllInGrade inserted 24 students
@@ -234,6 +250,7 @@ describe('Class Controller', () => {
     it('should skip enrollment when autoEnroll is false', async () => {
       const row = buildClassRow();
       // Transaction: BEGIN, createClass, COMMIT
+      mockStaffOfSchool();
       mockTransactionSequence([{ rows: [row] }]);
       const body = { ...buildCreateClassBody(), autoEnroll: false };
       const res = await authPost('/api/classes').send(body);
@@ -244,6 +261,7 @@ describe('Class Controller', () => {
 
     it('should report zero enrolled when the grade has no students', async () => {
       const row = buildClassRow();
+      mockStaffOfSchool();
       mockTransactionSequence([
         { rows: [row] },
         { rows: [], rowCount: 0 },
@@ -261,6 +279,7 @@ describe('Class Controller', () => {
     });
 
     it('should return 500 and roll back on database error', async () => {
+      mockStaffOfSchool();
       mockTransactionError(0, 'insert failed');
       const body = buildCreateClassBody();
       const res = await authPost('/api/classes').send(body);
@@ -373,11 +392,45 @@ describe('Class Controller', () => {
       mockClassGuard();
       const classId = uuidv4();
       const studentId = uuidv4();
+      mockEnrollmentFit(studentId);
       mockQueryResponse([{ class_id: classId, student_id: studentId }]);
       const res = await authPost(`/api/classes/${classId}/students`).send({ studentId });
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('success');
       expect(res.body.data.classId).toBe(classId);
+    });
+
+    it('should return 404 and enrol nobody for a student of another school', async () => {
+      mockClassGuard();
+      const studentId = uuidv4();
+      mockEnrollmentFit(studentId, { same_school: false });
+      const res = await authPost(`/api/classes/${uuidv4()}/students`).send({ studentId });
+      expect(res.status).toBe(404);
+      expect(wroteTo('class_students')).toBe(false);
+    });
+
+    it('should return 404 for a student that does not exist', async () => {
+      mockClassGuard();
+      mockEnrollmentFit(null, { same_school: null, same_year: null });
+      const res = await authPost(`/api/classes/${uuidv4()}/students`).send({ studentId: uuidv4() });
+      expect(res.status).toBe(404);
+      expect(wroteTo('class_students')).toBe(false);
+    });
+
+    it('should return 400 for a student of another school year', async () => {
+      mockClassGuard();
+      const studentId = uuidv4();
+      mockEnrollmentFit(studentId, { same_year: false });
+      const res = await authPost(`/api/classes/${uuidv4()}/students`).send({ studentId });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('STUDENT_OTHER_YEAR');
+      expect(wroteTo('class_students')).toBe(false);
+    });
+
+    it('should return 404 (not 500) when the student id is not a uuid', async () => {
+      mockClassGuard();
+      const res = await authPost(`/api/classes/${uuidv4()}/students`).send({ studentId: 'nope' });
+      expect(res.status).toBe(404);
     });
 
     it('should return 400 when studentId is missing', async () => {
@@ -445,6 +498,8 @@ describe('Class Controller', () => {
       const classId = uuidv4();
       const sid1 = uuidv4();
       const sid2 = uuidv4();
+      // selectEnrollableStudents: both are of the class's school and year
+      mockQueryResponse([{ student_id: sid1 }, { student_id: sid2 }]);
       // enrollSpecificStudents
       mockQueryResponse([]);
       // selectEnrolledSpecificStudents
@@ -455,6 +510,19 @@ describe('Class Controller', () => {
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('success');
       expect(res.body.data).toHaveLength(2);
+    });
+
+    it('should return 400 and enrol nobody when one student is not of this school and year', async () => {
+      mockClassGuard();
+      const sid1 = uuidv4();
+      const outsider = uuidv4();
+      mockQueryResponse([{ student_id: sid1 }]); // selectEnrollableStudents: only one fits
+      const res = await authPost(`/api/classes/${uuidv4()}/students/bulk`).send({
+        studentIds: [sid1, outsider, 'not-an-id'],
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.invalid).toEqual([outsider, 'not-an-id']);
+      expect(wroteTo('class_students')).toBe(false);
     });
 
     it('should return 201 when enrolling all in grade', async () => {
@@ -530,6 +598,7 @@ describe('Class Controller', () => {
   describe('POST /api/classes/:sourceClassId/duplicate', () => {
     it('should return 201 on successful duplication', async () => {
       mockClassGuard();
+      mockStaffOfSchool();
       const sourceId = uuidv4();
       const sourceRow = buildClassRow({ class_id: sourceId });
       const newRow = buildClassRow();
@@ -564,6 +633,7 @@ describe('Class Controller', () => {
 
     it('should return 400 for invalid source class ID format', async () => {
       mockClassGuard();
+      mockStaffOfSchool();
       const res = await authPost('/api/classes/not-a-uuid/duplicate').send({
         grade: 5,
         subject: 'Science',
@@ -577,6 +647,7 @@ describe('Class Controller', () => {
 
     it('should return 400 when required fields are missing', async () => {
       mockClassGuard();
+      mockStaffOfSchool();
       const res = await authPost(`/api/classes/${uuidv4()}/duplicate`).send({
         grade: 5,
       });
@@ -586,6 +657,7 @@ describe('Class Controller', () => {
 
     it('should return 404 when source class not found', async () => {
       mockClassGuard();
+      mockStaffOfSchool();
       const sourceId = uuidv4();
       mockTransactionSequence([
         { rows: [] },
@@ -604,6 +676,7 @@ describe('Class Controller', () => {
 
     it('should return 500 on transaction error', async () => {
       mockClassGuard();
+      mockStaffOfSchool();
       mockTransactionError(0, 'tx failed');
       const res = await authPost(`/api/classes/${uuidv4()}/duplicate`).send({
         grade: 5,
@@ -627,11 +700,23 @@ describe('Class Controller', () => {
       const classRow = buildClassRow({ class_id: classId, teacher_id: TEST_TEACHER_USER_ID });
       // selectClassById
       mockQueryResponse([classRow]);
+      mockStaffOfSchool();
       // insertClassTeacher
       mockQueryResponse([{ class_id: classId, teacher_id: teacherId, created_at: new Date().toISOString() }]);
       const res = await authPost(`/api/classes/${classId}/teachers`).send({ teacherId });
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('success');
+    });
+
+    it('should return 404 and add nobody when the teacher is not staff of the school', async () => {
+      mockClassGuard();
+      const classId = uuidv4();
+      mockQueryResponse([buildClassRow({ class_id: classId, teacher_id: TEST_TEACHER_USER_ID })]);
+      mockStaffOfSchool(false);
+      const res = await authPost(`/api/classes/${classId}/teachers`).send({ teacherId: uuidv4() });
+      expect(res.status).toBe(404);
+      expect(res.body.message).toBe('Teacher not found');
+      expect(wroteTo('class_teachers')).toBe(false);
     });
 
     it('should return 400 when teacherId is missing', async () => {

@@ -37,6 +37,21 @@ const bulkQueries = {
   `,
 
   /**
+   * Which of these students may join the class: the ones of the class's own
+   * school and school year.
+   *    $1 = class_id
+   *    $2 = uuid[] array of student_ids
+   */
+  selectEnrollableStudents: `
+    SELECT s.student_id
+    FROM students s
+    JOIN classes c ON c.class_id = $1::uuid
+    WHERE s.student_id = ANY($2::uuid[])
+      AND s.school = c.school
+      AND s.school_year_id IS NOT DISTINCT FROM c.school_year_id
+  `,
+
+  /**
    * 3) Return exactly which student_ids from a provided array are now in class_students.
    *    $1 = class_id      (UUID)
    *    $2 = uuid[] array  (array of student_ids)

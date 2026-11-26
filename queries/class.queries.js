@@ -380,6 +380,28 @@ const classQueries = {
       ORDER BY u.last_name, u.first_name
     `,
 
+    // Enrolment guard: one row when the class exists; student_id is null when
+    // the student doesn't (a deleted student is not in the `students` view).
+    selectEnrollmentFit: `
+      SELECT
+        s.student_id,
+        (s.school = c.school) AS same_school,
+        (s.school_year_id IS NOT DISTINCT FROM c.school_year_id) AS same_year
+      FROM classes c
+      LEFT JOIN students s ON s.student_id = $2
+      WHERE c.class_id = $1
+    `,
+
+    // A current teacher or admin account of the school ($1 user, $2 school).
+    selectStaffOfSchool: `
+      SELECT 1
+      FROM users
+      WHERE user_id = $1
+        AND school = $2
+        AND role IN ('TEACHER', 'ADMIN')
+        AND is_archived = FALSE
+    `,
+
     insertClassTeacher: `
       INSERT INTO class_teachers (class_id, teacher_id)
       VALUES ($1, $2)

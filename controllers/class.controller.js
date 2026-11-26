@@ -23,6 +23,21 @@ const CLASS_LIST_KEYS = [
   "classes.all", "classes.manage", "attendance.classes", "report_cards", "students",
   "users", "messages.all", "announcements.school", "scheduling",
 ];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value) => typeof value === "string" && UUID_RE.test(value);
+const TEACHER_NOT_FOUND = { status: "failed", message: "Teacher not found" };
+
+/**
+ * Whether `userId` is a current teacher or admin of `school`. Only they can
+ * lead or co-teach a class there: the class guard proves the caller may
+ * change the class, and this proves the person named belongs to its school.
+ */
+const isStaffOfSchool = async (userId, school) => {
+  if (!isUuid(userId)) return false;
+  const { rows } = await db.query(classQueries.selectStaffOfSchool, [userId, school]);
+  return rows.length > 0;
+};
+
 const seesAllClasses = (req) => canAny(req, ...CLASS_LIST_KEYS);
 const managesClasses = (req) => canAny(req, "classes.manage", "classes.all");
 const teaches = (userId, c, atMap) =>
@@ -255,6 +270,10 @@ const createClass = async (req, res) => {
   if (teacherId !== req.user.userId && !managesClasses(req)) {
     return res.status(403).json(NOT_YOURS);
   }
+  // Giving it to someone else: they must be staff of this school.
+  if (teacherId !== req.user.userId && !(await isStaffOfSchool(teacherId, school))) {
+    return res.status(404).json(TEACHER_NOT_FOUND);
+  }
 
   const client = await db.connect();
 
@@ -333,6 +352,10 @@ const updateClass = async (req, res) => {
   // is classes.manage.
   if (teacherId && req.class && teacherId !== req.class.teacherId && !managesClasses(req)) {
     return res.status(403).json(NOT_YOURS);
+  }
+  // The new lead must be staff of the class's school.
+  if (teacherId && req.class && teacherId !== req.class.teacherId && !(await isStaffOfSchool(teacherId, req.class.school))) {
+    return res.status(404).json(TEACHER_NOT_FOUND);
   }
 
   // Build the parameter array in the same order as `updateClassById`
@@ -499,7 +522,22 @@ const addStudentToClass = async (req, res) => {
   }
 
   try {
-    // (Optional) You may want to verify that classId and studentId both exist in their tables before inserting.
+    // A class only takes students of its own school and school year. The
+    // class guard has already proved the caller may change this class.
+    const { rows: [fit] } = isUuid(studentId)
+      ? await db.query(classQueries.selectEnrollmentFit, [classId, studentId])
+      : { rows: [] };
+    if (!fit || !fit.student_id || !fit.same_school) {
+      return res.status(404).json({ status: "failed", message: "Student not found" });
+    }
+    if (!fit.same_year) {
+      return res.status(400).json({
+        status: "failed",
+        code: "STUDENT_OTHER_YEAR",
+        message: "This student belongs to a different school year than the class",
+      });
+    }
+
     const { rows } = await db.query(
       classQueries.createClassStudentRelation,
       [classId, studentId]
@@ -631,6 +669,23 @@ const bulkEnrollStudentsToClass = async (req, res) => {
       });
     }
 
+    // Every student must be one of the class's school and school year, or
+    // nobody is enrolled: a partial enrolment would hide the bad ids.
+    const wanted = [...new Set(studentIds.map((id) => String(id).toLowerCase()))];
+    const { rows: enrollable } = await db.query(
+      bulkQueries.selectEnrollableStudents,
+      [classId, wanted.filter(isUuid)]
+    );
+    const allowed = new Set(enrollable.map((r) => String(r.student_id).toLowerCase()));
+    const invalid = wanted.filter((id) => !allowed.has(id));
+    if (invalid.length > 0) {
+      return res.status(400).json({
+        status: "failed",
+        message: `${invalid.length} student(s) can't be enrolled in this class`,
+        invalid,
+      });
+    }
+
     // 5) Insert only the provided list
     // Here we pass a real `uuid[]` for $2; pg will automatically cast the JS array → uuid[].
     await db.query(bulkQueries.enrollSpecificStudents, [classId, studentIds]);
@@ -751,7 +806,9 @@ const duplicateClass = async (req, res) => {
   if (teacherId !== req.user.userId && !managesClasses(req)) {
     return res.status(403).json(NOT_YOURS);
   }
-
+  if (teacherId !== req.user.userId && !(await isStaffOfSchool(teacherId, req.user.school))) {
+    return res.status(404).json(TEACHER_NOT_FOUND);
+  }
 
   const client = await db.connect();
   // Storage objects copied for classwork attachments; removed if the copy rolls back.
@@ -986,6 +1043,10 @@ const addTeacherToClass = async (req, res) => {
         status: "failed",
         message: "This teacher is already the primary teacher for this class",
       });
+    }
+    // A co-teacher is staff of the class's school.
+    if (!(await isStaffOfSchool(teacherId, classRows[0].school))) {
+      return res.status(404).json(TEACHER_NOT_FOUND);
     }
 
     const { rows } = await db.query(classQueries.insertClassTeacher, [classId, teacherId]);
