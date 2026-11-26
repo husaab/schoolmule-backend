@@ -9,7 +9,7 @@ const S = require('./state');
 const { slotsFor, overlaps, timeLabel } = require('./slots');
 const T = require('./time');
 const { childrenOf } = require('./booking');
-const { teachersFor, subjectFor, dayWindow } = require('./emails');
+const { teachersFor, subjectFor, dayWindow, familyDayList } = require('./emails');
 
 const iso = (d) => (d ? new Date(d).toISOString() : null);
 const unique = (values) => [...new Set(values)];
@@ -68,11 +68,17 @@ function parentView(state, people, userId, now = new Date()) {
     .filter((s) => teachers.some((t) => t.studentIds.includes(s.id)))
     .sort((a, b) => S.gradeRank(b.grade) - S.gradeRank(a.grade) || a.name.localeCompare(b.name));
   const family = new Set([...S.familyStudents(people, [...childIds]), ...childIds]);
+  const bookings = state.bookings.filter((b) => b.student_ids.some((id) => family.has(id)));
+  // A day only for some teachers shows when one of theirs meets on it (or they are booked on it).
+  const theirDays = new Set([
+    ...familyDayList(state, state.days, teachers).map((d) => d.day_id), ...bookings.map((b) => b.day_id),
+  ]);
+  const days = state.days.filter((d) => theirDays.has(d.day_id));
   return {
     ...eventView(state, now),
     // The number a phone call meeting suggests (theirs from the last one, else the file's).
     phone: S.phoneFor(state, people, [...childIds], userId),
-    days: state.days.map((day) => ({ ...dayBase(state, day, now), window: dayWindow(state, people, day) })),
+    days: days.map((day) => ({ ...dayBase(state, day, now), window: dayWindow(state, people, day) })),
     children: kids.map((s) => ({
       studentId: s.id, name: s.name, firstName: s.firstName, grade: s.grade, gradeLabel: S.gradeLabel(s.grade),
       room: state.event.use_grade_room ? `${S.gradeLabel(s.grade)} room` : null,
@@ -86,7 +92,7 @@ function parentView(state, people, userId, now = new Date()) {
       classIds: Object.fromEntries(studentIds.map((id) => [id, teacher.classesByStudent.get(id)?.[0]?.classId || null])),
       room: state.settings.get(teacher.id)?.room || null,
       slotMinutes: S.lengthFor(state, teacher.id),
-      days: state.days.map((day) => {
+      days: days.map((day) => {
         const plan = S.planFor(state, teacher.id, day);
         const bookable = now < T.cutoffAt(state.event, day);
         return {
@@ -97,8 +103,7 @@ function parentView(state, people, userId, now = new Date()) {
         };
       }),
     })),
-    bookings: state.bookings
-      .filter((b) => b.student_ids.some((id) => family.has(id)))
+    bookings: bookings
       .map((b) => {
         const day = state.days.find((d) => d.day_id === b.day_id);
         return {

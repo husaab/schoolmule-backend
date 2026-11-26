@@ -142,6 +142,13 @@ const cutoffLabel = (event) => (event.cutoff_min == null
 /** Days families can still book: [{ day, ... }] whose cutoff is ahead. */
 const bookableDays = (state, now) => state.days.filter((d) => now < T.cutoffAt(state.event, d));
 
+/**
+ * The days a family is told about: every day, except a day only for some
+ * teachers when none of the family's teachers (teachersFor) meets on it.
+ */
+const familyDayList = (state, days, teachers) => days.filter((d) => d.everyone !== false
+  || teachers.some(({ teacher }) => S.planFor(state, teacher.id, d).slots.length > 0));
+
 /** The window a parent sees for a day: earliest to latest teacher time. */
 function dayWindow(state, people, day) {
   let start = Infinity;
@@ -185,7 +192,9 @@ const inviteHandler = {
         const room = state.event.use_grade_room ? `${S.gradeLabel(s.grade)} room` : null;
         return { name: s.firstName, detail: [room, `${n} teacher${n === 1 ? '' : 's'}`].filter(Boolean).join(' · ') };
       });
-    const days = bookableDays(state, now);
+    const open = bookableDays(state, now);
+    const theirs = familyDayList(state, open, teachers);
+    const days = theirs.length ? theirs : open;
     const first = [...childIds][0];
     const link = await parentLink(guardian, first, PARENT_PATH);
     const plan = link.createAccount ? link : await parentLink(guardian, first, `${PARENT_PATH}?plan=1`);
@@ -453,7 +462,7 @@ const lastCallHandler = {
       rows,
       link: link.url,
       planLink: plan.url,
-      closingLine: days.map((d) => `Booking for ${T.weekday(d.day_date)} closes ${T.instantLabel(T.cutoffAt(state.event, d))}.`).join(' '),
+      closingLine: familyDayList(state, days, teachers).map((d) => `Booking for ${T.weekday(d.day_date)} closes ${T.instantLabel(T.cutoffAt(state.event, d))}.`).join(' '),
       fullTeachers: rows.filter((r) => !r.open).map((r) => r.name),
       createAccount: link.createAccount,
       schoolName,
@@ -543,5 +552,6 @@ module.exports = {
   familyDays,
   bookableDays,
   dayWindow,
+  familyDayList,
   overlaps,
 };

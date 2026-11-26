@@ -27,6 +27,16 @@ const checkLength = (v) => {
 };
 const cleanLabel = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 60) : null);
 
+/** The teachers a day is for (a day only for some teachers): at least one, each with families to meet. */
+function pickedTeachers(people, ids) {
+  const picked = [...new Set(Array.isArray(ids) ? ids : [])];
+  if (!picked.length) throw new MeetingError(400, 'PICK_TEACHERS', 'Pick the teachers who meet families that day');
+  if (picked.some((id) => !people.teachers.has(id))) {
+    throw new MeetingError(404, 'TEACHER_NOT_FOUND', "One of these teachers has no students' families to meet");
+  }
+  return picked;
+}
+
 /** The meetings a change would leave without a time, as the 409 lists them. */
 function describe(state, people, bookings) {
   return bookings.map((b) => {
@@ -111,23 +121,29 @@ function updateSettings({ school, eventId, userId, body }) {
 // ── Days and everyone's breaks ───────────────────────────────
 
 function addDay({ school, eventId, body }) {
-  return guarded(school, eventId, async ({ client, state }) => {
+  return guarded(school, eventId, async ({ client, state, people }) => {
     if (!DATE_RE.test(body.date || '')) throw new MeetingError(400, 'BAD_DAYS', 'Pick a date');
     if (state.days.some((d) => d.day_date === body.date)) throw new MeetingError(409, 'DAY_EXISTS', 'That day is already there');
     const start = body.start ?? state.days[0]?.start_min ?? 930;
     const end = body.end ?? state.days[0]?.end_min ?? 1170;
     checkWindow(start, end);
-    const { rows: [row] } = await client.query(q.insertDay, [eventId, body.date, start, end, bool(body.everyone, true)]);
+    const everyone = bool(body.everyone, true);
     // A day just for some teachers: they work it with the hours given.
-    for (const teacherId of Array.isArray(body.teacherIds) ? body.teacherIds : []) {
-      await client.query(q.upsertTeacherDay, [row.day_id, teacherId, true, null, null]);
-    }
+    const picked = everyone ? [] : pickedTeachers(people, body.teacherIds);
+    const { rows: [row] } = await client.query(q.insertDay, [eventId, body.date, start, end, everyone]);
+    for (const teacherId of picked) await client.query(q.upsertTeacherDay, [row.day_id, teacherId, true, null, null]);
     return row.day_id;
   });
 }
 
+/**
+ * Change a day's date, school hours, or who it is for. `everyone: false` with
+ * `teacherIds` makes it a day only for those teachers (they keep any hours of
+ * their own on it; the others stop working it); `everyone: true` gives it
+ * back to every teacher, except the ones switched off for it.
+ */
 function updateDay({ school, eventId, dayId, body }) {
-  return guarded(school, eventId, async ({ client, state }) => {
+  return guarded(school, eventId, async ({ client, state, people }) => {
     const day = state.days.find((d) => d.day_id === dayId);
     if (!day) throw new MeetingError(404, 'DAY_NOT_FOUND', 'That day was not found');
     const date = body.date ?? day.day_date;
@@ -141,7 +157,28 @@ function updateDay({ school, eventId, dayId, body }) {
     const start = body.start ?? day.start_min;
     const end = body.end ?? day.end_min;
     checkWindow(start, end);
-    await client.query(q.updateDay, [dayId, eventId, date, start, end, bool(body.everyone, day.everyone)]);
+    const everyone = bool(body.everyone, day.everyone);
+    await client.query(q.updateDay, [dayId, eventId, date, start, end, everyone]);
+    const ownDay = (teacherId) => state.teacherDays.get(`${dayId}:${teacherId}`);
+    // Becoming a day for some teachers always names them: a day nobody works helps no one.
+    if (!everyone && (body.teacherIds !== undefined || day.everyone)) {
+      const picked = new Set(pickedTeachers(people, body.teacherIds));
+      for (const teacherId of people.teachers.keys()) {
+        const own = ownDay(teacherId);
+        if (picked.has(teacherId)) {
+          const hours = own?.works && own.start_min != null;
+          await client.query(q.upsertTeacherDay, [dayId, teacherId, true, hours ? own.start_min : null, hours ? own.end_min : null]);
+        } else if (own) {
+          await client.query(q.deleteTeacherDay, [dayId, teacherId]);
+        }
+      }
+    } else if (everyone && !day.everyone) {
+      // Working it with school hours is every teacher's default again: no row needed.
+      for (const teacherId of people.teachers.keys()) {
+        const own = ownDay(teacherId);
+        if (own?.works && own.start_min == null) await client.query(q.deleteTeacherDay, [dayId, teacherId]);
+      }
+    }
   });
 }
 

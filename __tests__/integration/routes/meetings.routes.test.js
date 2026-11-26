@@ -387,6 +387,67 @@ describe('Integration: parent–teacher meetings', () => {
     expect(rasha.subject).toBe('Times are still open for parent–teacher meetings');
   });
 
+  it('a day only for some teachers: their families see and book it, the other families never hear of it', async () => {
+    const WED = '2027-02-03';
+    const { eventId, mon, tue } = await createEvent();
+    const wedBody = { date: WED, start: H(9), end: H(10), everyone: false };
+
+    // A day for some teachers names them, and each has families to meet.
+    expect((await office('post', `/events/${eventId}/days`).send(wedBody)).body.code).toBe('PICK_TEACHERS');
+    expect((await office('post', `/events/${eventId}/days`).send({ ...wedBody, teacherIds: [SALAAT_ONLY] })).body.code).toBe('TEACHER_NOT_FOUND');
+    const added = await office('post', `/events/${eventId}/days`).send({ ...wedBody, teacherIds: [KHALIL] });
+    expect(added.status).toBe(201);
+    const wed = added.body.data.dayId;
+
+    // Ms. Khalil is part time: not in on Monday or Tuesday.
+    const off = await office('put', `/events/${eventId}/teachers/${KHALIL}`).send({ days: [{ dayId: mon, works: false }, { dayId: tue, works: false }] });
+    expect(off.status).toBe(200);
+    const day = (setup) => setup.days.find((d) => d.dayId === wed);
+    const works = (setup, teacherId) => setup.teachers.find((t) => t.teacherId === teacherId).days.find((d) => d.dayId === wed).works;
+    expect(day(off.body.data)).toMatchObject({ everyone: false, teacherIds: [KHALIL] });
+    expect([KHALIL, SALEH, FAROUK].map((id) => works(off.body.data, id))).toEqual([true, false, false]);
+
+    await office('post', `/events/${eventId}/schedule`).send({});
+    await deliverQueuedEmails(pool);
+    // The Nassers' teachers don't meet on Wednesday; Lina Haddad's homeroom teacher does.
+    expect(sent().find((m) => m.to[0] === 'rasha.parent@example.com').subject).toBe('Book your parent–teacher meetings · Mon Feb 1 & Tue Feb 2');
+    expect(sent().find((m) => m.to[0] === 'amal.parent@example.com').subject).toBe('Book your parent–teacher meetings · Mon Feb 1, Tue Feb 2 & Wed Feb 3');
+    const pageFor = async (id) => (await asParent(id, 'get', '/meetings')).body.data.events[0];
+    expect((await pageFor(RASHA)).days.map((d) => d.date)).toEqual([MON, TUE]);
+    const amal = await pageFor(AMAL);
+    expect(amal.days.map((d) => d.date)).toEqual([MON, TUE, WED]);
+    expect(amal.teachers.find((t) => t.teacherId === KHALIL).days.map((d) => d.works)).toEqual([false, false, true]);
+
+    const refused = await asParent(RASHA, 'post', `/meetings/${eventId}/bookings`).send({ teacherId: SALEH, dayId: wed, startMin: H(9), studentIds: [kareem] });
+    expect(refused.body.code).toBe('TIME_GONE');
+    const booked = await asParent(AMAL, 'post', `/meetings/${eventId}/bookings`).send({ teacherId: KHALIL, dayId: wed, startMin: H(9), studentIds: [lina] });
+    expect(booked.status).toBe(201);
+
+    // Changing who the day is for never strands the booked family, and keeps a teacher's own hours.
+    const dayUrl = `/events/${eventId}/days/${wed}`;
+    const without = await office('put', dayUrl).send({ everyone: false, teacherIds: [FAROUK] });
+    expect(without.status).toBe(409);
+    expect(without.body.code).toBe('BOOKED_TIMES');
+    expect((await office('put', `/events/${eventId}/teachers/${KHALIL}`).send({ days: [{ dayId: wed, works: true, start: H(9), end: H(9, 30) }] })).status).toBe(200);
+    expect((await office('put', dayUrl).send({ everyone: false, teacherIds: [KHALIL, FAROUK] })).status).toBe(200);
+    let setup = (await office('get', `/events/${eventId}`)).body.data;
+    expect(day(setup).teacherIds.sort()).toEqual([FAROUK, KHALIL].sort());
+    expect(setup.teachers.find((t) => t.teacherId === KHALIL).days.find((d) => d.dayId === wed)).toMatchObject({ works: true, ownHours: true, end: H(9, 30) });
+    expect((await pageFor(RASHA)).days.map((d) => d.date)).toEqual([MON, TUE, WED]);
+
+    // Every teacher's day after all, then back to Ms. Khalil alone (the teachers have to be named).
+    expect((await office('put', dayUrl).send({ everyone: true })).status).toBe(200);
+    expect((await office('put', dayUrl).send({ everyone: false })).body.code).toBe('PICK_TEACHERS');
+    setup = (await office('get', `/events/${eventId}`)).body.data;
+    expect(day(setup)).toMatchObject({ everyone: true, teacherIds: [] });
+    expect([KHALIL, SALEH, FAROUK].map((id) => works(setup, id))).toEqual([true, true, true]);
+    expect((await pool.query('SELECT teacher_id FROM ptm_teacher_days WHERE day_id = $1', [wed])).rows).toEqual([{ teacher_id: KHALIL }]);
+    expect((await office('put', dayUrl).send({ everyone: false, teacherIds: [KHALIL] })).status).toBe(200);
+    setup = (await office('get', `/events/${eventId}`)).body.data;
+    expect([KHALIL, SALEH, FAROUK].map((id) => works(setup, id))).toEqual([true, false, false]);
+    expect((await pageFor(RASHA)).days.map((d) => d.date)).toEqual([MON, TUE]);
+  });
+
   it('deleting the meetings cancels every booking and tells each family', async () => {
     const { eventId, mon } = await createEvent();
     await office('post', `/events/${eventId}/schedule`).send({});
