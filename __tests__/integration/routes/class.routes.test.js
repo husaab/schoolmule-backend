@@ -78,11 +78,12 @@ describe('Integration: Class Routes', () => {
     return rows[0];
   };
 
-  // Helper to seed a student
+  // Helper to seed a student (of the active school year, like the classes:
+  // a class only takes students of its own year)
   const seedStudent = async (name = 'Alice Smith', grade = '5') => {
     const { rows } = await pool.query(
-      `INSERT INTO students (name, school, grade) VALUES ($1, 'ALHAADIACADEMY', $2) RETURNING student_id`,
-      [name, grade]
+      `INSERT INTO students (name, school, grade, school_year_id) VALUES ($1, 'ALHAADIACADEMY', $2, $3) RETURNING student_id`,
+      [name, grade, activeYearId]
     );
     return rows[0].student_id;
   };
