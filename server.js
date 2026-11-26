@@ -60,6 +60,7 @@ const studentPortalRoutes = require("./routes/studentPortal.routes")
 const profileRoutes = require("./routes/profile.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
 const aiUsageRoutes = require("./routes/aiUsage.routes");
+const assistantRoutes = require("./routes/assistant.routes");
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
 const observeAlertsRoutes = require("./routes/observeAlerts.routes");
@@ -159,6 +160,10 @@ app.use("/api/schools", schoolRoutes);
 // AI usage is counted per person and school, not per school year, and the
 // web server reports it without a year header: no year context needed.
 app.use("/api/ai-usage", aiUsageRoutes);
+// Muley. A question about a past school year is a POST, which
+// resolveSchoolYear refuses for most staff: the assistant resolves the year
+// itself and its tools still go through the year rules of the routes they call.
+app.use("/api/assistant", assistantRoutes);
 app.use(resolveSchoolYear);
 
 app.use("/api/users", userRoutes);
