@@ -130,6 +130,8 @@ const ALL_TABLES = [
   'classes',
   'students_all', // `students` is a view of it (student soft delete)
   'registration_field_mappings',
+  'student_custom_fields',
+  'student_view_emails',
   'registration_form_submissions',
   'registration_form_fields',
   'registration_forms',

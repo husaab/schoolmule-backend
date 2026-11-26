@@ -3,25 +3,39 @@
 // Everything the import engine needs to know about students, and the only
 // place in the import feature that knows students exist at all.
 //
-// The engine (engine.js) and the classifier (classify.js) talk to this module
-// through a fixed shape — mappableFields / suggestMapping / coerceValue /
-// loadCandidates / buildCreateParams / diffFillable / applyCreate / applyUpdate /
-// dependentTables / sideEffects. Adding a second import target later (staff,
+// The engine (engine.js) and the classifier (classify.js) know nothing about
+// students: they talk to this module through what it exports at the bottom.
+// Adding a second import target later (staff,
 // parents) means writing a sibling module with the same shape plus one additive
 // migration for its link column; the engine itself does not change.
 
 const importQueries = require('../../queries/registrationImport.queries');
 const bulkQueries = require('../../queries/bulk.queries');
+const { readCalendarDate } = require('../../utils/calendarDate');
+const { toField } = require('../customFields/fields');
+const { normalizeValue, displayValue, readCustomFields, emptyCustomFields } = require('../customFields/values');
 
 // The DB enum is GRADE = ('1'..'8', 'JK', 'SK'); values are compared and stored
 // as these literal tokens.
 const GRADE_VALUES = ['JK', 'SK', '1', '2', '3', '4', '5', '6', '7', '8'];
+// students.gender is 'male' | 'female' | NULL (honorific_gender_migration.sql).
+const GENDER_VALUES = ['female', 'male'];
+
+// A form question saved into one of the school's custom fields: the mapping
+// row's target_field is 'custom' and custom_field_id says which field. In the
+// values a row maps to, and in the diff, such a field is keyed 'custom:<id>'.
+const CUSTOM_TARGET = 'custom';
+const CUSTOM_PREFIX = 'custom:';
+const customKey = fieldId => `${CUSTOM_PREFIX}${fieldId}`;
+const isCustomKey = key => typeof key === 'string' && key.startsWith(CUSTOM_PREFIX);
+const customIdOf = key => key.slice(CUSTOM_PREFIX.length);
 
 // Which student fields a form field can feed, and how each is validated.
 // `column` is the students table column the value lands in.
 const MAPPABLE_FIELDS = [
   { targetField: 'name',             column: 'name',               label: 'Student name',            dataType: 'text',     group: 'Student', required: true },
   { targetField: 'grade',            column: 'grade',              label: 'Grade',                   dataType: 'enum',     group: 'Student', required: true, enumValues: GRADE_VALUES },
+  { targetField: 'gender',           column: 'gender',             label: 'Gender',                  dataType: 'enum',     group: 'Student', required: false, enumValues: GENDER_VALUES },
   { targetField: 'oen',              column: 'oen',                label: 'OEN',                     dataType: 'text',     group: 'Student', required: false },
   { targetField: 'dateOfBirth',      column: 'date_of_birth',      label: 'Date of birth',           dataType: 'date',     group: 'Student', required: false },
   { targetField: 'address',          column: 'address',            label: 'Residential address',     dataType: 'textarea', group: 'Student', required: false },
@@ -50,6 +64,7 @@ const SUGGEST_RULES = [
   // The student's own address, before the parent rules can claim "email".
   { targetField: 'studentEmail',     test: l => /(student|child).{0,15}e-?mail/.test(l) },
   { targetField: 'grade',            test: l => /grade|kindergarten|which class/.test(l) },
+  { targetField: 'gender',           test: l => /\bgender\b|\bsex\b/.test(l) },
   { targetField: 'dateOfBirth',      test: l => /date of birth|birth ?date|\bdob\b/.test(l) },
   { targetField: 'oen',              test: l => /\boen\b|ontario education number/.test(l) },
   { targetField: 'healthCardNumber', test: l => /health card/.test(l) },
@@ -85,6 +100,23 @@ function suggestGradeValue(optionText) {
   return null;
 }
 
+// "Female", "Girl", "F" → 'female'; "Male", "Boy", "M" → 'male'. Female is
+// tested first because "female" contains "male".
+function suggestGenderValue(optionText) {
+  const l = String(optionText).trim().toLowerCase();
+  if (/\b(female|girl|woman)\b|^f$/.test(l)) return 'female';
+  if (/\b(male|boy|man)\b|^m$/.test(l)) return 'male';
+  return null;
+}
+
+// Best-effort translation of one answer option to a value of an enum target.
+// Mirrored by guessEnumValue() in the frontend's src/lib/importMapping.ts.
+function suggestEnumValue(targetField, optionText) {
+  if (targetField === 'grade') return suggestGradeValue(optionText);
+  if (targetField === 'gender') return suggestGenderValue(optionText);
+  return null;
+}
+
 /**
  * Propose a mapping for a form's fields. Returns
  * [{ fieldId, targetField, valueMap }] covering only the fields it is
@@ -102,10 +134,10 @@ function suggestMapping(fields) {
     if (!field) continue;
 
     let valueMap = null;
-    if (rule.targetField === 'grade' && Array.isArray(field.options)) {
+    if (FIELD_BY_TARGET.get(rule.targetField).dataType === 'enum' && Array.isArray(field.options)) {
       valueMap = {};
       for (const opt of field.options) {
-        const v = suggestGradeValue(opt);
+        const v = suggestEnumValue(rule.targetField, opt);
         if (v) valueMap[opt] = v;
       }
     }
@@ -117,6 +149,10 @@ function suggestMapping(fields) {
 }
 
 // ─── Value coercion / validation ──────────────────────────────────────
+
+// A mapping's own answer → value translation, when it has one for this answer.
+const translateAnswer = (valueMap, raw) =>
+  (valueMap && Object.prototype.hasOwnProperty.call(valueMap, raw) ? valueMap[raw] : undefined);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -135,10 +171,11 @@ function coerceValue(targetField, rawValue, valueMap) {
   switch (def.dataType) {
     case 'enum': {
       // An explicit mapping wins; otherwise accept a value that already is a
-      // valid token (e.g. a plain text field where a parent typed "3").
-      const mapped = valueMap && Object.prototype.hasOwnProperty.call(valueMap, raw)
-        ? valueMap[raw]
-        : (GRADE_VALUES.includes(raw.toUpperCase()) ? raw.toUpperCase() : null);
+      // valid token (e.g. a plain text field where a parent typed "3" or
+      // "Female"), whatever its capitals.
+      const mapped = translateAnswer(valueMap, raw)
+        ?? def.enumValues.find(v => v.toLowerCase() === raw.toLowerCase())
+        ?? (targetField === 'gender' ? suggestGenderValue(raw) : null);
       if (!mapped) {
         return { ok: false, error: `"${raw}" is not mapped to a ${def.label.toLowerCase()} value` };
       }
@@ -149,22 +186,10 @@ function coerceValue(targetField, rawValue, valueMap) {
     }
 
     case 'date': {
-      // Accept ISO (what the form's date input produces) and D/M/Y or M/D/Y
-      // typed into a text field. Ambiguous slash dates are read as D/M/Y,
-      // matching the en-CA convention used across the app.
-      const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (iso) return { ok: true, value: raw };
-
-      const slash = raw.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
-      if (slash) {
-        const [, a, b, y] = slash;
-        const day = parseInt(a, 10);
-        const month = parseInt(b, 10);
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-          return { ok: true, value: `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` };
-        }
-      }
-      return { ok: false, error: `"${raw}" is not a recognizable date` };
+      // ISO (what the form's date input produces) or D/M/Y typed into a text
+      // field, and only a day that exists: 31 February is refused here, as
+      // this row's problem, rather than by Postgres in the middle of the import.
+      return readCalendarDate(raw);
     }
 
     case 'email':
@@ -183,6 +208,60 @@ function coerceValue(targetField, rawValue, valueMap) {
   }
 }
 
+// ─── Custom fields ────────────────────────────────────────────────────
+
+// The custom field a mapping row feeds, in the shape the value rules use
+// (selectMappingsByForm joins its definition onto the row), or null for a
+// built-in target.
+function customFieldOf(mapping) {
+  if (!mapping || !mapping.custom_field_id) return null;
+  return toField({
+    field_id: mapping.custom_field_id,
+    label: mapping.custom_label,
+    field_type: mapping.custom_type,
+    options: mapping.custom_options,
+  });
+}
+
+/** What a mapping row's value is keyed by: the target field, or 'custom:<fieldId>'. */
+const mappingKey = mapping => (mapping.custom_field_id ? customKey(mapping.custom_field_id) : mapping.target_field);
+
+/**
+ * Turn one raw answer into the value a mapping row writes. A custom field is
+ * read by the same rules as the student form (customFields/values.js), after
+ * the mapping's own answer → choice translation when it has one.
+ */
+function coerceMapped(mapping, rawValue) {
+  const field = customFieldOf(mapping);
+  if (!field) return coerceValue(mapping.target_field, rawValue, mapping.value_map);
+
+  const raw = rawValue === null || rawValue === undefined ? '' : String(rawValue).trim();
+  return normalizeValue(field, translateAnswer(mapping.value_map, raw) ?? raw);
+}
+
+// The custom fields a row would save, labelled for the preview:
+// [{ fieldId, label, display }].
+function describeExtras(values, mappings) {
+  const out = [];
+  for (const m of mappings) {
+    const field = customFieldOf(m);
+    if (!field) continue;
+    const value = values[customKey(field.fieldId)];
+    if (value === undefined || value === null) continue;
+    out.push({ fieldId: field.fieldId, label: field.label, display: displayValue(field, value) });
+  }
+  return out;
+}
+
+// { fieldId: value } for the custom-field entries of a values object.
+function customValuesOf(values) {
+  const out = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (isCustomKey(key) && value !== null && value !== undefined) out[customIdOf(key)] = value;
+  }
+  return out;
+}
+
 // ─── Candidates ───────────────────────────────────────────────────────
 
 async function loadCandidates(client, { school, schoolYearId }) {
@@ -194,9 +273,23 @@ const getCandidateName = row => row.name;
 const getCandidateGrade = row => row.grade;
 const getCandidateId = row => row.student_id;
 
+// A student this import is about to create, as a stand-in candidate, so a
+// later submission for the same child in the same run is matched against it
+// instead of being created a second time.
+const pendingCandidate = (submissionId, values) => ({
+  student_id: `pending:${submissionId}`,
+  name: values.name,
+  grade: values.grade,
+});
+
 // A field counts as blank when it is NULL or whitespace-only — fill-blanks-only
 // updates treat an empty string the same as no value.
 function isBlank(candidateRow, targetField) {
+  if (isCustomKey(targetField)) {
+    // No key means no value; false and 0 are answers, not blanks.
+    const v = readCustomFields(candidateRow.custom_fields).values[customIdOf(targetField)];
+    return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+  }
   const def = FIELD_BY_TARGET.get(targetField);
   if (!def) return false;
   const v = candidateRow[def.column];
@@ -207,11 +300,26 @@ function isBlank(candidateRow, targetField) {
  * Fill-blanks-only diff: which mapped values would actually be written to an
  * existing student. Never proposes overwriting a field that already has data.
  */
-function diffFillable(candidateRow, values) {
+function diffFillable(candidateRow, values, mappings = []) {
+  const customByKey = new Map();
+  for (const m of mappings) {
+    const field = customFieldOf(m);
+    if (field) customByKey.set(customKey(field.fieldId), field);
+  }
+
   const diff = [];
   for (const [targetField, value] of Object.entries(values)) {
     if (value === null || value === undefined || value === '') continue;
     if (!isBlank(candidateRow, targetField)) continue;
+
+    if (isCustomKey(targetField)) {
+      const field = customByKey.get(targetField);
+      if (!field) continue;
+      // `to` is what the admin reads; `value` is what is written (a number
+      // stays a number, yes/no stays a boolean).
+      diff.push({ targetField, label: field.label, from: null, to: displayValue(field, value), value });
+      continue;
+    }
     const def = FIELD_BY_TARGET.get(targetField);
     diff.push({ targetField, label: def.label, from: null, to: String(value) });
   }
@@ -241,6 +349,8 @@ async function applyCreate(client, values, { school, schoolYearId, submissionId,
     values.fatherPhone ?? null,
     submissionId,
     values.studentEmail ?? null,
+    values.gender ?? null,
+    JSON.stringify({ ...emptyCustomFields(), values: customValuesOf(values) }),
   ]);
   return rows[0];
 }
@@ -254,6 +364,11 @@ async function applyUpdate(client, studentId, diff) {
   if (diff.length === 0) return null;
   const byTarget = new Map(diff.map(d => [d.targetField, d.to]));
   const param = t => (byTarget.has(t) ? byTarget.get(t) : null);
+
+  const customPatch = {};
+  for (const d of diff) {
+    if (isCustomKey(d.targetField)) customPatch[customIdOf(d.targetField)] = d.value;
+  }
 
   const { rows } = await client.query(importQueries.updateStudentFillBlanks, [
     studentId,
@@ -272,6 +387,8 @@ async function applyUpdate(client, studentId, diff) {
     param('fatherEmail'),
     param('fatherPhone'),
     param('studentEmail'),
+    param('gender'),
+    Object.keys(customPatch).length > 0 ? JSON.stringify(customPatch) : null,
   ]);
   return rows[0] || null;
 }
@@ -345,15 +462,23 @@ module.exports = {
   key: 'student',
   label: 'Students',
   GRADE_VALUES,
+  GENDER_VALUES,
+  CUSTOM_TARGET,
+  customKey,
   mappableFields: MAPPABLE_FIELDS,
   fieldByTarget: FIELD_BY_TARGET,
   suggestMapping,
   suggestGradeValue,
+  suggestEnumValue,
   coerceValue,
+  mappingKey,
+  coerceMapped,
+  describeExtras,
   loadCandidates,
   getCandidateName,
   getCandidateGrade,
   getCandidateId,
+  pendingCandidate,
   isBlank,
   diffFillable,
   applyCreate,

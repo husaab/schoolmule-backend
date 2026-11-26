@@ -90,6 +90,15 @@ function buildCandidateIndex(candidates, getName) {
   return { byName, all: candidates };
 }
 
+// Adds one more row to an index built by buildCandidateIndex.
+function addCandidate(index, candidate, getName) {
+  index.all.push(candidate);
+  const key = normalizeName(getName(candidate));
+  if (!key) return;
+  if (!index.byName.has(key)) index.byName.set(key, []);
+  index.byName.get(key).push(candidate);
+}
+
 /**
  * Resolve a mapped name+grade against existing entities.
  *
@@ -136,5 +145,6 @@ module.exports = {
   editDistance,
   isNearName,
   buildCandidateIndex,
+  addCandidate,
   resolveMatch,
 };

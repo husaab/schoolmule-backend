@@ -28,6 +28,7 @@ const FEATURES = [
   ['/api/finance', 'Finance'],
   ['/api/registration', 'Forms'],
   ['/api/student-views', 'Student views'],
+  ['/api/student-custom-fields', 'Students'],
   ['/api/analytics', 'Analytics'],
   ['/api/agendas', 'Agendas'],
   ['/api/patch-notes', "What's new"],

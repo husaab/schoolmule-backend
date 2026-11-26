@@ -24,6 +24,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,
@@ -55,6 +56,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,
@@ -91,6 +93,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,
@@ -126,6 +129,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,
@@ -158,9 +162,12 @@ const studentQueries = {
       health_card_number,
       medical_notes,
       student_email,
-      gender
+      gender,
+      custom_fields
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+      -- $20 = the student's custom fields as JSON text: { values, notes }
+      $20::jsonb
     )
     RETURNING *
   `,
@@ -189,6 +196,18 @@ const studentQueries = {
                                   THEN NULLIF(LOWER(TRIM($19)), '') ELSE student_email END,
       -- $20 = the body carried gender (so null clears it), $21 = the value.
       gender               = CASE WHEN $20::boolean THEN $21::text ELSE gender END,
+      -- $22 = the custom-field change as JSON text, or NULL when the body
+      -- carried none. "values" merges key by key and a null value removes its
+      -- key (jsonb_strip_nulls), so a field the form never touched is left
+      -- alone and two people editing different fields don't undo each other;
+      -- "notes", when present, replaces the student's notes.
+      custom_fields        = CASE WHEN $22::jsonb IS NULL THEN custom_fields ELSE jsonb_build_object(
+                               'values', jsonb_strip_nulls(
+                                 COALESCE(custom_fields -> 'values', '{}'::jsonb)
+                                 || COALESCE($22::jsonb -> 'values', '{}'::jsonb)),
+                               'notes', CASE WHEN $22::jsonb ? 'notes' THEN $22::jsonb -> 'notes'
+                                             ELSE COALESCE(custom_fields -> 'notes', '[]'::jsonb) END
+                             ) END,
       last_modified_at     = NOW()
     -- $5 = the caller's school: only their own students, and a student never
     -- moves to another school here.
@@ -266,6 +285,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,
@@ -325,6 +345,7 @@ const studentQueries = {
       gender,
       medical_notes,
       source_submission_id,
+      custom_fields,
       created_at,
       last_modified_at,
       is_archived,

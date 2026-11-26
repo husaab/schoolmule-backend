@@ -150,16 +150,8 @@ async function runExecute(db, {
     const createdStudents = [];
     const updatedStudents = [];
 
-    for (const row of classified) {
-      if (row.action === 'skip') {
-        results.push({ submissionId: row.submissionId, action: 'skip', reason: row.reason });
-        continue;
-      }
-      if (row.action === 'error') {
-        results.push({ submissionId: row.submissionId, action: 'error', reason: row.reason });
-        continue;
-      }
-
+    // Writes one create or update row and returns its result.
+    const applyRow = async (row) => {
       if (row.action === 'create') {
         const student = await target.applyCreate(client, row.values, {
           school,
@@ -172,59 +164,87 @@ async function runExecute(db, {
         // took it, so roll this one student back out rather than leaving an
         // orphan that no submission points at.
         const { rows: claimed } = await client.query(importQueries.markSubmissionImported, [
-          row.submissionId, student.student_id, userId, school,
+          row.submissionId, student.student_id, userId, school, true,
         ]);
         if (claimed.length === 0) {
           await client.query(importQueries.deleteStudentScoped, [student.student_id, school]);
-          results.push({
+          return {
             submissionId: row.submissionId,
             action: 'skip',
             reason: 'Imported by someone else while this import was running',
-          });
-          continue;
+          };
         }
 
         createdStudents.push(student);
-        results.push({
+        return {
           submissionId: row.submissionId, action: 'create',
           studentId: student.student_id, studentName: student.name,
-        });
+        };
+      }
+
+      // Update. Claim the submission BEFORE writing. A create has to write
+      // first (there is no student id to claim with until the row exists,
+      // hence the delete-on-loss above), but an update already knows its
+      // target, so claiming first means a lost race writes nothing at all
+      // rather than leaving fields changed by an import that reports itself
+      // as skipped.
+      const { rows: claimed } = await client.query(importQueries.markSubmissionImported, [
+        row.submissionId, row.matchedEntityId, userId, school, false,
+      ]);
+      if (claimed.length === 0) {
+        return {
+          submissionId: row.submissionId,
+          action: 'skip',
+          reason: 'Imported by someone else while this import was running',
+        };
+      }
+
+      const updated = await target.applyUpdate(client, row.matchedEntityId, row.diff);
+      if (!updated) {
+        // Nothing to write after all — release the claim so the submission
+        // isn't left marked as imported by a no-op.
+        await client.query(importQueries.clearSubmissionImport, [row.submissionId, school]);
+        return { submissionId: row.submissionId, action: 'skip', reason: 'Nothing left to fill in' };
+      }
+      await client.query(importQueries.setStudentSourceSubmission, [updated.student_id, row.submissionId]);
+
+      updatedStudents.push(updated);
+      return {
+        submissionId: row.submissionId, action: 'update',
+        studentId: updated.student_id, studentName: updated.name,
+        fieldsFilled: row.diff.map(d => d.label),
+      };
+    };
+
+    for (const row of classified) {
+      if (row.action === 'skip' || row.action === 'error') {
+        results.push({ submissionId: row.submissionId, action: row.action, reason: row.reason });
         continue;
       }
 
-      if (row.action === 'update') {
-        // Claim the submission BEFORE writing. A create has to write first
-        // (there is no student id to claim with until the row exists, hence the
-        // delete-on-loss above), but an update already knows its target, so
-        // claiming first means a lost race writes nothing at all rather than
-        // leaving fields changed by an import that reports itself as skipped.
-        const { rows: claimed } = await client.query(importQueries.markSubmissionImported, [
-          row.submissionId, row.matchedEntityId, userId, school,
-        ]);
-        if (claimed.length === 0) {
-          results.push({
-            submissionId: row.submissionId,
-            action: 'skip',
-            reason: 'Imported by someone else while this import was running',
-          });
-          continue;
-        }
-
-        const updated = await target.applyUpdate(client, row.matchedEntityId, row.diff);
-        if (!updated) {
-          // Nothing to write after all — release the claim so the submission
-          // isn't left marked as imported by a no-op.
-          await client.query(importQueries.clearSubmissionImport, [row.submissionId, school]);
-          results.push({ submissionId: row.submissionId, action: 'skip', reason: 'Nothing left to fill in' });
-          continue;
-        }
-        await client.query(importQueries.setStudentSourceSubmission, [updated.student_id, row.submissionId]);
-
-        updatedStudents.push(updated);
+      // Each row writes inside its own savepoint: if the database refuses one
+      // (a value validation didn't foresee), that row alone is undone and
+      // reported, and the rest of the import still goes through. Without it a
+      // single bad row cancelled every other student in the batch.
+      const createdBefore = createdStudents.length;
+      const updatedBefore = updatedStudents.length;
+      await client.query('SAVEPOINT import_row');
+      try {
+        const result = await applyRow(row);
+        await client.query('RELEASE SAVEPOINT import_row');
+        results.push(result);
+      } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT import_row');
+        createdStudents.length = createdBefore;
+        updatedStudents.length = updatedBefore;
+        logger.error(
+          { err: error, formId, submissionId: row.submissionId },
+          'Import row failed and was skipped; the rest of the import continues',
+        );
         results.push({
-          submissionId: row.submissionId, action: 'update',
-          studentId: updated.student_id, studentName: updated.name,
-          fieldsFilled: row.diff.map(d => d.label),
+          submissionId: row.submissionId,
+          action: 'error',
+          reason: "This submission couldn't be saved. Nothing was changed for it.",
         });
       }
     }
@@ -282,10 +302,12 @@ async function runExecute(db, {
 /**
  * Reverse an import.
  *
- * Always unlinks. Deletes the created entity only when explicitly asked AND
- * nothing depends on it — most of the tables referencing a student cascade on
- * delete, so an unchecked delete would silently take attendance, grades and
- * report card feedback with it.
+ * Always unlinks. Deletes the entity only when explicitly asked, when this
+ * import CREATED it (an import that filled in a student who was already in the
+ * school must never take that student with it), AND nothing depends on it —
+ * most of the tables referencing a student cascade on delete, so an unchecked
+ * delete would silently take attendance, grades and report card feedback
+ * with it.
  */
 async function runUndo(db, { submissionId, school, deleteStudent, target, userId = null }) {
   const client = await db.connect();
@@ -304,13 +326,15 @@ async function runUndo(db, { submissionId, school, deleteStudent, target, userId
     }
 
     const studentId = submission.imported_student_id;
-    const blockedBy = deleteStudent ? await findDependents(client, studentId, target) : [];
+    const createdByImport = submission.import_created_student === true;
+    const mayDelete = deleteStudent && createdByImport;
+    const blockedBy = mayDelete ? await findDependents(client, studentId, target, submissionId) : [];
 
     await client.query(importQueries.clearSubmissionImport, [submissionId, school]);
-    await client.query(importQueries.clearStudentSourceSubmission, [studentId]);
+    await client.query(importQueries.clearStudentSourceSubmission, [studentId, submissionId]);
 
     let studentDeleted = false;
-    if (deleteStudent && blockedBy.length === 0) {
+    if (mayDelete && blockedBy.length === 0) {
       const { rows: deleted } = await client.query(importQueries.softDeleteStudentScoped, [studentId, school, userId]);
       studentDeleted = deleted.length > 0;
     }
@@ -320,6 +344,7 @@ async function runUndo(db, { submissionId, school, deleteStudent, target, userId
       ok: true,
       unlinked: true,
       studentDeleted,
+      createdByImport,
       blockedBy,
       studentId,
       studentName: submission.imported_student_name,
@@ -333,11 +358,15 @@ async function runUndo(db, { submissionId, school, deleteStudent, target, userId
 }
 
 /**
- * Which of the target's dependent tables hold rows for this entity.
- * Reported to the admin so "can't delete" comes with a reason.
+ * Which of the target's dependent tables hold rows for this entity, plus any
+ * other submission imported into it. Reported to the admin so "can't delete"
+ * comes with a reason.
  */
-async function findDependents(client, entityId, target) {
+async function findDependents(client, entityId, target, submissionId) {
   const found = [];
+  const { rows: others } = await client.query(importQueries.selectOtherSubmissionForStudent, [entityId, submissionId]);
+  if (others.length > 0) found.push({ table: 'registration_form_submissions', label: 'other imported submissions' });
+
   for (const dep of target.dependentTables) {
     const { rows } = await client.query(
       `SELECT 1 FROM ${dep.table} WHERE ${dep.column} = $1 LIMIT 1`,
@@ -362,13 +391,19 @@ async function inspectUndo(db, { submissionId, school, target }) {
 
   const client = await db.connect();
   try {
-    const blockedBy = await findDependents(client, submission.imported_student_id, target);
+    const createdByImport = submission.import_created_student === true;
+    const blockedBy = createdByImport
+      ? await findDependents(client, submission.imported_student_id, target, submissionId)
+      : [];
     return {
       ok: true,
       studentId: submission.imported_student_id,
       studentName: submission.imported_student_name,
+      // False when the import only filled in a student who already existed:
+      // undo then unlinks, and the student is never offered for deletion.
+      createdByImport,
       blockedBy,
-      canDelete: blockedBy.length === 0,
+      canDelete: createdByImport && blockedBy.length === 0,
     };
   } finally {
     client.release();

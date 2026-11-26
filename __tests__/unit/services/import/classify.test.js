@@ -324,3 +324,135 @@ describe('classifyBatch', () => {
     expect(summary).toMatchObject({ create: 2, skip: 2, error: 1, total: 5 });
   });
 });
+
+// ─── The same child twice in one batch ────────────────────────────────
+
+describe('classifyBatch: duplicates inside one batch', () => {
+  it('creates the first submission for a child and skips the second', () => {
+    const { rows, summary } = run([
+      submission('s1', fullAnswers),
+      submission('s2', { ...fullAnswers, [F.medical]: 'None' }),
+    ]);
+    expect(rows.map(r => r.action)).toEqual(['create', 'skip']);
+    expect(rows[1]).toMatchObject({
+      matchTier: 'batch',
+      needsReview: false,
+      reason: 'Same student as an earlier submission in this import',
+    });
+    expect(rows[1].locked).toBeUndefined(); // the admin may still decide otherwise
+    expect(summary).toMatchObject({ create: 1, skip: 1 });
+  });
+
+  it('matches the name loosely, the way existing students are matched', () => {
+    const { rows } = run([
+      submission('s1', fullAnswers),
+      submission('s2', { ...fullAnswers, [F.name]: '  ahmad   HAMZE ' }),
+      submission('s3', { ...fullAnswers, [F.name]: 'Hamze Ahmad' }),
+    ]);
+    expect(rows[1]).toMatchObject({ action: 'skip', matchTier: 'batch', needsReview: false });
+    // Same words in another order is only a possible match: a person decides.
+    expect(rows[2]).toMatchObject({ action: 'skip', matchTier: 'batch', needsReview: true });
+    expect(rows[2].reason).toContain('Ahmad Hamze');
+  });
+
+  it('lets the admin create both, for two children who share a name', () => {
+    const { rows } = run(
+      [submission('s1', fullAnswers), submission('s2', fullAnswers)],
+      [],
+      { overrides: { s2: 'create' } },
+    );
+    expect(rows.map(r => r.action)).toEqual(['create', 'create']);
+  });
+
+  it('does not hold a name against later rows when its own row is not created', () => {
+    const { rows } = run(
+      [submission('s1', fullAnswers), submission('s2', fullAnswers)],
+      [],
+      { overrides: { s1: 'skip' } },
+    );
+    expect(rows.map(r => r.action)).toEqual(['skip', 'create']);
+  });
+
+  it('keeps different children apart', () => {
+    const { rows } = run([
+      submission('s1', fullAnswers),
+      submission('s2', { ...fullAnswers, [F.name]: 'Layla Hamze' }),
+    ]);
+    expect(rows.map(r => r.action)).toEqual(['create', 'create']);
+  });
+
+  it('cannot update a student that this import has not created yet', () => {
+    const { rows } = run(
+      [submission('s1', fullAnswers), submission('s2', fullAnswers)],
+      [],
+      { overrides: { s2: 'update' } },
+    );
+    expect(rows[1]).toMatchObject({ action: 'error', matchTier: 'batch' });
+    expect(rows[1].matchCandidates).toEqual([]);
+  });
+
+  it('prefers the existing student over the batch when both match', () => {
+    const { rows } = run(
+      [submission('s1', fullAnswers), submission('s2', fullAnswers)],
+      [student('stu-1', 'Ahmad Hamze', '2')],
+    );
+    expect(rows.map(r => r.matchTier)).toEqual(['exact', 'exact']);
+  });
+});
+
+// ─── Custom fields ────────────────────────────────────────────────────
+
+describe('classifyBatch: custom fields', () => {
+  const BUS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const Q_BUS = '11111111-1111-4111-8111-111111111111';
+  const withBus = [
+    ...mappings,
+    {
+      field_id: Q_BUS, target_field: 'custom', value_map: null,
+      custom_field_id: BUS, custom_label: 'Bus route', custom_type: 'select', custom_options: ['Route 4', 'Walks'],
+    },
+  ];
+  const classify = (submissions, candidates = [], opts = {}) =>
+    classifyBatch({ submissions, mappings: withBus, candidates, target, ...opts });
+
+  it('carries the answer into the row and labels it for the preview', () => {
+    const { rows } = classify([submission('s1', { ...fullAnswers, [Q_BUS]: 'Route 4' })]);
+    expect(rows[0].action).toBe('create');
+    expect(rows[0].values[`custom:${BUS}`]).toBe('Route 4');
+    expect(rows[0].extras).toEqual([{ fieldId: BUS, label: 'Bus route', display: 'Route 4' }]);
+  });
+
+  it('leaves the field out when the question was not answered', () => {
+    const { rows } = classify([submission('s1', fullAnswers)]);
+    expect(rows[0].action).toBe('create');
+    expect(rows[0].extras).toEqual([]);
+  });
+
+  it('blocks only the row whose answer the field cannot hold', () => {
+    const { rows } = classify([
+      submission('s1', { ...fullAnswers, [Q_BUS]: 'Helicopter' }),
+      submission('s2', { ...fullAnswers, [F.name]: 'Layla Hamze', [Q_BUS]: 'Walks' }),
+    ]);
+    expect(rows[0]).toMatchObject({ action: 'error', reason: '"Helicopter" is not one of the choices for Bus route' });
+    expect(rows[1].action).toBe('create');
+  });
+
+  it('fills the field on an existing student only when it is empty', () => {
+    const answers = { ...fullAnswers, [Q_BUS]: 'Route 4' };
+    const empty = student('stu-1', 'Ahmad Hamze', '2', { custom_fields: { values: {}, notes: [] } });
+    const filled = student('stu-1', 'Ahmad Hamze', '2', { custom_fields: { values: { [BUS]: 'Walks' }, notes: [] } });
+
+    const toEmpty = classify([submission('s1', answers)], [empty], { overrides: { s1: 'update' } }).rows[0];
+    expect(toEmpty.diff.find(d => d.targetField === `custom:${BUS}`)).toMatchObject({ label: 'Bus route', to: 'Route 4', value: 'Route 4' });
+
+    const toFilled = classify([submission('s1', answers)], [filled], { overrides: { s1: 'update' } }).rows[0];
+    expect(toFilled.diff.some(d => d.targetField === `custom:${BUS}`)).toBe(false);
+  });
+});
+
+describe('mapAnswers: every problem with a row', () => {
+  it('reports an impossible date as that row\'s error', () => {
+    const { errors } = mapAnswers(submission('s1', { ...fullAnswers, [F.dob]: '2019-02-31' }), mappings, target);
+    expect(errors).toEqual([{ targetField: 'dateOfBirth', message: '"2019-02-31" is not a real date' }]);
+  });
+});

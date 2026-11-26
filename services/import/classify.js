@@ -7,7 +7,7 @@
 // with the same inputs, so what the admin approved in the preview is exactly
 // what the import writes — they cannot drift, because it is one function.
 
-const { buildCandidateIndex, resolveMatch } = require('./matching');
+const { buildCandidateIndex, addCandidate, resolveMatch } = require('./matching');
 
 /**
  * Apply a form's saved mapping to one submission's answers.
@@ -22,13 +22,18 @@ function mapAnswers(submission, mappings, target) {
   const errors = [];
   const answers = submission.answers || {};
 
+  // A mapping row feeds either a built-in field or one of the target's custom
+  // fields; the target says what the value is keyed by and how it is read.
+  const keyOf = target.mappingKey || (m => m.target_field);
+  const coerce = target.coerceMapped || ((m, raw) => target.coerceValue(m.target_field, raw, m.value_map));
+
   for (const m of mappings) {
-    const raw = answers[m.field_id];
-    const result = target.coerceValue(m.target_field, raw, m.value_map);
+    const key = keyOf(m);
+    const result = coerce(m, answers[m.field_id]);
     if (result.ok) {
-      if (result.value !== null) values[m.target_field] = result.value;
+      if (result.value !== null) values[key] = result.value;
     } else {
-      errors.push({ targetField: m.target_field, message: result.error });
+      errors.push({ targetField: key, message: result.error });
     }
   }
 
@@ -68,6 +73,9 @@ function mapAnswers(submission, mappings, target) {
  *   validation error→ error, non-importable regardless of override
  *   exact match     → skip by default, override may promote to update/create
  *   near match      → needs review; unresolved rows stay skipped
+ *   same child as an earlier row of this batch
+ *                   → skip by default (needs review when only close), override
+ *                     may promote to create
  *   no match        → create by default, override may demote to skip
  */
 function classifyBatch({
@@ -80,6 +88,10 @@ function classifyBatch({
 }) {
   const index = buildCandidateIndex(candidates, target.getCandidateName);
   const candidateById = new Map(candidates.map(c => [target.getCandidateId(c), c]));
+  // The entities this same run is about to create. `candidates` only holds
+  // what existed before the run, so without this two submissions for one
+  // child would both be created.
+  const pending = buildCandidateIndex([], target.getCandidateName);
   const rows = [];
 
   for (const sub of submissions) {
@@ -93,6 +105,8 @@ function classifyBatch({
       mappedName: values.name ?? null,
       mappedGrade: values.grade ?? null,
       errors: errors.map(e => e.message),
+      // What the row saves beyond the built-in fields, labelled for the preview.
+      extras: target.describeExtras ? target.describeExtras(values, mappings) : [],
       matchTier: 'none',
       matchedEntityId: null,
       matchedEntityName: null,
@@ -143,9 +157,16 @@ function classifyBatch({
       || (matches.length === 1 ? target.getCandidateId(matches[0]) : null);
     const picked = pickedId ? candidateById.get(pickedId) : null;
 
+    // Nothing existing matches: is it the same child as an earlier row of
+    // this batch? (An existing match already keeps the row from being created.)
+    const inBatch = tier === 'none'
+      ? resolveMatch(pending, { name: values.name, grade: values.grade }, target.getCandidateName, target.getCandidateGrade)
+      : { tier: 'none', matches: [] };
+
     let action;
     let reason;
     let needsReview = false;
+    let matchTier = tier;
 
     if (tier === 'exact') {
       action = 'skip';
@@ -156,6 +177,15 @@ function classifyBatch({
       reason = matches.length > 1
         ? `Possible match — ${matches.length} similar students`
         : `Possible match — "${target.getCandidateName(matches[0])}" (grade ${target.getCandidateGrade(matches[0])})`;
+    } else if (inBatch.tier === 'exact') {
+      action = 'skip';
+      matchTier = 'batch';
+      reason = 'Same student as an earlier submission in this import';
+    } else if (inBatch.tier === 'near') {
+      action = 'skip';
+      matchTier = 'batch';
+      needsReview = true;
+      reason = `Possibly the same student as an earlier submission in this import — "${target.getCandidateName(inBatch.matches[0])}"`;
     } else {
       action = 'create';
       reason = 'New student';
@@ -168,9 +198,11 @@ function classifyBatch({
         rows.push({
           ...base,
           action: 'error',
-          matchTier: tier,
+          matchTier,
           matchCandidates,
-          reason: 'Choose which existing student to update',
+          reason: matchTier === 'batch'
+            ? 'That student is created by this same import. Run the import first, then update them.'
+            : 'Choose which existing student to update',
           needsReview: true,
         });
         continue;
@@ -180,7 +212,7 @@ function classifyBatch({
       needsReview = false;
     }
 
-    const diff = action === 'update' && picked ? target.diffFillable(picked, values) : [];
+    const diff = action === 'update' && picked ? target.diffFillable(picked, values, mappings) : [];
 
     // An update that would change nothing is a skip in everything but name;
     // say so rather than reporting a no-op as a successful update.
@@ -188,7 +220,7 @@ function classifyBatch({
       rows.push({
         ...base,
         action: 'skip',
-        matchTier: tier,
+        matchTier,
         matchedEntityId: pickedId,
         matchedEntityName: picked ? target.getCandidateName(picked) : null,
         matchCandidates,
@@ -197,12 +229,18 @@ function classifyBatch({
       continue;
     }
 
+    // A row that will be created counts as an existing student for the rows
+    // after it.
+    if (action === 'create' && target.pendingCandidate) {
+      addCandidate(pending, target.pendingCandidate(sub.submission_id, values), target.getCandidateName);
+    }
+
     rows.push({
       ...base,
       action,
       reason,
       needsReview,
-      matchTier: tier,
+      matchTier,
       matchedEntityId: action === 'update' ? pickedId : (matches.length === 1 ? target.getCandidateId(matches[0]) : null),
       matchedEntityName: picked ? target.getCandidateName(picked) : (matches.length === 1 ? target.getCandidateName(matches[0]) : null),
       matchCandidates,

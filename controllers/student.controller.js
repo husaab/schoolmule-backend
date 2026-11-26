@@ -6,6 +6,8 @@ const { getSettings } = require("../services/classroom/classroomSettings");
 const logger = require("../logger");
 const { can } = require("../services/access/access");
 const { withPhotoUrls } = require("../services/profile/photos");
+const { loadLiveFields, fieldsById } = require("../services/customFields/fields");
+const { normalizeCustomFieldsInput, readCustomFields, emptyCustomFields } = require("../services/customFields/values");
 
 // Student rows with photo_url: the photo on the student's login, while the school has student photos on.
 const withStudentPhotos = (rows, school) => withPhotoUrls(rows, school, { role: "STUDENT" });
@@ -40,6 +42,29 @@ const hideStudentEmail = (req) => (student) => {
   if (managesStudentAccounts(req) || !student) return student;
   const { studentEmail, ...rest } = student;
   return rest;
+};
+
+// A student as a staff member sees it. The student's own address is for those
+// who manage student accounts, and the school's custom fields are for those
+// who work with student records (`students`): /api/students is also read by
+// attendance, forms, messaging and other areas that only need the roster.
+// Parents and students never come through here (requireStaff on the routes).
+const toStaffView = (req) => (row) => {
+  const student = hideStudentEmail(req)(toCamel(row));
+  if (can(req, "students")) student.customFields = readCustomFields(row.custom_fields);
+  return student;
+};
+
+// The `customFields` of a create/update body, checked against the school's
+// fields: { provided: false } when the body carries none (so an older client
+// changes nothing), else { provided: true, patch } or { error }.
+const readCustomFieldsBody = async (req) => {
+  const input = req.body ? req.body.customFields : undefined;
+  if (input === undefined || input === null) return { provided: false, patch: null };
+  const fields = await loadLiveFields(db, req.user.school);
+  const checked = normalizeCustomFieldsInput(input, fieldsById(fields));
+  if (checked.error) return { error: checked.error };
+  return { provided: true, patch: checked.patch };
 };
 
 const GENDERS = ['male', 'female'];
@@ -101,7 +126,7 @@ const getAllStudents = async (req, res) => {
     logger.info("All students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toStaffView(req))
     });
   } catch (error) {
     logger.error(error);
@@ -121,7 +146,7 @@ const getStudentById = async (req, res) => {
     const [student] = await withStudentPhotos(rows, req.user.school);
     return res.status(200).json({
       status: "success",
-      data: hideStudentEmail(req)(toCamel(student))
+      data: toStaffView(req)(student)
     });
   } catch (error) {
     logger.error(error);
@@ -167,6 +192,19 @@ const createStudent = async (req, res) => {
   }
 
   try {
+    const custom = await readCustomFieldsBody(req);
+    if (custom.error) {
+      return res.status(400).json({ status: "failed", message: custom.error });
+    }
+    // A new student starts from nothing, so a cleared (null) value is simply left out.
+    const customFields = emptyCustomFields();
+    if (custom.provided) {
+      for (const [fieldId, value] of Object.entries(custom.patch.values || {})) {
+        if (value !== null) customFields.values[fieldId] = value;
+      }
+      customFields.notes = custom.patch.notes || [];
+    }
+
     const vals = [
       name,
       homeroomTeacherId || null,
@@ -187,13 +225,14 @@ const createStudent = async (req, res) => {
       medicalNotes || null,
       email.value,
       gender.value,
+      JSON.stringify(customFields),
     ];
     const { rows } = await db.query(studentQueries.createStudent, vals);
 
     logger.info(`Student created with id ${rows[0].student_id}`);
     return res.status(201).json({
       status: "success",
-      data: hideStudentEmail(req)(toCamel(rows[0]))
+      data: toStaffView(req)(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -233,6 +272,17 @@ const updateStudent = async (req, res) => {
     return res.status(400).json({ status: "failed", message: gender.error });
   }
 
+  let custom;
+  try {
+    custom = await readCustomFieldsBody(req);
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: "failed", message: "Error updating student" });
+  }
+  if (custom.error) {
+    return res.status(400).json({ status: "failed", message: custom.error });
+  }
+
   const vals = [
     name ?? null,
     homeroomTeacherId ?? null,
@@ -255,6 +305,7 @@ const updateStudent = async (req, res) => {
     email.value,
     gender.provided,
     gender.value,
+    custom.provided ? JSON.stringify(custom.patch) : null,
   ];
 
   try {
@@ -294,7 +345,7 @@ const updateStudent = async (req, res) => {
     logger.info(`Student ${id} updated`);
     return res.status(200).json({
       status: "success",
-      data: hideStudentEmail(req)(toCamel(rows[0]))
+      data: toStaffView(req)(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -332,7 +383,7 @@ const getArchivedStudents = async (req, res) => {
     logger.info("Archived students fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toStaffView(req))
     });
   } catch (error) {
     logger.error(error);
@@ -419,7 +470,7 @@ const archiveStudent = async (req, res) => {
     return res.status(200).json({
       status: "success",
       message: "Student archived successfully",
-      data: hideStudentEmail(req)(toCamel(rows[0]))
+      data: toStaffView(req)(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -455,7 +506,7 @@ const unarchiveStudent = async (req, res) => {
     return res.status(200).json({
       status: "success",
       message: "Student unarchived successfully",
-      data: hideStudentEmail(req)(toCamel(rows[0]))
+      data: toStaffView(req)(rows[0])
     });
   } catch (error) {
     logger.error(error);
@@ -474,7 +525,7 @@ const getAllStudentsWithArchived = async (req, res) => {
     logger.info("All students (including archived) fetched successfully");
     return res.status(200).json({
       status: "success",
-      data: (await withStudentPhotos(rows, requestedSchool)).map(toCamel).map(hideStudentEmail(req))
+      data: (await withStudentPhotos(rows, requestedSchool)).map(toStaffView(req))
     });
   } catch (error) {
     logger.error(error);

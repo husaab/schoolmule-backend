@@ -3,6 +3,7 @@ const logger = require('../logger');
 const rolloverQueries = require('../queries/schoolYearRollover.queries');
 const schoolYearQueries = require('../queries/schoolYear.queries');
 const commentBankQueries = require('../queries/commentBank.queries');
+const { readCustomFields } = require('../services/customFields/values');
 
 const GRADE_PROGRESSION = {
   JK: 'SK', SK: '1',
@@ -116,6 +117,9 @@ const executeRollover = async (req, res, next) => {
           targetYearId, s.student_id, s.student_email,
           s.avatar == null ? null : JSON.stringify(s.avatar),
           s.gender ?? null,
+          // Custom fields are facts about the child, so they follow them into
+          // the new year (the school's field list is not per year).
+          JSON.stringify(readCustomFields(s.custom_fields)),
         ]);
         await client.query(rolloverQueries.copyParentLinks, [inserted.rows[0].student_id, s.student_id]);
         await client.query(rolloverQueries.copyGuardianRemovals, [inserted.rows[0].student_id, s.student_id]);

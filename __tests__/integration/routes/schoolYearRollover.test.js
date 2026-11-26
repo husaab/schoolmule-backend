@@ -81,6 +81,29 @@ describe('school year rollover', () => {
     expect(kid.avatar).toEqual(spec);
   });
 
+  it("rollover carries a student's custom fields and notes into the new year", async () => {
+    const { rows: [field] } = await pool.query(
+      `INSERT INTO student_custom_fields (school, label, field_type) VALUES ('ALHAADIACADEMY', 'Bus route', 'text') RETURNING field_id`);
+    const custom = { values: { [field.field_id]: 'Route 4' }, notes: [{ label: 'Locker', value: 'B14' }] };
+    await pool.query(`UPDATE students SET custom_fields = $2::jsonb WHERE student_id = $1`, [movingKid, JSON.stringify(custom)]);
+
+    const res = await authenticatedRequest('post', `/api/school-years/${year26}/rollover`).send({
+      students: { mode: 'rollover', excludeStudentIds: [], gradeOverrides: {} },
+      classes:  { mode: 'skip' },
+      terms:    [],
+      copyPlanner: false,
+      copyCalendar: false,
+    });
+    expect(res.status).toBe(200);
+
+    const { rows: [rolled] } = await pool.query(
+      `SELECT custom_fields FROM students WHERE school_year_id = $1 AND previous_student_id = $2`, [year26, movingKid]);
+    expect(rolled.custom_fields).toEqual(custom);
+    // Last year's row keeps its own copy.
+    const { rows: [source] } = await pool.query(`SELECT custom_fields FROM students WHERE student_id = $1`, [movingKid]);
+    expect(source.custom_fields).toEqual(custom);
+  });
+
   it("rollover carries each class's standard comments", async () => {
     const { rows: [src] } = await pool.query(`SELECT class_id FROM classes WHERE school_year_id = $1`, [year25]);
     const bank = {

@@ -7,8 +7,12 @@ const db = require('../config/database');
 const logger = require('../logger');
 const registrationQueries = require('../queries/registration.queries');
 const importQueries = require('../queries/registrationImport.queries');
+const customFieldQueries = require('../queries/studentCustomFields.queries');
 const target = require('../services/import/studentImportTarget');
 const engine = require('../services/import/engine');
+const { can } = require('../services/access/access');
+const { loadLiveFields, fieldsById, toField } = require('../services/customFields/fields');
+const { validateNewField, LIMITS, UUID_RE } = require('../services/customFields/values');
 
 const VALID_TARGETS = new Set(target.mappableFields.map(f => f.targetField));
 
@@ -24,6 +28,8 @@ function toCamelMapping(row) {
     mappingId: row.mapping_id,
     fieldId: row.field_id,
     targetField: row.target_field,
+    // Set when targetField is 'custom': which of the school's fields the question feeds.
+    customFieldId: row.custom_field_id || null,
     valueMap: row.value_map || null,
   };
 }
@@ -48,6 +54,7 @@ const getMapping = async (req, res) => {
 
     const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
     const { rows: saved } = await db.query(importQueries.selectMappingsByForm, [formId, school]);
+    const customFields = await loadLiveFields(db, school);
 
     const isSuggested = saved.length === 0;
     const mappings = isSuggested
@@ -71,6 +78,9 @@ const getMapping = async (req, res) => {
           required: f.required,
           enumValues: f.enumValues || null,
         })),
+        // The school's custom fields: a question with no built-in student
+        // field can be saved into one of these, or into a new one.
+        customFields,
         fields: fields.map(f => ({
           fieldId: f.field_id,
           fieldType: f.field_type,
@@ -107,32 +117,111 @@ const saveMapping = async (req, res) => {
 
   // Validate the whole set before writing any of it, so a bad row can't leave
   // a half-saved mapping behind.
+  const liveFields = await loadLiveFields(db, school);
+  const liveById = fieldsById(liveFields);
+  const liveByLabel = new Map(liveFields.map(f => [f.label.toLowerCase(), f]));
+
   const seenTargets = new Set();
   const seenFields = new Set();
+  const seenCustom = new Set();
+  const seenNewLabels = new Set();
+  // What will be written, one entry per mapping: { fieldId, targetField, valueMap, customFieldId | newField }
+  const plan = [];
+
   for (const m of mappings) {
     if (!m || !fieldById.has(m.fieldId)) {
       return res.status(400).json({ status: 'failed', message: 'Mapping references a field that is not on this form' });
     }
-    if (!VALID_TARGETS.has(m.targetField)) {
-      return res.status(400).json({ status: 'failed', message: `Unknown target field "${m.targetField}"` });
-    }
     if (seenFields.has(m.fieldId)) {
       return res.status(400).json({ status: 'failed', message: 'A form field can only map to one student field' });
+    }
+    seenFields.add(m.fieldId);
+    const valueMap = m.valueMap && typeof m.valueMap === 'object' && Object.keys(m.valueMap).length > 0 ? m.valueMap : null;
+
+    if (m.targetField === target.CUSTOM_TARGET) {
+      // A custom field: one of the school's existing fields, or a new one
+      // created from this question.
+      const existingId = typeof m.customFieldId === 'string' && UUID_RE.test(m.customFieldId)
+        ? m.customFieldId.toLowerCase() : null;
+      const wantsNew = m.newField !== undefined && m.newField !== null;
+      if (Boolean(existingId) === wantsNew) {
+        return res.status(400).json({ status: 'failed', message: 'A custom field mapping needs an existing field or a new one' });
+      }
+
+      let field = existingId ? liveById.get(existingId) : null;
+      let newField = null;
+      if (existingId && !field) {
+        return res.status(400).json({ status: 'failed', message: 'One of the custom fields no longer exists. Reload and try again.' });
+      }
+      if (wantsNew) {
+        const checked = validateNewField(m.newField);
+        if (checked.error) return res.status(400).json({ status: 'failed', message: checked.error });
+        // A name the school already uses means that field, not a second one.
+        field = liveByLabel.get(checked.value.label.toLowerCase()) || null;
+        if (!field) {
+          if (!can(req, 'students')) {
+            return res.status(403).json({
+              status: 'failed',
+              code: 'PERMISSION_DENIED',
+              message: 'Adding a custom field needs permission to edit students. You can still map questions to the existing fields.',
+            });
+          }
+          const labelKey = checked.value.label.toLowerCase();
+          if (seenNewLabels.has(labelKey)) {
+            return res.status(400).json({ status: 'failed', message: `Two new fields are both called "${checked.value.label}"` });
+          }
+          seenNewLabels.add(labelKey);
+          newField = checked.value;
+        }
+      }
+
+      if (field) {
+        if (seenCustom.has(field.fieldId)) {
+          return res.status(400).json({ status: 'failed', message: `Two form fields both map to "${field.label}"` });
+        }
+        seenCustom.add(field.fieldId);
+      }
+      plan.push({ fieldId: m.fieldId, targetField: target.CUSTOM_TARGET, valueMap, customFieldId: field ? field.fieldId : null, newField });
+      continue;
+    }
+
+    if (!VALID_TARGETS.has(m.targetField)) {
+      return res.status(400).json({ status: 'failed', message: `Unknown target field "${m.targetField}"` });
     }
     if (seenTargets.has(m.targetField)) {
       return res.status(400).json({ status: 'failed', message: `Two form fields both map to "${m.targetField}"` });
     }
-    seenFields.add(m.fieldId);
     seenTargets.add(m.targetField);
+    plan.push({ fieldId: m.fieldId, targetField: m.targetField, valueMap, customFieldId: null, newField: null });
+  }
+
+  if (liveFields.length + seenNewLabels.size > LIMITS.fieldsPerSchool) {
+    return res.status(400).json({
+      status: 'failed',
+      message: `A school can have at most ${LIMITS.fieldsPerSchool} custom fields, and this would make ${liveFields.length + seenNewLabels.size}.`,
+    });
   }
 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     await client.query(importQueries.deleteMappingsByForm, [formId]);
-    for (const m of mappings) {
+    const createdFields = [];
+    for (const m of plan) {
+      let customFieldId = m.customFieldId;
+      if (m.newField) {
+        // In this same transaction, so the mapping and its new fields are
+        // saved together or not at all. If someone added a field of that name
+        // a moment ago, theirs is used.
+        const { rows } = await client.query(customFieldQueries.getOrCreateField, [
+          school, m.newField.label, m.newField.type,
+          m.newField.options ? JSON.stringify(m.newField.options) : null, req.user.userId,
+        ]);
+        customFieldId = rows[0].field_id;
+        if (rows[0].created) createdFields.push(toField(rows[0]));
+      }
       await client.query(importQueries.upsertMapping, [
-        formId, m.fieldId, m.targetField, m.valueMap ? JSON.stringify(m.valueMap) : null,
+        formId, m.fieldId, m.targetField, m.valueMap ? JSON.stringify(m.valueMap) : null, customFieldId,
       ]);
     }
     await client.query('COMMIT');
@@ -140,7 +229,12 @@ const saveMapping = async (req, res) => {
     const { rows: saved } = await db.query(importQueries.selectMappingsByForm, [formId, school]);
     return res.status(200).json({
       status: 'success',
-      data: { isSuggested: false, mappings: saved.map(toCamelMapping) },
+      data: {
+        isSuggested: false,
+        mappings: saved.map(toCamelMapping),
+        customFields: await loadLiveFields(db, school),
+        createdFields,
+      },
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -297,11 +391,14 @@ const undoImport = async (req, res) => {
       return res.status(code).json({ status: 'failed', message: result.message });
     }
 
-    const message = result.studentDeleted
-      ? 'Import undone and student deleted'
-      : result.blockedBy.length > 0
-        ? 'Import undone. The student was kept because other records depend on it.'
-        : 'Import undone';
+    let message = 'Import undone';
+    if (result.studentDeleted) {
+      message = 'Import undone and student deleted';
+    } else if (req.body?.deleteStudent === true && !result.createdByImport) {
+      message = 'Import undone. The student was kept: they were already in SchoolMule before this import.';
+    } else if (result.blockedBy.length > 0) {
+      message = 'Import undone. The student was kept because other records depend on it.';
+    }
 
     return res.status(200).json({ status: 'success', message, data: result });
   } catch (error) {

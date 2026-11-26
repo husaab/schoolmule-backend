@@ -2735,3 +2735,82 @@ ALTER TABLE ptm_breaks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ptm_bookings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ptm_booking_students ENABLE ROW LEVEL SECURITY;
 
+
+-- Student custom fields (student_custom_fields_migration.sql): the school's
+-- field list, the values on the student, custom fields and gender as import
+-- targets, and whether an import created its student. After the students_all
+-- rename, so the view is re-made to show the new column.
+CREATE TABLE IF NOT EXISTS student_custom_fields (
+  field_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school      school NOT NULL,
+  label       VARCHAR(80) NOT NULL CHECK (btrim(label) <> ''),
+  field_type  VARCHAR(10) NOT NULL
+              CHECK (field_type IN ('text', 'textarea', 'number', 'date', 'select', 'boolean')),
+  options     JSONB,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at  TIMESTAMPTZ,
+  deleted_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT student_custom_fields_options_ck CHECK (
+    (field_type = 'select' AND options IS NOT NULL AND jsonb_typeof(options) = 'array')
+    OR (field_type <> 'select' AND options IS NULL)
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_student_custom_fields_label
+  ON student_custom_fields (school, lower(btrim(label))) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_student_custom_fields_order
+  ON student_custom_fields (school, sort_order);
+ALTER TABLE student_custom_fields ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE students_all
+  ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '{"values":{},"notes":[]}'::jsonb;
+CREATE OR REPLACE VIEW students WITH (security_invoker = true) AS
+  SELECT * FROM students_all WHERE deleted_at IS NULL;
+
+ALTER TABLE registration_field_mappings
+  ADD COLUMN IF NOT EXISTS custom_field_id UUID
+  REFERENCES student_custom_fields(field_id) ON DELETE CASCADE;
+ALTER TABLE registration_field_mappings
+  DROP CONSTRAINT IF EXISTS registration_field_mappings_target_field_check;
+ALTER TABLE registration_field_mappings
+  ADD CONSTRAINT registration_field_mappings_target_field_check CHECK (target_field IN (
+    'name', 'grade', 'oen', 'dateOfBirth', 'medicalNotes', 'address',
+    'healthCardNumber', 'emergencyContact',
+    'motherName', 'motherEmail', 'motherPhone',
+    'fatherName', 'fatherEmail', 'fatherPhone',
+    'studentEmail', 'gender', 'custom'
+  ));
+ALTER TABLE registration_field_mappings
+  ADD CONSTRAINT registration_field_mappings_custom_ck
+  CHECK ((target_field = 'custom') = (custom_field_id IS NOT NULL));
+ALTER TABLE registration_field_mappings
+  DROP CONSTRAINT IF EXISTS registration_field_mappings_form_id_target_field_key;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_field_mappings_form_target
+  ON registration_field_mappings (form_id, target_field) WHERE target_field <> 'custom';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_field_mappings_form_custom
+  ON registration_field_mappings (form_id, custom_field_id) WHERE custom_field_id IS NOT NULL;
+
+ALTER TABLE registration_form_submissions
+  ADD COLUMN IF NOT EXISTS import_created_student BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Certificate send log (student_view_emails_migration.sql). It was missing
+-- here; the import undo checks it among the tables that depend on a student,
+-- so undo could not be exercised against this schema without it.
+CREATE TABLE IF NOT EXISTS student_view_emails (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  view_id         UUID NOT NULL REFERENCES student_views(view_id) ON DELETE CASCADE,
+  student_id      UUID NOT NULL REFERENCES students_all(student_id),
+  sent_by         UUID REFERENCES users(user_id),
+  email_addresses JSONB NOT NULL,
+  cc_addresses    JSONB,
+  custom_header   TEXT,
+  custom_message  TEXT,
+  metric          NUMERIC,
+  school          school NOT NULL,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_student_view_emails_view ON student_view_emails(view_id);
+CREATE INDEX IF NOT EXISTS idx_student_view_emails_student ON student_view_emails(student_id);
+ALTER TABLE student_view_emails ENABLE ROW LEVEL SECURITY;
