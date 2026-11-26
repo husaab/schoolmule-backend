@@ -77,11 +77,61 @@ const getAllSchoolsWithAssets = `
   ORDER BY s.name
 `;
 
+// ── Earlier versions (services/schoolAssetHistory.js) ──────────────────
+
+// $1 version_id … $11 source_action_id
+const insertVersion = `
+  INSERT INTO school_asset_versions (
+    version_id, school_id, school, asset_type, storage_path, live_ext,
+    content_type, byte_size, replaced_by, reason, source_action_id
+  )
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+  RETURNING *
+`;
+
+// One asset's earlier versions, newest first. $1 school_id, $2 asset_type
+const selectVersions = `
+  SELECT
+    v.version_id, v.asset_type, v.storage_path, v.reason, v.replaced_at,
+    v.content_type, v.byte_size,
+    NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), '') AS replaced_by_name
+  FROM school_asset_versions v
+  LEFT JOIN users u ON u.user_id = v.replaced_by
+  WHERE v.school_id = $1 AND v.asset_type = $2
+  ORDER BY v.replaced_at DESC, v.version_id
+`;
+
+// One version, only when it is this school's and this asset's. $1 version_id, $2 school_id, $3 asset_type
+const selectVersion = `
+  SELECT *
+  FROM school_asset_versions
+  WHERE version_id = $1 AND school_id = $2 AND asset_type = $3
+`;
+
+// The versions past the newest $3 for one school and asset.
+const selectVersionsBeyond = `
+  SELECT version_id, storage_path
+  FROM school_asset_versions
+  WHERE school_id = $1 AND asset_type = $2
+  ORDER BY replaced_at DESC, version_id
+  OFFSET $3
+`;
+
+const deleteVersions = `
+  DELETE FROM school_asset_versions
+  WHERE version_id = ANY($1::uuid[])
+`;
+
 module.exports = {
   getSchoolAssetsBySchoolCode,
   getSchoolAssetsBySchoolId,
   upsertSchoolAssets,
   updateAssetPath,
   deleteSchoolAssets,
-  getAllSchoolsWithAssets
+  getAllSchoolsWithAssets,
+  insertVersion,
+  selectVersions,
+  selectVersion,
+  selectVersionsBeyond,
+  deleteVersions,
 };

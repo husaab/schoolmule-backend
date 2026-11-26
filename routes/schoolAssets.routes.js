@@ -5,8 +5,9 @@ const schoolAssetsController = require('../controllers/schoolAssets.controller')
 // Get school assets by school code
 
 // RBAC + tenancy. Every route is pinned to the caller's own school: a code or
-// id naming another school reads as missing. Uploading and deleting assets is
-// school setup; listing every school's assets is the platform owner's.
+// id naming another school reads as missing. Uploading, deleting and
+// restoring assets is school setup; listing every school's assets is the
+// platform owner's.
 const db = require('../config/database');
 const logger = require('../logger');
 const requirePlatformOwner = require('../middleware/requirePlatformOwner');
@@ -46,6 +47,11 @@ router.post('/upload', schoolSetup, schoolAssetsController.upload.single('file')
 
 // Delete specific asset
 router.delete('/:schoolId/:assetType', schoolSetup, ownSchoolId, schoolAssetsController.deleteAsset);
+
+// Earlier versions of one asset (kept when it is replaced or deleted), and
+// putting one back. School setup, own school only, like upload and delete.
+router.get('/:schoolId/:assetType/versions', schoolSetup, ownSchoolId, schoolAssetsController.listAssetVersions);
+router.post('/:schoolId/:assetType/versions/:versionId/restore', schoolSetup, ownSchoolId, schoolAssetsController.restoreAssetVersion);
 
 // Get all schools with their assets (admin view)
 router.get('/all', requirePlatformOwner, schoolAssetsController.getAllSchoolsWithAssets);

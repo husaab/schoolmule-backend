@@ -4,6 +4,16 @@ const logger = require("../logger");
 const supabase = require('../config/supabaseClient');
 const multer = require('multer');
 const path = require('path');
+const history = require('../services/schoolAssetHistory');
+const audit = require('../services/audit/auditLog');
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The live file was not touched: its copy could not be made first.
+const NOT_KEPT = {
+  status: 'error',
+  code: 'ASSET_COPY_FAILED',
+  message: "The current file couldn't be saved to its history, so nothing was changed. Try again.",
+};
 
 const toCamel = row => ({
   schoolCode: row.school_code,
@@ -126,6 +136,22 @@ const uploadAsset = async (req, res) => {
     const fileExtension = path.extname(file.originalname);
     const fileName = `${schoolFolder}/${assetType}${fileExtension}`;
 
+    // The file being replaced is kept first (School Assets -> earlier
+    // versions). If it can't be kept, it isn't overwritten.
+    const { rows: existingAssets } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolId]);
+    const currentAssets = existingAssets.length > 0 ? existingAssets[0] : {};
+    const previousPath = currentAssets[`${assetType}_path`] || null;
+    let kept = null;
+    try {
+      kept = await history.archiveCurrent({
+        schoolId, school: req.user.school, assetType, currentPath: previousPath,
+        userId: req.user.userId, reason: 'replaced',
+      });
+    } catch (archiveError) {
+      logger.error({ err: archiveError }, 'School asset upload stopped: the current file could not be kept');
+      return res.status(500).json(NOT_KEPT);
+    }
+
     // Upload to Supabase storage
     const { error } = await supabase
       .storage
@@ -140,11 +166,6 @@ const uploadAsset = async (req, res) => {
       throw new Error('Upload to storage failed');
     }
 
-    // Get existing assets
-    const { rows: existingAssets } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolId]);
-    
-    const currentAssets = existingAssets.length > 0 ? existingAssets[0] : {};
-    
     // Update the specific asset path
     const updatedAssets = {
       logo_path: currentAssets.logo_path,
@@ -163,13 +184,27 @@ const uploadAsset = async (req, res) => {
       updatedAssets.school_stamp_path
     ]);
 
+    // A new file with another extension lives at another path: the old one
+    // would otherwise stay public for good.
+    await history.removeLiveFile(previousPath, fileName);
+    await audit.record({
+      ...audit.actorOf(req),
+      action: 'school_asset.replace',
+      entityType: 'school_asset',
+      entityId: schoolId,
+      summary: `${history.ASSET_LABELS[assetType]} ${previousPath ? 'replaced' : 'added'}`,
+      changes: [{ key: assetType, label: history.ASSET_LABELS[assetType], before: previousPath, after: fileName }],
+    });
+
     res.json({
       status: 'success',
       message: 'Asset uploaded successfully',
       data: {
         ...toCamel(result.rows[0]),
         uploadedAsset: assetType,
-        filePath: fileName
+        filePath: fileName,
+        // The version the replaced file was kept as, when there was one.
+        keptVersionId: kept ? kept.version_id : null
       }
     });
   } catch (error) {
@@ -215,6 +250,17 @@ const deleteAsset = async (req, res) => {
     const currentAssets = existingAssets[0];
     const assetPath = currentAssets[`${assetType}_path`];
 
+    // Deleting keeps the file as an earlier version first, so it can be restored.
+    try {
+      await history.archiveCurrent({
+        schoolId, school: req.user.school, assetType, currentPath: assetPath,
+        userId: req.user.userId, reason: 'deleted',
+      });
+    } catch (archiveError) {
+      logger.error({ err: archiveError }, 'School asset delete stopped: the current file could not be kept');
+      return res.status(500).json(NOT_KEPT);
+    }
+
     if (assetPath) {
       // Delete from Supabase storage
       const { error } = await supabase.storage
@@ -243,6 +289,17 @@ const deleteAsset = async (req, res) => {
       updatedAssets.school_stamp_path
     ]);
 
+    if (assetPath) {
+      await audit.record({
+        ...audit.actorOf(req),
+        action: 'school_asset.delete',
+        entityType: 'school_asset',
+        entityId: schoolId,
+        summary: `${history.ASSET_LABELS[assetType]} removed`,
+        changes: [{ key: assetType, label: history.ASSET_LABELS[assetType], before: assetPath, after: null }],
+      });
+    }
+
     res.json({
       status: 'success',
       message: 'Asset deleted successfully',
@@ -254,6 +311,59 @@ const deleteAsset = async (req, res) => {
       status: 'error',
       message: 'Failed to delete asset',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// GET /:schoolId/:assetType/versions -> the asset's earlier versions, newest first
+const listAssetVersions = async (req, res) => {
+  const { schoolId, assetType } = req.params;
+  if (!history.isAssetType(assetType)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid asset type' });
+  }
+  try {
+    const versions = await history.listVersions(schoolId, assetType);
+    return res.json({ status: 'success', data: versions });
+  } catch (error) {
+    logger.error('Error listing school asset versions:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to load earlier versions' });
+  }
+};
+
+// POST /:schoolId/:assetType/versions/:versionId/restore -> the earlier version becomes the live file
+const restoreAssetVersion = async (req, res) => {
+  const { schoolId, assetType, versionId } = req.params;
+  if (!history.isAssetType(assetType)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid asset type' });
+  }
+  if (!UUID_RE.test(versionId)) {
+    return res.status(404).json({ status: 'error', message: 'Version not found' });
+  }
+  try {
+    const restored = await history.restoreVersion({
+      schoolId, schoolCode: req.user.school, assetType, versionId, userId: req.user.userId,
+    });
+    if (!restored) {
+      return res.status(404).json({ status: 'error', message: 'Version not found' });
+    }
+    await audit.record({
+      ...audit.actorOf(req),
+      action: 'school_asset.restore',
+      entityType: 'school_asset',
+      entityId: schoolId,
+      summary: `${history.ASSET_LABELS[assetType]} restored to an earlier version`,
+      changes: [{ key: assetType, label: history.ASSET_LABELS[assetType], before: restored.previousPath, after: restored.livePath }],
+    });
+    return res.json({
+      status: 'success',
+      message: 'Earlier version restored',
+      data: { ...toCamel(restored.assets), restoredAsset: assetType, filePath: restored.livePath },
+    });
+  } catch (error) {
+    logger.error({ err: error }, 'Error restoring a school asset version');
+    return res.status(500).json({
+      status: 'error',
+      message: "The earlier version couldn't be restored. Nothing was changed.",
     });
   }
 };
@@ -363,6 +473,8 @@ module.exports = {
   getSchoolAssetsBySchoolId,
   uploadAsset,
   deleteAsset,
+  listAssetVersions,
+  restoreAssetVersion,
   getAllSchoolsWithAssets,
   getSchoolAssetsFolderUrl,
   getAssetSignedUrl
