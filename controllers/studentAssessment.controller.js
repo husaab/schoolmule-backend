@@ -21,6 +21,26 @@ const toColumnMaps = (rows) => ({
 
 const PLAIN = Object.freeze({ draftCol: new Map(), liveCol: new Map(), inAudience: () => false });
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (value) => typeof value === 'string' && UUID_RE.test(value);
+const NOT_IN_CLASS = 'STUDENT_NOT_IN_CLASS';
+
+/**
+ * Which of these students are on the class's roster, as a set of lower-cased
+ * ids. A grade is only ever written for a student of the class: the class
+ * guard proves the caller may grade this class, and this proves the cell is
+ * one of its cells (not a student of another class or another school).
+ */
+async function enrolledIn(classId, studentIds) {
+  const ids = [...new Set(studentIds.filter(isUuid).map((id) => id.toLowerCase()))];
+  if (ids.length === 0) return new Set();
+  const { rows } = await db.query(
+    `SELECT student_id FROM class_students WHERE class_id = $1 AND student_id = ANY($2::uuid[])`,
+    [classId, ids]
+  );
+  return new Set(rows.map((r) => String(r.student_id).toLowerCase()));
+}
+
 /**
  * Runs `fn(runner, { draftCol, liveCol, inAudience })`. With no turn-in
  * column among `assessmentIds` (every plain gradebook save) it runs on the
@@ -132,7 +152,7 @@ const upsertScoresByClass = async (req, res) => {
     // Reject scores outside [0, max_score] so bad data can't enter regardless
     // of which client posted it. Looking up the assessments by class also
     // rejects scores aimed at assessments belonging to a different class.
-    const assessmentIds = [...new Set(scores.map((e) => e.assessmentId))];
+    const assessmentIds = [...new Set(scores.map((e) => e.assessmentId).filter(isUuid))];
     const { rows: assessmentRows } = await db.query(
       `SELECT assessment_id, name, max_score
        FROM assessments
@@ -140,12 +160,24 @@ const upsertScoresByClass = async (req, res) => {
       [classId, assessmentIds]
     );
     const assessmentById = new Map(assessmentRows.map((a) => [a.assessment_id, a]));
+    // The whole save is refused when any cell is for a student who isn't on
+    // this class's roster, the same way a bad score refuses it: one statement
+    // writes every cell, and a partial save would hide the mistake.
+    const enrolled = await enrolledIn(classId, scores.map((e) => e.studentId));
 
     const invalid = [];
     for (const { studentId, assessmentId, score, status } of scores) {
+      if (!isUuid(studentId) || !isUuid(assessmentId)) {
+        invalid.push({ studentId, assessmentId, score, reason: 'Not a valid id' });
+        continue;
+      }
       const assessment = assessmentById.get(assessmentId);
       if (!assessment) {
         invalid.push({ studentId, assessmentId, score, reason: 'Assessment not found in this class' });
+        continue;
+      }
+      if (!enrolled.has(studentId.toLowerCase())) {
+        invalid.push({ studentId, assessmentId, score, code: NOT_IN_CLASS, reason: 'Student is not enrolled in this class' });
         continue;
       }
       if (status != null && !STATUSES.includes(status)) {
@@ -166,8 +198,11 @@ const upsertScoresByClass = async (req, res) => {
     }
 
     if (invalid.length > 0) {
+      const notInClass = invalid.some((entry) => entry.code === NOT_IN_CLASS);
       return res.status(400).json({
         status: 'failed',
+        // Lets a client tell "the roster changed, reload" from a bad score.
+        ...(notInClass ? { code: NOT_IN_CLASS } : {}),
         message: `${invalid.length} score(s) are invalid`,
         invalid,
       });
@@ -269,6 +304,10 @@ async function applyCellStatusSplit({ classId, studentId, assessmentId, status, 
     [classId, assessmentId]
   );
   if (targets.length === 0) return { rows: [], drafts: [], found: false };
+  // Only a student of this class has a cell here (see enrolledIn).
+  if (!isUuid(studentId) || !(await enrolledIn(classId, [studentId])).has(studentId.toLowerCase())) {
+    return { rows: [], drafts: [], found: true, notInClass: true };
+  }
 
   // D3/D17: an unpublished turn-in column takes the flag as a draft.
   const allIds = targets.map((t) => t.assessment_id);
@@ -336,10 +375,17 @@ const setScoreStatus = async (req, res) => {
     return res.status(400).json({ status: 'failed', message: `status must be one of ${STATUSES.join(', ')}` });
   }
 
+  if (!isUuid(studentId) || !isUuid(assessmentId)) {
+    return res.status(400).json({ status: 'failed', message: 'studentId and assessmentId must be valid ids' });
+  }
+
   try {
-    const { rows, drafts, found } = await applyCellStatusSplit({ classId, studentId, assessmentId, status, userId: req.user?.userId ?? null });
+    const { rows, drafts, found, notInClass } = await applyCellStatusSplit({ classId, studentId, assessmentId, status, userId: req.user?.userId ?? null });
     if (!found) {
       return res.status(404).json({ status: 'failed', message: 'Assessment not found in this class' });
+    }
+    if (notInClass) {
+      return res.status(400).json({ status: 'failed', code: NOT_IN_CLASS, message: 'Student is not enrolled in this class' });
     }
     return res.status(200).json({ status: 'success', data: rows, drafts });
   } catch (err) {

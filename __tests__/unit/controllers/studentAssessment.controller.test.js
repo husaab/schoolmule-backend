@@ -99,16 +99,23 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   const mockAssessmentLookup = (assessments) => {
     mockQueryResponse(assessments);
   };
+  // Then the roster check: which of the request's students are in the class.
+  const mockEnrolled = (...studentIds) => mockQueryResponse(studentIds.map((student_id) => ({ student_id })));
   // D3/D17: the upsert asks which columns are turn-in columns; none here.
   const mockNoTurnInColumns = () => mockQueryResponse([]);
+  const S1 = '22222222-2222-4222-8222-222222222221';
+  const S2 = '22222222-2222-4222-8222-222222222222';
+  const A1 = '33333333-3333-4333-8333-333333333331';
+  const A_OTHER = '33333333-3333-4333-8333-333333333339';
 
   it('upserts scores successfully', async () => {
     mockGradebookGuard();
-    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '100' }]);
+    mockEnrolled(S1, S2);
     mockNoTurnInColumns();
     const upsertedRows = [
-      { student_id: 's1', assessment_id: 'a1', score: 85 },
-      { student_id: 's2', assessment_id: 'a1', score: 90 },
+      { student_id: S1, assessment_id: A1, score: 85 },
+      { student_id: S2, assessment_id: A1, score: 90 },
     ];
     mockQueryResponse(upsertedRows);
 
@@ -117,8 +124,8 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a1', score: 85 },
-          { studentId: 's2', assessmentId: 'a1', score: 90 },
+          { studentId: S1, assessmentId: A1, score: 85 },
+          { studentId: S2, assessmentId: A1, score: 90 },
         ],
       });
 
@@ -129,10 +136,11 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
 
   it('allows null scores for deletion', async () => {
     mockGradebookGuard();
-    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '100' }]);
+    mockEnrolled(S1, S2);
     mockNoTurnInColumns();
     const upsertedRows = [
-      { student_id: 's1', assessment_id: 'a1', score: null },
+      { student_id: S1, assessment_id: A1, score: null },
     ];
     mockQueryResponse(upsertedRows);
 
@@ -141,7 +149,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a1', score: null },
+          { studentId: S1, assessmentId: A1, score: null },
         ],
       });
 
@@ -152,14 +160,15 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
 
   it('returns 400 when a score exceeds the assessment max score', async () => {
     mockGradebookGuard();
-    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '33.5' }]);
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '33.5' }]);
+    mockEnrolled(S1, S2);
 
     const res = await request(app)
       .post('/api/studentAssessments/classes/class-123/scores')
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a1', score: 95 },
+          { studentId: S1, assessmentId: A1, score: 95 },
         ],
       });
 
@@ -171,14 +180,15 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
 
   it('returns 400 when a score is negative', async () => {
     mockGradebookGuard();
-    mockAssessmentLookup([{ assessment_id: 'a1', name: 'Quiz 1', max_score: '100' }]);
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '100' }]);
+    mockEnrolled(S1, S2);
 
     const res = await request(app)
       .post('/api/studentAssessments/classes/class-123/scores')
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a1', score: -5 },
+          { studentId: S1, assessmentId: A1, score: -5 },
         ],
       });
 
@@ -190,19 +200,57 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
   it('returns 400 when an assessment does not belong to the class', async () => {
     mockGradebookGuard();
     mockAssessmentLookup([]); // lookup finds nothing for this class
+    mockEnrolled(S1, S2);
 
     const res = await request(app)
       .post('/api/studentAssessments/classes/class-123/scores')
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a-other-class', score: 50 },
+          { studentId: S1, assessmentId: A_OTHER, score: 50 },
         ],
       });
 
     expect(res.status).toBe(400);
     expect(res.body.status).toBe('failed');
     expect(res.body.invalid[0].reason).toContain('not found in this class');
+  });
+
+  it('returns 400 and writes nothing when a student is not in the class', async () => {
+    mockGradebookGuard();
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '100' }]);
+    mockEnrolled(S1); // S2 is not on the roster
+
+    const res = await request(app)
+      .post('/api/studentAssessments/classes/class-123/scores')
+      .set(authHeader())
+      .send({
+        scores: [
+          { studentId: S1, assessmentId: A1, score: 85 },
+          { studentId: S2, assessmentId: A1, score: 90 },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('STUDENT_NOT_IN_CLASS');
+    expect(res.body.invalid).toHaveLength(1);
+    expect(res.body.invalid[0]).toMatchObject({ studentId: S2, code: 'STUDENT_NOT_IN_CLASS' });
+    // Nothing is written, not even the valid cell.
+    const statements = require('../../../config/database').query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => /INSERT INTO student_assessments/.test(sql))).toBe(false);
+  });
+
+  it('returns 400 (not 500) when an id is not a uuid', async () => {
+    mockGradebookGuard();
+    mockAssessmentLookup([{ assessment_id: A1, name: 'Quiz 1', max_score: '100' }]);
+
+    const res = await request(app)
+      .post('/api/studentAssessments/classes/class-123/scores')
+      .set(authHeader())
+      .send({ scores: [{ studentId: 'not-an-id', assessmentId: A1, score: 85 }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.invalid[0].reason).toBe('Not a valid id');
   });
 
   it('returns 400 when scores array is empty', async () => {
@@ -237,7 +285,7 @@ describe('POST /api/studentAssessments/classes/:classId/scores', () => {
       .set(authHeader())
       .send({
         scores: [
-          { studentId: 's1', assessmentId: 'a1', score: 85 },
+          { studentId: S1, assessmentId: A1, score: 85 },
         ],
       });
 

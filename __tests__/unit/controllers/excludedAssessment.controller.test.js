@@ -25,6 +25,7 @@ describe('Excluded Assessment Controller', () => {
       const token = mockAdminUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]); // target leaf lookup
+      mockQueryResponse([{ student_id: row.student_id }]); // the student is on the class roster
       mockQueryResponse([]); // no turn-in columns among them (D3/D17)
       mockQueryResponse([{ student_id: row.student_id, assessment_id: row.assessment_id, score: 7, status: 'excused' }]); // upsert
 
@@ -42,6 +43,23 @@ describe('Excluded Assessment Controller', () => {
       expect(res.body.data.studentId).toBe(row.student_id);
       expect(res.body.data.classId).toBe(row.class_id);
       expect(res.body.data.assessmentId).toBe(row.assessment_id);
+    });
+
+    it('writes nothing for a student who is not on the class roster', async () => {
+    mockGradebookGuard();
+      const token = mockAdminUser();
+      const row = buildExcludedAssessmentRow();
+      mockQueryResponse([{ assessment_id: row.assessment_id }]); // target leaf lookup
+      mockQueryResponse([]); // the roster check finds nobody
+
+      const res = await request(app)
+        .post(url)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ studentId: row.student_id, classId: row.class_id, assessmentId: row.assessment_id });
+
+      expect(res.status).toBe(404);
+      const statements = require('../../../config/database').query.mock.calls.map(([sql]) => String(sql));
+      expect(statements.some((sql) => /INSERT INTO student_assessments/.test(sql))).toBe(false);
     });
 
     it('should return 404 when the assessment is not in the class', async () => {
@@ -127,6 +145,7 @@ describe('Excluded Assessment Controller', () => {
       const token = mockTeacherUser();
       const row = buildExcludedAssessmentRow();
       mockQueryResponse([{ assessment_id: row.assessment_id }]);
+      mockQueryResponse([{ student_id: row.student_id }]); // on the class roster
       mockQueryResponse([]); // no turn-in columns
       mockQueryResponse([{ student_id: row.student_id, assessment_id: row.assessment_id, score: null, status: 'excused' }]);
 
@@ -148,12 +167,14 @@ describe('Excluded Assessment Controller', () => {
     it('should delete an exclusion successfully', async () => {
     mockGradebookGuard();
       const token = mockAdminUser();
+      const sid = '22222222-2222-4222-8222-222222222221';
       mockQueryResponse([{ assessment_id: 'aid' }]); // target leaf lookup
+      mockQueryResponse([{ student_id: sid }]); // the student is on the class roster
       mockQueryResponse([]); // no turn-in columns
-      mockQueryResponse([{ student_id: 'sid', assessment_id: 'aid', score: 7, status: 'graded' }]); // upsert
+      mockQueryResponse([{ student_id: sid, assessment_id: 'aid', score: 7, status: 'graded' }]); // upsert
 
       const res = await request(app)
-        .delete('/api/excluded-assessments/sid/cid/aid')
+        .delete(`/api/excluded-assessments/${sid}/cid/aid`)
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
