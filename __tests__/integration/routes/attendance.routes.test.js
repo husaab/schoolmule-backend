@@ -81,6 +81,69 @@ describe('Integration: Attendance Routes', () => {
       expect(dbResult.rows).toHaveLength(2);
     });
 
+    it('removes a cleared mark and keeps the rest of the day', async () => {
+      const [studentId1, studentId2] = await seedStudents();
+      await pool.query(
+        `INSERT INTO general_attendance (student_id, attendance_date, status, school)
+         VALUES ($1, '2025-10-15', 'PRESENT', 'ALHAADIACADEMY'),
+                ($2, '2025-10-15', 'ABSENT', 'ALHAADIACADEMY'),
+                ($2, '2025-10-16', 'ABSENT', 'ALHAADIACADEMY')`,
+        [studentId1, studentId2]
+      );
+
+      const res = await authenticatedRequest('post', '/api/attendance/general')
+        .send({
+          attendanceDate: '2025-10-15',
+          entries: [{ studentId: studentId1, status: 'LATE' }],
+          cleared: [studentId2],
+        });
+
+      expect(res.status).toBe(200);
+      const { rows } = await pool.query(
+        `SELECT student_id, attendance_date::text AS day, status FROM general_attendance ORDER BY attendance_date, status`
+      );
+      expect(rows).toEqual([
+        { student_id: studentId1, day: '2025-10-15', status: 'LATE' },
+        { student_id: studentId2, day: '2025-10-16', status: 'ABSENT' },
+      ]);
+    });
+
+    it('clears marks with no entries at all', async () => {
+      const [studentId1] = await seedStudents();
+      await pool.query(
+        `INSERT INTO general_attendance (student_id, attendance_date, status, school)
+         VALUES ($1, '2025-10-15', 'PRESENT', 'ALHAADIACADEMY')`,
+        [studentId1]
+      );
+
+      const res = await authenticatedRequest('post', '/api/attendance/general')
+        .send({ attendanceDate: '2025-10-15', entries: [], cleared: [studentId1] });
+
+      expect(res.status).toBe(200);
+      const { rows } = await pool.query('SELECT 1 FROM general_attendance');
+      expect(rows).toHaveLength(0);
+    });
+
+    it('keeps a mark that is both cleared and recorded in one save', async () => {
+      const [studentId1] = await seedStudents();
+      await pool.query(
+        `INSERT INTO general_attendance (student_id, attendance_date, status, school)
+         VALUES ($1, '2025-10-15', 'PRESENT', 'ALHAADIACADEMY')`,
+        [studentId1]
+      );
+
+      const res = await authenticatedRequest('post', '/api/attendance/general')
+        .send({
+          attendanceDate: '2025-10-15',
+          entries: [{ studentId: studentId1, status: 'ABSENT' }],
+          cleared: [studentId1],
+        });
+
+      expect(res.status).toBe(200);
+      const { rows } = await pool.query('SELECT status FROM general_attendance');
+      expect(rows).toEqual([{ status: 'ABSENT' }]);
+    });
+
     it('returns 400 when required fields are missing', async () => {
       const res = await authenticatedRequest('post', '/api/attendance/general')
         .send({ attendanceDate: '2025-10-15' });
@@ -168,6 +231,44 @@ describe('Integration: Attendance Routes', () => {
         [classId, '2025-10-15']
       );
       expect(dbResult.rows).toHaveLength(2);
+    });
+
+    it('removes a cleared mark from that class only', async () => {
+      const classId = await seedClass();
+      const [studentId1, studentId2] = await seedStudents();
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2), ($1, $3)', [classId, studentId1, studentId2]);
+      const { rows: other } = await pool.query(
+        `INSERT INTO classes (school, grade, subject, teacher_name, teacher_id, term_id, term_name)
+         SELECT school, grade, 'Science', teacher_name, teacher_id, term_id, term_name FROM classes WHERE class_id = $1
+         RETURNING class_id`,
+        [classId]
+      );
+      const otherClassId = other[0].class_id;
+      await pool.query('INSERT INTO class_students (class_id, student_id) VALUES ($1, $2)', [otherClassId, studentId2]);
+      await pool.query(
+        `INSERT INTO class_attendance (class_id, student_id, attendance_date, status)
+         VALUES ($1, $3, '2025-10-15', 'PRESENT'),
+                ($1, $4, '2025-10-15', 'ABSENT'),
+                ($2, $4, '2025-10-15', 'ABSENT')`,
+        [classId, otherClassId, studentId1, studentId2]
+      );
+
+      const res = await authenticatedRequest('post', '/api/attendance/class')
+        .send({
+          classId,
+          attendanceDate: '2025-10-15',
+          entries: [{ studentId: studentId1, status: 'LATE' }],
+          cleared: [studentId2],
+        });
+
+      expect(res.status).toBe(200);
+      const { rows } = await pool.query(
+        'SELECT class_id, student_id, status FROM class_attendance ORDER BY status'
+      );
+      expect(rows).toEqual([
+        { class_id: otherClassId, student_id: studentId2, status: 'ABSENT' },
+        { class_id: classId, student_id: studentId1, status: 'LATE' },
+      ]);
     });
 
     // The class is looked up first (class access): an unknown class is a 404.

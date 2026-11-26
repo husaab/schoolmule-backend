@@ -1,7 +1,16 @@
 const attendanceQueries = {
-  // Bulk insert general attendance
-  // $4 = the caller's school (token). Students of another school are skipped.
-  insertGeneralAttendance: `
+  // Save a day's general attendance in one statement: record the marks in
+  // $1/$3 and remove the marks of the students in $5 (cleared on screen).
+  // $4 = the caller's school (token). Students of another school are skipped,
+  // and only that school's records can be removed. The controller keeps the
+  // two lists apart, so no student is both removed and recorded.
+  saveGeneralAttendance: `
+    WITH removed AS (
+      DELETE FROM general_attendance
+       WHERE attendance_date = $2::date
+         AND school = $4::school
+         AND student_id = ANY($5::uuid[])
+    )
     INSERT INTO general_attendance (
       student_id,
       attendance_date,
@@ -15,9 +24,16 @@ const attendanceQueries = {
       SET status = EXCLUDED.status
   `,
 
-  // Bulk insert class attendance
+  // Save a day's attendance for one class in one statement: record the marks
+  // in $2/$4 and remove the marks of the students in $5 (cleared on screen).
   // Only students on the class roster are recorded.
-  insertClassAttendance: `
+  saveClassAttendance: `
+    WITH removed AS (
+      DELETE FROM class_attendance
+       WHERE class_id = $1::uuid
+         AND attendance_date = $3::date
+         AND student_id = ANY($5::uuid[])
+    )
     INSERT INTO class_attendance (class_id, student_id, attendance_date, status)
     SELECT $1::uuid, e.student_id, $3::date, e.status
       FROM unnest($2::uuid[], $4::attendance_status[]) AS e(student_id, status)

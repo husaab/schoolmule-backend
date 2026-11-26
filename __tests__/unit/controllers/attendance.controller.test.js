@@ -42,6 +42,37 @@ describe('POST /api/attendance/general', () => {
     expect(res.body.message).toBe('Attendance recorded');
   });
 
+  it('removes the marks of cleared students, never one that is also marked', async () => {
+    mockQueryResponse([]);
+
+    const res = await request(app)
+      .post(url)
+      .set(authHeader())
+      .send({
+        attendanceDate: '2025-10-15',
+        entries: [{ studentId: 'student-1', status: 'LATE' }],
+        cleared: ['student-2', 'student-2', 'student-1', 7, ''],
+      });
+
+    expect(res.status).toBe(200);
+    const db = require('../../__mocks__/config/database');
+    const call = db.query.mock.calls.find(([sql]) => /DELETE FROM general_attendance/.test(sql));
+    expect(call[1]).toEqual([['student-1'], '2025-10-15', ['LATE'], TEST_SCHOOL, ['student-2']]);
+  });
+
+  it('clears nothing when the body has no cleared list', async () => {
+    mockQueryResponse([]);
+
+    await request(app)
+      .post(url)
+      .set(authHeader())
+      .send({ attendanceDate: '2025-10-15', entries: [{ studentId: 'student-1', status: 'PRESENT' }] });
+
+    const db = require('../../__mocks__/config/database');
+    const call = db.query.mock.calls.find(([sql]) => /general_attendance/.test(sql));
+    expect(call[1][4]).toEqual([]);
+  });
+
   it('returns 400 when required fields are missing', async () => {
     const res = await request(app)
       .post(url)
@@ -116,6 +147,26 @@ describe('POST /api/attendance/class', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('success');
     expect(res.body.message).toBe('Class attendance recorded');
+  });
+
+  it('removes the marks of cleared students in that class', async () => {
+    mockClass();
+    mockQueryResponse([]);
+
+    const res = await request(app)
+      .post(url)
+      .set(authHeader())
+      .send({
+        classId: 'class-123',
+        attendanceDate: '2025-10-15',
+        entries: [],
+        cleared: ['student-2'],
+      });
+
+    expect(res.status).toBe(200);
+    const db = require('../../__mocks__/config/database');
+    const call = db.query.mock.calls.find(([sql]) => /DELETE FROM class_attendance/.test(sql));
+    expect(call[1]).toEqual(['class-123', [], '2025-10-15', [], ['student-2']]);
   });
 
   it('returns 400 when required fields are missing', async () => {
