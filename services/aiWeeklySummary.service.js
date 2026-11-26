@@ -21,9 +21,8 @@ const logger = require('../logger');
 const engine = require('./analyticsEngine');
 const aiQueries = require('../queries/aiWeeklySummary.queries');
 const parentPortalQueries = require('../queries/parentPortal.queries');
+const { AI_MODEL: MODEL, openaiChat } = require('./openaiChat');
 
-const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
-const MODEL = 'gpt-4o-mini';
 const NO_ACTIVITY_MODEL = 'none';
 const SCHOOL_TIMEZONE = 'America/Toronto';
 
@@ -249,18 +248,13 @@ async function callOpenAI(prompt) {
     return null;
   }
 
-  const response = await fetch(OPENAI_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      max_tokens: 220,
-      temperature: 0.6,
-    }),
+  const response = await openaiChat(apiKey, {
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: prompt },
+    ],
+    maxTokens: 220,
+    temperature: 0.6,
   });
 
   if (!response.ok) {
