@@ -523,6 +523,7 @@ const getWeeklySummary = async (req, res) => {
       studentId,
       termId,
       engineName: eng,
+      userId: req.user.userId,
     });
 
     return res.status(200).json({ status: 'success', data: { studentId, ...summary } });

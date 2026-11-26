@@ -59,6 +59,7 @@ const classroomRoutes = require("./routes/classroom.routes")
 const studentPortalRoutes = require("./routes/studentPortal.routes")
 const profileRoutes = require("./routes/profile.routes")
 const schoolYearRoutes = require("./routes/schoolYear.routes"); // created in Task 3
+const aiUsageRoutes = require("./routes/aiUsage.routes");
 const resolveSchoolYear = require("./middleware/resolveSchoolYear");
 const observeRoutes = require("./routes/observe.routes");
 const observeAlertsRoutes = require("./routes/observeAlerts.routes");
@@ -155,6 +156,9 @@ app.use("/api/school-years", schoolYearRoutes); // year mgmt itself needs no yea
 // and school.controller.js is not school-year-scoped (no req.schoolYear
 // usage) — same rationale as /api/school-years above.
 app.use("/api/schools", schoolRoutes);
+// AI usage is counted per person and school, not per school year, and the
+// web server reports it without a year header: no year context needed.
+app.use("/api/ai-usage", aiUsageRoutes);
 app.use(resolveSchoolYear);
 
 app.use("/api/users", userRoutes);

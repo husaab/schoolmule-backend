@@ -22,6 +22,7 @@ const engine = require('./analyticsEngine');
 const aiQueries = require('../queries/aiWeeklySummary.queries');
 const parentPortalQueries = require('../queries/parentPortal.queries');
 const { AI_MODEL: MODEL, openaiChat } = require('./openaiChat');
+const aiUsage = require('./aiUsage');
 
 const NO_ACTIVITY_MODEL = 'none';
 const SCHOOL_TIMEZONE = 'America/Toronto';
@@ -264,7 +265,7 @@ async function callOpenAI(prompt) {
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content?.trim();
-  return content || null;
+  return content ? { content, usage: data?.usage || null } : null;
 }
 
 /**
@@ -282,6 +283,7 @@ async function getOrGenerateWeeklySummary({
   studentName,
   termId,
   engineName,
+  userId = null,
   now = new Date(),
 }) {
   const weekStart = getWeekStart(now);
@@ -320,17 +322,35 @@ async function getOrGenerateWeeklySummary({
     return persist({ studentId, weekStart, weekEnd, content, model: NO_ACTIVITY_MODEL });
   }
 
-  let content;
+  // A school that has used up its month of AI gets no new summary until the
+  // month turns; the dashboard renders without the card, as for any failure.
+  if (!(await aiUsage.checkSchool(school)).ok) {
+    return { ...base, content: null, model: null, generatedAt: null, unavailable: true };
+  }
+
+  let generated;
   try {
-    content = await callOpenAI(buildUserPrompt(facts, name, weekStart, weekEnd));
+    generated = await callOpenAI(buildUserPrompt(facts, name, weekStart, weekEnd));
   } catch (error) {
     logger.error('Weekly summary generation failed:', error);
     return { ...base, content: null, model: null, generatedAt: null, unavailable: true };
   }
 
-  if (!content) {
+  if (!generated) {
     return { ...base, content: null, model: null, generatedAt: null, unavailable: true };
   }
+  const { content, usage } = generated;
+  // Counted against the parent whose dashboard asked for it (once a week per
+  // child: the summary is cached after this).
+  await aiUsage.record({
+    school,
+    userId,
+    feature: 'weekly_summary',
+    requests: 1,
+    inputTokens: usage?.prompt_tokens,
+    cachedInputTokens: usage?.prompt_tokens_details?.cached_tokens,
+    outputTokens: usage?.completion_tokens,
+  });
 
   return persist({ studentId, weekStart, weekEnd, content, model: MODEL });
 }

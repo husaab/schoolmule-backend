@@ -2814,3 +2814,58 @@ CREATE TABLE IF NOT EXISTS student_view_emails (
 CREATE INDEX IF NOT EXISTS idx_student_view_emails_view ON student_view_emails(view_id);
 CREATE INDEX IF NOT EXISTS idx_student_view_emails_student ON student_view_emails(student_id);
 ALTER TABLE student_view_emails ENABLE ROW LEVEL SECURITY;
+
+-- Audit log and AI usage counters (audit_and_ai_usage_migration.sql).
+CREATE TABLE IF NOT EXISTS audit_log (
+  audit_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ts                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  school              school NOT NULL,
+  school_year_id      UUID REFERENCES school_years(school_year_id) ON DELETE SET NULL,
+  actor_user_id       UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  actor_view          TEXT,
+  source              TEXT NOT NULL CHECK (source IN ('ui', 'assistant', 'system')),
+  action              TEXT NOT NULL,
+  entity_type         TEXT NOT NULL,
+  entity_id           UUID,
+  summary             TEXT NOT NULL,
+  changes             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  request_id          TEXT,
+  assistant_action_id UUID
+);
+CREATE INDEX IF NOT EXISTS audit_log_school_ts ON audit_log (school, ts DESC);
+CREATE INDEX IF NOT EXISTS audit_log_entity ON audit_log (school, entity_type, entity_id, ts DESC);
+CREATE INDEX IF NOT EXISTS audit_log_assistant_action ON audit_log (assistant_action_id) WHERE assistant_action_id IS NOT NULL;
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS ai_usage_daily (
+  user_id             UUID NOT NULL,
+  day                 DATE NOT NULL,
+  feature             TEXT NOT NULL,
+  school              school NOT NULL,
+  requests            INTEGER NOT NULL DEFAULT 0,
+  input_tokens        BIGINT NOT NULL DEFAULT 0,
+  cached_input_tokens BIGINT NOT NULL DEFAULT 0,
+  output_tokens       BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, feature)
+);
+CREATE INDEX IF NOT EXISTS ai_usage_daily_school_day ON ai_usage_daily (school, day);
+ALTER TABLE ai_usage_daily ENABLE ROW LEVEL SECURITY;
+
+-- School asset history (school_asset_versions_migration.sql). The private
+-- storage bucket is not mirrored here: storage is mocked in tests.
+CREATE TABLE IF NOT EXISTS school_asset_versions (
+  version_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id         UUID NOT NULL REFERENCES schools(school_id) ON DELETE CASCADE,
+  school            school NOT NULL,
+  asset_type        TEXT NOT NULL CHECK (asset_type IN ('logo', 'principal_signature', 'school_stamp')),
+  storage_path      TEXT NOT NULL,
+  live_ext          TEXT NOT NULL,
+  content_type      TEXT,
+  byte_size         INTEGER,
+  replaced_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  replaced_by       UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  reason            TEXT NOT NULL CHECK (reason IN ('replaced', 'deleted', 'restored_over')),
+  source_action_id  UUID
+);
+CREATE INDEX IF NOT EXISTS school_asset_versions_lookup ON school_asset_versions (school_id, asset_type, replaced_at DESC);
+ALTER TABLE school_asset_versions ENABLE ROW LEVEL SECURITY;
