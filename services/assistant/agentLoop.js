@@ -82,7 +82,7 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
     const [history, firstName, page] = await Promise.all([
       store.transcript(conversation.id),
       store.firstNameOf(who.userId),
-      pageOf(pageContext, read, refs),
+      view === 'PARENT' ? null : pageOf(pageContext, read, refs),
     ]);
     const messages = recent(history, caps.historyMessages);
     // The panel's "On this page: …": only a class this person can open.

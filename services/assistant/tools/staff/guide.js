@@ -11,6 +11,7 @@ const { defineTool } = require('../registry');
 const guide = require('../../guide/find');
 
 const STAFF = ['ADMIN', 'TEACHER'];
+const EVERYONE = ['ADMIN', 'TEACHER', 'PARENT'];
 
 defineTool({
   name: 'find_feature',
@@ -26,10 +27,10 @@ defineTool({
     required: ['query', 'class'],
     additionalProperties: false,
   },
-  views: STAFF,
+  views: EVERYONE,
   handler: async (args, ctx) => {
     const cls = args.class ? ctx.refs.resolve(args.class, 'class') : null;
-    const hits = guide.find(String(args.query).slice(0, 200));
+    const hits = guide.find(String(args.query).slice(0, 200), { parent: Boolean(ctx.access && ctx.access.view === 'PARENT') });
     if (hits.length === 0) {
       return { summary: 'Nothing in the guide matched', forModel: { results: [], note: 'Nothing in the site guide matched. Say so plainly; do not guess where it is.' } };
     }
@@ -81,7 +82,7 @@ defineTool({
     required: ['question', 'options'],
     additionalProperties: false,
   },
-  views: STAFF,
+  views: EVERYONE,
   terminal: true,
   handler: async (args, ctx) => {
     const options = args.options.map((option, index) => {

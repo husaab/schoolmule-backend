@@ -143,8 +143,13 @@ describe('the site guide', () => {
       expect(entry.path).toMatch(/^\/[a-z-/]+$/);
       expect(entry.steps.length).toBeGreaterThan(0);
       if (Array.isArray(entry.needs)) for (const key of entry.needs) expect(KEYS).toContain(key);
-      else expect(['staff', 'fullAdmin']).toContain(entry.needs);
-      for (const tool of [].concat(entry.muley || [])) expect(registry._tools.has(tool)).toBe(true);
+      else expect(['staff', 'fullAdmin', 'parent']).toContain(entry.needs);
+      for (const tool of [].concat(entry.muley || [])) {
+        expect(registry._tools.has(tool)).toBe(true);
+        // A parent page names a tool a parent has, a staff page one staff have.
+        expect(registry._tools.get(tool).views).toContain(entry.needs === 'parent' ? 'PARENT' : 'TEACHER');
+      }
+      if (entry.needs === 'parent') expect(entry.path).toMatch(/^\/parent\//);
       if (entry.classPath) expect(entry.classPath).toContain(':classId');
     }
   });
@@ -156,7 +161,10 @@ describe('the tool registry', () => {
     expect(names).toEqual([...names].sort());
     expect(names).toEqual(expect.arrayContaining(['list_classes', 'get_class_roster', 'get_gradebook', 'get_class_attendance', 'find_feature', 'ask_user_to_choose']));
     expect(registry.definitionsFor('ADMIN').map((t) => t.name)).toEqual(names);
-    expect(registry.definitionsFor('PARENT')).toEqual([]);
+    // A parent gets the family tools, the guide and asking to choose: nothing that reads a staff route.
+    expect(registry.definitionsFor('PARENT').map((t) => t.name)).toEqual([
+      'ask_user_to_choose', 'find_feature', 'get_child_attendance', 'get_child_grades', 'get_meetings', 'get_school_calendar', 'get_whats_due', 'list_my_children',
+    ]);
     expect(registry.definitionsFor('STUDENT')).toEqual([]);
   });
 

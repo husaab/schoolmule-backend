@@ -124,8 +124,8 @@ describe('Muley: turns, tools and who it answers', () => {
       expect((await turn({ message: 'hello' })).res.body.code).toBe('ASSISTANT_DISABLED');
     });
 
-    it('never answers in an admin preview, a parent or a student', async () => {
-      await switchOn({ roleParent: true });
+    it('never answers in an admin preview or a student, and a parent only where parents are switched on', async () => {
+      await switchOn({ roleParent: false });
       const fake = script([[text('hi')]]);
       const preview = { ...TEACHER_A, impersonator: { userId: ADMIN_ID } };
 
@@ -138,7 +138,7 @@ describe('Muley: turns, tools and who it answers', () => {
 
       const asParent = await turn({ message: 'hello' }, PARENT);
       expect(asParent.res.status).toBe(403);
-      expect(asParent.res.body.code).toBe('ASSISTANT_NOT_AVAILABLE');
+      expect(asParent.res.body.code).toBe('ASSISTANT_DISABLED');
       // With the parent gate enforcing, a parent's settings check is answered "off", never a 403 the app would toast.
       process.env.RBAC_PARENT_GATE = 'enforce';
       const parentSettings = await authenticatedRequest('get', '/api/assistant/settings', PARENT);

@@ -62,7 +62,7 @@ const getSettings = async (req, res) => {
     }
     return res.status(200).json({
       status: 'success',
-      data: { enabled: true, view: req.access.view, capabilities: { writes: Boolean(verdict.settings.allowWrites) }, maxMessageLength: config.caps().messageChars },
+      data: { enabled: true, view: req.access.view, capabilities: { writes: Boolean(verdict.settings.allowWrites) && req.access.view !== 'PARENT' }, maxMessageLength: config.caps().messageChars },
     });
   } catch (error) {
     logger.error({ err: error }, 'Error reading assistant settings');
@@ -125,7 +125,7 @@ const startTurn = async (req, res) => {
         who, access: req.access, token: req.headers.authorization.slice(7), schoolYear, conversation, turnId,
         text, choice: choice || null, pageContext: pageContext && typeof pageContext === 'object' ? pageContext : null,
         attached: attached.map((f) => ({ id: f.id, name: f.name.replace(/[\r\n"]/g, ' ').trim().slice(0, 120) || 'image' })),
-        allowWrites: Boolean(req.assistant && req.assistant.settings.allowWrites),
+        allowWrites: Boolean(req.assistant && req.assistant.settings.allowWrites) && req.access.view !== 'PARENT',
         emit: stream.send, signal: stop.signal,
       });
     } finally {
@@ -258,7 +258,7 @@ const receiveAttachment = (req, res, next) => attachmentUpload(req, res, (err) =
 // POST /api/assistant/attachments (multipart, one image as `file`): keep an image for a change
 // Muley may prepare, such as a new school stamp. Nothing is changed by it.
 const uploadAttachment = async (req, res) => {
-  if (!req.assistant || !req.assistant.settings.allowWrites) return failed(res, 403, 'WRITES_OFF', "Your school hasn't switched on saving changes through Muley.");
+  if (!req.assistant || !req.assistant.settings.allowWrites || req.access.view === 'PARENT') return failed(res, 403, 'WRITES_OFF', "Your school hasn't switched on saving changes through Muley.");
   if (!req.file) return failed(res, 400, 'FILE_REQUIRED', 'Attach an image.');
   try {
     return res.status(201).json({ status: 'success', data: await attachments.store(whoOf(req), req.file) });
@@ -280,7 +280,7 @@ const actionFailed = (res, err) => {
   return res.status(500).json({ status: 'failed', code: 'ACTION_FAILED', message: 'That could not be done. Nothing was changed.' });
 };
 const writesOn = (req, res) => {
-  if (req.assistant && req.assistant.settings.allowWrites) return true;
+  if (req.assistant && req.assistant.settings.allowWrites && req.access.view !== 'PARENT') return true;
   failed(res, 403, 'WRITES_OFF', "Your school hasn't switched on saving changes through Muley.");
   return false;
 };

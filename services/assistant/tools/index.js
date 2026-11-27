@@ -6,5 +6,6 @@ require('./staff/insights');
 require('./staff/attendance');
 require('./staff/assets');
 require('./staff/writes');
+require('./parent/family');
 
 module.exports = require('./registry');

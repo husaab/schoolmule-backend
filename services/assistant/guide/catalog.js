@@ -23,6 +23,8 @@
 
 const STAFF = 'staff';
 const FULL_ADMIN = 'fullAdmin';
+// The parent portal's pages: found only by a parent, and only for them.
+const PARENT = 'parent';
 
 const ENTRIES = [
   // ── Everyday ────────────────────────────────────────────────
@@ -114,6 +116,30 @@ const ENTRIES = [
     steps: ['Open the class\'s gradebook.', 'Choose Publish and pick the assessments to release.', 'Parents and students see a grade only once it is published; guardians are emailed a couple of minutes later, and you can unpublish before then.'] },
   { id: 'report-card-comments', title: 'Write report card comments', words: ['comments', 'work habits', 'behaviour ratings', 'ai comment', 'comment bank'], path: '/gradebook', classPath: '/gradebook/:classId/feedback', needs: STAFF,
     steps: ['Open the class\'s gradebook and choose its report card comments.', 'Fill in each student\'s ratings and comment; they save as you go.'] },
+
+  // ── The parent portal (sidebar labels as a parent sees them) ─
+  { id: 'parent-overview', title: 'Overview', words: ['home', 'dashboard', 'summary', 'my children'], path: '/parent/dashboard', needs: PARENT,
+    steps: ['In the menu, choose Overview.'], muley: 'list_my_children' },
+  { id: 'parent-grades', title: 'Grades', words: ['marks', 'scores', 'how is my child doing', 'tests', 'assessments', 'average', 'report'], path: '/parent/grades', needs: PARENT,
+    steps: ['In the menu, choose Grades.', 'Pick your child at the top, then open a class to see each mark.', 'A mark shows once the teacher publishes it.'], muley: 'get_child_grades' },
+  { id: 'parent-classes', title: 'Classes', words: ['homework', 'classwork', 'assignments', 'due', 'missing work', 'stream', 'class posts', 'hand in'], path: '/parent/classes', needs: PARENT,
+    steps: ['In the menu, choose Classes.', 'Pick your child to see their classes, what is due and what was posted.'], muley: 'get_whats_due' },
+  { id: 'parent-attendance', title: 'Attendance', words: ['absent', 'late', 'absences', 'days missed', 'report an absence'], path: '/parent/attendance', needs: PARENT,
+    steps: ['In the menu, choose Attendance.', 'Pick your child to see each day.'], muley: 'get_child_attendance' },
+  { id: 'parent-messages', title: 'Messages', words: ['message a teacher', 'contact the teacher', 'email the teacher', 'write to the school', 'office', 'inbox', 'reply'], path: '/parent/messages', needs: PARENT,
+    steps: ['In the menu, choose Messages.', 'Choose New message, pick the teacher or the office, and write your message.'] },
+  { id: 'parent-meetings', title: 'Meetings', words: ['parent teacher meeting', 'parent-teacher interviews', 'conference', 'book a meeting', 'book a time', 'interview'], path: '/parent/meetings', needs: PARENT,
+    steps: ['In the menu, choose Meetings (it shows while meetings are open).', 'Pick a teacher and a time, then confirm.', 'You can move or cancel it there until booking closes.'], muley: 'get_meetings' },
+  { id: 'parent-calendar', title: 'Calendar', words: ['holidays', 'pa day', 'school closed', 'events', 'no school', 'break', 'dates'], path: '/parent/calendar', needs: PARENT,
+    steps: ['In the menu, choose Calendar.'], muley: 'get_school_calendar' },
+  { id: 'parent-feedback', title: 'Feedback', words: ['comments', 'teacher comments', 'progress report', 'learning skills'], path: '/parent/feedback', needs: PARENT,
+    steps: ['In the menu, choose Feedback.', 'Comments show once the school sends the report home.'] },
+  { id: 'parent-report-cards', title: 'Report Cards', words: ['report card', 'term report', 'download report', 'pdf'], path: '/parent/report-cards', needs: PARENT,
+    steps: ['In the menu, choose Report Cards.', 'Open your child to download each report once the school sends it.'] },
+  { id: 'parent-staff', title: 'Staff Directory', words: ['teachers', 'who is my child\'s teacher', 'staff', 'principal', 'contact list'], path: '/parent/staff', needs: PARENT,
+    steps: ['In the menu, choose Staff Directory.'] },
+  { id: 'parent-notifications', title: 'Notification settings', words: ['emails', 'notifications', 'stop emails', 'email settings', 'alerts'], path: '/parent/notifications', needs: PARENT,
+    steps: ['Open your account menu at the top right and choose Notifications.'] },
 ];
 
-module.exports = { ENTRIES, STAFF, FULL_ADMIN };
+module.exports = { ENTRIES, STAFF, FULL_ADMIN, PARENT };

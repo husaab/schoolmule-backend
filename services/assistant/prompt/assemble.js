@@ -5,7 +5,7 @@
 // Nothing here comes from the model or from page text: the name and role
 // are the session's, and the page is only what a guarded read confirmed.
 
-const { STATIC_PREFIX } = require('./static');
+const { STATIC_PREFIX, STATIC_PREFIX_PARENT } = require('./static');
 const { PERMISSIONS } = require('../../../config/permissions');
 
 const VIEW_LABEL = { ADMIN: 'a school administrator', TEACHER: 'a teacher' };
@@ -24,6 +24,12 @@ function todayIn(timezone, now = new Date()) {
  */
 function assemble({ firstName, view, access, schoolYearLabel, today, page, allowWrites = false }) {
   const lines = ['# This conversation'];
+  if (view === 'PARENT') {
+    lines.push(`You are helping ${firstName ? `${firstName}, ` : ''}a parent or guardian in the parent portal.`);
+    lines.push(`Today is ${today.weekday}, ${today.date}.${schoolYearLabel ? ` The school year in use is ${schoolYearLabel}.` : ''}`);
+    lines.push('You can only read, explain and show where things are.');
+    return [STATIC_PREFIX_PARENT, lines.join('\n')];
+  }
   lines.push(`You are helping ${firstName ? `${firstName}, ` : ''}${VIEW_LABEL[view] || 'a member of staff'}.`);
   if (access.isFullAdmin) {
     lines.push('Their account is a full administrator: it can open every area of the school.');
@@ -34,7 +40,7 @@ function assemble({ firstName, view, access, schoolYearLabel, today, page, allow
   }
   lines.push(`Today is ${today.weekday}, ${today.date}.${schoolYearLabel ? ` The school year in use is ${schoolYearLabel}.` : ''}`);
   lines.push(allowWrites
-    ? 'This school lets you prepare class attendance and marks for this person to apply (propose_class_attendance, propose_scores). Nothing else can be changed through you yet.'
+    ? 'This school lets you prepare changes for this person to save, with the tools that prepare them (attendance, marks, who counts in the class average, the school\'s stamp, logo or signature). Nothing else can be changed through you.'
     : 'This school has not switched on preparing changes: you can only read, explain and show where things are.');
   if (page && page.classRef) {
     lines.push(`They are looking at the class ${page.label} right now. Its ref is ${page.classRef}.`);

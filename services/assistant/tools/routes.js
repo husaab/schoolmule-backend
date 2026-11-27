@@ -31,6 +31,14 @@ const ROUTES = Object.freeze({
   schoolAssets: { method: 'GET', path: '/api/school-assets/school-code/:schoolCode', params: { schoolCode: SCHOOL_CODE } },
   schoolAssetVersions: { method: 'GET', path: '/api/school-assets/:schoolId/:assetType/versions', params: { assetType: ASSET_TYPE } },
 
+  // The parent portal: a parent's own children, as the portal shows them.
+  parentSummary: { method: 'GET', path: '/api/parent-portal/summary' },
+  parentChildGrades: { method: 'GET', path: '/api/parent-portal/students/:studentId/grades' },
+  parentChildAttendance: { method: 'GET', path: '/api/parent-portal/students/:studentId/attendance' }, // ?from=&to=
+  parentClassroomSummary: { method: 'GET', path: '/api/parent-portal/classroom/summary' },
+  parentCalendar: { method: 'GET', path: '/api/parent-portal/calendar' },              // ?from=&to=
+  parentMeetings: { method: 'GET', path: '/api/parent-portal/meetings' },
+
   // Writes. Never given to a tool: only services/assistant/actions runs them,
   // when the person presses Apply or Undo on a change they were shown.
   saveClassAttendance: { method: 'POST', path: '/api/attendance/class' },

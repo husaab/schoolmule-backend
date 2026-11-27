@@ -5,7 +5,7 @@
 // people use for it, and the model has already turned the person's question
 // into a short query.
 
-const { ENTRIES, STAFF, FULL_ADMIN } = require('./catalog');
+const { ENTRIES, STAFF, FULL_ADMIN, PARENT } = require('./catalog');
 
 const STOP = new Set(['a', 'an', 'the', 'to', 'of', 'in', 'on', 'for', 'and', 'or', 'do', 'i', 'my', 'how', 'where', 'is', 'are', 'can', 'find', 'page', 'from', 'with', 'what', 'it']);
 const wordsOf = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
@@ -27,6 +27,7 @@ function score(entry, queryWords) {
 
 /** Whether this account can open the entry's page. `access` is req.access. */
 function canOpen(entry, access) {
+  if (entry.needs === PARENT) return Boolean(access && access.view === 'PARENT');
   if (!access || !access.isStaffView) return false;
   if (entry.needs === STAFF) return true;
   if (entry.needs === FULL_ADMIN) return Boolean(access.isFullAdmin);
@@ -35,6 +36,7 @@ function canOpen(entry, access) {
 
 /** Who can open it, said plainly, for someone who can't. */
 function whoCan(entry) {
+  if (entry.needs === PARENT) return 'A parent or guardian, in the parent portal';
   if (entry.needs === STAFF) return 'Any teacher or administrator';
   if (entry.needs === FULL_ADMIN) return 'A full administrator of the school';
   return 'Someone whose role includes this area, such as an administrator';
@@ -44,10 +46,11 @@ function whoCan(entry) {
  * The entries that best answer `query`, best first.
  * @returns {Array<{entry: object, score: number}>}
  */
-function find(query, { limit = 3 } = {}) {
+function find(query, { limit = 3, parent = false } = {}) {
   const queryWords = wordsOf(query);
   if (queryWords.length === 0) return [];
-  const hits = ENTRIES
+  // A parent is shown the parent portal's pages, and staff never are.
+  const hits = ENTRIES.filter((entry) => (entry.needs === PARENT) === parent)
     .map((entry) => ({ entry, score: score(entry, queryWords) }))
     .filter((hit) => hit.score > 0)
     .sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title));
