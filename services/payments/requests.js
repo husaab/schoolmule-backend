@@ -10,7 +10,11 @@
 //     grade twice adds only the students who weren't asked yet.
 //   - Nothing with money on it is deleted: a charge with any payment history
 //     is waived instead, and a request with any payment can't be deleted.
-//   - The amount can change only while nobody has paid anything.
+//   - The amount can change only while nobody has paid anything. The tax
+//     rate and whether tax is added or included count as the amount.
+//   - Each family's charge is one line: the request's amount and its tax (a
+//     copy of the rate, so editing the rate later changes no charge). What
+//     the family owes is the amount plus any tax added on top.
 
 const db = require('../../config/database');
 const logger = require('../../logger');
@@ -21,6 +25,8 @@ const emails = require('./emails');
 const { guardiansFor } = require('./guardians');
 const { MIN_ITEM_CENTS, MAX_ITEM_CENTS } = require('./paymentField');
 const { balanceCents } = require('./chargeStatus');
+const tax = require('./tax');
+const taxSettings = require('./taxSettings');
 
 const { ChargeError } = charges;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,7 +45,8 @@ const text = (value, max) => {
 
 /**
  * Checks what the office typed. `partial` (an edit) only checks the keys sent.
- * @returns {{ title?, description?, amountCents?, dueDate?, allowOffline?, accountingCode? }}
+ * Whether a tax rate is the school's is checked against the database later.
+ * @returns {{ title?, description?, amountCents?, dueDate?, allowOffline?, accountingCode?, taxRateId?, taxMode? }}
  */
 function normalizeRequest(body = {}, { partial = false } = {}) {
   const out = {};
@@ -65,7 +72,22 @@ function normalizeRequest(body = {}, { partial = false } = {}) {
   }
   if (has('allowOffline')) out.allowOffline = body.allowOffline === undefined ? true : Boolean(body.allowOffline);
   if (has('accountingCode')) out.accountingCode = text(body.accountingCode, 60);
+  if (has('taxRateId')) {
+    const id = body.taxRateId == null || body.taxRateId === '' ? null : String(body.taxRateId);
+    if (id !== null && !UUID_RE.test(id)) throw new ChargeError(taxSettings.BAD_RATE, 400);
+    out.taxRateId = id;
+  }
+  if (has('taxMode')) out.taxMode = tax.normalizeMode(body.taxMode);
   return out;
+}
+
+/** The rate a request row names ({ name, rateMilli, archived }), or null. */
+const rateOf = (request) => (request.tax_rate_id && request.tax_rate ? request.tax_rate : null);
+
+/** Each family's line: the amount as typed, its tax, and what the family owes. */
+function requestLine(amountCents, rate, mode) {
+  const line = tax.taxLine(amountCents, rate, mode);
+  return { ...line, totalCents: amountCents + (line.taxIncluded ? 0 : line.taxCents) };
 }
 
 /** Who to send to: picked students, whole grades and whole classes, in the school's year. */
@@ -103,16 +125,21 @@ async function inTransaction(work) {
   }
 }
 
-/** Makes the charges for new students and queues their guardians' emails. @returns the charges made */
-async function addCharges(tx, request, studentIds, { account, notify }) {
+/**
+ * Makes the charges for new students and queues their guardians' emails.
+ * `rate` is the request's tax rate as it stands now (or null).
+ * @returns the charges made
+ */
+async function addCharges(tx, request, studentIds, { account, notify, rate }) {
   const made = [];
+  const line = requestLine(request.amount_cents, rate, request.tax_mode);
   for (const studentId of studentIds) {
     const { rows: [charge] } = await tx.query(chargeQueries.insertRequestCharge, [
       request.school, request.livemode, request.request_id, studentId, request.title, request.currency,
-      request.amount_cents, request.accounting_code, account?.payment_account_id || null,
+      line.totalCents, request.accounting_code, account?.payment_account_id || null, line.taxCents,
     ]);
     if (!charge) continue; // asked already
-    await tx.query(chargeQueries.insertLine, [charge.charge_id, null, request.title, request.amount_cents, 0]);
+    await tx.query(chargeQueries.insertLine, charges.lineParams(charge.charge_id, { itemId: null, label: request.title, ...line }, 0));
     if (notify) {
       const queued = await emails.queueRequest(tx, charge);
       if (queued > 0) await tx.query(chargeQueries.markLinkSent, [charge.charge_id]);
@@ -141,12 +168,23 @@ async function checkCanCollect(school, allowOffline) {
 // ─── Shaping ──────────────────────────────────────────────────────────
 
 function toRequest(row) {
+  const rate = rateOf(row);
+  const mode = tax.normalizeMode(row.tax_mode);
+  const line = requestLine(row.amount_cents, rate, mode);
   return {
     requestId: row.request_id,
     title: row.title,
     description: row.description,
     currency: row.currency,
+    // The price as typed, per student; with its tax (at the rate as it stands now), what each family owes.
     amountCents: row.amount_cents,
+    taxRateId: row.tax_rate_id || null,
+    taxName: rate ? rate.name : null,
+    taxRateMilli: rate ? rate.rateMilli : null,
+    taxArchived: rate ? Boolean(rate.archived) : false,
+    taxMode: mode,
+    taxPerStudentCents: line.taxCents,
+    totalPerStudentCents: line.totalCents,
     dueDate: row.due_date_text ?? null,
     allowOffline: row.allow_offline,
     accountingCode: row.accounting_code,
@@ -220,13 +258,14 @@ async function create({ school, livemode, schoolYearId, body, user }) {
   const notify = body.notify !== false;
   const pay = await checkCanCollect(school, fields.allowOffline);
   const result = await inTransaction(async (tx) => {
+    const rate = await taxSettings.resolveForRequest(tx, school, fields.taxRateId);
     const studentIds = await resolveStudents(tx, { school, schoolYearId, target });
     if (studentIds.length === 0) throw new ChargeError('No students match who you chose.', 400);
     const { rows: [request] } = await tx.query(q.insertRequest, [
       school, livemode, schoolYearId, fields.title, fields.description, fields.amountCents, fields.dueDate,
-      fields.allowOffline, fields.accountingCode, user.userId,
+      fields.allowOffline, fields.accountingCode, user.userId, rate ? rate.taxRateId : null, fields.taxMode,
     ]);
-    const made = await addCharges(tx, request, studentIds, { account: pay.account, notify });
+    const made = await addCharges(tx, request, studentIds, { account: pay.account, notify, rate });
     return { request, made };
   });
   if (notify) emails.kick();
@@ -242,7 +281,7 @@ async function addStudents({ school, livemode, schoolYearId, requestId, body, us
     const request = await loadRequest(tx, { school, livemode, requestId, lock: true });
     const pay = await checkCanCollect(school, request.allow_offline);
     const studentIds = await resolveStudents(tx, { school, schoolYearId: request.school_year_id || schoolYearId, target });
-    return addCharges(tx, request, studentIds, { account: pay.account, notify });
+    return addCharges(tx, request, studentIds, { account: pay.account, notify, rate: rateOf(request) });
   });
   if (notify && result.length > 0) emails.kick();
   logger.info({ school, userId: user.userId, requestId, added: result.length }, 'Payments: students added to a payment request');
@@ -267,7 +306,9 @@ async function removeCharge({ school, livemode, requestId, chargeId }) {
 
 /**
  * Edits a request. The name and amount are copied onto each family's charge;
- * the amount can change only while nobody has paid anything.
+ * the amount can change only while nobody has paid anything. Changing the
+ * tax rate, or whether a rate is added or included, counts as changing the
+ * amount: every family's charge and line is rewritten and recomputed.
  */
 async function update({ school, livemode, requestId, body }) {
   const fields = normalizeRequest(body, { partial: true });
@@ -275,10 +316,20 @@ async function update({ school, livemode, requestId, body }) {
     const request = await loadRequest(tx, { school, livemode, requestId, lock: true });
     const allowOffline = fields.allowOffline ?? request.allow_offline;
     if (fields.allowOffline === false) await checkCanCollect(school, false);
+    const taxRateId = fields.taxRateId !== undefined ? fields.taxRateId : request.tax_rate_id;
+    const taxMode = fields.taxMode ?? request.tax_mode;
+    // A rate removed since it was chosen may stay on this request; no other archived one.
+    const rate = await taxSettings.resolveForRequest(tx, school, taxRateId, { keep: request.tax_rate_id });
     const amountChanges = fields.amountCents !== undefined && fields.amountCents !== request.amount_cents;
-    if (amountChanges) {
+    // Without a rate, added or included makes no difference to anyone's amount.
+    const taxChanges = (taxRateId || null) !== (request.tax_rate_id || null) || (Boolean(taxRateId) && taxMode !== request.tax_mode);
+    if (amountChanges || taxChanges) {
       const { rows: [{ n }] } = await tx.query(q.countRequestPayments, [requestId]);
-      if (n > 0) throw new ChargeError('Families have paid already, so the amount can’t change. Waive or refund instead.', 409, 'HAS_PAYMENTS');
+      if (n > 0) {
+        throw new ChargeError(amountChanges
+          ? 'Families have paid already, so the amount can’t change. Waive or refund instead.'
+          : 'Families have paid already, so the tax can’t change. Waive or refund instead.', 409, 'HAS_PAYMENTS');
+      }
     }
     const next = {
       title: fields.title ?? request.title,
@@ -290,10 +341,15 @@ async function update({ school, livemode, requestId, body }) {
     };
     await tx.query(q.updateRequest, [
       requestId, next.title, next.description, next.amountCents, next.dueDate, next.allowOffline, next.accountingCode,
+      rate ? rate.taxRateId : null, taxMode,
     ]);
-    await tx.query(q.updateRequestCharges, [requestId, next.title, next.amountCents, next.accountingCode]);
-    if (amountChanges) {
-      await tx.query(q.updateRequestLines, [requestId, next.title, next.amountCents]);
+    await tx.query(q.updateRequestCharges, [requestId, next.title, next.accountingCode]);
+    if (amountChanges || taxChanges) {
+      const line = requestLine(next.amountCents, rate, taxMode);
+      await tx.query(q.updateRequestMoney, [requestId, line.totalCents, line.taxCents]);
+      await tx.query(q.updateRequestLines, [
+        requestId, next.title, line.amountCents, line.taxCents, line.taxName, line.taxRateMilli, line.taxIncluded,
+      ]);
       const { rows } = await tx.query('SELECT charge_id FROM charges WHERE request_id = $1', [requestId]);
       for (const row of rows) await charges.recompute(tx, row.charge_id);
     } else if (fields.title) {
@@ -370,4 +426,5 @@ module.exports = {
   remind,
   sendDueSoonReminders,
   gradeRank,
+  requestLine,
 };

@@ -161,7 +161,14 @@ describe('the payment field in the builder', () => {
     expect(res.status).toBe(200);
     const pay = res.body.data.find((f) => f.fieldType === 'payment');
     expect(pay).toMatchObject({ isRequired: false, options: null });
-    expect(pay.payment).toEqual({ ...PAYMENT, accountingCode: '4210', currency: 'cad' });
+    // Staff reads carry each item's tax rate (none here) and the field's tax mode.
+    expect(pay.payment).toEqual({
+      ...PAYMENT,
+      items: PAYMENT.items.map((item) => ({ ...item, taxRateId: null, tax: null })),
+      accountingCode: '4210',
+      currency: 'cad',
+      taxMode: 'added',
+    });
   });
 
   it('refuses a second payment field, and a price under 50 cents', async () => {

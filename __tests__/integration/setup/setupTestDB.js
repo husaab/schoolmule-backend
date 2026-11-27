@@ -90,6 +90,8 @@ const ALL_TABLES = [
   'charge_lines',
   'charges',
   'payment_requests',
+  'tax_rates',
+  'payment_settings',
   'planner_period_rules',
   'planner_schedule_sessions',
   'planner_schedules',

@@ -19,8 +19,10 @@ const {
 const { can } = require('../services/access/access');
 const chargeQueries = require('../queries/charges.queries');
 const charges = require('../services/payments/charges');
-const { normalizePaymentConfig, PaymentFieldError, formatCents } = require('../services/payments/paymentField');
+const { normalizePaymentConfig, staffPaymentConfig, PaymentFieldError, formatCents } = require('../services/payments/paymentField');
 const { paidWith } = require('../services/payments/emails');
+const taxSettings = require('../services/payments/taxSettings');
+const officePayments = require('../services/payments/officePayments');
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -85,9 +87,16 @@ function toCamelSubmission(row, { finance = false } = {}) {
     studentId: row.student_id || null,
     studentName: row.linked_student?.name || null,
     studentGrade: row.linked_student?.grade || null,
+    // Set when the office entered the response for the family (a payment for a student who never sent the form).
+    enteredByName: row.entered_by_name || null,
     payment: toSubmissionPayment(row.payment, finance),
   };
 }
+
+/** A field as staff read it: a payment field's items carry their tax rate (`tax`). */
+const staffField = (rates) => (field) => (field.fieldType === 'payment' && field.payment
+  ? { ...field, payment: staffPaymentConfig(field.payment, rates) }
+  : field);
 
 const isFinance = (req) => can(req, 'finance');
 
@@ -128,7 +137,9 @@ const getForm = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Form not found' });
     }
-    return res.status(200).json({ status: 'success', data: toCamelForm(rows[0]) });
+    const form = toCamelForm(rows[0]);
+    if (form.fields.some((f) => f.fieldType === 'payment')) form.fields = form.fields.map(staffField(await taxSettings.ratesById(school)));
+    return res.status(200).json({ status: 'success', data: form });
   } catch (error) {
     logger.error({ err: error }, 'Error fetching registration form');
     return res.status(500).json({ status: 'failed', message: 'Error fetching form' });
@@ -403,6 +414,12 @@ const upsertFields = async (req, res) => {
     // Fetch existing field IDs so we know which to update vs insert
     const { rows: existingFields } = await client.query(registrationQueries.selectFieldsByFormId, [formId]);
     const existingIds = new Set(existingFields.map(f => f.field_id));
+    // A payment item may name one of the school's live tax rates, or keep a
+    // removed one this form's payment field already had.
+    const rates = await taxSettings.ratesById(school, client);
+    const keepArchived = existingFields
+      .filter((f) => f.field_type === 'payment')
+      .flatMap((f) => (f.payment_config?.items || []).map((item) => item.taxRateId).filter(Boolean));
 
     const validTypes = ['text', 'email', 'phone', 'date', 'select', 'radio', 'textarea', 'payment'];
     const incomingIds = new Set();
@@ -427,7 +444,7 @@ const upsertFields = async (req, res) => {
       let paymentConfig = null;
       if (f.fieldType === 'payment') {
         try {
-          paymentConfig = normalizePaymentConfig(f.payment);
+          paymentConfig = normalizePaymentConfig(f.payment, { rates, keepArchived });
         } catch (error) {
           await client.query('ROLLBACK');
           if (error instanceof PaymentFieldError) return res.status(400).json({ status: 'failed', message: error.message });
@@ -487,7 +504,7 @@ const upsertFields = async (req, res) => {
         placeholder: ff.placeholder,
         isRequired: ff.is_required,
         options: ff.options,
-        payment: ff.payment_config,
+        payment: ff.field_type === 'payment' && ff.payment_config ? staffPaymentConfig(ff.payment_config, rates) : ff.payment_config,
         sortOrder: ff.sort_order,
       })),
     });
@@ -785,12 +802,15 @@ const exportSubmissions = async (req, res) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Submissions');
 
-    // Build headers. A form that asks for payment gets the payment's columns too.
+    // Build headers. A form that asks for payment gets the payment's columns too,
+    // and who entered a response when the office did it for the family.
     const hasPayment = fields.some((f) => f.field_type === 'payment');
+    const hasOffice = hasPayment || submissions.some((sub) => sub.entered_by);
     const finance = isFinance(req);
     const headers = ['Submission Date', 'Status'];
     fields.forEach(f => headers.push(f.label));
     if (hasPayment) headers.push('Payment', 'Amount', 'Paid', 'Refunded', 'Paid with');
+    if (hasOffice) headers.push('Entered by');
     sheet.addRow(headers);
 
     // Style header row
@@ -820,6 +840,7 @@ const exportSubmissions = async (req, res) => {
           row.push('Nothing to pay', '', '', '', '');
         }
       }
+      if (hasOffice) row.push(sub.entered_by ? 'Entered by the office' : '');
       sheet.addRow(row);
     });
 
@@ -856,14 +877,49 @@ const exportSubmissions = async (req, res) => {
 /** Whether this school can take card payments now, for the builder's payment field. Anyone who builds forms may ask. */
 const getPaymentAvailability = async (req, res) => {
   try {
-    const { client, account, online } = await charges.availability(req.user.school);
+    const [{ client, account, online }, rates] = await Promise.all([
+      charges.availability(req.user.school),
+      taxSettings.listRates(db, req.user.school),
+    ]);
     return res.status(200).json({
       status: 'success',
-      data: { configured: Boolean(client), mode: client ? client.mode : null, online, accountStatus: account ? account.status : null },
+      data: {
+        configured: Boolean(client),
+        mode: client ? client.mode : null,
+        online,
+        accountStatus: account ? account.status : null,
+        // The school's live rates, for each item's Tax picker (they are edited in Finance → Payments → Settings).
+        taxRates: rates.filter((r) => !r.archived).map(({ taxRateId, name, rateMilli }) => ({ taxRateId, name, rateMilli })),
+      },
     });
   } catch (error) {
     logger.error({ err: error }, 'Error loading payment availability');
     return res.status(500).json({ status: 'failed', message: 'Error loading payment availability' });
+  }
+};
+
+// ─── A payment the office takes for a student (no response yet) ──────
+
+/**
+ * POST /api/registration/forms/:formId/office-payments: cash, a cheque or
+ * another payment for a student whose family never sent the form. Makes the
+ * response, its charge and the payment together (services/payments/officePayments.js).
+ * Needs `finance` and access to the form.
+ */
+const recordOfficePayment = async (req, res) => {
+  try {
+    const charge = await officePayments.recordForStudent({
+      school: req.user.school, formId: req.params.formId, body: req.body || {}, user: req.user,
+    });
+    return res.status(201).json({ status: 'success', data: charge });
+  } catch (error) {
+    if (error instanceof charges.ChargeError) {
+      return res.status(error.status).json({
+        status: 'failed', code: error.code || undefined, message: error.message, ...(error.data !== undefined ? { data: error.data } : {}),
+      });
+    }
+    logger.error({ err: error }, 'Error recording an office payment');
+    return res.status(500).json({ status: 'failed', message: 'Error recording the payment' });
   }
 };
 
@@ -902,4 +958,5 @@ module.exports = {
   exportSubmissions,
   getNewCount,
   getPaymentAvailability,
+  recordOfficePayment,
 };

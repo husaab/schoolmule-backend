@@ -5,7 +5,8 @@ const schoolYearQueries = require('../queries/schoolYear.queries');
 const googleSheetsQueries = require('../queries/googleSheets.queries');
 const logger = require('../logger');
 const charges = require('../services/payments/charges');
-const { priceSelection, summaryAnswer, PaymentFieldError } = require('../services/payments/paymentField');
+const { priceSelection, summaryAnswer, publicPaymentConfig, PaymentFieldError } = require('../services/payments/paymentField');
+const taxSettings = require('../services/payments/taxSettings');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,12 +36,11 @@ async function childrenOf(parent, schoolCode, studentId = null) {
   return rows.map((r) => ({ studentId: r.student_id, name: r.name, grade: r.grade }));
 }
 
-/** A payment field as the public sees it: no accounting code. */
-function publicField(field) {
+/** A payment field as the public sees it: no accounting code or rate ids; each item's tax, and the field's taxMode. */
+const publicField = (rates) => (field) => {
   if (field.fieldType !== 'payment' || !field.payment) return field;
-  const { accountingCode, ...payment } = field.payment;
-  return { ...field, payment };
-}
+  return { ...field, payment: publicPaymentConfig(field.payment, rates) };
+};
 
 function toCamelForm(row) {
   return {
@@ -80,8 +80,8 @@ const getPublicForm = async (req, res) => {
     }
 
     const form = toCamelForm(formRows[0]);
-    form.fields = form.fields.map(publicField);
     const hasPayment = form.fields.some((f) => f.fieldType === 'payment');
+    form.fields = form.fields.map(publicField(hasPayment ? await taxSettings.ratesById(schoolCode) : null));
     const pay = hasPayment ? await charges.availability(schoolCode) : { online: false, client: null };
     const { online } = pay;
 
@@ -215,7 +215,7 @@ const submitForm = async (req, res) => {
     let pay = null;
     if (paymentField) {
       try {
-        priced = priceSelection(paymentField.payment_config, req.body.payment?.itemIds);
+        priced = priceSelection(paymentField.payment_config, req.body.payment?.itemIds, await taxSettings.ratesById(schoolCode));
       } catch (error) {
         if (error instanceof PaymentFieldError) return res.status(400).json({ status: 'failed', message: error.message });
         throw error;
@@ -299,7 +299,9 @@ const submitForm = async (req, res) => {
       payment = {
         token: charge.public_token,
         method,
+        // What the family owes, tax added on top included; taxCents is all the tax in it.
         totalCents: charge.amount_cents,
+        taxCents: charge.tax_cents || 0,
         payPath: `/pay/${charge.public_token}`,
         checkoutUrl: null,
       };

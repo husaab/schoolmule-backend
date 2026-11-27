@@ -6,7 +6,7 @@
 
 const CHARGE_COLUMNS = `
   c.charge_id, c.school, c.livemode, c.source_type, c.submission_id, c.form_id, c.field_id, c.request_id, c.student_id,
-  c.payer_email, c.description, c.currency, c.amount_cents, c.amount_paid_cents, c.amount_refunded_cents,
+  c.payer_email, c.description, c.currency, c.amount_cents, c.amount_paid_cents, c.amount_refunded_cents, c.tax_cents,
   c.status, c.chosen_method, c.paid_at, c.accounting_code, c.public_token, c.payment_account_id,
   c.checkout_session_id, c.checkout_url, c.checkout_expires_at, c.checkout_attempts,
   c.reminder_sent_at, c.link_sent_at, c.dispute_status, c.created_at, c.updated_at
@@ -48,23 +48,25 @@ const chargesQueries = {
   CHARGE_EXTRAS,
   CHARGE_STATS,
 
+  /** amount_cents ($10) is what the family owes, tax added on top included; tax_cents ($14) all its tax. */
   insertCharge: `
     INSERT INTO charges (school, livemode, submission_id, form_id, field_id, student_id, payer_email, description,
-                         currency, amount_cents, chosen_method, accounting_code, payment_account_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                         currency, amount_cents, chosen_method, accounting_code, payment_account_id, tax_cents)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *
   `,
 
+  /** A line keeps its own copy of the tax: $6 cents, $7 name, $8 rate, $9 whether it is inside the price. */
   insertLine: `
-    INSERT INTO charge_lines (charge_id, item_id, label, amount_cents, sort_order)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO charge_lines (charge_id, item_id, label, amount_cents, sort_order, tax_cents, tax_name, tax_rate_milli, tax_included)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
   `,
 
   /** A charge for a payment request: one per student, so sending twice adds nobody twice. */
   insertRequestCharge: `
     INSERT INTO charges (school, livemode, source_type, request_id, student_id, description, currency,
-                         amount_cents, chosen_method, accounting_code, payment_account_id)
-    VALUES ($1, $2, 'request', $3, $4, $5, $6, $7, 'card', $8, $9)
+                         amount_cents, chosen_method, accounting_code, payment_account_id, tax_cents)
+    VALUES ($1, $2, 'request', $3, $4, $5, $6, $7, 'card', $8, $9, $10)
     ON CONFLICT (request_id, student_id) WHERE request_id IS NOT NULL AND student_id IS NOT NULL DO NOTHING
     RETURNING *
   `,
@@ -77,7 +79,8 @@ const chargesQueries = {
 
   /** The family's link. Any Stripe mode: the token itself is the secret. */
   selectChargeByToken: `
-    SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS}, s.name AS school_name, s.slug AS school_slug
+    SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS}, s.name AS school_name, s.slug AS school_slug,
+      (SELECT ps.tax_number FROM payment_settings ps WHERE ps.school = c.school) AS tax_number
     FROM charges c ${CHARGE_JOINS}
     LEFT JOIN schools s ON s.school_code = c.school
     WHERE c.public_token = $1
@@ -120,7 +123,7 @@ const chargesQueries = {
   `,
 
   selectLines: `
-    SELECT line_id, item_id, label, amount_cents, sort_order
+    SELECT line_id, item_id, label, amount_cents, sort_order, tax_cents, tax_name, tax_rate_milli, tax_included
     FROM charge_lines WHERE charge_id = $1 ORDER BY sort_order, label
   `,
 
@@ -252,7 +255,8 @@ const chargesQueries = {
 
   /**
    * One page of the school's charges, newest first. $4 status, $5 form,
-   * $6 search, $8 request, $9 source ('form_submission' or 'request'), $10 student.
+   * $6 search, $8 request, $9 source ('form_submission' or 'request'), $10 student,
+   * $11 tax ('taxed' or 'untaxed').
    */
   listCharges: `
     SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS},
@@ -272,6 +276,7 @@ const chargesQueries = {
       AND ($8::uuid IS NULL OR c.request_id = $8)
       AND ($9::text IS NULL OR c.source_type = $9)
       AND ($10::uuid IS NULL OR c.student_id = $10)
+      AND ($11::text IS NULL OR ($11 = 'taxed' AND c.tax_cents > 0) OR ($11 = 'untaxed' AND c.tax_cents = 0))
     ORDER BY c.created_at DESC, c.charge_id
     LIMIT $3 OFFSET $7
   `,
@@ -291,7 +296,14 @@ const chargesQueries = {
         WHERE c.school = $1 AND c.livemode = $2 AND c.status IN ('unpaid','partially_paid'))::int AS outstanding_count,
       (SELECT COUNT(*) FROM charges c
         WHERE c.school = $1 AND c.livemode = $2 AND c.dispute_status IS NOT NULL
-          AND c.dispute_status NOT IN ('won','lost','closed'))::int AS open_disputes
+          AND c.dispute_status NOT IN ('won','lost','closed'))::int AS open_disputes,
+      -- Each payment in this month carries its share of its charge's tax; this month's refunds take theirs back.
+      GREATEST(0, ROUND(COALESCE((
+        SELECT SUM(CASE WHEN p.kind = 'refund' THEN -1 ELSE 1 END * p.amount_cents::numeric * c.tax_cents / c.amount_cents)
+          FROM charge_payments p JOIN charges c ON c.charge_id = p.charge_id
+         WHERE c.school = $1 AND c.livemode = $2 AND c.tax_cents > 0 AND p.created_at >= $3
+           AND ((p.kind IN ('card','cash','cheque','other') AND p.status = 'succeeded')
+                OR (p.kind = 'refund' AND p.status IN ('succeeded','pending')))), 0)))::int AS tax_collected_this_month_cents
   `,
 
   // ─── The overview ─────────────────────────────────────────────────

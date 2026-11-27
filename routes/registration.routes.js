@@ -16,6 +16,7 @@ const ownForm = requireFormAccess('form');
 const ownSubmission = requireFormAccess('submission');
 const allForms = requirePermission('forms');
 const googleConnection = requirePermission('forms', 'staff_attendance');
+const finance = requirePermission('finance');
 const createsStudents = [allForms, requirePermission('students')];
 
 // ─── Forms ──────────────────────────────────────────────────────────
@@ -44,6 +45,8 @@ router.get('/forms/:formId/submissions/:submissionId', ownSubmission, controller
 router.patch('/submissions/:submissionId/status', ownSubmission, controller.updateSubmission);
 router.patch('/submissions/:submissionId/answers', ownSubmission, controller.updateSubmissionAnswers);
 router.delete('/submissions/:submissionId', ownSubmission, controller.deleteSubmission);
+// The office takes a payment for a student whose family never sent the form: money needs `finance`, and the form must be theirs to open.
+router.post('/forms/:formId/office-payments', finance, ownForm, controller.recordOfficePayment);
 
 // ─── Google Sheets sync ─────────────────────────────────────────────
 // The OAuth callback is NOT here — Google sends the browser there without a
