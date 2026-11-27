@@ -1,15 +1,16 @@
 // services/payments/guardians.js
 //
 // Who to email about a student's payment: the parent accounts linked to the
-// student (their sign-in email, and the email on the link), then the mother's
-// and father's emails on the student's record. Lower-cased, valid, once each.
+// student (their sign-in email, unless the account is archived, and the email
+// on the link), then the mother's and father's emails on the student's
+// record. Lower-cased, valid, once each.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const GUARDIANS_SQL = `
   SELECT ps.student_id, u.user_id, LOWER(TRIM(u.email)) AS email, 1 AS rank
     FROM parent_students ps JOIN users u ON u.user_id = ps.parent_id
-   WHERE ps.student_id = ANY($1::uuid[]) AND u.email IS NOT NULL
+   WHERE ps.student_id = ANY($1::uuid[]) AND u.email IS NOT NULL AND u.is_archived = false
   UNION ALL
   SELECT ps.student_id, ps.parent_id, LOWER(TRIM(ps.parent_email)), 2
     FROM parent_students ps
