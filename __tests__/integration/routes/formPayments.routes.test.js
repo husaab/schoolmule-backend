@@ -432,6 +432,20 @@ describe('coming back from Stripe, and the webhook', () => {
     expect((await charge()).dispute_status).toBe('needs_response');
   });
 
+  it('fills in the Stripe fee once Stripe has worked it out', async () => {
+    const { c } = await paidByCard();
+    const noFee = paidSession(c.charge_id);
+    noFee.payment_intent.latest_charge.balance_transaction = 'txn_not_ready';
+    mockClient.retrieveCheckoutSession.mockResolvedValueOnce(noFee);
+    await publicGet(`/api/registration/public/payments/${c.public_token}?session_id=cs_test_1`);
+    expect((await payments(c.charge_id))[0].stripe_fee_cents).toBeNull();
+
+    mockClient.retrievePaymentIntent = jest.fn().mockResolvedValueOnce(paidSession(c.charge_id).payment_intent);
+    const charges = require('../../../services/payments/charges');
+    expect(await charges.fillMissingFees({ client: mockClient })).toBe(1);
+    expect((await payments(c.charge_id))[0].stripe_fee_cents).toBe(120);
+  });
+
   it('the safety net finds a payment whose webhook never came', async () => {
     await paidByCard();
     await pool().query(`UPDATE charges SET updated_at = now() - interval '20 minutes'`);

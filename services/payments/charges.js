@@ -297,6 +297,9 @@ async function fulfillSession({ client, accountId, session, sessionId }) {
       charge.charge_id, charge.school, s.amount_total, s.id, intent?.id || (typeof s.payment_intent === 'string' ? s.payment_intent : null),
       card.stripeChargeId, card.brand, card.last4, card.wallet, card.feeCents,
     ]);
+    if (!inserted[0]) {
+      await tx.query(q.fillCardDetails, [s.id, card.feeCents, card.stripeChargeId, card.brand, card.last4, card.wallet]);
+    }
     const updated = await recompute(tx, charge.charge_id);
     if (inserted[0]) {
       await tx.query(q.clearCheckout, [charge.charge_id, s.id]);
@@ -322,6 +325,28 @@ async function maybeSendReminder(chargeId) {
   await emails.queuePaymentLink(db, charge, { automatic: true });
   emails.kick();
   return true;
+}
+
+/**
+ * Fills in the Stripe fee on recent card payments that were recorded before
+ * Stripe had worked it out (it comes a moment after the payment).
+ * @returns how many were filled
+ */
+async function fillMissingFees({ client }) {
+  const { rows } = await db.query(q.selectMissingFees, [client.livemode]);
+  let filled = 0;
+  for (const row of rows) {
+    try {
+      const intent = await client.retrievePaymentIntent(row.stripe_account_id, row.stripe_payment_intent_id);
+      const card = cardFacts(intent);
+      if (card.feeCents == null) continue;
+      await db.query(q.setFee, [row.payment_id, card.feeCents, card.stripeChargeId]);
+      filled += 1;
+    } catch (error) {
+      logger.warn({ paymentId: row.payment_id, err: error.message }, 'Payments: could not read a payment’s Stripe fee');
+    }
+  }
+  return filled;
 }
 
 // ─── Refunds and disputes (Stripe's side) ─────────────────────────────
@@ -556,6 +581,7 @@ module.exports = {
   openCheckout,
   fulfillSession,
   maybeSendReminder,
+  fillMissingFees,
   syncRefunds,
   syncDispute,
   recordOffline,

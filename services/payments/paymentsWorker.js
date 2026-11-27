@@ -125,7 +125,9 @@ const STALE_CHECK_MS = 5 * 60 * 1000;
 async function checkStaleIfDue({ client, now = Date.now() } = {}) {
   if (now - lastStaleCheck < STALE_CHECK_MS) return 0;
   lastStaleCheck = now;
-  return checkStaleCheckouts({ client });
+  const looked = await checkStaleCheckouts({ client });
+  await charges.fillMissingFees({ client });
+  return looked;
 }
 
 /** The once-a-day work. Several server instances may each run it; it is idempotent. */
