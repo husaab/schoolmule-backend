@@ -156,8 +156,9 @@ defineTool({
 
     const columns = [...assessments.values()].filter((a) => !only || a.id === only).map(({ ref, name, outOf, category }) => ({ ref, name, outOf, category }));
     const list = [...students.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const marked = columns.filter((c) => !c.category).length;
     return {
-      summary: `${list.length} students, ${columns.filter((c) => !c.category).length} ${only ? 'assessment' : 'assessments'} in ${cls.label}`,
+      summary: `${list.length} ${list.length === 1 ? 'student' : 'students'}, ${marked} ${marked === 1 ? 'assessment' : 'assessments'} in ${cls.label}`,
       forModel: { class: cls.label, assessments: columns, students: list },
     };
   },

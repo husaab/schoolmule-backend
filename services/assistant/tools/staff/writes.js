@@ -25,7 +25,7 @@ function dayFrom(value, today) {
   return value;
 }
 
-const PREPARED_NOTE = 'The person now sees a preview of exactly this change with an Apply button. Nothing is saved until they press it. In one or two sentences, say what will change and that they can press Apply. Do not say it was saved.';
+const PREPARED_NOTE = 'The person now sees a preview of exactly this change with a Save button. Nothing is saved until they press it. In one or two sentences, say what will change and that they can press Save. Do not say it was saved.';
 
 defineTool({
   name: 'propose_class_attendance',

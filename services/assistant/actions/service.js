@@ -172,7 +172,7 @@ async function apply({ actionId, who, token, expectedHash, idempotencyKey = null
       changes: Object.keys(row.args.targets).map((key) => ({ key, label: labelOf(key), before: beforeApplied[key], after: after[key] })),
       requestId, assistantActionId: actionId,
     });
-    await tellConversation(row, `The person pressed Apply on "${row.title}": ${KINDS[row.kind].count(outcome.written)} saved. It can be undone from the same card.`);
+    await tellConversation(row, `The person pressed Save on "${row.title}": ${KINDS[row.kind].count(outcome.written)} saved. It can be undone from the same card.`);
     return publicView(applied);
   } catch (err) {
     if (err instanceof ActionError) throw err;

@@ -88,10 +88,21 @@ describe('Muley: preparing, applying and undoing changes', () => {
       [toolCall('list_classes', {})],
       [toolCall('get_class_roster', { class: 'c1' })],
       [toolCall('propose_class_attendance', { class: 'c1', date: 'today', marks: [{ student: 's2', status: 'ABSENT' }], everyone_else: 'PRESENT', overwrite: false }, 'prop')],
-      [text('Here is the change: press Apply to save it.')],
+      [text('Here is the change: press Save to keep it.')],
     ]);
     return turn({ message: 'everyone is here except Yusuf Rahman' });
   };
+
+  it('lets a browser send the Idempotency-Key that Save and Undo carry', async () => {
+    const res = await request(getApp())
+      .options('/api/assistant/actions/any/apply')
+      .set('Origin', process.env.CROSS_ORIGIN_URL)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type,authorization,idempotency-key');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-headers'].toLowerCase()).toContain('idempotency-key');
+  });
 
   it('prepares attendance without writing it, and saves it only on Apply', async () => {
     const { of } = await prepareAttendance();
@@ -113,7 +124,7 @@ describe('Muley: preparing, applying and undoing changes', () => {
     expect(log).toMatchObject({ source: 'assistant', action: 'assistant.class_attendance.apply', summary: `Class attendance · Math · Grade 6 · ${TODAY}` });
     expect(log.changes.map((c) => [c.label, c.before, c.after])).toEqual(expect.arrayContaining([['Yusuf Rahman', null, 'ABSENT'], ['Yusuf Siddiqui', null, 'PRESENT']]));
     const { rows: events } = await pool.query(`SELECT content FROM assistant_messages WHERE role = 'event'`);
-    expect(events.map((e) => e.content)).toEqual([expect.stringContaining('pressed Apply')]);
+    expect(events.map((e) => e.content)).toEqual([expect.stringContaining('pressed Save')]);
 
     const undone = await undo(action);
     expect(undone.status).toBe(200);
