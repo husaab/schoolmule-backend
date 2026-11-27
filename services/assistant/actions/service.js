@@ -60,7 +60,7 @@ function publicView(row) {
     applyLabel: `Save ${kind.count(n)}`,
     doneLabel: result.written === 0 ? 'Already up to date' : `Saved ${kind.count(result.written ?? n)}`,
     undoLabel: 'Undo',
-    undoneLabel: `Undone. ${kind.count(n)} put back as they were.`,
+    undoneLabel: `Undone. ${kind.count(n)} put back as ${n === 1 ? 'it was' : 'they were'}.`,
     canUndo: row.status === 'applied' && row.applied_at && Date.now() - new Date(row.applied_at).getTime() < UNDO_DAYS * 86_400_000,
     topics: kind.topics(row.args),
     error: row.error_message || null,

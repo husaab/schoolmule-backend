@@ -264,4 +264,82 @@ describe('Muley: preparing, applying and undoing changes', () => {
     const tool = opened.body.data.messages.find((m) => m.role === 'tool' && m.card && m.card.type === 'change');
     expect(tool.card.actionId).toBe(action.id);
   });
+
+  describe('who counts in the class average', () => {
+    const exclusions = async () => Object.fromEntries((await pool.query(
+      `SELECT s.name, array_agg(COALESCE(e.assessment_id::text, 'class') ORDER BY e.assessment_id) AS what, max(e.note) AS note
+       FROM class_stats_exclusions e JOIN students s ON s.student_id = e.student_id WHERE e.class_id = $1 GROUP BY s.name`, [classId])).rows
+      .map((r) => [r.name, { what: r.what, note: r.note }]));
+
+    beforeEach(async () => {
+      // Yusuf Rahman is already left out of the quiz's class average, with a note.
+      await pool.query(`INSERT INTO class_stats_exclusions (class_id, student_id, assessment_id, note, created_by) VALUES ($1, $2, $3, 'IEP', $4)`,
+        [classId, ids['Yusuf Rahman'], quizId, TEACHER.userId]);
+    });
+
+    const prepare = async (entries, note = null) => {
+      script([
+        [toolCall('list_classes', {})],
+        [toolCall('get_class_roster', { class: 'c1' })],
+        [toolCall('get_gradebook', { class: 'c1', assessment: null })],
+        [toolCall('propose_class_average_exclusion', { class: 'c1', entries, note }, 'avg')],
+        [text('Ready: press Save.')],
+      ]);
+      return turn({ message: 'leave Sara out of the class average' });
+    };
+
+    it('prepares leaving a student out, saves it on Save, and Undo puts back exactly what was there', async () => {
+      // Refs from the roster: Sara is s1, Yusuf Rahman s2; the quiz is a1.
+      const { of } = await prepare([{ student: 's1', counted: false, assessment: null }, { student: 's2', counted: false, assessment: null }], 'Joined late');
+      const [{ action }] = of('action');
+      expect(action).toMatchObject({ kind: 'stats_exclusion', applyLabel: 'Save 2 changes', topics: [`stats-exclusions:${classId}`] });
+      const card = of('card').find((c) => c.card.type === 'change').card;
+      expect(card.rows).toEqual([
+        { name: 'Sara Malik', now: 'Counted', next: 'Left out' },
+        { name: 'Yusuf Rahman', now: 'Left out of 1 assessment', next: 'Left out' },
+      ]);
+      // Nothing is written before Save.
+      expect(await exclusions()).toEqual({ 'Yusuf Rahman': { what: [quizId], note: 'IEP' } });
+
+      const saved = await apply(action);
+      expect(saved.status).toBe(200);
+      expect(saved.body.data).toMatchObject({ status: 'applied', doneLabel: 'Saved 2 changes' });
+      expect(await exclusions()).toEqual({
+        'Sara Malik': { what: ['class'], note: 'Joined late' },
+        'Yusuf Rahman': { what: ['class'], note: 'Joined late' },
+      });
+
+      const undone = await undo(action);
+      expect(undone.body.data).toMatchObject({ status: 'undone', undoneLabel: 'Undone. 2 changes put back as they were.' });
+      expect(await exclusions()).toEqual({ 'Yusuf Rahman': { what: [quizId], note: 'IEP' } });
+    });
+
+    it('counts a student again for one assessment, which counts them everywhere when it was the only one', async () => {
+      const { of } = await prepare([{ student: 's2', counted: true, assessment: 'a1' }]);
+      const [{ action }] = of('action');
+      expect(of('card').find((c) => c.card.type === 'change').card.rows).toEqual([{ name: 'Yusuf Rahman', now: 'Left out of 1 assessment', next: 'Counted' }]);
+      expect((await apply(action)).body.data.doneLabel).toBe('Saved 1 change');
+      expect(await exclusions()).toEqual({});
+      expect((await undo(action)).body.data.undoneLabel).toBe('Undone. 1 change put back as it was.');
+      expect(await exclusions()).toEqual({ 'Yusuf Rahman': { what: [quizId], note: 'IEP' } });
+    });
+
+    it('prepares nothing when everyone already counts as asked', async () => {
+      const { of } = await prepare([{ student: 's1', counted: true, assessment: null }]);
+      expect(of('action')).toEqual([]);
+      expect(of('tool').find((e) => e.id === 'avg' && e.state === 'finished')).toMatchObject({ ok: true, summary: 'Nothing to change' });
+      expect((await pool.query(`SELECT count(*)::int AS n FROM assistant_actions`)).rows[0].n).toBe(0);
+    });
+
+    it('says in the guide that Muley can do it, where the school allows changes', async () => {
+      const fake = script([[toolCall('find_feature', { query: 'omit a student from the class average', class: null })], [text('Steps.')]]);
+      await turn({ message: 'how do I omit a student from class average?' });
+      expect(JSON.parse(fake.calls.at(-1).messages.at(-1).content).results[0].muleyCanHelpWith).toBe('propose_class_average_exclusion');
+
+      await settings.save('ALHAADIACADEMY', { allowWrites: false }, null);
+      const readOnly = script([[toolCall('find_feature', { query: 'omit a student from the class average', class: null })], [text('Steps.')]]);
+      await turn({ message: 'how do I omit a student from class average?' });
+      expect(JSON.parse(readOnly.calls.at(-1).messages.at(-1).content).results[0].muleyCanHelpWith).toBeNull();
+    });
+  });
 });

@@ -2,7 +2,7 @@
 //
 // Tools that prepare a change. They read the current values, work out what
 // would change, and record it as a pending action (ctx.propose): the person
-// sees a preview with an Apply button, and nothing is written until they
+// sees a preview with a Save button, and nothing is written until they
 // press it (services/assistant/actions/service.js). Offered only where the
 // school allows Muley to prepare changes (ai_assistant_settings.allow_writes).
 
@@ -219,6 +219,110 @@ defineTool({
         note: assessment.isPublished
           ? 'This assessment is published: parents and students see these marks once you save.'
           : 'Not published yet: parents and students see nothing until you publish this assessment.',
+      },
+    };
+  },
+});
+
+const EXCLUSION_NOTE_MAX = 500;
+const COUNT_NOTE = 'They keep every mark and their own term grade. Only the class average, median and rank leave them out.';
+
+defineTool({
+  name: 'propose_class_average_exclusion',
+  doing: 'Preparing who counts in the class average',
+  writes: true,
+  description:
+    'Prepare leaving students out of a class\'s average (and its median and rank), or counting them again, for the person to save. Their own marks and term grade never change. Each entry is a student\'s ref, counted (false to leave them out, true to count them again) and assessment: null for the whole class average, or an assessment ref (from get_gradebook) for that one assessment\'s class average only. Read the roster first for the students\' refs, and name only the students the person gave you.',
+  parameters: {
+    type: 'object',
+    properties: {
+      class: REF,
+      entries: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: 'object',
+          properties: {
+            student: REF,
+            counted: { type: 'boolean', description: 'false to leave the student out, true to count them again.' },
+            assessment: { type: ['string', 'null'], description: 'An assessment ref for one assessment only, or null for the whole class average.' },
+          },
+          required: ['student', 'counted', 'assessment'],
+          additionalProperties: false,
+        },
+      },
+      note: { type: ['string', 'null'], description: 'The reason, in the person\'s words, if they gave one (staff see it beside the student). Otherwise null.' },
+    },
+    required: ['class', 'entries', 'note'],
+    additionalProperties: false,
+  },
+  views: STAFF,
+  handler: async (args, ctx) => {
+    const cls = ctx.refs.resolve(args.class, 'class');
+    const kind = KINDS.stats_exclusion;
+    const [{ data: roster }, current] = await Promise.all([
+      ctx.read('classStudents', { params: { classId: cls.id } }),
+      kind.read(ctx.read, { classId: cls.id }),
+    ]);
+    const inClass = new Map((roster || []).map((s) => [s.studentId, s.name]));
+    const note = typeof args.note === 'string' && args.note.trim() ? args.note.trim().slice(0, EXCLUSION_NOTE_MAX) : null;
+
+    const targets = {};
+    const before = {};
+    const names = {};
+    for (const entry of args.entries) {
+      const student = ctx.refs.resolve(entry.student, 'student');
+      if (!inClass.has(student.id)) throw new ToolError('NOT_IN_CLASS', `${student.label} is not in ${cls.label}.`);
+      // Several entries for one student build on each other.
+      const now = student.id in targets ? targets[student.id] : current[student.id] ?? null;
+      let next;
+      if (!entry.assessment) {
+        next = entry.counted ? null : { scope: 'class', assessmentIds: [], note: note ?? (now && now.note) ?? null };
+      } else {
+        const assessment = ctx.refs.resolve(entry.assessment, 'assessment');
+        if (now && now.scope === 'class') {
+          if (!entry.counted) continue; // already left out of everything
+          throw new ToolError('LEFT_OUT_OF_CLASS', `${student.label} is left out of the whole class average. Count them again everywhere first, or leave it as it is.`);
+        }
+        const ids = new Set(now ? now.assessmentIds : []);
+        if (entry.counted) ids.delete(assessment.id);
+        else ids.add(assessment.id);
+        next = ids.size === 0 ? null : { scope: 'assessments', assessmentIds: [...ids].sort(), note: note ?? (now && now.note) ?? null };
+      }
+      if (!(student.id in before)) before[student.id] = current[student.id] ?? null;
+      targets[student.id] = next;
+      names[student.id] = student.label;
+    }
+    // A student who ends where they started has nothing to save.
+    for (const key of Object.keys(targets)) {
+      if (kind.same(before[key], targets[key])) {
+        delete targets[key];
+        delete before[key];
+      }
+    }
+    const keys = Object.keys(targets);
+    if (keys.length === 0) {
+      return { summary: 'Nothing to change', forModel: { prepared: false, note: `Those students already count in ${cls.label} as asked. Tell the person nothing needed changing.` } };
+    }
+
+    const rows = keys.map((key) => ({ key, name: names[key], now: kind.label(before[key]), next: kind.label(targets[key]) })).sort((a, b) => a.name.localeCompare(b.name));
+    const title = `Class average · ${cls.label}`;
+    const action = await ctx.propose({ kind: 'stats_exclusion', title, args: { classId: cls.id, className: cls.label, targets }, before, preview: { rows } });
+    return {
+      summary: `${keys.length} ${keys.length === 1 ? 'change' : 'changes'} ready to save`,
+      forModel: { prepared: true, class: cls.label, changes: rows.map(({ name, now, next }) => ({ name, now, next })), note: PREPARED_NOTE },
+      action,
+      card: {
+        type: 'change',
+        actionId: action.id,
+        title: 'Who counts in the class average',
+        subtitle: cls.label,
+        columns: ['Student', 'Now', 'New'],
+        rows: rows.slice(0, MAX_ROWS_SHOWN).map(({ name, now, next }) => ({ name, now, next })),
+        hiddenCount: Math.max(0, rows.length - MAX_ROWS_SHOWN),
+        tally: null,
+        note: COUNT_NOTE,
       },
     };
   },

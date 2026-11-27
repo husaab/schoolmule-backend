@@ -16,11 +16,14 @@ const ROUTES = Object.freeze({
   classAttendance: { method: 'GET', path: '/api/attendance/class/:classId' },          // ?date=YYYY-MM-DD
   classAssessments: { method: 'GET', path: '/api/classes/:classId/assessments' },
   gridOverlay: { method: 'GET', path: '/api/classroom/classes/:classId/grid-overlay' }, // columns filled from Classwork
+  classStatsExclusions: { method: 'GET', path: '/api/classes/:classId/stats-exclusions' }, // who is left out of the class average
 
   // Writes. Never given to a tool: only services/assistant/actions runs them,
   // when the person presses Apply or Undo on a change they were shown.
   saveClassAttendance: { method: 'POST', path: '/api/attendance/class' },
   saveScores: { method: 'POST', path: '/api/studentAssessments/classes/:classId/scores' },
+  saveStatsExclusion: { method: 'PUT', path: '/api/classes/:classId/stats-exclusions/:studentId' },
+  removeStatsExclusion: { method: 'DELETE', path: '/api/classes/:classId/stats-exclusions/:studentId' },
 });
 
 module.exports = { ROUTES };

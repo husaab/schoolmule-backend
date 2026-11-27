@@ -100,7 +100,9 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
 
     const system = assemble({ firstName, view, access, schoolYearLabel: schoolYear ? schoolYear.label : null, today, page, allowWrites });
     const tools = registry.definitionsFor(view, { allowWrites });
-    const baseCtx = { read, refs, access, user: { userId: who.userId }, today: today.date, pageContext: page };
+    const offered = new Set(tools.map((tool) => tool.name));
+    // offers(name): whether this conversation has that tool (a change tool only where the school allows changes).
+    const baseCtx = { read, refs, access, user: { userId: who.userId }, today: today.date, pageContext: page, offers: (name) => offered.has(name) };
     // A tool that prepares a change records it here; nothing is written to school data.
     const contextFor = (toolCallId) => ({
       ...baseCtx,

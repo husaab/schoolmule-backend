@@ -12,7 +12,9 @@
 //   needs     who can open it: 'staff' (any teacher or admin), 'fullAdmin',
 //             or the permission keys of config/permissions.js (any one)
 //   steps     how to get there by hand, in the app's own labels
-//   muley     the Muley tool that can do it, when there is one
+//   muley     the Muley tool that can do it, when there is one; a list
+//             gives the tool to name first where the conversation has it
+//             (a change tool only where the school allows changes)
 //
 // The sidebar and Admin Panel labels here are the ones in
 // schoolmule/src/components/sidebar/Sidebar.tsx and src/lib/adminPanelNav.ts;
@@ -29,9 +31,9 @@ const ENTRIES = [
   { id: 'classes', title: 'Classes', words: ['class list', 'my classes', 'create class', 'new class', 'classwork', 'assignments'], path: '/classes', needs: STAFF,
     steps: ['In the sidebar, choose Classes.', 'Open a class to see its classwork, students and settings.'], muley: 'list_classes' },
   { id: 'gradebook', title: 'Gradebook', words: ['grades', 'marks', 'scores', 'enter grades', 'assessments', 'quiz marks', 'test marks', 'grading'], path: '/gradebook', classPath: '/gradebook/:classId', needs: STAFF,
-    steps: ['In the sidebar, choose Classes and open the class.', 'Go to its gradebook: each student is a row and each assessment a column.', 'Type a score in a cell; it saves by itself.'], muley: 'get_gradebook' },
+    steps: ['In the sidebar, choose Classes and open the class.', 'Go to its gradebook: each student is a row and each assessment a column.', 'Type a score in a cell; it saves by itself.'], muley: ['propose_scores', 'get_gradebook'] },
   { id: 'class-attendance', title: 'Class Attendance', words: ['attendance', 'take attendance', 'roll', 'register', 'absent', 'late', 'present'], path: '/attendance/class', classPath: '/attendance/class/:classId', needs: STAFF,
-    steps: ['In the sidebar, open Attendance and choose Class Attendance.', 'Pick the class and the day, mark each student, then Save.'], muley: 'get_class_attendance' },
+    steps: ['In the sidebar, open Attendance and choose Class Attendance.', 'Pick the class and the day, mark each student, then Save.'], muley: ['propose_class_attendance', 'get_class_attendance'] },
   { id: 'general-attendance', title: 'General Attendance', words: ['daily attendance', 'whole school attendance', 'homeroom attendance', 'morning attendance'], path: '/attendance/general', needs: ['attendance.daily'],
     steps: ['In the sidebar, open Attendance and choose General Attendance.', 'Pick the day, mark each student, then Save.'] },
   { id: 'students', title: 'Students', words: ['student list', 'directory', 'student profile', 'add student', 'archive student', 'deleted students', 'custom fields'], path: '/students', needs: ['students'],
@@ -103,9 +105,11 @@ const ENTRIES = [
 
   // ── Things done inside a page ───────────────────────────────
   { id: 'class-average-exclusion', title: 'Leave a student out of the class average', words: ['omit a student from the class average', 'exclude from average', 'who counts in the class average', 'do not count a student', 'class statistics', 'median', 'rank'], path: '/classes', classPath: '/classes/:classId', needs: STAFF,
-    steps: ['Open the class and go to its Settings.', 'Under Class options, choose "Who counts in the class average".', 'Switch the student off. They keep every mark and their own term grade; they are only left out of the class average, median and rank.', 'To leave a student out of one assessment only, open the gradebook, open that cell\'s menu and choose "Leave out of the class average".'] },
+    steps: ['Open the class and go to its Settings.', 'Under Class options, choose "Who counts in the class average".', 'Switch the student off. They keep every mark and their own term grade; they are only left out of the class average, median and rank.', 'To leave a student out of one assessment only, open the gradebook, open that cell\'s menu and choose "Leave out of the class average".'],
+    muley: 'propose_class_average_exclusion' },
   { id: 'excuse-assessment', title: 'Excuse a student from an assessment, or mark it missing', words: ['excused', 'exempt', 'missing work', 'did not hand in', 'absent for the test'], path: '/gradebook', classPath: '/gradebook/:classId', needs: STAFF,
-    steps: ['Open the class\'s gradebook.', 'Open the menu on the student\'s cell for that assessment.', 'Choose Excused (it never counts) or Missing (it counts as zero).'] },
+    steps: ['Open the class\'s gradebook.', 'Open the menu on the student\'s cell for that assessment.', 'Choose Excused (it never counts) or Missing (it counts as zero).'],
+    muley: 'propose_scores' },
   { id: 'publish-grades', title: 'Publish grades to parents', words: ['release marks', 'send grades home', 'parents cannot see grades', 'unpublish'], path: '/gradebook', classPath: '/gradebook/:classId', needs: STAFF,
     steps: ['Open the class\'s gradebook.', 'Choose Publish and pick the assessments to release.', 'Parents and students see a grade only once it is published; guardians are emailed a couple of minutes later, and you can unpublish before then.'] },
   { id: 'report-card-comments', title: 'Write report card comments', words: ['comments', 'work habits', 'behaviour ratings', 'ai comment', 'comment bank'], path: '/gradebook', classPath: '/gradebook/:classId/feedback', needs: STAFF,

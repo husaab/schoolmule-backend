@@ -11,6 +11,7 @@
 
 const STATUS_LABEL = { PRESENT: 'Present', LATE: 'Late', ABSENT: 'Absent', EXCUSED: 'Excused' };
 const num = (value) => (value === null || value === undefined || value === '' ? null : Number(value));
+const sortedIds = (ids) => [...(ids || [])].sort();
 
 const KINDS = {
   // args: { classId, date, className }; a value is 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED' | null (unmarked)
@@ -65,6 +66,45 @@ const KINDS = {
       return `${Number(value.score)} / ${args.outOf ?? 100}`;
     },
     count: (n) => `${n} ${n === 1 ? 'score' : 'scores'}`,
+  },
+
+  // Who counts in a class's average, median and rank (their own marks never change).
+  // args: { classId, className }; a value is null (counted) or { scope: 'class' | 'assessments', assessmentIds, note }
+  stats_exclusion: {
+    topics: (args) => [`stats-exclusions:${args.classId}`],
+    async read(read, args) {
+      const { data } = await read('classStatsExclusions', { params: { classId: args.classId } });
+      const current = {};
+      for (const entry of data || []) {
+        current[entry.studentId] = { scope: entry.scope, assessmentIds: entry.scope === 'class' ? [] : sortedIds(entry.assessmentIds), note: entry.note ?? null };
+      }
+      return current;
+    },
+    valueOf: (current, key) => current[key] ?? null,
+    // The note is the teacher's own words, not who counts: it never makes two values differ.
+    same: (a, b) => {
+      if (!a || !b) return !a && !b;
+      return a.scope === b.scope && JSON.stringify(sortedIds(a.assessmentIds)) === JSON.stringify(sortedIds(b.assessmentIds));
+    },
+    async write(write, args, values) {
+      for (const [studentId, value] of Object.entries(values)) {
+        if (!value) {
+          await write('removeStatsExclusion', { params: { classId: args.classId, studentId } });
+        } else {
+          await write('saveStatsExclusion', {
+            params: { classId: args.classId, studentId },
+            body: { scope: value.scope, assessmentIds: value.scope === 'class' ? [] : value.assessmentIds, note: value.note ?? null },
+          });
+        }
+      }
+    },
+    label: (value) => {
+      if (!value) return 'Counted';
+      if (value.scope === 'class') return 'Left out';
+      const n = (value.assessmentIds || []).length;
+      return `Left out of ${n} ${n === 1 ? 'assessment' : 'assessments'}`;
+    },
+    count: (n) => `${n} ${n === 1 ? 'change' : 'changes'}`,
   },
 };
 

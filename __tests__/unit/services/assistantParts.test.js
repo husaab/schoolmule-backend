@@ -144,7 +144,7 @@ describe('the site guide', () => {
       expect(entry.steps.length).toBeGreaterThan(0);
       if (Array.isArray(entry.needs)) for (const key of entry.needs) expect(KEYS).toContain(key);
       else expect(['staff', 'fullAdmin']).toContain(entry.needs);
-      if (entry.muley) expect(registry._tools.has(entry.muley)).toBe(true);
+      for (const tool of [].concat(entry.muley || [])) expect(registry._tools.has(tool)).toBe(true);
       if (entry.classPath) expect(entry.classPath).toContain(':classId');
     }
   });
@@ -198,10 +198,9 @@ describe('the tool registry', () => {
 describe('the loopback reader', () => {
   const dispatcher = (transport) => createDispatcher({ token: 'tok', schoolYearId: ID(7), requestId: 'turn-1', transport });
 
-  it('reads only GET routes, writes only the two save routes, and builds the path itself', async () => {
-    const writes = Object.entries(ROUTES).filter(([, route]) => route.method !== 'GET').map(([id]) => id).sort();
-    expect(writes).toEqual(['saveClassAttendance', 'saveScores']);
-    for (const id of writes) expect(ROUTES[id].method).toBe('POST');
+  it('reads only GET routes, writes only the save routes, and builds the path itself', async () => {
+    const writes = Object.fromEntries(Object.entries(ROUTES).filter(([, route]) => route.method !== 'GET').map(([id, route]) => [id, route.method]));
+    expect(writes).toEqual({ saveClassAttendance: 'POST', saveScores: 'POST', saveStatsExclusion: 'PUT', removeStatsExclusion: 'DELETE' });
     const { read: readOnly } = dispatcher(async () => ({ status: 200, body: {} }));
     await expect(readOnly('saveScores', { params: { classId: ID(1) } })).rejects.toThrow(/not a route a tool can read/);
     const seen = [];

@@ -40,7 +40,7 @@ defineTool({
         steps: entry.steps,
         canOpen: allowed,
         whoCan: allowed ? null : guide.whoCan(entry),
-        muleyCanHelpWith: entry.muley || null,
+        muleyCanHelpWith: [].concat(entry.muley || []).find((tool) => ctx.offers && ctx.offers(tool)) || null,
         path: allowed ? guide.pathFor(entry, cls ? cls.id : null) : null,
       };
     });

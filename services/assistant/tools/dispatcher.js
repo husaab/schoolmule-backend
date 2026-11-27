@@ -60,16 +60,17 @@ function createDispatcher({ token, schoolYearId = null, requestId = 'assistant',
   };
 
   /**
-   * POST one of the named write routes. Only the actions service calls this,
-   * for a change the person pressed Apply or Undo on. -> the route's JSON body.
-   * Throws a ToolError carrying the route's own refusal message.
+   * Call one of the named write routes (POST, PUT or DELETE). Only the
+   * actions service calls this, for a change the person pressed Save or Undo
+   * on. -> the route's JSON body. Throws a ToolError carrying the route's own
+   * refusal message.
    */
   async function write(routeId, { params = {}, body } = {}) {
     const route = ROUTES[routeId];
-    if (!route || route.method !== 'POST') throw new Error(`"${routeId}" is not a route a change can be written through`);
+    if (!route || route.method === 'GET') throw new Error(`"${routeId}" is not a route a change can be written through`);
     let answer;
     try {
-      answer = await transport({ method: 'POST', path: pathOf(routeId, route, params), headers: headersFor(), body });
+      answer = await transport({ method: route.method, path: pathOf(routeId, route, params), headers: headersFor(), body });
     } catch (err) {
       if (err instanceof ToolError) throw err;
       if (/needs a valid/.test(err.message)) throw err;
