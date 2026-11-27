@@ -29,6 +29,7 @@ const registrationQueries = {
             'placeholder', ff.placeholder,
             'isRequired', ff.is_required,
             'options', ff.options,
+            'payment', ff.payment_config,
             'sortOrder', ff.sort_order
           ) ORDER BY ff.sort_order
         ) FILTER (WHERE ff.field_id IS NOT NULL),
@@ -95,15 +96,15 @@ const registrationQueries = {
 
   updateField: `
     UPDATE registration_form_fields
-    SET field_type = $1, label = $2, placeholder = $3, is_required = $4, options = $5, sort_order = $6
+    SET field_type = $1, label = $2, placeholder = $3, is_required = $4, options = $5, sort_order = $6, payment_config = $9
     WHERE field_id = $7 AND form_id = $8
     RETURNING *
   `,
 
   insertField: `
     INSERT INTO registration_form_fields
-      (form_id, field_type, label, placeholder, is_required, options, sort_order)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+      (form_id, field_type, label, placeholder, is_required, options, sort_order, payment_config)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
   `,
 
@@ -136,7 +137,18 @@ const registrationQueries = {
   // school's submission just by knowing its UUID.
   selectSubmissionById: `
     SELECT s.*,
-      (SELECT name FROM students WHERE student_id = s.imported_student_id) AS imported_student_name
+      (SELECT name FROM students WHERE student_id = s.imported_student_id) AS imported_student_name,
+      (SELECT jsonb_build_object('name', st.name, 'grade', st.grade::text) FROM students_all st
+        WHERE st.student_id = s.student_id) AS linked_student,
+      (SELECT jsonb_build_object(
+          'chargeId', c.charge_id, 'status', c.status, 'amountCents', c.amount_cents,
+          'amountPaidCents', c.amount_paid_cents, 'amountRefundedCents', c.amount_refunded_cents,
+          'chosenMethod', c.chosen_method, 'disputeStatus', c.dispute_status, 'livemode', c.livemode,
+          'lastPayment', (SELECT jsonb_build_object('kind', p.kind, 'cardBrand', p.card_brand, 'cardLast4', p.card_last4, 'wallet', p.wallet)
+                            FROM charge_payments p
+                           WHERE p.charge_id = c.charge_id AND p.kind IN ('card','cash','cheque','other') AND p.status = 'succeeded'
+                           ORDER BY p.created_at DESC LIMIT 1))
+         FROM charges c WHERE c.submission_id = s.submission_id) AS payment
     FROM registration_form_submissions s
     JOIN registration_forms f ON s.form_id = f.form_id
     WHERE s.submission_id = $1 AND f.school = $2

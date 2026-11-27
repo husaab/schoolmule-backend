@@ -15,6 +15,7 @@ const {
 } = require('../controllers/parentPortal.controller');
 const classroom = require('../controllers/parentClassroom.controller');
 const meetings = require('../controllers/meetings.controller');
+const parentPayments = require('../controllers/parentPayments.controller');
 
 const router = express.Router();
 
@@ -68,6 +69,9 @@ router.get('/students/:studentId/classroom/classes/:classId/classwork', ...lensC
 router.get('/students/:studentId/classroom/items/:itemId', ...lensChild, classroom.getLensItem);
 router.get('/students/:studentId/classroom/files/:fileId/url', ...lensChild, classroom.getLensFileUrl);
 router.get('/students/:studentId/classroom/grades', ...lensChild, classroom.getLensGrades);
+
+// What the family owes and has paid. Off unless PARENT_PAYMENTS_ENABLED=true.
+router.get('/payments', parentPayments.listPayments);
 
 // Email preferences: the weekly (or daily) summary and missing-work alerts.
 router.get('/notification-prefs', classroom.getNotificationPrefs);

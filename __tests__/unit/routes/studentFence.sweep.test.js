@@ -46,13 +46,17 @@ const UNFENCED_ROUTES = [
   'POST /api/email/contact',                                      // public contact form
   'GET /api/registration/public/:schoolSlug/:formSlug',           // public registration form
   'POST /api/registration/public/:schoolSlug/:formSlug/submit',   // public registration form
+  'GET /api/registration/public/:schoolSlug/:formSlug/children', // a signed-in parent's children (checks a PARENT token itself), rate limited
+  'GET /api/registration/public/payments/:token',                 // a family's payment link (the token is the secret), rate limited
+  'POST /api/registration/public/payments/:token/checkout',       // a family's payment link: open Stripe's page, rate limited
+  'POST /api/payments/stripe/webhook',                            // Stripe's webhook (signature over the raw body)
   'GET /api/registration/google/callback',                        // Google OAuth redirect (signed state)
   'GET /api/finance/qbo/callback',                                // Intuit OAuth redirect (signed state)
   'GET /api/schedule/public/:schoolSlug/:shareToken',             // shared schedule link
 ];
 
 // server.js mounts on an /api path that are not routers.
-const NON_ROUTER_MOUNTS = ['/api/finance/families/import']; // larger JSON body limit
+const NON_ROUTER_MOUNTS = ['/api/finance/families/import', '/api/payments/stripe/webhook']; // larger JSON body limit; Stripe's raw body
 // Path-less app.use(...) calls in server.js (global middleware, not routes).
 const GLOBAL_MIDDLEWARE = [
   'cors(corsOptions)', 'jsonBodies', 'globalLimiter', 'httpLogger', 'alertRequestCounter',
