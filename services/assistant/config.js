@@ -10,8 +10,12 @@ const number = (value, fallback) => {
 };
 
 module.exports = {
-  /** The kill switch: nothing under /api/assistant answers unless this is on. */
-  enabled: () => process.env.ASSISTANT_ENABLED === 'true',
+  /**
+   * The kill switch. On unless ASSISTANT_ENABLED is "false": every school is
+   * off until it is switched on (services/assistant/settings.js), so this only
+   * needs setting to stop Muley everywhere at once.
+   */
+  enabled: () => process.env.ASSISTANT_ENABLED !== 'false',
   model: () => process.env.ASSISTANT_MODEL || 'gpt-6-luna',
   /** 'none' keeps the transcript free of reasoning items; raise it only with the adapter's support for them. */
   reasoningEffort: () => process.env.ASSISTANT_REASONING_EFFORT || 'none',

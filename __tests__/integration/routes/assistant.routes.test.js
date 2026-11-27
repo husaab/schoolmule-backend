@@ -115,8 +115,10 @@ describe('Muley: turns, tools and who it answers', () => {
       expect((await authenticatedRequest('get', '/api/assistant/settings')).body.data.enabled).toBe(false);
     });
 
-    it('has a kill switch', async () => {
+    it('has a kill switch, on unless it is thrown', async () => {
       await switchOn();
+      delete process.env.ASSISTANT_ENABLED;
+      expect((await authenticatedRequest('get', '/api/assistant/settings', TEACHER_A)).body.data.enabled).toBe(true);
       process.env.ASSISTANT_ENABLED = 'false';
       expect((await authenticatedRequest('get', '/api/assistant/settings', TEACHER_A)).body.data.enabled).toBe(false);
       expect((await turn({ message: 'hello' })).res.body.code).toBe('ASSISTANT_DISABLED');
@@ -389,6 +391,22 @@ describe('Muley: turns, tools and who it answers', () => {
 
   describe('conversations', () => {
     beforeEach(() => switchOn());
+
+    it('are deleted once nobody has added to them for longer than the school keeps them', async () => {
+      const { sweepOnce } = require('../../../services/assistant/retentionWorker');
+      await settings.save('ALHAADIACADEMY', { transcriptRetentionDays: 30 }, null);
+      const make = async (daysAgo) => (await pool.query(
+        `INSERT INTO assistant_conversations (school, user_id, view, last_message_at) VALUES ('ALHAADIACADEMY', $1, 'TEACHER', NOW() - ($2 || ' days')::interval) RETURNING conversation_id`,
+        [TEACHER_A.userId, daysAgo])).rows[0].conversation_id;
+      const fresh = await make(29);
+      const stale = await make(31);
+      await pool.query(`INSERT INTO assistant_messages (conversation_id, seq, role, content) VALUES ($1, 1, 'user', 'old')`, [stale]);
+
+      expect(await sweepOnce()).toBe(1);
+      const { rows } = await pool.query(`SELECT conversation_id FROM assistant_conversations`);
+      expect(rows.map((r) => r.conversation_id)).toEqual([fresh]);
+      expect((await pool.query(`SELECT count(*)::int AS n FROM assistant_messages`)).rows[0].n).toBe(0);
+    });
 
     it('belong to one person: listed, reopened, renamed and deleted only by them', async () => {
       script([[toolCall('list_classes', {}, 'list')], [text('You teach Math.')]]);

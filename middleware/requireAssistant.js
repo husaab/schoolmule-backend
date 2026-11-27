@@ -1,7 +1,7 @@
 // middleware/requireAssistant.js
 //
 // Who Muley answers. In order:
-//   1. the kill switch (ASSISTANT_ENABLED) must be on;
+//   1. the kill switch must not be thrown (ASSISTANT_ENABLED=false stops Muley everywhere);
 //   2. never during an admin "view as" preview: the previewer must not read
 //      or continue the other person's conversations (a preview token's POSTs
 //      are already refused by verifyUser; this covers the GETs);

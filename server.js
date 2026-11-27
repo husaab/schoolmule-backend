@@ -241,6 +241,8 @@ if (require.main === module) {
   require("./services/messageNotifier").startWorker();
   require("./services/observe/eventBuffer").start();
   require("./services/observe/retentionWorker").startWorker();
+  // Muley conversations past their school's retention period.
+  require("./services/assistant/retentionWorker").startWorker();
   // Emails and pushes the owner when production misbehaves. Only where
   // ALERTS_ENABLED=true (Railway): a local backend uses the prod database.
   require("./services/observe/alerts/worker").startWorker();
