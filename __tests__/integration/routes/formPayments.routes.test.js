@@ -393,6 +393,25 @@ describe('paying inside our own page (embedded Checkout)', () => {
     expect(mockClient.listPaymentMethodDomains).toHaveBeenCalledTimes(1);
   });
 
+  it('two requests at once (a double click, two tabs) open one form and both get it', async () => {
+    const ids = await seedForm();
+    await connectSchool();
+    await submitCard(ids, { payment: { itemIds: ['lunch'], method: 'card', ui: 'embedded' } });
+    const c = await charge();
+    mockClient.listPaymentMethodDomains.mockResolvedValue({ data: [{ domain_name: 'schoolmule.ca' }] });
+    // Stripe takes a moment; the second request must wait for it rather than send the same request again.
+    mockClient.createCheckoutSession.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(embeddedSession()), 150)));
+    mockClient.retrieveCheckoutSession.mockResolvedValue(embeddedSession());
+    const [a, b] = await Promise.all([
+      publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' }),
+      publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(a.body.data.clientSecret).toBe('cs_emb_1_secret_abc');
+    expect(b.body.data.clientSecret).toBe('cs_emb_1_secret_abc');
+    expect(mockClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+  });
+
   it('Stripe returns the family to their link, which records the payment as before', async () => {
     const ids = await seedForm();
     await connectSchool();

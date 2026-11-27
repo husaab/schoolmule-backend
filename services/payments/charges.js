@@ -251,9 +251,35 @@ async function ensureWalletDomain(client, stripeAccountId) {
  *   url and clientSecret are both null when the charge turned out to be paid already
  */
 async function openCheckout(chargeId, { client = clientOrNull(), ui = 'hosted' } = {}) {
+  if (!client) throw new ChargeError('Card payments aren’t set up on this server yet.', 503, 'PAYMENTS_UNAVAILABLE');
+  return withCheckoutLock(chargeId, () => openCheckoutNow(chargeId, { client, ui }));
+}
+
+/**
+ * One payment page opened at a time per charge. A double click, two tabs, or
+ * a page asking twice would otherwise send Stripe the same request twice at
+ * once (Stripe refuses the second: "idempotency_key_in_use"). The second
+ * waits here, then finds and reuses what the first one opened.
+ */
+async function withCheckoutLock(chargeId, work) {
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    await conn.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`checkout:${chargeId}`]);
+    const result = await work();
+    await conn.query('COMMIT');
+    return result;
+  } catch (error) {
+    await conn.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function openCheckoutNow(chargeId, { client, ui }) {
   const uiMode = UI_MODES[ui] || UI_MODES.hosted;
   const embedded = uiMode === UI_MODES.embedded;
-  if (!client) throw new ChargeError('Card payments aren’t set up on this server yet.', 503, 'PAYMENTS_UNAVAILABLE');
   const { rows: [charge] } = await db.query(q.selectChargeForStripe, [chargeId, client.livemode]);
   if (!charge) throw new ChargeError('Payment not found', 404);
   const account = await accountForCharge(charge, client);
