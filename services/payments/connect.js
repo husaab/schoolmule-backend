@@ -117,10 +117,12 @@ async function startOnboarding({ school, user, client = stripeClient.clientFromE
   return { url: link.url, account: row };
 }
 
-/** Reads the school's account from Stripe and stores what changed. */
-async function syncAccount({ school, client = stripeClient.clientFromEnv() }) {
-  const row = await findAccount(school, client.livemode);
-  if (!row || row.status === 'disconnected') return row;
+/**
+ * Reads one connected account from Stripe and stores what changed. A failure
+ * is noted on the row and thrown, so the caller decides whether to retry.
+ */
+async function refreshAccount(row, client) {
+  if (row.status === 'disconnected') return row;
   let account;
   try {
     account = await client.retrieveAccount(row.stripe_account_id);
@@ -129,6 +131,12 @@ async function syncAccount({ school, client = stripeClient.clientFromEnv() }) {
     throw error;
   }
   return applyStripeAccount(row, account);
+}
+
+/** Reads the school's account from Stripe and stores what changed. */
+async function syncAccount({ school, client = stripeClient.clientFromEnv() }) {
+  const row = await findAccount(school, client.livemode);
+  return row ? refreshAccount(row, client) : row;
 }
 
 /**
@@ -140,4 +148,4 @@ async function disconnect({ school, client = stripeClient.clientFromEnv() }) {
   return rows[0] || null;
 }
 
-module.exports = { summarizeAccount, deriveStatus, findAccount, startOnboarding, syncAccount, disconnect, COUNTRY, CURRENCY };
+module.exports = { summarizeAccount, deriveStatus, findAccount, startOnboarding, syncAccount, refreshAccount, disconnect, COUNTRY, CURRENCY };

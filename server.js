@@ -44,6 +44,7 @@ const googleSheetsPublicRoutes = require("./routes/googleSheetsPublic.routes")
 const financePublicRoutes = require("./routes/financePublic.routes")
 const financeRoutes = require("./routes/finance.routes")
 const paymentsRoutes = require("./routes/payments.routes")
+const paymentsWebhookRoutes = require("./routes/paymentsWebhook.routes")
 const schedulePublicRoutes = require("./routes/schedulePublic.routes")
 const studentViewRoutes = require("./routes/studentView.routes")
 const analyticsRoutes = require("./routes/analytics.routes")
@@ -113,6 +114,10 @@ app.use("/api/finance/families/import", express.json({ limit: "2mb" }));
 // Report templates carry their uploaded images inline and need more than
 // 100 KB; their router parses its own bodies after sign-in, so an anonymous
 // caller can never make the server buffer a large body.
+// Stripe signs the exact bytes it sent, so its webhook must reach the handler
+// unparsed. body-parser skips a body it has already read, so the global JSON
+// parser below leaves this one alone.
+app.use("/api/payments/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 const defaultJson = express.json();
 const jsonBodies = (req, res, next) => (req.path.startsWith("/api/report-templates") ? next() : defaultJson(req, res, next));
 app.use(jsonBodies);
@@ -135,6 +140,8 @@ app.use("/api/registration/google", googleSheetsPublicRoutes);
 // Intuit OAuth callback: no JWT on the redirect, school comes from the signed state.
 app.use("/api/finance/qbo", financePublicRoutes);
 app.use("/api/schedule/public", schedulePublicRoutes);
+// Stripe's webhook: no JWT, the request is proven by its signature.
+app.use("/api/payments/stripe/webhook", paymentsWebhookRoutes);
 // Any signed-in browser may report its own errors, verified or not: an
 // unverified or pending account is exactly the one stuck in a redirect loop.
 // So it sits ahead of the global guard with a token-only check (bad tokens
@@ -239,6 +246,8 @@ if (require.main === module) {
   // started on import would leave timers running across the whole suite.
   require("./services/google/sheetSyncWorker").startWorker();
   require("./services/finance/financeSyncWorker").startWorker();
+  // Acts on what Stripe tells us. Only where STRIPE_SECRET_KEY is set.
+  require("./services/payments/paymentsWorker").startWorker();
   require("./services/schedulePlanner/goLiveWorker").startWorker();
   require("./services/messageNotifier").startWorker();
   require("./services/observe/eventBuffer").start();
