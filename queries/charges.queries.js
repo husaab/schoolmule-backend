@@ -135,6 +135,35 @@ const chargesQueries = {
     RETURNING payment_id
   `,
 
+  /** Stripe adds a payment's fee a moment after it completes: a later report fills in what was missing. */
+  fillCardDetails: `
+    UPDATE charge_payments
+    SET stripe_fee_cents = COALESCE(stripe_fee_cents, $2),
+        stripe_charge_id = COALESCE(stripe_charge_id, $3),
+        card_brand = COALESCE(card_brand, $4),
+        card_last4 = COALESCE(card_last4, $5),
+        wallet = COALESCE(wallet, $6)
+    WHERE stripe_checkout_session_id = $1
+  `,
+
+  /** Recent card payments whose fee Stripe hadn't worked out yet. */
+  selectMissingFees: `
+    SELECT p.payment_id, p.stripe_payment_intent_id, a.stripe_account_id
+    FROM charge_payments p
+    JOIN charges c ON c.charge_id = p.charge_id
+    JOIN payment_accounts a ON a.payment_account_id = c.payment_account_id
+    WHERE c.livemode = $1 AND p.kind = 'card' AND p.status = 'succeeded'
+      AND p.stripe_fee_cents IS NULL AND p.stripe_payment_intent_id IS NOT NULL
+      AND p.created_at > now() - interval '7 days'
+    ORDER BY p.created_at
+    LIMIT 50
+  `,
+
+  setFee: `
+    UPDATE charge_payments SET stripe_fee_cents = $2, stripe_charge_id = COALESCE(stripe_charge_id, $3)
+    WHERE payment_id = $1 AND stripe_fee_cents IS NULL
+  `,
+
   insertOfflinePayment: `
     INSERT INTO charge_payments (charge_id, school, kind, amount_cents, status, note, recorded_by)
     VALUES ($1, $2, $3, $4, 'succeeded', $5, $6)
