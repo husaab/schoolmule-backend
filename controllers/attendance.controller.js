@@ -141,9 +141,54 @@ const getClassAttendanceByDate = async (req, res) => {
   }
 };
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_RANGE_DAYS = 92;
+
+/** ?from=&to= as two real days, from first, at most 92 days apart: { from, to } or { error }. */
+function rangeOf(query) {
+  const { from, to } = query || {};
+  const real = (d) => typeof d === 'string' && ISO_DAY.test(d) && !Number.isNaN(Date.parse(`${d}T12:00:00Z`));
+  if (!real(from) || !real(to)) return { error: 'from and to must be days written YYYY-MM-DD' };
+  if (from > to) return { error: 'from must not be after to' };
+  const days = (Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000 + 1;
+  if (days > MAX_RANGE_DAYS) return { error: `Ask for ${MAX_RANGE_DAYS} days or fewer at a time` };
+  return { from, to };
+}
+
+// GET /api/attendance/class/:classId/range?from=&to= -> every mark of the class on those days
+const getClassAttendanceRange = async (req, res) => {
+  const range = rangeOf(req.query);
+  if (range.error) return res.status(400).json({ status: 'failed', message: range.error });
+  try {
+    const { rows } = await db.query(attendanceQueries.selectClassAttendanceRange, [req.params.classId, range.from, range.to]);
+    return res.status(200).json({ status: 'success', data: rows.map((r) => ({ studentId: r.student_id, date: r.day, status: r.status })) });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Database error' });
+  }
+};
+
+// GET /api/attendance/general/range?from=&to= -> the school's daily marks on those days, with names
+const getGeneralAttendanceRange = async (req, res) => {
+  const range = rangeOf(req.query);
+  if (range.error) return res.status(400).json({ status: 'failed', message: range.error });
+  try {
+    const { rows } = await db.query(attendanceQueries.selectGeneralAttendanceRange, [req.user.school, range.from, range.to]);
+    return res.status(200).json({
+      status: 'success',
+      data: rows.map((r) => ({ studentId: r.student_id, name: r.name, grade: r.grade, date: r.day, status: r.status })),
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ status: 'failed', message: 'Database error' });
+  }
+};
+
 module.exports = {
   submitGeneralAttendance,
   submitClassAttendance,
   getGeneralAttendanceByDate,
   getClassAttendanceByDate,
+  getClassAttendanceRange,
+  getGeneralAttendanceRange,
 };

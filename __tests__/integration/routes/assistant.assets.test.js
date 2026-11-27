@@ -114,8 +114,13 @@ describe('Muley: a new school stamp from an attached image', () => {
     expect(bad.res.status).toBe(400);
     expect(bad.res.body.code).toBe('INVALID_ATTACHMENT');
 
-    // A teacher can't attach (it is a change), and can't prepare one: School Assets needs school setup.
-    const file = (await attach()).body.data;
+    // Someone else's attachment is not one this person can name.
+    const adminsFile = (await attach()).body.data;
+    const borrowed = await turn({ message: 'new stamp', attachments: [adminsFile] }, TEACHER);
+    expect(borrowed.res.body.code).toBe('ATTACHMENT_GONE');
+
+    // A teacher's own image can't become the stamp either: School Assets needs school setup.
+    const file = (await attach(TEACHER)).body.data;
     const fake = script([[toolCall('propose_school_asset', { asset: 'school_stamp', file: 'f1' }, 'stamp')], [text('You need an administrator.')]]);
     const { of } = await turn({ message: 'new stamp', attachments: [file] }, TEACHER);
     expect(of('action')).toEqual([]);
@@ -133,4 +138,29 @@ describe('Muley: a new school stamp from an attached image', () => {
     expect([403, 404]).toContain(other.status);
     expect(await versions()).toEqual([]);
   });
+
+  it('removes attachments two days old, files first, and refuses one that is gone', async () => {
+    const attachments = require('../../../services/assistant/attachments');
+    const fresh = (await attach()).body.data;
+    const old = (await attach()).body.data;
+    await pool.query(`UPDATE assistant_attachments SET created_at = NOW() - INTERVAL '3 days' WHERE attachment_id = $1`, [old.id]);
+    storage.remove.mockClear();
+
+    expect(await attachments.prune()).toBe(1);
+    expect(storage.remove).toHaveBeenCalledWith([`ALHAADIACADEMY/muley-uploads/${ADMIN_ID}/${old.id}`]);
+    expect((await pool.query(`SELECT attachment_id FROM assistant_attachments`)).rows.map((r) => r.attachment_id)).toEqual([fresh.id]);
+
+    const gone = await turn({ message: 'use the old one', attachments: [old] });
+    expect(gone.res.body.code).toBe('ATTACHMENT_GONE');
+  });
+
+  it('keeps the rows when storage refuses, to try again the next day', async () => {
+    const attachments = require('../../../services/assistant/attachments');
+    const old = (await attach()).body.data;
+    await pool.query(`UPDATE assistant_attachments SET created_at = NOW() - INTERVAL '3 days' WHERE attachment_id = $1`, [old.id]);
+    storage.remove.mockResolvedValueOnce({ data: null, error: { message: 'storage down' } });
+    expect(await attachments.prune()).toBe(0);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM assistant_attachments`)).rows[0].n).toBe(1);
+  });
 });
+

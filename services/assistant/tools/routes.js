@@ -17,6 +17,8 @@ const ROUTES = Object.freeze({
   classStudents: { method: 'GET', path: '/api/classes/:classId/students' },            // roster
   classScores: { method: 'GET', path: '/api/studentAssessments/classes/:classId/scores' }, // gradebook
   classAttendance: { method: 'GET', path: '/api/attendance/class/:classId' },          // ?date=YYYY-MM-DD
+  classAttendanceRange: { method: 'GET', path: '/api/attendance/class/:classId/range' }, // ?from=&to=
+  generalAttendanceRange: { method: 'GET', path: '/api/attendance/general/range' },    // ?from=&to=, the school's daily attendance
   classAssessments: { method: 'GET', path: '/api/classes/:classId/assessments' },
   gridOverlay: { method: 'GET', path: '/api/classroom/classes/:classId/grid-overlay' }, // columns filled from Classwork
   classStatsExclusions: { method: 'GET', path: '/api/classes/:classId/stats-exclusions' }, // who is left out of the class average

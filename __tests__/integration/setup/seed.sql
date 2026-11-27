@@ -2923,6 +2923,19 @@ CREATE TABLE IF NOT EXISTS assistant_messages (
   UNIQUE (conversation_id, seq)
 );
 
+CREATE TABLE IF NOT EXISTS assistant_attachments (
+  attachment_id  TEXT PRIMARY KEY,
+  school         public.school NOT NULL,
+  user_id        UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  storage_path   TEXT NOT NULL,
+  file_name      TEXT NOT NULL,
+  content_type   TEXT NOT NULL,
+  byte_size      INTEGER NOT NULL CHECK (byte_size > 0),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS assistant_attachments_created ON assistant_attachments (created_at);
+CREATE INDEX IF NOT EXISTS assistant_attachments_owner ON assistant_attachments (user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS assistant_actions (
   action_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID REFERENCES assistant_conversations(conversation_id) ON DELETE SET NULL,

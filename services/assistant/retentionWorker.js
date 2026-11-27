@@ -5,10 +5,12 @@
 // unless the school changed it; a school with no settings row keeps 90), once
 // a day, in bounded batches. Messages go with their conversation. The record
 // of changes Muley made (assistant_actions, audit_log) is kept apart and is
-// not touched here.
+// not touched here. The same daily sweep removes images attached in the
+// panel once they are two days old (attachments.prune).
 
 const db = require('../../config/database');
 const logger = require('../../logger');
+const attachments = require('./attachments');
 
 const DEFAULT_DAYS = 90;
 const BATCH = 500;
@@ -52,8 +54,9 @@ function startWorker(intervalMs = CHECK_MS) {
     sweeping = true;
     try {
       const deleted = await sweepOnce();
+      const images = await attachments.prune();
       lastSweepDate = today;
-      logger.info({ assistant: true, deleted }, 'assistant: conversation retention sweep complete');
+      logger.info({ assistant: true, deleted, images }, 'assistant: conversation retention sweep complete');
     } catch (err) {
       logger.warn({ assistant: true, err }, 'assistant: conversation retention sweep failed');
     } finally {

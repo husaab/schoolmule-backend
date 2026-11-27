@@ -49,6 +49,23 @@ const attendanceQueries = {
       AND attendance_date = $2::date
   `,
 
+  // A class's marks over a range of days (from and to included).
+  selectClassAttendanceRange: `
+    SELECT student_id, to_char(attendance_date, 'YYYY-MM-DD') AS day, status
+    FROM class_attendance
+    WHERE class_id = $1 AND attendance_date BETWEEN $2::date AND $3::date
+    ORDER BY attendance_date
+  `,
+
+  // The school's daily marks over a range of days, with each student's name and grade.
+  selectGeneralAttendanceRange: `
+    SELECT ga.student_id, s.name, s.grade, to_char(ga.attendance_date, 'YYYY-MM-DD') AS day, ga.status
+    FROM general_attendance ga
+    JOIN students s ON s.student_id = ga.student_id
+    WHERE ga.school = $1 AND ga.attendance_date BETWEEN $2::date AND $3::date
+    ORDER BY ga.attendance_date, s.name
+  `,
+
   // Get class attendance for a given class and date
   selectGeneralAttendanceByDate: `
     SELECT student_id, status

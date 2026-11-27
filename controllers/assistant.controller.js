@@ -96,6 +96,10 @@ const startTurn = async (req, res) => {
   let conversation;
   let turnId;
   try {
+    if (attached.length > 0) {
+      const kept = await attachments.ownedBy(who, attached.map((f) => f.id));
+      if (attached.some((f) => !kept.has(f.id))) return failed(res, 400, 'ATTACHMENT_GONE', 'That image is no longer there. Attach it again.');
+    }
     const verdict = await aiUsage.start({ school: who.school, userId: who.userId, feature: 'assistant' });
     if (!verdict.ok) return failed(res, 429, verdict.code, verdict.message);
 

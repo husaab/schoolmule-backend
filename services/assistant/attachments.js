@@ -9,8 +9,15 @@
 // Nothing is changed by an upload. A change tool can offer to make the file
 // a school asset; the school-assets route does that when the person presses
 // Save, through the same permission checks as an upload on School Assets.
+//
+// Each upload is a row in assistant_attachments. A saved change copies the
+// image into the school's assets, and a preview expires after 24 hours, so
+// prune() (run daily by the retention worker) removes files older than two
+// days, and their rows.
 
 const { v4: uuidv4 } = require('uuid');
+const db = require('../../config/database');
+const logger = require('../../logger');
 const supabase = require('../../config/supabaseClient');
 
 const BUCKET = 'school-assets-history';
@@ -19,6 +26,8 @@ const TYPES = Object.freeze({ 'image/png': '.png', 'image/jpeg': '.jpg', 'image/
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif)$/;
 const CONTENT_TYPE = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif' };
 const PREVIEW_SECONDS = 60 * 60;
+const KEEP_DAYS = 2;
+const PRUNE_BATCH = 200;
 
 const isId = (id) => typeof id === 'string' && ID_RE.test(id);
 
@@ -35,14 +44,34 @@ async function store(who, { buffer, mimetype, originalname }) {
   if (!buffer || buffer.length === 0) throw Object.assign(new Error('That file is empty.'), { status: 400, code: 'FILE_EMPTY' });
   if (buffer.length > MAX_BYTES) throw Object.assign(new Error('Keep the image under 5 MB.'), { status: 400, code: 'FILE_TOO_LARGE' });
   const id = `${uuidv4()}${ext}`;
-  const { error } = await supabase.storage.from(BUCKET).upload(pathOf(who, id), buffer, { contentType: CONTENT_TYPE[ext], upsert: false });
+  const storagePath = pathOf(who, id);
+  const { error } = await supabase.storage.from(BUCKET).upload(storagePath, buffer, { contentType: CONTENT_TYPE[ext], upsert: false });
   if (error) throw new Error(`The image could not be kept: ${error.message || 'storage error'}`);
   const name = String(originalname || `image${ext}`).replace(/[\r\n]/g, ' ').slice(0, 120);
+  await db.query(
+    `INSERT INTO assistant_attachments (attachment_id, school, user_id, storage_path, file_name, content_type, byte_size)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [id, who.school, who.userId, storagePath, name, CONTENT_TYPE[ext], buffer.length],
+  );
   return { id, name, size: buffer.length };
+}
+
+/** Which of these ids are this person's attachments that are still kept. -> Set of ids */
+async function ownedBy(who, ids) {
+  const valid = (ids || []).filter(isId);
+  if (valid.length === 0) return new Set();
+  const { rows } = await db.query(
+    'SELECT attachment_id FROM assistant_attachments WHERE user_id = $1 AND school::text = $2 AND attachment_id = ANY($3::text[])',
+    [who.userId, who.school, valid],
+  );
+  return new Set(rows.map((r) => r.attachment_id));
 }
 
 /** The file's bytes, for the school-assets route. Throws when it isn't there. */
 async function read(who, id) {
+  if (!(await ownedBy(who, [id])).has(id)) {
+    throw Object.assign(new Error('That attachment is no longer there. Attach the image again.'), { status: 404, code: 'ATTACHMENT_GONE' });
+  }
   const { data, error } = await supabase.storage.from(BUCKET).download(pathOf(who, id));
   if (error || !data) throw Object.assign(new Error('That attachment is no longer there. Attach the image again.'), { status: 404, code: 'ATTACHMENT_GONE' });
   const ext = id.slice(id.lastIndexOf('.'));
@@ -62,4 +91,30 @@ function liveUrl(livePath) {
   return data ? data.publicUrl : null;
 }
 
-module.exports = { store, read, previewUrl, liveUrl, isId, pathOf, MAX_BYTES, TYPES };
+/**
+ * Remove attachments older than two days: the files, then their rows. A
+ * batch whose files can't be removed keeps its rows, to be tried again the
+ * next day. -> how many were removed.
+ */
+async function prune({ olderThanDays = KEEP_DAYS } = {}) {
+  let removed = 0;
+  for (;;) {
+    const { rows } = await db.query(
+      `SELECT attachment_id, storage_path FROM assistant_attachments
+       WHERE created_at < NOW() - make_interval(days => $1) ORDER BY created_at LIMIT ${PRUNE_BATCH}`,
+      [olderThanDays],
+    );
+    if (rows.length === 0) break;
+    const { error } = await supabase.storage.from(BUCKET).remove(rows.map((r) => r.storage_path));
+    if (error) {
+      logger.warn({ assistant: true, err: error }, 'assistant: old attachments could not be removed from storage');
+      break;
+    }
+    await db.query('DELETE FROM assistant_attachments WHERE attachment_id = ANY($1::text[])', [rows.map((r) => r.attachment_id)]);
+    removed += rows.length;
+    if (rows.length < PRUNE_BATCH) break;
+  }
+  return removed;
+}
+
+module.exports = { store, read, ownedBy, previewUrl, liveUrl, prune, isId, pathOf, MAX_BYTES, TYPES, KEEP_DAYS };

@@ -3,7 +3,9 @@ const {
   submitGeneralAttendance,
   submitClassAttendance,
   getGeneralAttendanceByDate,
-  getClassAttendanceByDate
+  getClassAttendanceByDate,
+  getClassAttendanceRange,
+  getGeneralAttendanceRange,
 } = require('../controllers/attendance.controller');
 const { requirePermission } = require('../middleware/access');
 const requireClassOwnership = require('../middleware/requireClassOwnership');
@@ -21,6 +23,8 @@ router.post('/general', dailyAttendance, submitGeneralAttendance);
 router.post('/class', classAttendance((req) => req.body && req.body.classId), submitClassAttendance);
 
 router.get('/general', dailyAttendance, getGeneralAttendanceByDate);
+router.get('/general/range', dailyAttendance, getGeneralAttendanceRange);
+router.get('/class/:classId/range', classAttendance((req) => req.params.classId), getClassAttendanceRange);
 router.get('/class/:classId', classAttendance((req) => req.params.classId), getClassAttendanceByDate);
 
 module.exports = router;
