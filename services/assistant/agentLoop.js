@@ -84,6 +84,8 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
       pageOf(pageContext, read, refs),
     ]);
     const messages = recent(history, caps.historyMessages);
+    // The panel's "On this page: …": only a class this person can open.
+    emit({ t: 'context', label: page ? page.label : null });
 
     await store.append(conversation.id, turnId, { role: 'user', content: text });
     messages.push({ role: 'user', content: text });

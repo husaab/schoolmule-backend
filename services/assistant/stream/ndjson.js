@@ -1,7 +1,7 @@
 // services/assistant/stream/ndjson.js
 //
 // The stream a turn is answered on: one JSON object per line, each with a
-// `t` (start, text, tool, card, choices, usage, error, ping, done). The web
+// `t` (start, context, text, tool, card, choices, usage, error, ping, done). The web
 // app and the mobile app read it the same way, line by line.
 //
 // A ping goes out every 15 seconds while a turn is quiet: the host closes a

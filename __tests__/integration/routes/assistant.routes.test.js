@@ -278,12 +278,16 @@ describe('Muley: turns, tools and who it answers', () => {
       await turn({ message: 'hi', pageContext: { classId: 'not-an-id' } });
       await turn({ message: 'hi', pageContext: 'nonsense' });
       for (const call of fake.calls) expect(call.system[1]).not.toContain('looking at the class');
+      const { of } = await (async () => { script([[text('ok')]]); return turn({ message: 'hi', pageContext: { classId: '550e8400-e29b-41d4-a716-4466554400ee' } }); })();
+      expect(of('context')).toEqual([{ t: 'context', label: null }]);
     });
 
     it('knows the class on the page when the person can open it', async () => {
-      const fake = script([[toolCall('get_class_roster', { class: 'c1' })], [text('Three.')]]);
+      const fake = script([[toolCall('get_class_roster', { class: 'c1' })], [text('Three.')], [text('Same.')]]);
       await turn({ message: 'how many students in this class?', pageContext: { classId, route: '/gradebook/x' } });
       expect(fake.calls[0].system[1]).toContain('They are looking at the class Math · Grade 6 right now. Its ref is c1.');
+      const { of } = await turn({ message: 'and now?', pageContext: { classId } });
+      expect(of('context')).toEqual([{ t: 'context', label: 'Math · Grade 6' }]);
       expect(JSON.parse(fake.calls[1].messages.at(-1).content).students).toHaveLength(3);
     });
 
