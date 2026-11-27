@@ -115,7 +115,8 @@ const ENTRIES = [
   { id: 'publish-grades', title: 'Publish grades to parents', words: ['release marks', 'send grades home', 'parents cannot see grades', 'unpublish'], path: '/gradebook', classPath: '/gradebook/:classId', needs: STAFF,
     steps: ['Open the class\'s gradebook.', 'Choose Publish and pick the assessments to release.', 'Parents and students see a grade only once it is published; guardians are emailed a couple of minutes later, and you can unpublish before then.'] },
   { id: 'report-card-comments', title: 'Write report card comments', words: ['comments', 'work habits', 'behaviour ratings', 'ai comment', 'comment bank'], path: '/gradebook', classPath: '/gradebook/:classId/feedback', needs: STAFF,
-    steps: ['Open the class\'s gradebook and choose its report card comments.', 'Fill in each student\'s ratings and comment; they save as you go.'] },
+    steps: ['Open the class\'s gradebook and choose its report card comments.', 'Fill in each student\'s ratings and comment; they save as you go.'],
+    muley: ['propose_report_card_comments', 'get_report_card_comments'] },
 
   // ── The parent portal (sidebar labels as a parent sees them) ─
   { id: 'parent-overview', title: 'Overview', words: ['home', 'dashboard', 'summary', 'my children'], path: '/parent/dashboard', needs: PARENT,

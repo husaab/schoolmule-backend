@@ -109,6 +109,37 @@ const KINDS = {
     count: (n) => `${n} ${n === 1 ? 'change' : 'changes'}`,
   },
 
+  // Report card comments (grades 1-8) for one class's term. args: { classId, className };
+  // a value is { comment } (null: no comment). The route saves learning skills with the
+  // comment, so the write sends each student's current learning skills back unchanged.
+  report_card_comment: {
+    topics: (args) => [`report-comments:${args.classId}`],
+    async read(read, args) {
+      const { data } = await read('reportCardFeedback', { params: { classId: args.classId } });
+      const current = {};
+      for (const row of data || []) {
+        current[row.studentId] = { comment: row.comment || null, workHabits: row.workHabits || null, behavior: row.behavior || null };
+      }
+      return current;
+    },
+    valueOf: (current, key) => current[key] ?? { comment: null, workHabits: null, behavior: null },
+    same: (a, b) => (((a && a.comment) || '').trim()) === (((b && b.comment) || '').trim()),
+    async write(write, args, values, { current = {} } = {}) {
+      const feedbackEntries = Object.entries(values).map(([studentId, value]) => {
+        const now = current[studentId] || {};
+        return { studentId, classId: args.classId, workHabits: now.workHabits || null, behavior: now.behavior || null, comment: (value && value.comment) || null };
+      });
+      await write('saveReportCardFeedback', { body: { feedbackEntries } });
+      return null;
+    },
+    label: (value) => {
+      const text = value && value.comment ? value.comment.trim() : '';
+      if (!text) return 'blank';
+      return text.length > 70 ? `${text.slice(0, 67)}…` : text;
+    },
+    count: (n) => `${n} ${n === 1 ? 'comment' : 'comments'}`,
+  },
+
   // The school's logo, stamp or principal signature, from an image attached in Muley's panel.
   // args: { schoolCode, assetType }; the one key is the asset type. A value as read is
   // { path, newestVersionId, schoolId } (the live file and the newest kept copy); the target

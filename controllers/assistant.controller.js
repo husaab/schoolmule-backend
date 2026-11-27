@@ -204,7 +204,7 @@ const deleteConversation = async (req, res) => {
 // ── The school's log ──────────────────────────────────────────
 
 const LOG_STATUSES = ['pending', 'applying', 'applied', 'undoing', 'undone', 'rejected', 'expired', 'failed'];
-const KIND_LABELS = { class_attendance: 'Attendance', scores: 'Marks', stats_exclusion: 'Class average', school_asset: 'School image' };
+const KIND_LABELS = { class_attendance: 'Attendance', scores: 'Marks', stats_exclusion: 'Class average', school_asset: 'School image', report_card_comment: 'Report comments' };
 const LOG_PAGE = 50;
 
 // GET /api/assistant/log?status=&kind=&before= (full admins): every change prepared through Muley at

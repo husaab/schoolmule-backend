@@ -5,6 +5,7 @@ require('./staff/guide');
 require('./staff/insights');
 require('./staff/attendance');
 require('./staff/assets');
+require('./staff/comments');
 require('./staff/writes');
 require('./parent/family');
 

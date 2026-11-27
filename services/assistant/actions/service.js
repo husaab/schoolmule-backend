@@ -117,7 +117,8 @@ async function settle(row, { read, write }, { from, to, labelOf }) {
     toWrite[key] = to[key];
   }
   if (conflicts.length > 0) return { conflicts, current };
-  const extra = Object.keys(toWrite).length > 0 ? await kind.write(write, row.args, toWrite, { result: row.result }) : null;
+  // current: what each key holds now, for a kind whose write must send fields it doesn't change.
+  const extra = Object.keys(toWrite).length > 0 ? await kind.write(write, row.args, toWrite, { result: row.result, current }) : null;
   return { conflicts: [], current, written: Object.keys(toWrite).length, extra: extra || null };
 }
 

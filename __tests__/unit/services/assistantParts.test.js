@@ -211,6 +211,7 @@ describe('the loopback reader', () => {
     expect(writes).toEqual({
       saveClassAttendance: 'POST', saveScores: 'POST', saveStatsExclusion: 'PUT', removeStatsExclusion: 'DELETE',
       replaceSchoolAsset: 'POST', restoreSchoolAssetVersion: 'POST', deleteSchoolAsset: 'DELETE',
+      saveReportCardFeedback: 'POST',
     });
     const { read: readOnly } = dispatcher(async () => ({ status: 200, body: {} }));
     await expect(readOnly('saveScores', { params: { classId: ID(1) } })).rejects.toThrow(/not a route a tool can read/);

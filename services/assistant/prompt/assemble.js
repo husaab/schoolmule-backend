@@ -40,7 +40,7 @@ function assemble({ firstName, view, access, schoolYearLabel, today, page, allow
   }
   lines.push(`Today is ${today.weekday}, ${today.date}.${schoolYearLabel ? ` The school year in use is ${schoolYearLabel}.` : ''}`);
   lines.push(allowWrites
-    ? 'This school lets you prepare changes for this person to save, with the tools that prepare them (attendance, marks, who counts in the class average, the school\'s stamp, logo or signature). Nothing else can be changed through you.'
+    ? 'This school lets you prepare changes for this person to save, with the tools that prepare them (attendance, marks, report card comments, who counts in the class average, the school\'s stamp, logo or signature). Nothing else can be changed through you.'
     : 'This school has not switched on preparing changes: you can only read, explain and show where things are.');
   if (page && page.classRef) {
     lines.push(`They are looking at the class ${page.label} right now. Its ref is ${page.classRef}.`);

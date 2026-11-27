@@ -29,6 +29,8 @@ const ROUTES = Object.freeze({
   analyticsStudent: { method: 'GET', path: '/api/analytics/student/:studentId' },      // ?termId=
   analyticsSnapshot: { method: 'GET', path: '/api/analytics/snapshot' },               // ?termId=, one record per student
   schoolAssets: { method: 'GET', path: '/api/school-assets/school-code/:schoolCode', params: { schoolCode: SCHOOL_CODE } },
+  reportCardFeedback: { method: 'GET', path: '/api/report-cards/feedback/class/:classId' }, // a class's report card comments and learning skills
+  reportCommentRules: { method: 'GET', path: '/api/report-comments/class/:classId' },      // the school's word limits and the review lock
   schoolAssetVersions: { method: 'GET', path: '/api/school-assets/:schoolId/:assetType/versions', params: { assetType: ASSET_TYPE } },
 
   // The parent portal: a parent's own children, as the portal shows them.
@@ -46,6 +48,7 @@ const ROUTES = Object.freeze({
   saveStatsExclusion: { method: 'PUT', path: '/api/classes/:classId/stats-exclusions/:studentId' },
   removeStatsExclusion: { method: 'DELETE', path: '/api/classes/:classId/stats-exclusions/:studentId' },
   replaceSchoolAsset: { method: 'POST', path: '/api/school-assets/from-assistant' },
+  saveReportCardFeedback: { method: 'POST', path: '/api/report-cards/feedback/bulk' },
   restoreSchoolAssetVersion: { method: 'POST', path: '/api/school-assets/:schoolId/:assetType/versions/:versionId/restore', params: { assetType: ASSET_TYPE } },
   deleteSchoolAsset: { method: 'DELETE', path: '/api/school-assets/:schoolId/:assetType', params: { assetType: ASSET_TYPE } },
 });
