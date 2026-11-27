@@ -200,6 +200,51 @@ const deleteConversation = async (req, res) => {
   }
 };
 
+// ── The school's log ──────────────────────────────────────────
+
+const LOG_STATUSES = ['pending', 'applying', 'applied', 'undoing', 'undone', 'rejected', 'expired', 'failed'];
+const KIND_LABELS = { class_attendance: 'Attendance', scores: 'Marks', stats_exclusion: 'Class average', school_asset: 'School image' };
+const LOG_PAGE = 50;
+
+// GET /api/assistant/log?status=&kind=&before= (full admins): every change prepared through Muley at
+// the school, newest first, with who prepared it, who saved or undid it, and what it changed.
+const getSchoolLog = async (req, res) => {
+  const { status, kind, before } = req.query;
+  if (status !== undefined && !LOG_STATUSES.includes(status)) return failed(res, 400, 'INVALID_STATUS', 'Unknown status');
+  if (kind !== undefined && !KIND_LABELS[kind]) return failed(res, 400, 'INVALID_KIND', 'Unknown kind of change');
+  if (before !== undefined && Number.isNaN(Date.parse(before))) return failed(res, 400, 'INVALID_BEFORE', 'before must be a time');
+  try {
+    const { rows } = await db.query(queries.selectSchoolLog, [req.user.school, status || null, kind || null, before || null, LOG_PAGE + 1]);
+    const page = rows.slice(0, LOG_PAGE).map((r) => ({
+      id: r.action_id,
+      kind: r.kind,
+      kindLabel: KIND_LABELS[r.kind] || r.kind,
+      status: r.status,
+      title: r.title,
+      // Each student or item the change touched: its name, and the value before and after.
+      changes: ((r.preview && r.preview.rows) || []).map((row) => ({ name: row.name, now: row.now ?? null, next: row.next ?? null })),
+      written: r.result && typeof r.result.written === 'number' ? r.result.written : null,
+      error: r.error_message || null,
+      preparedBy: r.person_name,
+      preparedAs: r.person_view || null,
+      preparedAt: r.created_at,
+      savedBy: r.applied_by_name || null,
+      savedAt: r.applied_at,
+      undoneBy: r.undone_by_name || null,
+      undoneAt: r.undone_at,
+      expiresAt: r.expires_at,
+    }));
+    return res.status(200).json({
+      status: 'success',
+      data: page,
+      next: rows.length > LOG_PAGE ? page[page.length - 1].preparedAt : null,
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Error reading the school's assistant log");
+    return res.status(500).json({ status: 'failed', message: 'Error loading the log' });
+  }
+};
+
 // ── Attachments ───────────────────────────────────────────────
 
 const attachmentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: attachments.MAX_BYTES, files: 1 } }).single('file');
@@ -350,5 +395,5 @@ module.exports = {
   getSettings, startTurn, listConversations, getConversation, renameConversation, deleteConversation,
   getAction, applyAction, undoAction, dismissAction,
   getSchoolSettings, saveSchoolSettings, listSchoolSettings,
-  receiveAttachment, uploadAttachment,
+  receiveAttachment, uploadAttachment, getSchoolLog,
 };

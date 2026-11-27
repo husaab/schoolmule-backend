@@ -21,6 +21,29 @@ module.exports = {
     ORDER BY sc.name
   `,
 
+  // The school's changes prepared through Muley, newest first, with who
+  // prepared, saved and undid each. $2 a status or null, $3 a kind or null,
+  // $4 "before this time" for the next page, $5 how many.
+  selectSchoolLog: `
+    SELECT a.action_id, a.kind, a.status, a.title, a.preview, a.result, a.error_message,
+           a.created_at, a.applied_at, a.undone_at, a.expires_at,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS person_name,
+           c.view AS person_view,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', ap.first_name, ap.last_name)), ''), ap.username) AS applied_by_name,
+           COALESCE(NULLIF(TRIM(CONCAT_WS(' ', ud.first_name, ud.last_name)), ''), ud.username) AS undone_by_name
+    FROM assistant_actions a
+    JOIN users u ON u.user_id = a.user_id
+    LEFT JOIN assistant_conversations c ON c.conversation_id = a.conversation_id
+    LEFT JOIN users ap ON ap.user_id = a.applied_by
+    LEFT JOIN users ud ON ud.user_id = a.undone_by
+    WHERE a.school::text = $1
+      AND ($2::text IS NULL OR a.status = $2)
+      AND ($3::text IS NULL OR a.kind = $3)
+      AND ($4::timestamptz IS NULL OR a.created_at < $4)
+    ORDER BY a.created_at DESC
+    LIMIT $5
+  `,
+
   selectSettings: `
     SELECT school, enabled, role_teacher, role_admin, role_parent, allow_writes, allow_outward,
            self_serve, transcript_retention_days, updated_at

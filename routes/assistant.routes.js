@@ -16,6 +16,7 @@ const express = require('express');
 const router = express.Router();
 const requireAssistant = require('../middleware/requireAssistant');
 const requirePlatformOwner = require('../middleware/requirePlatformOwner');
+const { requireFullAdmin } = require('../middleware/access');
 const { createGlobalLimiter } = require('../middleware/globalRateLimit');
 const assistant = require('../controllers/assistant.controller');
 const config = require('../services/assistant/config');
@@ -39,6 +40,8 @@ router.post('/actions/:actionId/apply', requireAssistant, assistant.applyAction)
 router.post('/actions/:actionId/undo', requireAssistant, assistant.undoAction);
 router.post('/actions/:actionId/dismiss', requireAssistant, assistant.dismissAction);
 
+// The school's log of changes prepared through Muley: full admins, whether or not Muley is on now.
+router.get('/log', requireFullAdmin, assistant.getSchoolLog);
 router.get('/platform/settings', requirePlatformOwner, assistant.listSchoolSettings);
 router.get('/platform/settings/:school', requirePlatformOwner, assistant.getSchoolSettings);
 router.put('/platform/settings/:school', requirePlatformOwner, assistant.saveSchoolSettings);

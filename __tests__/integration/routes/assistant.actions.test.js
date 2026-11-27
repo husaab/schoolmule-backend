@@ -265,6 +265,27 @@ describe('Muley: preparing, applying and undoing changes', () => {
     expect(tool.card.actionId).toBe(action.id);
   });
 
+  it('lists every change in the school\'s log for full admins, with who prepared, saved and undid it', async () => {
+    const { of } = await prepareAttendance();
+    const [{ action }] = of('action');
+    await apply(action);
+    await undo(action);
+
+    expect((await authenticatedRequest('get', '/api/assistant/log', TEACHER)).status).toBe(403);
+    const res = await authenticatedRequest('get', '/api/assistant/log'); // the default account: a full admin
+    expect(res.status).toBe(200);
+    expect(res.body.next).toBeNull();
+    expect(res.body.data).toEqual([expect.objectContaining({
+      id: action.id, kind: 'class_attendance', kindLabel: 'Attendance', status: 'undone', title: action.title,
+      preparedBy: 'Tess Teacher', preparedAs: 'TEACHER', savedBy: 'Tess Teacher', undoneBy: 'Tess Teacher', written: 2,
+    })]);
+    expect(res.body.data[0].changes).toEqual(expect.arrayContaining([{ name: 'Yusuf Rahman', now: 'unmarked', next: 'Absent' }]));
+
+    expect((await authenticatedRequest('get', '/api/assistant/log?status=applied')).body.data).toEqual([]);
+    expect((await authenticatedRequest('get', '/api/assistant/log?kind=scores')).body.data).toEqual([]);
+    expect((await authenticatedRequest('get', '/api/assistant/log?status=nope')).status).toBe(400);
+  });
+
   describe('who counts in the class average', () => {
     const exclusions = async () => Object.fromEntries((await pool.query(
       `SELECT s.name, array_agg(COALESCE(e.assessment_id::text, 'class') ORDER BY e.assessment_id) AS what, max(e.note) AS note
