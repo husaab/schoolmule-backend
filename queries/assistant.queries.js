@@ -4,6 +4,23 @@
 
 module.exports = {
   // ── Settings ────────────────────────────────────────────────
+  // Every school with its switches (null where it has no row, i.e. off) and
+  // the last 30 days of use, for the platform owner's Muley page.
+  selectSchoolsWithSettings: `
+    SELECT sc.school_code::text AS school, sc.name,
+           st.enabled, st.role_teacher, st.role_admin, st.role_parent, st.allow_writes, st.allow_outward,
+           st.self_serve, st.transcript_retention_days, st.updated_at,
+           (SELECT count(*)::int FROM assistant_conversations c
+             WHERE c.school::text = sc.school_code::text AND c.last_message_at > NOW() - INTERVAL '30 days') AS conversations_30d,
+           (SELECT count(DISTINCT c.user_id)::int FROM assistant_conversations c
+             WHERE c.school::text = sc.school_code::text AND c.last_message_at > NOW() - INTERVAL '30 days') AS people_30d,
+           (SELECT count(*)::int FROM assistant_actions a
+             WHERE a.school::text = sc.school_code::text AND a.applied_at > NOW() - INTERVAL '30 days') AS changes_saved_30d
+    FROM schools sc
+    LEFT JOIN ai_assistant_settings st ON st.school::text = sc.school_code::text
+    ORDER BY sc.name
+  `,
+
   selectSettings: `
     SELECT school, enabled, role_teacher, role_admin, role_parent, allow_writes, allow_outward,
            self_serve, transcript_retention_days, updated_at

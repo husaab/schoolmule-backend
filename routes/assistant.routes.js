@@ -38,6 +38,7 @@ router.post('/actions/:actionId/apply', requireAssistant, assistant.applyAction)
 router.post('/actions/:actionId/undo', requireAssistant, assistant.undoAction);
 router.post('/actions/:actionId/dismiss', requireAssistant, assistant.dismissAction);
 
+router.get('/platform/settings', requirePlatformOwner, assistant.listSchoolSettings);
 router.get('/platform/settings/:school', requirePlatformOwner, assistant.getSchoolSettings);
 router.put('/platform/settings/:school', requirePlatformOwner, assistant.saveSchoolSettings);
 

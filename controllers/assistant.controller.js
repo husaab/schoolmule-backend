@@ -18,6 +18,7 @@ const { runTurn } = require('../services/assistant/agentLoop');
 const { openStream } = require('../services/assistant/stream/ndjson');
 const { available } = require('../middleware/requireAssistant');
 const actions = require('../services/assistant/actions/service');
+const queries = require('../queries/assistant.queries');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = { status: 'failed', message: 'Conversation not found' };
@@ -256,6 +257,29 @@ const dismissAction = async (req, res) => {
 
 const SCHOOL_CODE = /^[A-Z0-9_]{2,60}$/;
 
+// GET /api/assistant/platform/settings (platform owner): every school, its switches and its last 30 days.
+const listSchoolSettings = async (req, res) => {
+  try {
+    const { rows } = await db.query(queries.selectSchoolsWithSettings);
+    const data = rows.map((r) => ({
+      school: r.school,
+      name: r.name,
+      settings: r.enabled === null
+        ? { ...settings.OFF }
+        : {
+            enabled: r.enabled, roleTeacher: r.role_teacher, roleAdmin: r.role_admin, roleParent: r.role_parent,
+            allowWrites: r.allow_writes, allowOutward: r.allow_outward, selfServe: r.self_serve, transcriptRetentionDays: r.transcript_retention_days,
+          },
+      updatedAt: r.updated_at,
+      lastThirtyDays: { conversations: r.conversations_30d, people: r.people_30d, changesSaved: r.changes_saved_30d },
+    }));
+    return res.status(200).json({ status: 'success', data, killSwitch: !config.enabled() });
+  } catch (error) {
+    logger.error({ err: error }, 'Error listing the schools\' assistant settings');
+    return res.status(500).json({ status: 'failed', message: 'Error loading the settings' });
+  }
+};
+
 // GET /api/assistant/platform/settings/:school (platform owner)
 const getSchoolSettings = async (req, res) => {
   const school = String(req.params.school || '').toUpperCase();
@@ -290,5 +314,5 @@ const saveSchoolSettings = async (req, res) => {
 module.exports = {
   getSettings, startTurn, listConversations, getConversation, renameConversation, deleteConversation,
   getAction, applyAction, undoAction, dismissAction,
-  getSchoolSettings, saveSchoolSettings,
+  getSchoolSettings, saveSchoolSettings, listSchoolSettings,
 };

@@ -157,6 +157,24 @@ describe('Muley: turns, tools and who it answers', () => {
       expect((await authenticatedRequest('get', '/api/assistant/settings', TEACHER_A)).body.data.enabled).toBe(true);
       expect((await authenticatedRequest('put', '/api/assistant/platform/settings/NOSUCHSCHOOL', { email: 'owner@schoolmule.test' }).send({ enabled: true })).status).toBe(404);
     });
+
+    it('lists every school with its switches and its last 30 days for the platform owner only', async () => {
+      process.env.PLATFORM_OWNER_EMAILS = 'owner@schoolmule.test';
+      await switchOn({ allowWrites: true });
+      expect((await authenticatedRequest('get', '/api/assistant/platform/settings')).status).toBe(403);
+
+      const res = await authenticatedRequest('get', '/api/assistant/platform/settings', { email: 'owner@schoolmule.test' });
+      expect(res.status).toBe(200);
+      expect(res.body.killSwitch).toBe(false);
+      const bySchool = Object.fromEntries(res.body.data.map((s) => [s.school, s]));
+      expect(bySchool.ALHAADIACADEMY).toMatchObject({
+        settings: { enabled: true, roleTeacher: true, roleAdmin: true, allowWrites: true },
+        lastThirtyDays: { conversations: 0, people: 0, changesSaved: 0 },
+      });
+      // A school that was never switched on is listed as off.
+      const off = res.body.data.find((s) => s.school !== 'ALHAADIACADEMY');
+      if (off) expect(off.settings).toMatchObject({ enabled: false, roleTeacher: false });
+    });
   });
 
   describe('a turn', () => {
