@@ -19,6 +19,8 @@ const queries = require('../../queries/payments.queries');
 const stripeClient = require('./stripeClient');
 const connect = require('./connect');
 const events = require('./events');
+const charges = require('./charges');
+const chargeQueries = require('../../queries/charges.queries');
 
 const DEFAULT_INTERVAL_MS = 5000;
 // 4^attempts seconds over six attempts spans roughly an hour.
@@ -93,6 +95,39 @@ async function refreshAllAccounts({ client = stripeClient.clientFromEnv() } = {}
   return refreshed;
 }
 
+/**
+ * The safety net for card payments: a family who paid but whose webhook never
+ * arrived, or a payment page that expired unnoticed. Asks Stripe about every
+ * charge still waiting on a page after ten minutes, at most every five.
+ * @returns how many were looked at
+ */
+async function checkStaleCheckouts({ client = stripeClient.clientFromEnv() } = {}) {
+  const { rows } = await db.query(chargeQueries.selectStaleCheckouts, [client.livemode]);
+  for (const row of rows) {
+    try {
+      const session = await client.retrieveCheckoutSession(row.stripe_account_id, row.checkout_session_id);
+      if (session.status === 'open') {
+        await db.query('UPDATE charges SET updated_at = now() WHERE charge_id = $1', [row.charge_id]);
+      } else {
+        await charges.fulfillSession({ client, accountId: row.stripe_account_id, session });
+      }
+    } catch (error) {
+      await db.query('UPDATE charges SET updated_at = now() WHERE charge_id = $1', [row.charge_id]).catch(() => {});
+      logger.warn({ chargeId: row.charge_id, err: error.message }, 'Payments: safety-net check of a payment page failed');
+    }
+  }
+  return rows.length;
+}
+
+let lastStaleCheck = 0;
+const STALE_CHECK_MS = 5 * 60 * 1000;
+
+async function checkStaleIfDue({ client, now = Date.now() } = {}) {
+  if (now - lastStaleCheck < STALE_CHECK_MS) return 0;
+  lastStaleCheck = now;
+  return checkStaleCheckouts({ client });
+}
+
 /** The once-a-day work. Several server instances may each run it; it is idempotent. */
 async function runDailyIfDue({ client = stripeClient.clientFromEnv(), today = torontoDate() } = {}) {
   if (today === lastDailyDate) return false;
@@ -125,12 +160,13 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
     try {
       await runDailyIfDue({ client });
       await drainAll({ client });
+      await checkStaleIfDue({ client });
     } catch (error) {
       if (error?.code === UNDEFINED_TABLE && !disabledReason) {
-        disabledReason = 'payments_stripe_connect_migration.sql / payments_stripe_events_migration.sql has not been applied';
+        disabledReason = 'the payments migrations have not been applied';
         stopWorker();
         logger.error(
-          { migrations: ['payments_stripe_connect_migration.sql', 'payments_stripe_events_migration.sql'] },
+          { migrations: ['payments_stripe_connect_migration.sql', 'payments_stripe_events_migration.sql', 'payments_form_charges_migration.sql'] },
           'Payments worker disabled: tables are missing. Apply the migrations and restart.',
         );
         return;
@@ -160,6 +196,7 @@ module.exports = {
   drainOnce,
   drainAll,
   refreshAllAccounts,
+  checkStaleCheckouts,
   runDailyIfDue,
   MAX_ATTEMPTS,
   isDisabled: () => disabledReason,

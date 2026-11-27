@@ -52,6 +52,7 @@ async function resolveScope(client, { formId, school, scope, fields }) {
       dateTo: scope?.dateTo,
       fieldFilters: scope?.fieldFilters,
       importState: scope?.importState,
+      paymentState: scope?.paymentState,
     },
     scope?.sorts,
   );

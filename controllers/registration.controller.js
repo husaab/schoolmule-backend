@@ -14,7 +14,13 @@ const {
   parseSorts,
   parseFieldFilters,
   parseImportState,
+  parsePaymentState,
 } = require('../services/submissionFilters');
+const { can } = require('../services/access/access');
+const chargeQueries = require('../queries/charges.queries');
+const charges = require('../services/payments/charges');
+const { normalizePaymentConfig, PaymentFieldError, formatCents } = require('../services/payments/paymentField');
+const { paidWith } = require('../services/payments/emails');
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -47,7 +53,19 @@ function toCamelForm(row) {
   };
 }
 
-function toCamelSubmission(row) {
+// The payment on a response, as staff see it. A waived fee reads "settled"
+// to anyone without `finance` (services/payments/charges.visibleStatus).
+function toSubmissionPayment(payment, finance) {
+  if (!payment) return null;
+  return { ...payment, status: charges.visibleStatus(payment.status, finance) };
+}
+
+const PAYMENT_LABELS = {
+  unpaid: 'Unpaid', partially_paid: 'Part paid', paid: 'Paid', partially_refunded: 'Part refunded',
+  refunded: 'Refunded', waived: 'Waived', settled: 'Settled',
+};
+
+function toCamelSubmission(row, { finance = false } = {}) {
   return {
     submissionId: row.submission_id,
     formId: row.form_id,
@@ -63,8 +81,11 @@ function toCamelSubmission(row) {
     importedAt: row.imported_at || null,
     importedBy: row.imported_by || null,
     importedStudentName: row.imported_student_name || null,
+    payment: toSubmissionPayment(row.payment, finance),
   };
 }
+
+const isFinance = (req) => can(req, 'finance');
 
 // Multer config for banner upload
 const storage = multer.memoryStorage();
@@ -176,6 +197,27 @@ const updateForm = async (req, res) => {
   }
 };
 
+/**
+ * Why a form with a payment field can't be published yet, or null. The family
+ * needs an email field (for the receipt), and a way to pay: card payments on,
+ * or paying at the office allowed.
+ */
+async function paymentPublishProblem(formId, school) {
+  const { rows: fields } = await db.query(registrationQueries.selectFieldsByFormId, [formId]);
+  const payment = fields.find((f) => f.field_type === 'payment');
+  if (!payment) return null;
+  if (!fields.some((f) => f.field_type === 'email')) {
+    return 'Add an Email field before publishing: the receipt for the payment is sent there.';
+  }
+  if (!payment.payment_config?.allowOffline) {
+    const { online } = await charges.availability(school);
+    if (!online) {
+      return 'Card payments aren’t switched on for your school. Connect Stripe in Finance → Payments, or allow paying at the office in the payment field.';
+    }
+  }
+  return null;
+}
+
 const updateFormStatus = async (req, res) => {
   try {
     const { formId } = req.params;
@@ -211,6 +253,11 @@ const updateFormStatus = async (req, res) => {
       });
     }
 
+    if (newStatus === 'published') {
+      const problem = await paymentPublishProblem(formId, school);
+      if (problem) return res.status(400).json({ status: 'failed', code: 'PAYMENT_NOT_READY', message: problem });
+    }
+
     const { rows } = await db.query(registrationQueries.updateFormStatus, [newStatus, formId, school, newStatus, newStatus]);
     if (rows.length === 0) {
       return res.status(500).json({ status: 'failed', message: 'Status update failed unexpectedly' });
@@ -227,6 +274,16 @@ const deleteForm = async (req, res) => {
   try {
     const { formId } = req.params;
     const school = req.user.school;
+
+    // Money was asked for through this form: its record has to stay.
+    const { rows: [paid] } = await db.query(chargeQueries.countChargesForForm, [formId]);
+    if (paid && paid.n > 0) {
+      return res.status(409).json({
+        status: 'failed',
+        code: 'FORM_HAS_PAYMENTS',
+        message: 'This form has payments, so it can’t be deleted. Close it instead.',
+      });
+    }
 
     const { rows } = await db.query(registrationQueries.deleteForm, [formId, school]);
     if (rows.length === 0) {
@@ -343,8 +400,13 @@ const upsertFields = async (req, res) => {
     const { rows: existingFields } = await client.query(registrationQueries.selectFieldsByFormId, [formId]);
     const existingIds = new Set(existingFields.map(f => f.field_id));
 
-    const validTypes = ['text', 'email', 'phone', 'date', 'select', 'radio', 'textarea'];
+    const validTypes = ['text', 'email', 'phone', 'date', 'select', 'radio', 'textarea', 'payment'];
     const incomingIds = new Set();
+
+    if (fields.filter((f) => f && f.fieldType === 'payment').length > 1) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ status: 'failed', message: 'A form can have one payment field. Put every item in it.' });
+    }
 
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
@@ -355,6 +417,20 @@ const upsertFields = async (req, res) => {
       if (!f.label || !f.label.trim()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ status: 'failed', message: 'Field label is required' });
+      }
+      // A payment field's price list is checked and tidied here; it has no
+      // options, and whether it must be paid comes from its required items.
+      let paymentConfig = null;
+      if (f.fieldType === 'payment') {
+        try {
+          paymentConfig = normalizePaymentConfig(f.payment);
+        } catch (error) {
+          await client.query('ROLLBACK');
+          if (error instanceof PaymentFieldError) return res.status(400).json({ status: 'failed', message: error.message });
+          throw error;
+        }
+        f.options = null;
+        f.isRequired = false;
       }
 
       if (f.fieldId && existingIds.has(f.fieldId)) {
@@ -368,6 +444,7 @@ const upsertFields = async (req, res) => {
           i,
           f.fieldId,
           formId,
+          paymentConfig ? JSON.stringify(paymentConfig) : null,
         ]);
         incomingIds.add(f.fieldId);
       } else {
@@ -380,6 +457,7 @@ const upsertFields = async (req, res) => {
           f.isRequired || false,
           f.options ? JSON.stringify(f.options) : null,
           i,
+          paymentConfig ? JSON.stringify(paymentConfig) : null,
         ]);
       }
     }
@@ -405,6 +483,7 @@ const upsertFields = async (req, res) => {
         placeholder: ff.placeholder,
         isRequired: ff.is_required,
         options: ff.options,
+        payment: ff.payment_config,
         sortOrder: ff.sort_order,
       })),
     });
@@ -446,6 +525,7 @@ const getSubmissions = async (req, res) => {
     const sorts = parseSorts(req.query);
     const fieldFilters = parseFieldFilters(req.query);
     const importState = parseImportState(req.query);
+    const paymentState = parsePaymentState(req.query);
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -466,6 +546,7 @@ const getSubmissions = async (req, res) => {
         dateTo,
         fieldFilters,
         importState,
+        paymentState,
       }, sorts);
 
     const sql = `
@@ -484,7 +565,7 @@ const getSubmissions = async (req, res) => {
 
     return res.status(200).json({
       status: 'success',
-      data: rows.map(toCamelSubmission),
+      data: rows.map((row) => toCamelSubmission(row, { finance: isFinance(req) })),
       pagination: {
         total: parseInt(countRows[0].count, 10),
         page: parseInt(page, 10),
@@ -505,7 +586,7 @@ const getSubmission = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
-    return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0]) });
+    return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0], { finance: isFinance(req) }) });
   } catch (error) {
     logger.error({ err: error }, 'Error fetching submission');
     return res.status(500).json({ status: 'failed', message: 'Error fetching submission' });
@@ -530,7 +611,9 @@ const updateSubmission = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
-    return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0]) });
+    // Read back with its payment, so the row the page swaps in still shows it.
+    const { rows: fresh } = await db.query(registrationQueries.selectSubmissionById, [submissionId, req.user.school]);
+    return res.status(200).json({ status: 'success', data: toCamelSubmission(fresh[0] || rows[0], { finance: isFinance(req) }) });
   } catch (error) {
     logger.error({ err: error }, 'Error updating submission');
     return res.status(500).json({ status: 'failed', message: 'Error updating submission' });
@@ -576,9 +659,16 @@ const updateSubmissionAnswers = async (req, res) => {
     }
 
     const sanitizedAnswers = {};
+    // The payment field's answer is written by the server from the charge; it is never edited here.
+    for (const field of fields) {
+      if (field.field_type === 'payment' && subRows[0].answers && subRows[0].answers[field.field_id] !== undefined) {
+        sanitizedAnswers[field.field_id] = subRows[0].answers[field.field_id];
+      }
+    }
     for (const [key, value] of Object.entries(answers)) {
       const field = fieldMap.get(key);
       if (!field) continue; // ignore unknown field IDs
+      if (field.field_type === 'payment') continue;
 
       const cleaned = String(value)
         .replace(/<[^>]*>/g, '') // strip HTML tags
@@ -609,7 +699,8 @@ const updateSubmissionAnswers = async (req, res) => {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
     }
     await queueSheetSync(rows[0].form_id);
-    return res.status(200).json({ status: 'success', data: toCamelSubmission(rows[0]) });
+    const { rows: fresh } = await db.query(registrationQueries.selectSubmissionById, [submissionId, school]);
+    return res.status(200).json({ status: 'success', data: toCamelSubmission(fresh[0] || rows[0], { finance: isFinance(req) }) });
   } catch (error) {
     logger.error({ err: error }, 'Error updating submission answers');
     return res.status(500).json({ status: 'failed', message: 'Error updating submission answers' });
@@ -619,6 +710,21 @@ const updateSubmissionAnswers = async (req, res) => {
 const deleteSubmission = async (req, res) => {
   try {
     const { submissionId } = req.params;
+    // A response whose payment has any history (paid, recorded, waived,
+    // refunded) is a financial record and stays. An unpaid one with no
+    // history goes, with its charge.
+    const { rows: [charge] } = await db.query(chargeQueries.selectChargeForSubmission, [submissionId]);
+    if (charge) {
+      const { rows: [count] } = await db.query(chargeQueries.countPayments, [charge.charge_id]);
+      if (count.n > 0 || charge.school !== req.user.school) {
+        return res.status(409).json({
+          status: 'failed',
+          code: 'SUBMISSION_HAS_PAYMENT',
+          message: 'This response has a payment recorded, so it can’t be deleted. Refund or remove the payment first, or change its status instead.',
+        });
+      }
+      await db.query(chargeQueries.deleteCharge, [charge.charge_id]);
+    }
     const { rows } = await db.query(registrationQueries.deleteSubmission, [submissionId, req.user.school]);
     if (rows.length === 0) {
       return res.status(404).json({ status: 'failed', message: 'Submission not found' });
@@ -643,6 +749,7 @@ const exportSubmissions = async (req, res) => {
     const sorts = parseSorts(req.query);
     const fieldFilters = parseFieldFilters(req.query);
     const importState = parseImportState(req.query);
+    const paymentState = parsePaymentState(req.query);
 
     // Verify form belongs to school
     const { rows: formRows } = await db.query(registrationQueries.selectFormById, [formId, school]);
@@ -657,7 +764,7 @@ const exportSubmissions = async (req, res) => {
     const { whereClause, orderClause, params } = buildSubmissionsQuery(
       formId,
       fields,
-      { status: filterStatus, dateFrom, dateTo, fieldFilters, importState },
+      { status: filterStatus, dateFrom, dateTo, fieldFilters, importState, paymentState },
       sorts,
       true, // useExportDefault — multi-column Grade+Name when no explicit sort
     );
@@ -674,9 +781,12 @@ const exportSubmissions = async (req, res) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Submissions');
 
-    // Build headers
+    // Build headers. A form that asks for payment gets the payment's columns too.
+    const hasPayment = fields.some((f) => f.field_type === 'payment');
+    const finance = isFinance(req);
     const headers = ['Submission Date', 'Status'];
     fields.forEach(f => headers.push(f.label));
+    if (hasPayment) headers.push('Payment', 'Amount', 'Paid', 'Refunded', 'Paid with');
     sheet.addRow(headers);
 
     // Style header row
@@ -691,6 +801,21 @@ const exportSubmissions = async (req, res) => {
       fields.forEach(f => {
         row.push(sub.answers[f.field_id] || '');
       });
+      if (hasPayment) {
+        const pay = toSubmissionPayment(sub.payment, finance);
+        if (pay) {
+          const last = pay.lastPayment;
+          row.push(
+            PAYMENT_LABELS[pay.status] || pay.status,
+            formatCents(pay.amountCents),
+            formatCents(pay.amountPaidCents),
+            pay.amountRefundedCents ? formatCents(pay.amountRefundedCents) : '',
+            last ? paidWith({ kind: last.kind, card_brand: last.cardBrand, card_last4: last.cardLast4, wallet: last.wallet }) : '',
+          );
+        } else {
+          row.push('Nothing to pay', '', '', '', '');
+        }
+      }
       sheet.addRow(row);
     });
 
@@ -719,6 +844,22 @@ const exportSubmissions = async (req, res) => {
     if (!res.headersSent) {
       return res.status(500).json({ status: 'failed', message: 'Error exporting submissions' });
     }
+  }
+};
+
+// ─── Payments availability (for the builder) ──────────────────────
+
+/** Whether this school can take card payments now, for the builder's payment field. Anyone who builds forms may ask. */
+const getPaymentAvailability = async (req, res) => {
+  try {
+    const { client, account, online } = await charges.availability(req.user.school);
+    return res.status(200).json({
+      status: 'success',
+      data: { configured: Boolean(client), mode: client ? client.mode : null, online, accountStatus: account ? account.status : null },
+    });
+  } catch (error) {
+    logger.error({ err: error }, 'Error loading payment availability');
+    return res.status(500).json({ status: 'failed', message: 'Error loading payment availability' });
   }
 };
 
@@ -756,4 +897,5 @@ module.exports = {
   deleteSubmission,
   exportSubmissions,
   getNewCount,
+  getPaymentAvailability,
 };
