@@ -15,6 +15,8 @@ const mockClient = {
   retrieveDispute: jest.fn(),
   listPayouts: jest.fn(),
   retrieveBalance: jest.fn(),
+  listPaymentMethodDomains: jest.fn(),
+  createPaymentMethodDomain: jest.fn(),
   request: jest.fn(),
 };
 let mockConfigured = true;
@@ -211,7 +213,7 @@ describe('a family paying through the form', () => {
     const field = res.body.data.fields.find((f) => f.fieldType === 'payment');
     expect(field.payment.items).toHaveLength(2);
     expect(field.payment.accountingCode).toBeUndefined();
-    expect(res.body.data.payments).toEqual({ online: false, currency: 'cad' });
+    expect(res.body.data.payments).toEqual({ online: false, currency: 'cad', testMode: true });
     await connectSchool();
     res = await publicGet('/api/registration/public/maple/trip');
     expect(res.body.data.payments.online).toBe(true);
@@ -311,7 +313,7 @@ describe('a family paying through the form', () => {
     mockClient.createCheckoutSession.mockResolvedValueOnce(session({ id: 'cs_test_2', url: 'https://checkout.stripe.com/c/pay/cs_test_2' }));
     const again = await publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, {});
     expect(again.status).toBe(200);
-    expect(again.body.data).toEqual({ url: 'https://checkout.stripe.com/c/pay/cs_test_2', paid: false });
+    expect(again.body.data).toEqual({ url: 'https://checkout.stripe.com/c/pay/cs_test_2', clientSecret: null, stripeAccountId: null, paid: false });
   });
 
   it('reuses an open page with time left rather than opening a second one', async () => {
@@ -335,6 +337,90 @@ describe('a family paying through the form', () => {
     await publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, {});
     expect(mockClient.expireCheckoutSession).toHaveBeenCalledWith(ACCT, 'cs_test_1');
     expect((await charge()).checkout_session_id).toBe('cs_test_2');
+  });
+});
+
+describe('paying inside our own page (embedded Checkout)', () => {
+  const embeddedSession = (over = {}) => session({ id: 'cs_emb_1', url: null, client_secret: 'cs_emb_1_secret_abc', ui_mode: 'embedded_page', ...over });
+  let frontend;
+  beforeAll(() => { frontend = process.env.FRONTEND_URL; process.env.FRONTEND_URL = 'https://schoolmule.ca'; });
+  afterAll(() => { process.env.FRONTEND_URL = frontend; });
+
+  it('closes Stripe’s own page when the family switches to ours, and cards work even if wallets can’t be set up', async () => {
+    const ids = await seedForm();
+    await connectSchool();
+    await submitCard(ids);
+    const c = await charge();
+    // Stripe's page (cs_test_1) is open with time left, but it isn't the kind asked for.
+    mockClient.retrieveCheckoutSession.mockResolvedValueOnce(session());
+    mockClient.listPaymentMethodDomains.mockRejectedValueOnce(new Error('Stripe HTTP 500'));
+    mockClient.createCheckoutSession.mockResolvedValueOnce(embeddedSession());
+    const res = await publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ url: null, clientSecret: 'cs_emb_1_secret_abc', stripeAccountId: ACCT, paid: false });
+    expect(mockClient.expireCheckoutSession).toHaveBeenCalledWith(ACCT, 'cs_test_1');
+    expect((await charge()).checkout_session_id).toBe('cs_emb_1');
+  });
+
+  it('a form sent from the web opens no Stripe page; the family’s form inside ours returns to their link', async () => {
+    const ids = await seedForm();
+    await connectSchool();
+    const sent = await submitCard(ids, { payment: { itemIds: ['lunch'], method: 'card', ui: 'embedded' } });
+    expect(sent.status).toBe(201);
+    expect(sent.body.data.payment).toMatchObject({ method: 'card', checkoutUrl: null, totalCents: 3100 });
+    expect(mockClient.createCheckoutSession).not.toHaveBeenCalled();
+    const c = await charge();
+
+    mockClient.listPaymentMethodDomains.mockResolvedValueOnce({ data: [] });
+    mockClient.createPaymentMethodDomain.mockResolvedValueOnce({ id: 'pmd_1', domain_name: 'schoolmule.ca' });
+    mockClient.createCheckoutSession.mockResolvedValueOnce(embeddedSession());
+    const res = await publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' });
+    expect(res.body.data).toEqual({ url: null, clientSecret: 'cs_emb_1_secret_abc', stripeAccountId: ACCT, paid: false });
+
+    const [account, params] = mockClient.createCheckoutSession.mock.calls[0];
+    expect(account).toBe(ACCT);
+    expect(params).toMatchObject({ ui_mode: 'embedded_page', return_url: `https://schoolmule.ca/pay/${c.public_token}?session_id={CHECKOUT_SESSION_ID}` });
+    expect(params.success_url).toBeUndefined();
+    expect(params.cancel_url).toBeUndefined();
+    // Wallets inside our page need our domain on the school's own account.
+    expect(mockClient.createPaymentMethodDomain).toHaveBeenCalledWith(ACCT, 'schoolmule.ca');
+
+    // Opening it again reuses the open form, and doesn't check the domain twice.
+    mockClient.retrieveCheckoutSession.mockResolvedValueOnce(embeddedSession());
+    const again = await publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' });
+    expect(again.body.data.clientSecret).toBe('cs_emb_1_secret_abc');
+    expect(mockClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect(mockClient.listPaymentMethodDomains).toHaveBeenCalledTimes(1);
+  });
+
+  it('two requests at once (a double click, two tabs) open one form and both get it', async () => {
+    const ids = await seedForm();
+    await connectSchool();
+    await submitCard(ids, { payment: { itemIds: ['lunch'], method: 'card', ui: 'embedded' } });
+    const c = await charge();
+    mockClient.listPaymentMethodDomains.mockResolvedValue({ data: [{ domain_name: 'schoolmule.ca' }] });
+    // Stripe takes a moment; the second request must wait for it rather than send the same request again.
+    mockClient.createCheckoutSession.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(embeddedSession()), 150)));
+    mockClient.retrieveCheckoutSession.mockResolvedValue(embeddedSession());
+    const [a, b] = await Promise.all([
+      publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' }),
+      publicPost(`/api/registration/public/payments/${c.public_token}/checkout`, { ui: 'embedded' }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(a.body.data.clientSecret).toBe('cs_emb_1_secret_abc');
+    expect(b.body.data.clientSecret).toBe('cs_emb_1_secret_abc');
+    expect(mockClient.createCheckoutSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stripe returns the family to their link, which records the payment as before', async () => {
+    const ids = await seedForm();
+    await connectSchool();
+    await submitCard(ids, { payment: { itemIds: ['lunch'], method: 'card', ui: 'embedded' } });
+    const c = await charge();
+    mockClient.retrieveCheckoutSession.mockResolvedValue(paidSession(c.charge_id, { id: 'cs_emb_1' }));
+    const res = await publicGet(`/api/registration/public/payments/${c.public_token}?session_id=cs_emb_1`);
+    expect(res.body.data.status).toBe('paid');
+    expect(await payments(c.charge_id)).toHaveLength(1);
   });
 });
 

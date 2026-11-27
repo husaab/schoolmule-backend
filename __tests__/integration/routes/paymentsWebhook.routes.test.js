@@ -189,6 +189,16 @@ describe('Stripe webhook (integration)', () => {
       expect(await worker.drainOnce({ client: mockClient })).toBe(0);
     });
 
+    it('takes account.updated from a "Your account" destination too, where the account is the object', async () => {
+      await connectSchool();
+      // Accounts v2 sends a platform's own accounts' events without event.account.
+      await deliver(event({ account: undefined }));
+      mockClient.retrieveAccount.mockResolvedValueOnce(stripeAccount({ card: 'active', payouts: 'active', due: 0 }));
+      expect(await worker.drainOnce({ client: mockClient })).toBe(1);
+      expect(mockClient.retrieveAccount).toHaveBeenCalledWith(ACCT);
+      expect(await account()).toMatchObject({ status: 'active' });
+    });
+
     it('reports restricted when Stripe pauses a school that was active', async () => {
       await connectSchool('active');
       await pool().query(`UPDATE payment_accounts SET activated_at = now()`);

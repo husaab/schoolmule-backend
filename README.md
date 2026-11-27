@@ -41,6 +41,10 @@ Finance → Payments lets a school connect its own Stripe account (`services/pay
 | `STRIPE_WEBHOOK_SECRET` | everywhere payments should work | The signing secret of the Stripe webhook endpoint (`whsec_…`). Comma-separate several when more than one endpoint sends here. Locally, `stripe listen --print-secret` prints the CLI's. |
 | `PARENT_PAYMENTS_ENABLED` | off until launch | `true` turns on the parent portal's Payments page (`GET /api/parent-portal/payments`). Unset, the route answers 404. |
 
+Families pay inside SchoolMule's own page when the web has `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (Stripe's embedded Checkout, `POST /api/registration/public/payments/:token/checkout` with `{ ui: 'embedded' }`); otherwise, and in the app, on Stripe's own page. For Apple Pay and Google Pay inside the page, the backend registers `FRONTEND_URL`'s domain on each school's Stripe account the first time it opens one there.
+
+Stripe sends payment events from schools' accounts to a **Connected accounts** destination, and (with Accounts v2) a school account's own `account.updated` to a **Your account** destination. Both can point at the same URL: put both signing secrets in `STRIPE_WEBHOOK_SECRET`, separated by a comma.
+
 Rows in `payment_accounts` are kept per Stripe mode, so a backend running with a test key only ever reads and writes test rows.
 
 Stripe's webhook is `POST /api/payments/stripe/webhook` (no JWT; the signature over the raw body is the proof). It stores each event once in `stripe_events` and answers at once; `services/payments/paymentsWorker.js` acts on it, retries failures with backoff, and once a day re-reads every connected school's account. Apply `payments_stripe_events_migration.sql` too.
