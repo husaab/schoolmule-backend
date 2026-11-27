@@ -261,6 +261,15 @@ describe('payment requests', () => {
     // Noor has no guardian email: her charge is there, nobody was emailed.
     expect(res.body.data.charges.find((c) => c.studentId === s.noor).linkSentAt).toBeNull();
 
+    // An archived parent account isn't emailed (the link's own email still is).
+    await pool().query(`UPDATE users SET is_archived = true WHERE user_id = $1`, [PARENT_ID]);
+    const again = await authenticatedRequest('get', `/api/payments/requests/${res.body.data.requestId}`);
+    expect(again.body.data.charges.find((c) => c.studentId === s.aisha).guardianEmails).toEqual(['parent@test.com', 'mum.khan@example.com']);
+    await pool().query(`UPDATE parent_students SET parent_email = NULL WHERE parent_id = $1`, [PARENT_ID]);
+    const archived = await authenticatedRequest('get', `/api/payments/requests/${res.body.data.requestId}`);
+    expect(archived.body.data.charges.find((c) => c.studentId === s.aisha).guardianEmails).toEqual(['mum.khan@example.com']);
+    await pool().query(`UPDATE users SET is_archived = false WHERE user_id = $1`, [PARENT_ID]);
+
     // Sending to the grade and Yusuf's class again adds only Yusuf.
     const more = await authenticatedRequest('post', `/api/payments/requests/${res.body.data.requestId}/students`).send({ grades: ['5'], classIds: [s.classId] });
     expect(more.status).toBe(200);
