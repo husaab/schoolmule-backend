@@ -82,7 +82,8 @@ const getPublicForm = async (req, res) => {
     const form = toCamelForm(formRows[0]);
     form.fields = form.fields.map(publicField);
     const hasPayment = form.fields.some((f) => f.fieldType === 'payment');
-    const { online } = hasPayment ? await charges.availability(schoolCode) : { online: false };
+    const pay = hasPayment ? await charges.availability(schoolCode) : { online: false, client: null };
+    const { online } = pay;
 
     // Build banner image URL if it exists
     let bannerImageUrl = null;
@@ -99,7 +100,8 @@ const getPublicForm = async (req, res) => {
         schoolName,
         schoolSlug,
         // Whether the family can pay by card right now (a payment field only).
-        payments: hasPayment ? { online, currency: 'cad' } : null,
+        // testMode lets the page check its Stripe.js key is for the same mode before showing Stripe's form inside it.
+        payments: hasPayment ? { online, currency: 'cad', testMode: pay.client ? !pay.client.livemode : null } : null,
       },
     });
   } catch (error) {
@@ -289,6 +291,9 @@ const submitForm = async (req, res) => {
 
     // A card payment goes straight on to Stripe's page. If Stripe can't open
     // one now, the response is kept and the family's link lets them retry.
+    // The web pays inside its own page instead (payment.ui = 'embedded'): it
+    // asks for that form itself, so no Stripe page is opened here.
+    const embeddedHere = req.body.payment?.ui === 'embedded';
     let payment = null;
     if (charge) {
       payment = {
@@ -298,7 +303,7 @@ const submitForm = async (req, res) => {
         payPath: `/pay/${charge.public_token}`,
         checkoutUrl: null,
       };
-      if (method === 'card') {
+      if (method === 'card' && !embeddedHere) {
         try {
           const opened = await charges.openCheckout(charge.charge_id, { client: pay.client });
           payment.checkoutUrl = opened.url;
@@ -357,13 +362,27 @@ const getPayment = async (req, res) => {
   }
 };
 
-/** POST /api/registration/public/payments/:token/checkout: a Stripe page for what is still owed. */
+/**
+ * POST /api/registration/public/payments/:token/checkout: a Stripe payment for
+ * what is still owed. { ui: 'embedded' } answers with what Stripe.js needs to
+ * show the form inside our page (the client secret, on the school's account);
+ * otherwise a link to Stripe's own page.
+ */
 const startPayment = async (req, res) => {
   try {
     const found = await charges.publicView(req.params.token);
     if (!found) return res.status(404).json({ status: 'failed', message: 'Payment not found' });
-    const opened = await charges.openCheckout(found.row.charge_id);
-    return res.status(200).json({ status: 'success', data: { url: opened.url, paid: !opened.url } });
+    const ui = req.body?.ui === 'embedded' ? 'embedded' : 'hosted';
+    const opened = await charges.openCheckout(found.row.charge_id, { ui });
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        url: opened.url,
+        clientSecret: opened.clientSecret,
+        stripeAccountId: opened.clientSecret ? opened.stripeAccountId : null,
+        paid: !opened.url && !opened.clientSecret,
+      },
+    });
   } catch (error) {
     return failPayment(res, error, 'start payment');
   }

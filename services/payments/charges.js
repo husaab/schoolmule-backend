@@ -205,13 +205,54 @@ async function accountForCharge(charge, client) {
   return account;
 }
 
+// Stripe's names for where its payment form shows: its own page, or inside ours.
+const UI_MODES = { hosted: 'hosted_page', embedded: 'embedded_page' };
+
+/** The host families pay on (schoolmule.ca), when it is a real https site. */
+function siteDomain() {
+  try {
+    const url = new URL(appUrl());
+    return url.protocol === 'https:' ? url.hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+// Accounts whose domain is registered, so it's checked once per school per process.
+const walletDomainsReady = new Set();
+
 /**
- * A Stripe payment page for what is still owed on a charge. An open page that
- * has time left is reused; an older one is closed first, so the family can't
- * pay the same charge twice by keeping two tabs.
- * @returns {Promise<{ url: string|null, charge }>} url is null when the charge turned out to be paid already
+ * Apple Pay, Google Pay and Link inside our own page need our domain
+ * registered on the school's account (the charge is theirs). Best effort:
+ * cards work without it, so a failure is logged, never thrown.
  */
-async function openCheckout(chargeId, { client = clientOrNull() } = {}) {
+async function ensureWalletDomain(client, stripeAccountId) {
+  const domain = siteDomain();
+  if (!domain || walletDomainsReady.has(`${stripeAccountId}:${domain}`)) return;
+  try {
+    const found = await client.listPaymentMethodDomains(stripeAccountId, domain);
+    if (!(found.data || []).some((d) => d.domain_name === domain)) {
+      await client.createPaymentMethodDomain(stripeAccountId, domain);
+      logger.info({ stripeAccountId, domain }, 'Payments: registered our domain for wallets on a school’s account');
+    }
+    walletDomainsReady.add(`${stripeAccountId}:${domain}`);
+  } catch (error) {
+    logger.warn({ stripeAccountId, domain, err: error.message }, 'Payments: could not register our domain for wallets; cards still work');
+  }
+}
+
+/**
+ * A Stripe payment for what is still owed on a charge: Stripe's own page
+ * (`hosted`, a url) or a form inside ours (`embedded`, a client secret for
+ * Stripe.js, on the school's account). An open session of the same kind with
+ * time left is reused; any other is closed first, so the family can't pay
+ * the same charge twice by keeping two tabs.
+ * @returns {Promise<{ url: string|null, clientSecret: string|null, stripeAccountId: string|null, charge }>}
+ *   url and clientSecret are both null when the charge turned out to be paid already
+ */
+async function openCheckout(chargeId, { client = clientOrNull(), ui = 'hosted' } = {}) {
+  const uiMode = UI_MODES[ui] || UI_MODES.hosted;
+  const embedded = uiMode === UI_MODES.embedded;
   if (!client) throw new ChargeError('Card payments aren’t set up on this server yet.', 503, 'PAYMENTS_UNAVAILABLE');
   const { rows: [charge] } = await db.query(q.selectChargeForStripe, [chargeId, client.livemode]);
   if (!charge) throw new ChargeError('Payment not found', 404);
@@ -219,20 +260,29 @@ async function openCheckout(chargeId, { client = clientOrNull() } = {}) {
   const facts = { amountCents: charge.amount_cents, amountPaidCents: charge.amount_paid_cents, status: charge.status };
   if (!canPayOnline(facts)) throw new ChargeError('There is nothing left to pay on this.', 409, 'NOTHING_OWED');
 
+  const answer = (session, current) => ({
+    url: embedded ? null : session.url,
+    clientSecret: embedded ? session.client_secret : null,
+    stripeAccountId: account.stripe_account_id,
+    charge: current,
+  });
+
   if (charge.checkout_session_id) {
     const previous = await client.retrieveCheckoutSession(account.stripe_account_id, charge.checkout_session_id);
     if (previous.status === 'complete') {
       const done = await fulfillSession({ client, accountId: account.stripe_account_id, session: previous });
-      return { url: null, charge: done.charge };
+      return { url: null, clientSecret: null, stripeAccountId: account.stripe_account_id, charge: done.charge };
     }
     const timeLeft = (previous.expires_at || 0) * 1000 - Date.now();
-    if (previous.status === 'open' && timeLeft > 5 * 60 * 1000) return { url: previous.url, charge };
+    const sameKind = (previous.ui_mode || UI_MODES.hosted) === uiMode;
+    if (previous.status === 'open' && sameKind && timeLeft > 5 * 60 * 1000) return answer(previous, charge);
     if (previous.status === 'open') {
       await client.expireCheckoutSession(account.stripe_account_id, previous.id).catch((error) => {
         logger.warn({ chargeId, err: error.message }, 'Payments: could not close an older payment page');
       });
     }
   }
+  if (embedded) await ensureWalletDomain(client, account.stripe_account_id);
 
   const { rows: lines } = await db.query(q.selectLines, [chargeId]);
   const session = await client.createCheckoutSession(account.stripe_account_id, {
@@ -248,13 +298,18 @@ async function openCheckout(chargeId, { client = clientOrNull() } = {}) {
       description: charge.description,
       metadata: { charge_id: charge.charge_id, source: sourceTag(charge) },
     },
-    success_url: `${payPageUrl(charge.public_token)}?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${payPageUrl(charge.public_token)}?cancelled=1`,
+    // Stripe's page links back to ours; inside ours, Stripe returns here once paid.
+    ...(embedded
+      ? { ui_mode: uiMode, return_url: `${payPageUrl(charge.public_token)}?session_id={CHECKOUT_SESSION_ID}` }
+      : {
+        success_url: `${payPageUrl(charge.public_token)}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${payPageUrl(charge.public_token)}?cancelled=1`,
+      }),
     expires_at: Math.floor(Date.now() / 1000) + CHECKOUT_MINUTES * 60,
   }, { idempotencyKey: `schoolmule-checkout-${charge.charge_id}-${charge.checkout_attempts + 1}` });
 
-  const { rows: [updated] } = await db.query(q.setCheckout, [charge.charge_id, session.id, session.url, session.expires_at]);
-  return { url: session.url, charge: updated };
+  const { rows: [updated] } = await db.query(q.setCheckout, [charge.charge_id, session.id, session.url || null, session.expires_at]);
+  return answer(session, updated);
 }
 
 /** The card details worth keeping from Stripe's charge object. */
@@ -662,5 +717,7 @@ module.exports = {
   visibleStatus,
   payPageUrl,
   checkoutLines,
+  ensureWalletDomain,
+  UI_MODES,
   cardFacts,
 };

@@ -199,6 +199,18 @@ function createClient({
   }
 
   /** Closes an open payment page so it can't be paid as well as a newer one. */
+  /**
+   * Wallets (Apple Pay, Google Pay, Link) on a page of ours: the domain must be
+   * registered on the school's own account, since the charge is theirs.
+   */
+  function listPaymentMethodDomains(accountId, domainName) {
+    return request('GET', '/v1/payment_method_domains', { stripeAccount: accountId, query: { domain_name: domainName, limit: 1 } });
+  }
+
+  function createPaymentMethodDomain(accountId, domainName) {
+    return request('POST', '/v1/payment_method_domains', { form: { domain_name: domainName }, stripeAccount: accountId });
+  }
+
   function expireCheckoutSession(accountId, sessionId) {
     return request('POST', `/v1/checkout/sessions/${idOf('cs', sessionId)}/expire`, { form: {}, stripeAccount: accountId });
   }
@@ -238,6 +250,7 @@ function createClient({
   return {
     mode, livemode: mode === 'live', request, createAccount, retrieveAccount, createAccountLink,
     createCheckoutSession, retrieveCheckoutSession, expireCheckoutSession, retrievePaymentIntent,
+    listPaymentMethodDomains, createPaymentMethodDomain,
     createRefund, listRefunds, retrieveDispute, listPayouts, retrieveBalance,
   };
 }

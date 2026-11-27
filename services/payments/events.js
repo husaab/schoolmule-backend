@@ -14,9 +14,17 @@ const queries = require('../../queries/payments.queries');
 const connect = require('./connect');
 const charges = require('./charges');
 
+/**
+ * The school's account an account event is about. From a "Connected accounts"
+ * destination it is the event's account; Accounts v2 sends these to a "Your
+ * account" destination, where the account is the event's object instead.
+ */
+const accountOf = (event) => event.stripe_account_id
+  || (String(event.object_id || '').startsWith('acct_') ? event.object_id : null);
+
 /** Stripe changed something about a school's account: capabilities, requirements, payouts. */
 async function accountUpdated(event, { client }) {
-  const { rows } = await db.query(queries.selectAccountByStripeId, [event.stripe_account_id, event.livemode]);
+  const { rows } = await db.query(queries.selectAccountByStripeId, [accountOf(event), event.livemode]);
   // Not a school of ours (another account on the platform), or already turned off here.
   if (!rows[0]) return;
   await connect.refreshAccount(rows[0], client);
@@ -24,10 +32,10 @@ async function accountUpdated(event, { client }) {
 
 /** The school removed SchoolMule from its Stripe account, from Stripe's side. */
 async function accountDeauthorized(event) {
-  const { rows } = await db.query(queries.selectAccountByStripeId, [event.stripe_account_id, event.livemode]);
+  const { rows } = await db.query(queries.selectAccountByStripeId, [accountOf(event), event.livemode]);
   if (!rows[0]) return;
   const { rows: changed } = await db.query(queries.markAccountDeauthorized, [rows[0].payment_account_id]);
-  if (changed[0]) logger.warn({ school: changed[0].school, stripeAccountId: event.stripe_account_id }, 'Payments: a school disconnected SchoolMule from Stripe');
+  if (changed[0]) logger.warn({ school: changed[0].school, stripeAccountId: rows[0].stripe_account_id }, 'Payments: a school disconnected SchoolMule from Stripe');
 }
 
 /** A family finished, abandoned or failed a Stripe payment page. */
