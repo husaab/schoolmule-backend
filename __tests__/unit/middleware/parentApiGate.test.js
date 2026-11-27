@@ -55,7 +55,11 @@ describe('parentApiGate', () => {
     expect(parentApiGate.allowedForParent('/api/users-export')).toBe(false);
   });
 
-  it('does not let a parent reach the assistant until it has a parent tool set', () => {
-    expect(parentApiGate.allowedForParent('/api/assistant/turns')).toBe(false);
+  it('lets a parent reach the assistant, whose own router decides whom it answers', () => {
+    // requireAssistant refuses a parent unless the school switched Muley on for parents;
+    // GET /api/assistant/settings must answer them "off", not 403, or the app shows a permission toast.
+    expect(parentApiGate.allowedForParent('/api/assistant/settings')).toBe(true);
+    expect(parentApiGate.allowedForParent('/api/assistant/turns')).toBe(true);
+    expect(parentApiGate.allowedForParent('/api/assistantx')).toBe(false);
   });
 });

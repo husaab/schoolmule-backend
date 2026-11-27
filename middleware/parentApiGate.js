@@ -32,6 +32,8 @@ const PARENT_ALLOWED = [
   '/api/schedule-planner',
   '/api/users',
   '/api/profile',
+  // Muley: its own router decides who it answers (requireAssistant), parents included.
+  '/api/assistant',
 ];
 
 const allowedForParent = (path) => PARENT_ALLOWED.some((p) => path === p || path.startsWith(`${p}/`));

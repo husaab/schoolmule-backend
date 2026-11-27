@@ -139,6 +139,12 @@ describe('Muley: turns, tools and who it answers', () => {
       const asParent = await turn({ message: 'hello' }, PARENT);
       expect(asParent.res.status).toBe(403);
       expect(asParent.res.body.code).toBe('ASSISTANT_NOT_AVAILABLE');
+      // With the parent gate enforcing, a parent's settings check is answered "off", never a 403 the app would toast.
+      process.env.RBAC_PARENT_GATE = 'enforce';
+      const parentSettings = await authenticatedRequest('get', '/api/assistant/settings', PARENT);
+      delete process.env.RBAC_PARENT_GATE;
+      expect(parentSettings.status).toBe(200);
+      expect(parentSettings.body.data.enabled).toBe(false);
 
       const asStudent = await turn({ message: 'hello' }, { userId: '550e8400-e29b-41d4-a716-446655440064', role: 'STUDENT' });
       expect(asStudent.res.status).toBe(403);
