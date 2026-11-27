@@ -16,6 +16,7 @@ const registrationPublicQueries = {
             'placeholder', ff.placeholder,
             'isRequired', ff.is_required,
             'options', ff.options,
+            'payment', ff.payment_config,
             'sortOrder', ff.sort_order
           ) ORDER BY ff.sort_order
         ) FILTER (WHERE ff.field_id IS NOT NULL),
@@ -28,7 +29,7 @@ const registrationPublicQueries = {
   `,
 
   selectFormFieldsForValidation: `
-    SELECT field_id, field_type, label, is_required, options
+    SELECT field_id, field_type, label, is_required, options, payment_config
     FROM registration_form_fields
     WHERE form_id = $1
     ORDER BY sort_order ASC

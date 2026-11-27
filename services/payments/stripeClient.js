@@ -19,6 +19,7 @@ const BASE = 'https://api.stripe.com';
 const DEFAULT_API_VERSION = '2026-11-18.endive';
 const REQUEST_TIMEOUT_MS = 30 * 1000;
 
+const ACCOUNT_RE = /^acct_[A-Za-z0-9]+$/;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const jitter = (ms) => ms + Math.floor(Math.random() * 250);
 
@@ -27,6 +28,22 @@ function keyMode(secretKey) {
   if (/^(sk|rk)_live_/.test(secretKey || '')) return 'live';
   if (/^(sk|rk)_test_/.test(secretKey || '')) return 'test';
   return null;
+}
+
+/**
+ * v1 bodies are form-encoded with nested keys:
+ *   { line_items: [{ price_data: { currency: 'cad' } }] } → line_items[0][price_data][currency]=cad
+ */
+function formEncode(value, prefix = '', out = []) {
+  if (value === undefined || value === null) return out;
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => formEncode(v, `${prefix}[${i}]`, out));
+  } else if (typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) formEncode(v, prefix ? `${prefix}[${k}]` : k, out);
+  } else {
+    out.push(`${encodeURIComponent(prefix)}=${encodeURIComponent(String(value))}`);
+  }
+  return out;
 }
 
 /** v2 list parameters are written include[0]=a&include[1]=b. */
@@ -58,12 +75,28 @@ function createClient({
     throw new StripeConfigError('A live Stripe key is only allowed where STRIPE_LIVE_ENABLED=true');
   }
 
-  async function request(method, path, { body, query, idempotencyKey } = {}) {
+  /**
+   * One call to Stripe. v2 paths take a JSON `body`; v1 paths take `form`
+   * (form-encoded). `stripeAccount` makes the call as a school's own
+   * account (a direct charge lives there, not on the platform).
+   */
+  async function request(method, path, { body, form, query, idempotencyKey, stripeAccount } = {}) {
     const qs = query ? toQueryString(query) : '';
     const url = `${BASE}${path}${qs ? `?${qs}` : ''}`;
     const headers = { Authorization: `Bearer ${secretKey}`, 'Stripe-Version': apiVersion, Accept: 'application/json' };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    let payload;
+    if (form !== undefined) {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      payload = formEncode(form).join('&');
+    } else if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      payload = JSON.stringify(body);
+    }
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    if (stripeAccount) {
+      if (!ACCOUNT_RE.test(String(stripeAccount))) throw new Error(`Invalid Stripe account id: ${stripeAccount}`);
+      headers['Stripe-Account'] = stripeAccount;
+    }
     // A write is only repeated when Stripe can tell the repeat from a second request.
     const canRetry = method === 'GET' || Boolean(idempotencyKey);
 
@@ -72,10 +105,7 @@ function createClient({
     while (true) {
       let res;
       try {
-        res = await fetchImpl(url, {
-          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
+        res = await fetchImpl(url, { method, headers, body: payload, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       } catch (error) {
         if (canRetry && attempt < maxRetries) { attempt += 1; await sleep(jitter(Math.min(8000, 500 * 2 ** attempt))); continue; }
         throw new StripeApiError(`Stripe request failed: ${error.message}`, { retryable: true });
@@ -126,7 +156,7 @@ function createClient({
   }
 
   function retrieveAccount(accountId) {
-    if (!/^acct_[A-Za-z0-9]+$/.test(String(accountId))) throw new Error(`Invalid Stripe account id: ${accountId}`);
+    if (!ACCOUNT_RE.test(String(accountId))) throw new Error(`Invalid Stripe account id: ${accountId}`);
     return request('GET', `/v2/core/accounts/${accountId}`, { query: { include: ACCOUNT_INCLUDE } });
   }
 
@@ -148,7 +178,68 @@ function createClient({
     });
   }
 
-  return { mode, livemode: mode === 'live', request, createAccount, retrieveAccount, createAccountLink };
+  // ─── Payments, made on the school's own account (direct charges) ───
+
+  const idOf = (prefix, id) => {
+    if (!new RegExp(`^${prefix}_[A-Za-z0-9_]+$`).test(String(id))) throw new Error(`Invalid Stripe ${prefix} id: ${id}`);
+    return id;
+  };
+
+  /** A Stripe-hosted payment page for one charge. `params` is the v1 body. */
+  function createCheckoutSession(accountId, params, { idempotencyKey } = {}) {
+    return request('POST', '/v1/checkout/sessions', { form: params, stripeAccount: accountId, idempotencyKey });
+  }
+
+  /** With the payment, its charge and the charge's fee, so one read tells the whole story. */
+  function retrieveCheckoutSession(accountId, sessionId) {
+    return request('GET', `/v1/checkout/sessions/${idOf('cs', sessionId)}`, {
+      stripeAccount: accountId,
+      query: { expand: ['payment_intent.latest_charge.balance_transaction'] },
+    });
+  }
+
+  /** Closes an open payment page so it can't be paid as well as a newer one. */
+  function expireCheckoutSession(accountId, sessionId) {
+    return request('POST', `/v1/checkout/sessions/${idOf('cs', sessionId)}/expire`, { form: {}, stripeAccount: accountId });
+  }
+
+  function retrievePaymentIntent(accountId, paymentIntentId) {
+    return request('GET', `/v1/payment_intents/${idOf('pi', paymentIntentId)}`, {
+      stripeAccount: accountId,
+      query: { expand: ['latest_charge.balance_transaction'] },
+    });
+  }
+
+  /** A refund of a card payment; `amount` in cents, the whole payment when left out. */
+  function createRefund(accountId, { paymentIntentId, amount, metadata }, { idempotencyKey } = {}) {
+    return request('POST', '/v1/refunds', {
+      stripeAccount: accountId,
+      idempotencyKey,
+      form: { payment_intent: idOf('pi', paymentIntentId), amount, reason: 'requested_by_customer', metadata },
+    });
+  }
+
+  function listRefunds(accountId, paymentIntentId) {
+    return request('GET', '/v1/refunds', { stripeAccount: accountId, query: { payment_intent: idOf('pi', paymentIntentId), limit: 100 } });
+  }
+
+  function retrieveDispute(accountId, disputeId) {
+    return request('GET', `/v1/disputes/${idOf('du', disputeId)}`, { stripeAccount: accountId });
+  }
+
+  function listPayouts(accountId, { limit = 20 } = {}) {
+    return request('GET', '/v1/payouts', { stripeAccount: accountId, query: { limit } });
+  }
+
+  function retrieveBalance(accountId) {
+    return request('GET', '/v1/balance', { stripeAccount: accountId });
+  }
+
+  return {
+    mode, livemode: mode === 'live', request, createAccount, retrieveAccount, createAccountLink,
+    createCheckoutSession, retrieveCheckoutSession, expireCheckoutSession, retrievePaymentIntent,
+    createRefund, listRefunds, retrieveDispute, listPayouts, retrieveBalance,
+  };
 }
 
 /** The client this process is configured for; throws StripeConfigError if none. */
@@ -160,4 +251,4 @@ function clientFromEnv() {
   });
 }
 
-module.exports = { createClient, clientFromEnv, keyMode, DEFAULT_API_VERSION, StripeApiError, StripeConfigError };
+module.exports = { createClient, clientFromEnv, keyMode, formEncode, DEFAULT_API_VERSION, StripeApiError, StripeConfigError };

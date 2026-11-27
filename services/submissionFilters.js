@@ -138,11 +138,27 @@ function parseImportState(query) {
   return raw === 'imported' || raw === 'not_imported' ? raw : null;
 }
 
+// Where a response's payment stands, as the list filters by it. A fixed enum,
+// so the statuses can be inlined; 'settled' is how staff without `finance`
+// see paid and waived together.
+const PAYMENT_STATES = {
+  open: ['unpaid', 'partially_paid'],
+  paid: ['paid', 'partially_refunded'],
+  refunded: ['refunded'],
+  waived: ['waived'],
+  settled: ['paid', 'partially_refunded', 'waived'],
+};
+
+function parsePaymentState(query) {
+  const raw = query.payment;
+  return raw === 'none' || Object.prototype.hasOwnProperty.call(PAYMENT_STATES, raw) ? raw : null;
+}
+
 // Builds the WHERE body (excluding the leading "WHERE") for submissions queries.
 // form_id is always bound to $1 by the caller; this returns the remaining bind
 // values in order ($2, $3, ...). Used by the list, count, export, and import-scope
 // queries so they stay consistent. Invalid/unknown field filters are silently skipped.
-function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters, importState }) {
+function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters, importState, paymentState }) {
   const params = [];
   const conds = ['form_id = $1'];
   let idx = 1; // $1 = form_id (supplied by caller)
@@ -162,6 +178,13 @@ function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters,
     conds.push('imported_student_id IS NOT NULL');
   } else if (importState === 'not_imported') {
     conds.push('imported_student_id IS NULL');
+  }
+
+  if (paymentState === 'none') {
+    conds.push('NOT EXISTS (SELECT 1 FROM charges c WHERE c.submission_id = registration_form_submissions.submission_id)');
+  } else if (PAYMENT_STATES[paymentState]) {
+    const list = PAYMENT_STATES[paymentState].map((s) => `'${s}'`).join(',');
+    conds.push(`EXISTS (SELECT 1 FROM charges c WHERE c.submission_id = registration_form_submissions.submission_id AND c.status IN (${list}))`);
   }
 
   const fieldMap = new Map(fields.map(f => [f.field_id, f]));
@@ -194,7 +217,16 @@ function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters,
 // WHERE/ORDER BY clauses below unqualified and therefore unambiguous.
 const SUBMISSION_SELECT = `*,
       (SELECT name FROM students
-        WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name`;
+        WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name,
+      (SELECT jsonb_build_object(
+          'chargeId', c.charge_id, 'status', c.status, 'amountCents', c.amount_cents,
+          'amountPaidCents', c.amount_paid_cents, 'amountRefundedCents', c.amount_refunded_cents,
+          'chosenMethod', c.chosen_method, 'disputeStatus', c.dispute_status, 'livemode', c.livemode,
+          'lastPayment', (SELECT jsonb_build_object('kind', p.kind, 'cardBrand', p.card_brand, 'cardLast4', p.card_last4, 'wallet', p.wallet)
+                            FROM charge_payments p
+                           WHERE p.charge_id = c.charge_id AND p.kind IN ('card','cash','cheque','other') AND p.status = 'succeeded'
+                           ORDER BY p.created_at DESC LIMIT 1))
+         FROM charges c WHERE c.submission_id = registration_form_submissions.submission_id) AS payment`;
 
 /**
  * Composes a complete submissions query's WHERE and ORDER BY with one correctly
@@ -238,5 +270,7 @@ module.exports = {
   parseSorts,
   parseFieldFilters,
   parseImportState,
+  parsePaymentState,
+  PAYMENT_STATES,
   buildSubmissionsWhere,
 };

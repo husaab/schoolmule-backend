@@ -30,6 +30,9 @@ router.patch('/forms/:formId/status', ownForm, controller.updateFormStatus);
 router.post('/forms/:formId/banner', ownForm, controller.upload.single('file'), controller.uploadBanner);
 router.delete('/forms/:formId/banner', ownForm, controller.deleteBanner);
 
+// Whether the school can take card payments, for the builder's payment field.
+router.get('/payment-availability', controller.getPaymentAvailability);
+
 // ─── Fields ─────────────────────────────────────────────────────────
 router.put('/forms/:formId/fields', ownForm, controller.upsertFields);
 

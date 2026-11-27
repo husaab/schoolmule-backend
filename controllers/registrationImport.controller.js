@@ -1,3 +1,4 @@
+const { parsePaymentState } = require('../services/submissionFilters');
 // controllers/registrationImport.controller.js
 //
 // HTTP surface for importing registration form submissions as students:
@@ -261,6 +262,8 @@ function parseScope(body) {
     dateTo: scope.dateTo || null,
     fieldFilters: Array.isArray(scope.fieldFilters) ? scope.fieldFilters : [],
     importState: scope.importState === 'imported' || scope.importState === 'not_imported' ? scope.importState : null,
+    // The same payment filter the list shows, so "import all" means what is on screen.
+    paymentState: parsePaymentState({ payment: scope.paymentState }),
     sorts: Array.isArray(scope.sorts) ? scope.sorts : [],
   };
 }

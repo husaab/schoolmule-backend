@@ -13,4 +13,18 @@ router.post('/account/onboarding-link', controller.createOnboardingLink);
 router.post('/account/sync', controller.syncAccount);
 router.delete('/account', controller.disconnect);
 
+// What is owed and paid (the ledger)
+router.get('/summary', controller.getSummary);
+router.get('/charges', controller.listCharges);
+router.get('/charges.csv', controller.exportCharges);
+router.get('/charges/:chargeId', controller.getCharge);
+router.post('/charges/:chargeId/offline', controller.recordOffline);
+router.post('/charges/:chargeId/waive', controller.waive);
+router.post('/charges/:chargeId/refund', controller.refund);
+router.post('/charges/:chargeId/send-link', controller.sendLink);
+router.post('/charges/:chargeId/payments/:paymentId/void', controller.voidPayment);
+
+// The school's payouts to its bank
+router.get('/payouts', controller.listPayouts);
+
 module.exports = router;

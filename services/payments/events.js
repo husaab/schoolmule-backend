@@ -12,6 +12,7 @@ const db = require('../../config/database');
 const logger = require('../../logger');
 const queries = require('../../queries/payments.queries');
 const connect = require('./connect');
+const charges = require('./charges');
 
 /** Stripe changed something about a school's account: capabilities, requirements, payouts. */
 async function accountUpdated(event, { client }) {
@@ -29,9 +30,58 @@ async function accountDeauthorized(event) {
   if (changed[0]) logger.warn({ school: changed[0].school, stripeAccountId: event.stripe_account_id }, 'Payments: a school disconnected SchoolMule from Stripe');
 }
 
+/** A family finished, abandoned or failed a Stripe payment page. */
+async function checkoutSession(event, { client }) {
+  // A platform-level session isn't one of ours: ours live on a school's account.
+  if (!event.stripe_account_id || !event.object_id) return;
+  await charges.fulfillSession({ client, accountId: event.stripe_account_id, sessionId: event.object_id });
+}
+
+/** Stripe's id of the card payment a charge, refund or dispute belongs to. */
+async function paymentIntentOf(event, { client }) {
+  const id = event.object_id || '';
+  if (id.startsWith('ch_')) {
+    const { rows } = await db.query(
+      'SELECT stripe_payment_intent_id FROM charge_payments WHERE stripe_charge_id = $1 AND stripe_payment_intent_id IS NOT NULL LIMIT 1',
+      [id],
+    );
+    if (rows[0]) return rows[0].stripe_payment_intent_id;
+    const found = await client.request('GET', `/v1/charges/${id}`, { stripeAccount: event.stripe_account_id });
+    return typeof found.payment_intent === 'string' ? found.payment_intent : found.payment_intent?.id || null;
+  }
+  if (id.startsWith('re_')) {
+    const found = await client.request('GET', `/v1/refunds/${id}`, { stripeAccount: event.stripe_account_id });
+    return typeof found.payment_intent === 'string' ? found.payment_intent : found.payment_intent?.id || null;
+  }
+  return null;
+}
+
+/** Money went back to a family: refunded here, or in the school's own Stripe Dashboard. */
+async function refundChanged(event, { client }) {
+  if (!event.stripe_account_id) return;
+  const paymentIntentId = await paymentIntentOf(event, { client });
+  if (!paymentIntentId) return;
+  await charges.syncRefunds({ client, accountId: event.stripe_account_id, paymentIntentId });
+}
+
+/** A family disputed a card payment with their bank, or a dispute ended. */
+async function disputeChanged(event, { client }) {
+  if (!event.stripe_account_id || !String(event.object_id || '').startsWith('du_')) return;
+  await charges.syncDispute({ client, accountId: event.stripe_account_id, disputeId: event.object_id });
+}
+
 const HANDLERS = {
   'account.updated': accountUpdated,
   'account.application.deauthorized': accountDeauthorized,
+  'checkout.session.completed': checkoutSession,
+  'checkout.session.async_payment_succeeded': checkoutSession,
+  'checkout.session.async_payment_failed': checkoutSession,
+  'checkout.session.expired': checkoutSession,
+  'charge.refunded': refundChanged,
+  'charge.refund.updated': refundChanged,
+  'charge.dispute.created': disputeChanged,
+  'charge.dispute.updated': disputeChanged,
+  'charge.dispute.closed': disputeChanged,
 };
 
 const handles = (type) => Object.prototype.hasOwnProperty.call(HANDLERS, type);

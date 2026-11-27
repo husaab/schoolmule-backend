@@ -47,6 +47,9 @@ const HANDLERS = {
   ptm_reminder: () => require('../meetings/emails').reminderHandler,
   ptm_last_call: () => require('../meetings/emails').lastCallHandler,
   ptm_teacher_list: () => require('../meetings/emails').teacherListHandler,
+  payment_receipt: () => require('../payments/emails').receiptHandler,
+  payment_link: () => require('../payments/emails').linkHandler,
+  payment_refund: () => require('../payments/emails').refundHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).
