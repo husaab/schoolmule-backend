@@ -85,6 +85,7 @@ const ALL_TABLES = [
   'families',
   'finance_qbo_connections',
   'payment_accounts',
+  'stripe_events',
   'planner_period_rules',
   'planner_schedule_sessions',
   'planner_schedules',

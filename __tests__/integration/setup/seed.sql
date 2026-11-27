@@ -3001,3 +3001,24 @@ CREATE TABLE IF NOT EXISTS payment_accounts (
   UNIQUE (school, livemode)
 );
 ALTER TABLE payment_accounts ENABLE ROW LEVEL SECURITY;
+
+-- Payments: Stripe events inbox (payments_stripe_events_migration.sql).
+CREATE TABLE IF NOT EXISTS stripe_events (
+  event_id          TEXT PRIMARY KEY CHECK (event_id ~ '^evt_[A-Za-z0-9_]+$'),
+  livemode          BOOLEAN NOT NULL,
+  type              TEXT NOT NULL,
+  stripe_account_id TEXT,
+  object_id         TEXT,
+  stripe_created_at TIMESTAMPTZ,
+  state             VARCHAR(20) NOT NULL DEFAULT 'queued'
+                    CHECK (state IN ('queued','running','done','failed')),
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at        TIMESTAMPTZ,
+  last_error        TEXT,
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_stripe_events_ready
+  ON stripe_events (livemode, next_attempt_at) WHERE state IN ('queued','running');
+ALTER TABLE stripe_events ENABLE ROW LEVEL SECURITY;

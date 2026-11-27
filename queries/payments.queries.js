@@ -70,6 +70,83 @@ const paymentsQueries = {
     WHERE payment_account_id = $1
     RETURNING ${ACCOUNT_COLUMNS}
   `,
+
+  selectAccountByStripeId: `
+    SELECT ${ACCOUNT_COLUMNS}
+    FROM payment_accounts
+    WHERE stripe_account_id = $1 AND livemode = $2
+  `,
+
+  /** Every school still connected in this mode, for the nightly re-check. */
+  selectAccountsToRefresh: `
+    SELECT ${ACCOUNT_COLUMNS}
+    FROM payment_accounts
+    WHERE livemode = $1 AND status <> 'disconnected'
+    ORDER BY connected_at
+  `,
+
+  /** The school cut the link from its own Stripe Dashboard. */
+  markAccountDeauthorized: `
+    UPDATE payment_accounts
+    SET status = 'disconnected', disconnected_at = now(), updated_at = now(),
+        last_error = 'The school disconnected SchoolMule from its Stripe account'
+    WHERE payment_account_id = $1 AND status <> 'disconnected'
+    RETURNING ${ACCOUNT_COLUMNS}
+  `,
+
+  // ─── Stripe events: the webhook's inbox and the worker's queue ────────
+
+  /** A repeat delivery of the same event is dropped here. */
+  insertEvent: `
+    INSERT INTO stripe_events (event_id, livemode, type, stripe_account_id, object_id, stripe_created_at)
+    VALUES ($1, $2, $3, $4, $5, to_timestamp($6))
+    ON CONFLICT (event_id) DO NOTHING
+    RETURNING event_id
+  `,
+
+  /** One due event of this mode, or one whose worker died mid-flight (5 minutes). */
+  claimNextEvent: `
+    UPDATE stripe_events
+    SET state = 'running', attempts = attempts + 1, claimed_at = now()
+    WHERE event_id = (
+      SELECT event_id FROM stripe_events
+      WHERE livemode = $1
+        AND ((state = 'queued' AND next_attempt_at <= now())
+          OR (state = 'running' AND claimed_at < now() - interval '5 minutes'))
+      ORDER BY received_at
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    )
+    RETURNING *
+  `,
+
+  completeEvent: `
+    UPDATE stripe_events
+    SET state = 'done', processed_at = now(), last_error = NULL
+    WHERE event_id = $1
+  `,
+
+  // Requeue with exponential backoff, or give up once attempts reach the cap ($3).
+  failEvent: `
+    UPDATE stripe_events
+    SET state = CASE WHEN attempts >= $3 THEN 'failed' ELSE 'queued' END,
+        last_error = $2,
+        next_attempt_at = now() + (interval '1 second' * power(4, attempts))
+    WHERE event_id = $1
+    RETURNING state
+  `,
+
+  failEventPermanently: `
+    UPDATE stripe_events
+    SET state = 'failed', last_error = $2
+    WHERE event_id = $1
+  `,
+
+  /** Handled events are only kept long enough to explain a recent problem. */
+  purgeOldEvents: `
+    DELETE FROM stripe_events
+    WHERE livemode = $1 AND state = 'done' AND processed_at < now() - interval '30 days'
+  `,
 };
 
 module.exports = paymentsQueries;

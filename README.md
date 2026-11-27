@@ -38,5 +38,15 @@ Finance → Payments lets a school connect its own Stripe account (`services/pay
 | `STRIPE_SECRET_KEY` | everywhere payments should work | The platform's Stripe secret key. Without it the Payments page says payments aren't switched on. Use a sandbox key (`sk_test_…`) on any machine that is not production. |
 | `STRIPE_LIVE_ENABLED` | production only | Must be `true` for a live key (`sk_live_…`) to be accepted. A local backend uses the production database, so it must never run with a live key. |
 | `STRIPE_API_VERSION` | optional | Overrides the pinned Stripe API version (`services/payments/stripeClient.js`). |
+| `STRIPE_WEBHOOK_SECRET` | everywhere payments should work | The signing secret of the Stripe webhook endpoint (`whsec_…`). Comma-separate several when more than one endpoint sends here. Locally, `stripe listen --print-secret` prints the CLI's. |
 
 Rows in `payment_accounts` are kept per Stripe mode, so a backend running with a test key only ever reads and writes test rows.
+
+Stripe's webhook is `POST /api/payments/stripe/webhook` (no JWT; the signature over the raw body is the proof). It stores each event once in `stripe_events` and answers at once; `services/payments/paymentsWorker.js` acts on it, retries failures with backoff, and once a day re-reads every connected school's account. Apply `payments_stripe_events_migration.sql` too.
+
+In Stripe, create one endpoint at that URL listening to **events on connected accounts**. To try it locally:
+
+```sh
+stripe listen --events account.updated,account.application.deauthorized,checkout.session.completed,checkout.session.expired,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,charge.refunded,charge.refund.updated,charge.dispute.created,charge.dispute.closed \
+  --forward-to http://localhost:4000/api/payments/stripe/webhook --forward-connect-to http://localhost:4000/api/payments/stripe/webhook
+```
