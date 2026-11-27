@@ -5,11 +5,34 @@
 // scoped by the charge's secret token.
 
 const CHARGE_COLUMNS = `
-  c.charge_id, c.school, c.livemode, c.source_type, c.submission_id, c.form_id, c.field_id, c.student_id,
+  c.charge_id, c.school, c.livemode, c.source_type, c.submission_id, c.form_id, c.field_id, c.request_id, c.student_id,
   c.payer_email, c.description, c.currency, c.amount_cents, c.amount_paid_cents, c.amount_refunded_cents,
   c.status, c.chosen_method, c.paid_at, c.accounting_code, c.public_token, c.payment_account_id,
   c.checkout_session_id, c.checkout_url, c.checkout_expires_at, c.checkout_attempts,
   c.reminder_sent_at, c.link_sent_at, c.dispute_status, c.created_at, c.updated_at
+`;
+
+/** What a charge is for (its form or request) and who (the student). */
+const CHARGE_JOINS = `
+  LEFT JOIN registration_forms f ON f.form_id = c.form_id
+  LEFT JOIN payment_requests r ON r.request_id = c.request_id
+  LEFT JOIN students_all st ON st.student_id = c.student_id
+`;
+const CHARGE_EXTRAS = `
+  f.title AS form_title, f.slug AS form_slug, r.title AS request_title, r.description AS request_description,
+  to_char(r.due_date, 'YYYY-MM-DD') AS due_date, r.allow_offline AS request_allow_offline,
+  st.name AS student_name, st.grade::text AS student_grade
+`;
+
+/** Totals over a group of charges (alias c): how many, how many settled, the money. */
+const CHARGE_STATS = `
+  COUNT(c.charge_id)::int AS students_count,
+  COUNT(c.charge_id) FILTER (WHERE c.status NOT IN ('unpaid','partially_paid'))::int AS settled_count,
+  COUNT(c.charge_id) FILTER (WHERE c.status IN ('unpaid','partially_paid'))::int AS open_count,
+  COALESCE(SUM(c.amount_cents), 0)::bigint AS expected_cents,
+  COALESCE(SUM(c.amount_paid_cents - c.amount_refunded_cents), 0)::bigint AS collected_cents,
+  COALESCE(SUM(GREATEST(c.amount_cents - c.amount_paid_cents, 0)) FILTER (WHERE c.status IN ('unpaid','partially_paid')), 0)::bigint AS outstanding_cents,
+  COALESCE(SUM(GREATEST(c.amount_cents - c.amount_paid_cents, 0)) FILTER (WHERE c.status = 'waived'), 0)::bigint AS waived_cents
 `;
 
 const PAYMENT_COLUMNS = `
@@ -21,6 +44,9 @@ const PAYMENT_COLUMNS = `
 
 const chargesQueries = {
   CHARGE_COLUMNS,
+  CHARGE_JOINS,
+  CHARGE_EXTRAS,
+  CHARGE_STATS,
 
   insertCharge: `
     INSERT INTO charges (school, livemode, submission_id, form_id, field_id, student_id, payer_email, description,
@@ -34,19 +60,37 @@ const chargesQueries = {
     VALUES ($1, $2, $3, $4, $5)
   `,
 
+  /** A charge for a payment request: one per student, so sending twice adds nobody twice. */
+  insertRequestCharge: `
+    INSERT INTO charges (school, livemode, source_type, request_id, student_id, description, currency,
+                         amount_cents, chosen_method, accounting_code, payment_account_id)
+    VALUES ($1, $2, 'request', $3, $4, $5, $6, $7, 'card', $8, $9)
+    ON CONFLICT (request_id, student_id) WHERE request_id IS NOT NULL AND student_id IS NOT NULL DO NOTHING
+    RETURNING *
+  `,
+
   selectChargeById: `
-    SELECT ${CHARGE_COLUMNS}, f.title AS form_title, f.slug AS form_slug
-    FROM charges c LEFT JOIN registration_forms f ON f.form_id = c.form_id
+    SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS}
+    FROM charges c ${CHARGE_JOINS}
     WHERE c.charge_id = $1 AND c.school = $2 AND c.livemode = $3
   `,
 
   /** The family's link. Any Stripe mode: the token itself is the secret. */
   selectChargeByToken: `
-    SELECT ${CHARGE_COLUMNS}, f.title AS form_title, f.slug AS form_slug, s.name AS school_name, s.slug AS school_slug
-    FROM charges c
-    LEFT JOIN registration_forms f ON f.form_id = c.form_id
+    SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS}, s.name AS school_name, s.slug AS school_slug
+    FROM charges c ${CHARGE_JOINS}
     LEFT JOIN schools s ON s.school_code = c.school
     WHERE c.public_token = $1
+  `,
+
+  /** The child on a charge (and on its form response). */
+  setStudent: `
+    UPDATE charges SET student_id = $2, updated_at = now() WHERE charge_id = $1
+  `,
+
+  /** Stripe's page asks for an email; a charge that had none (a request) keeps it for receipts. */
+  setPayerEmailIfMissing: `
+    UPDATE charges SET payer_email = $2, updated_at = now() WHERE charge_id = $1 AND payer_email IS NULL
   `,
 
   /** For the worker: the charge a Stripe object names, in this mode. */
@@ -206,9 +250,12 @@ const chargesQueries = {
 
   // ─── Staff lists ──────────────────────────────────────────────────
 
-  /** One page of the school's charges, newest first. $4 status filter, $5 form, $6 search. */
+  /**
+   * One page of the school's charges, newest first. $4 status, $5 form,
+   * $6 search, $8 request, $9 source ('form_submission' or 'request'), $10 student.
+   */
   listCharges: `
-    SELECT ${CHARGE_COLUMNS}, f.title AS form_title,
+    SELECT ${CHARGE_COLUMNS}, ${CHARGE_EXTRAS},
       (SELECT jsonb_build_object('kind', p.kind, 'cardBrand', p.card_brand, 'cardLast4', p.card_last4, 'wallet', p.wallet)
          FROM charge_payments p
         WHERE p.charge_id = c.charge_id AND p.kind IN ('card','cash','cheque','other') AND p.status = 'succeeded'
@@ -216,12 +263,15 @@ const chargesQueries = {
       (SELECT COALESCE(SUM(p.stripe_fee_cents), 0) FROM charge_payments p
         WHERE p.charge_id = c.charge_id AND p.kind = 'card' AND p.status = 'succeeded') AS stripe_fee_cents,
       COUNT(*) OVER() AS total_count
-    FROM charges c
-    LEFT JOIN registration_forms f ON f.form_id = c.form_id
+    FROM charges c ${CHARGE_JOINS}
     WHERE c.school = $1 AND c.livemode = $2
       AND ($4::text IS NULL OR c.status = $4 OR ($4 = 'open' AND c.status IN ('unpaid','partially_paid')))
       AND ($5::uuid IS NULL OR c.form_id = $5)
-      AND ($6::text IS NULL OR c.payer_email ILIKE '%' || $6 || '%' OR f.title ILIKE '%' || $6 || '%' OR c.description ILIKE '%' || $6 || '%')
+      AND ($6::text IS NULL OR c.payer_email ILIKE '%' || $6 || '%' OR f.title ILIKE '%' || $6 || '%'
+           OR c.description ILIKE '%' || $6 || '%' OR st.name ILIKE '%' || $6 || '%')
+      AND ($8::uuid IS NULL OR c.request_id = $8)
+      AND ($9::text IS NULL OR c.source_type = $9)
+      AND ($10::uuid IS NULL OR c.student_id = $10)
     ORDER BY c.created_at DESC, c.charge_id
     LIMIT $3 OFFSET $7
   `,
@@ -242,6 +292,44 @@ const chargesQueries = {
       (SELECT COUNT(*) FROM charges c
         WHERE c.school = $1 AND c.livemode = $2 AND c.dispute_status IS NOT NULL
           AND c.dispute_status NOT IN ('won','lost','closed'))::int AS open_disputes
+  `,
+
+  // ─── The overview ─────────────────────────────────────────────────
+
+  /** Each form that has taken payments, the most recently active first. */
+  overviewForms: `
+    SELECT c.form_id, f.title, f.slug, ${CHARGE_STATS}, MAX(c.created_at) AS last_at
+    FROM charges c JOIN registration_forms f ON f.form_id = c.form_id
+    WHERE c.school = $1 AND c.livemode = $2 AND c.source_type = 'form_submission'
+    GROUP BY c.form_id, f.title, f.slug
+    ORDER BY last_at DESC
+    LIMIT 20
+  `,
+
+  /** The latest things that happened to money, any source. Never voided or failed entries. */
+  overviewActivity: `
+    SELECT p.payment_id, p.kind, p.amount_cents, p.status, p.created_at, p.card_brand, p.card_last4, p.wallet,
+           c.charge_id, c.source_type, c.description, c.payer_email, f.title AS form_title, r.title AS request_title,
+           st.name AS student_name
+    FROM charge_payments p
+    JOIN charges c ON c.charge_id = p.charge_id
+    ${CHARGE_JOINS}
+    WHERE c.school = $1 AND c.livemode = $2 AND p.status IN ('succeeded','pending')
+    ORDER BY p.created_at DESC, p.payment_id
+    LIMIT 12
+  `,
+
+  /** Money in and out per month (school time), from $3 (the first month shown). */
+  overviewMonths: `
+    SELECT to_char(p.created_at AT TIME ZONE 'America/Toronto', 'YYYY-MM') AS month,
+      COALESCE(SUM(p.amount_cents) FILTER (WHERE p.kind = 'card' AND p.status = 'succeeded'), 0)::int AS card_cents,
+      COALESCE(SUM(p.amount_cents) FILTER (WHERE p.kind IN ('cash','cheque','other') AND p.status = 'succeeded'), 0)::int AS office_cents,
+      COALESCE(SUM(p.amount_cents) FILTER (WHERE p.kind = 'refund' AND p.status IN ('succeeded','pending')), 0)::int AS refunded_cents,
+      COALESCE(SUM(p.stripe_fee_cents) FILTER (WHERE p.kind = 'card' AND p.status = 'succeeded'), 0)::int AS stripe_fee_cents
+    FROM charge_payments p JOIN charges c ON c.charge_id = p.charge_id
+    WHERE c.school = $1 AND c.livemode = $2 AND p.created_at >= $3
+    GROUP BY 1
+    ORDER BY 1
   `,
 
   /** Charges that left Stripe's page without paying, for the safety-net check. */

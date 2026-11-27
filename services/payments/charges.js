@@ -93,9 +93,16 @@ const visibleStatus = (status, finance) => (!finance && status === 'waived' ? 's
 function toCharge(row, { finance = false, lines, payments } = {}) {
   const charge = {
     chargeId: row.charge_id,
+    sourceType: row.source_type,
     submissionId: row.submission_id,
     formId: row.form_id,
     formTitle: row.form_title ?? null,
+    requestId: row.request_id ?? null,
+    requestTitle: row.request_title ?? null,
+    dueDate: row.due_date ?? null,
+    studentId: row.student_id ?? null,
+    studentName: row.student_name ?? null,
+    studentGrade: row.student_grade ?? null,
     description: row.description,
     payerEmail: row.payer_email,
     currency: row.currency,
@@ -187,6 +194,8 @@ function checkoutLines(charge, lines) {
   }];
 }
 
+const sourceTag = (charge) => (charge.source_type === 'request' ? 'schoolmule_request' : 'schoolmule_form');
+
 async function accountForCharge(charge, client) {
   const { rows } = await db.query(accountQueries.selectAccount, [charge.school, client.livemode]);
   const account = rows[0];
@@ -234,10 +243,10 @@ async function openCheckout(chargeId, { client = clientOrNull() } = {}) {
     line_items: checkoutLines(charge, lines),
     customer_email: charge.payer_email || undefined,
     client_reference_id: charge.charge_id,
-    metadata: { charge_id: charge.charge_id, source: 'schoolmule_form' },
+    metadata: { charge_id: charge.charge_id, source: sourceTag(charge) },
     payment_intent_data: {
       description: charge.description,
-      metadata: { charge_id: charge.charge_id, source: 'schoolmule_form' },
+      metadata: { charge_id: charge.charge_id, source: sourceTag(charge) },
     },
     success_url: `${payPageUrl(charge.public_token)}?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${payPageUrl(charge.public_token)}?cancelled=1`,
@@ -300,6 +309,11 @@ async function fulfillSession({ client, accountId, session, sessionId }) {
     if (!inserted[0]) {
       await tx.query(q.fillCardDetails, [s.id, card.feeCents, card.stripeChargeId, card.brand, card.last4, card.wallet]);
     }
+    // A request has no email of its own: whoever paid gets the receipt (Stripe's page asks for one).
+    const stripeEmail = String(s.customer_details?.email || s.customer_email || '').trim().toLowerCase();
+    if (inserted[0] && !charge.payer_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(stripeEmail)) {
+      await tx.query(q.setPayerEmailIfMissing, [charge.charge_id, stripeEmail.slice(0, 254)]);
+    }
     const updated = await recompute(tx, charge.charge_id);
     if (inserted[0]) {
       await tx.query(q.clearCheckout, [charge.charge_id, s.id]);
@@ -317,7 +331,7 @@ async function fulfillSession({ client, accountId, session, sessionId }) {
 /** The one automatic "finish paying" email after a family left Stripe's page unpaid. */
 async function maybeSendReminder(chargeId) {
   const { rows: [charge] } = await db.query('SELECT * FROM charges WHERE charge_id = $1', [chargeId]);
-  if (!charge || !charge.payer_email) return false;
+  if (!charge || !charge.payer_email || charge.source_type === 'request') return false;
   const facts = { amountCents: charge.amount_cents, amountPaidCents: charge.amount_paid_cents, status: charge.status };
   if (!canPayOnline(facts) || charge.chosen_method !== 'card') return false;
   const { rows } = await db.query(q.claimReminder, [chargeId]);
@@ -514,15 +528,58 @@ async function refund({ school, livemode, chargeId, amountCents, note, user, cli
 async function sendPaymentLink({ school, livemode, chargeId }) {
   const { rows: [charge] } = await db.query(q.selectChargeById, [chargeId, school, livemode]);
   if (!charge) throw new ChargeError('Payment not found', 404);
-  if (!charge.payer_email) throw new ChargeError('This response has no email address to send the link to.', 409, 'NO_EMAIL');
   if (!canPayOnline(factsOf(charge))) throw new ChargeError('There is nothing left to pay on this.', 409, 'NOTHING_OWED');
   const { online } = await availability(school);
   if (!online) throw new ChargeError('Your school can’t take card payments right now. Check Finance → Payments.', 409, 'PAYMENTS_UNAVAILABLE');
-  await emails.queuePaymentLink(db, charge, { automatic: false });
+  // A request reminds the student's guardians; a form response emails whoever filled it in.
+  const queued = charge.source_type === 'request'
+    ? await emails.queueRequest(db, charge, { reminder: 'manual' })
+    : await emails.queuePaymentLink(db, charge, { automatic: false });
+  if (!queued) {
+    throw new ChargeError(charge.source_type === 'request'
+      ? 'This student has no guardian email on file. Add one to their record or parent account.'
+      : 'This response has no email address to send the link to.', 409, 'NO_EMAIL');
+  }
   await db.query(q.markLinkSent, [chargeId]);
   emails.kick();
   const { rows: [after] } = await db.query(q.selectChargeById, [chargeId, school, livemode]);
   return after;
+}
+
+/**
+ * Says which child a charge is for (or none), and the same on its form
+ * response. The student must be the school's.
+ */
+async function setStudent({ school, livemode, chargeId, studentId }) {
+  return inTransaction(async (tx) => {
+    const charge = await loadForStaff(tx, { school, livemode, chargeId });
+    if (charge.source_type === 'request') throw new ChargeError('A payment request is sent to a student; add or remove students on the request instead.', 409);
+    let id = null;
+    if (studentId) {
+      const { rows: [student] } = await tx.query('SELECT student_id FROM students WHERE student_id = $1 AND school = $2', [studentId, school]);
+      if (!student) throw new ChargeError('Student not found', 404);
+      id = student.student_id;
+    }
+    await tx.query(q.setStudent, [chargeId, id]);
+    if (charge.submission_id) {
+      await tx.query('UPDATE registration_form_submissions SET student_id = $2 WHERE submission_id = $1', [charge.submission_id, id]);
+    }
+    return { studentId: id };
+  });
+}
+
+/** Students of the school matching a name, for linking a payment to a child. */
+async function searchStudents({ school, schoolYearId, search }) {
+  const term = String(search || '').trim().slice(0, 80);
+  if (term.length < 2) return [];
+  const { rows } = await db.query(
+    `SELECT s.student_id, s.name, s.grade::text AS grade
+       FROM students s
+      WHERE s.school = $1 AND ($2::uuid IS NULL OR s.school_year_id = $2) AND s.name ILIKE '%' || $3 || '%'
+      ORDER BY s.name LIMIT 20`,
+    [school, schoolYearId, term],
+  );
+  return rows.map((r) => ({ studentId: r.student_id, name: r.name, grade: r.grade }));
 }
 
 // ─── Reads ────────────────────────────────────────────────────────────
@@ -553,8 +610,14 @@ async function publicView(token) {
     row,
     view: {
       schoolName: row.school_name,
-      formTitle: row.form_title || row.description,
+      sourceType: row.source_type,
+      formTitle: row.form_title || row.request_title || row.description,
       formPath: row.school_slug && row.form_slug ? `/${row.school_slug}/${row.form_slug}` : null,
+      // A request's own words, its due date, and the child it is for (the link goes to that child's guardians).
+      requestDescription: row.request_description || null,
+      dueDate: row.due_date || null,
+      studentName: row.student_name || null,
+      allowOffline: row.source_type === 'request' ? Boolean(row.request_allow_offline) : row.chosen_method === 'offline',
       currency: row.currency,
       lines: lines.map(toLine),
       amountCents: row.amount_cents,
@@ -589,7 +652,10 @@ module.exports = {
   voidPayment,
   refund,
   sendPaymentLink,
+  setStudent,
+  searchStudents,
   recompute,
+  inTransaction,
   detailForStaff,
   publicView,
   toCharge,

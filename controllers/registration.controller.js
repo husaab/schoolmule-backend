@@ -81,6 +81,10 @@ function toCamelSubmission(row, { finance = false } = {}) {
     importedAt: row.imported_at || null,
     importedBy: row.imported_by || null,
     importedStudentName: row.imported_student_name || null,
+    // The child a signed-in parent picked on the form (or the office linked later).
+    studentId: row.student_id || null,
+    studentName: row.linked_student?.name || null,
+    studentGrade: row.linked_student?.grade || null,
     payment: toSubmissionPayment(row.payment, finance),
   };
 }

@@ -218,6 +218,8 @@ function buildSubmissionsWhere(fields, { status, dateFrom, dateTo, fieldFilters,
 const SUBMISSION_SELECT = `*,
       (SELECT name FROM students
         WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name,
+      (SELECT jsonb_build_object('name', st.name, 'grade', st.grade::text) FROM students_all st
+        WHERE st.student_id = registration_form_submissions.student_id) AS linked_student,
       (SELECT jsonb_build_object(
           'chargeId', c.charge_id, 'status', c.status, 'amountCents', c.amount_cents,
           'amountPaidCents', c.amount_paid_cents, 'amountRefundedCents', c.amount_refunded_cents,

@@ -35,6 +35,10 @@ router.post('/payments/:token/checkout', paymentStartLimiter, controller.startPa
 // GET published form (public, no auth)
 router.get('/:schoolSlug/:formSlug', controller.getPublicForm);
 
+// A signed-in parent's children, to say which child a response is for.
+// Optional bearer token; without one the answer is { signedIn: false }.
+router.get('/:schoolSlug/:formSlug/children', paymentReadLimiter, controller.getChildren);
+
 // POST submit form (public, with spam protection)
 router.post(
   '/:schoolSlug/:formSlug/submit',

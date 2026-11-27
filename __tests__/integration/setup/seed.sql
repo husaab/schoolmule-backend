@@ -3101,3 +3101,39 @@ CREATE TABLE IF NOT EXISTS charge_payments (
 CREATE INDEX IF NOT EXISTS idx_charge_payments_charge ON charge_payments (charge_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_charge_payments_intent ON charge_payments (stripe_payment_intent_id) WHERE stripe_payment_intent_id IS NOT NULL;
 ALTER TABLE charge_payments ENABLE ROW LEVEL SECURITY;
+
+-- Payments: requests and the child link (payments_requests_migration.sql).
+
+CREATE TABLE IF NOT EXISTS payment_requests (
+  request_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school          school NOT NULL,
+  livemode        BOOLEAN NOT NULL,
+  school_year_id  UUID REFERENCES school_years(school_year_id) ON DELETE SET NULL,
+  title           TEXT NOT NULL,
+  -- Shown to families in the email and on their payment page.
+  description     TEXT,
+  currency        CHAR(3) NOT NULL DEFAULT 'cad',
+  amount_cents    INTEGER NOT NULL CHECK (amount_cents > 0),
+  due_date        DATE,
+  allow_offline   BOOLEAN NOT NULL DEFAULT true,
+  accounting_code TEXT,
+  created_by      UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_requests_school ON payment_requests (school, livemode, created_at DESC);
+ALTER TABLE payment_requests ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE charges DROP CONSTRAINT IF EXISTS charges_source_type_check;
+ALTER TABLE charges ADD CONSTRAINT charges_source_type_check
+  CHECK (source_type IN ('form_submission','request'));
+ALTER TABLE charges ADD COLUMN IF NOT EXISTS request_id UUID REFERENCES payment_requests(request_id) ON DELETE RESTRICT;
+-- A student is asked once per request.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_charges_request_student ON charges (request_id, student_id)
+  WHERE request_id IS NOT NULL AND student_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_charges_student ON charges (student_id) WHERE student_id IS NOT NULL;
+
+ALTER TABLE registration_form_submissions
+  ADD COLUMN IF NOT EXISTS student_id UUID REFERENCES students_all(student_id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(user_id) ON DELETE SET NULL;
+

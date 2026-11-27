@@ -36,9 +36,24 @@ const registrationPublicQueries = {
   `,
 
   insertSubmission: `
-    INSERT INTO registration_form_submissions (form_id, school, answers, ip_address)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO registration_form_submissions (form_id, school, answers, ip_address, student_id, submitted_by)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *
+  `,
+
+  /**
+   * A signed-in parent's children at a school, in its current year ($3), or
+   * one of them ($4). Never archived or deleted students.
+   */
+  selectParentChildren: `
+    SELECT DISTINCT s.student_id, s.name, s.grade::text AS grade
+    FROM parent_students ps
+    JOIN students s ON s.student_id = ps.student_id
+    WHERE ps.parent_id = $1 AND s.school = $2
+      AND ($3::uuid IS NULL OR s.school_year_id = $3)
+      AND ($4::uuid IS NULL OR s.student_id = $4)
+      AND COALESCE(s.is_archived, false) = false
+    ORDER BY s.name
   `,
 };
 

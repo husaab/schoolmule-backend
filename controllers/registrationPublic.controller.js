@@ -1,11 +1,39 @@
+const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const queries = require('../queries/registrationPublic.queries');
+const schoolYearQueries = require('../queries/schoolYear.queries');
 const googleSheetsQueries = require('../queries/googleSheets.queries');
 const logger = require('../logger');
 const charges = require('../services/payments/charges');
 const { priceSelection, summaryAnswer, PaymentFieldError } = require('../services/payments/paymentField');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The parent signed in on this browser, from an optional bearer token. Public
+ * forms work without one; with one, a parent can say which child a response
+ * is for. A preview ("view as") token or an unverified account counts as
+ * nobody.
+ */
+function signedInParent(req) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) return null;
+  try {
+    const decoded = jwt.verify(header.slice(7), process.env.JWT_SECRET);
+    if (decoded.role !== 'PARENT' || !decoded.isVerified || !decoded.isVerifiedSchool || decoded.impersonator) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+/** The parent's children at the form's school, this year (or one of them). */
+async function childrenOf(parent, schoolCode, studentId = null) {
+  const { rows: [year] } = await db.query(schoolYearQueries.selectActiveYearBySchool, [schoolCode]);
+  const { rows } = await db.query(queries.selectParentChildren, [parent.userId, schoolCode, year?.school_year_id ?? null, studentId]);
+  return rows.map((r) => ({ studentId: r.student_id, name: r.name, grade: r.grade }));
+}
 
 /** A payment field as the public sees it: no accounting code. */
 function publicField(field) {
@@ -81,6 +109,25 @@ const getPublicForm = async (req, res) => {
 };
 
 /**
+ * GET /api/registration/public/:schoolSlug/:formSlug/children
+ * For a signed-in parent: their children at the form's school, so the form can
+ * ask which child it is for. Anyone else gets { signedIn: false }.
+ */
+const getChildren = async (req, res) => {
+  try {
+    const parent = signedInParent(req);
+    if (!parent) return res.status(200).json({ status: 'success', data: { signedIn: false, children: [] } });
+    const { rows: schoolRows } = await db.query(queries.selectSchoolBySlug, [req.params.schoolSlug]);
+    if (schoolRows.length === 0) return res.status(404).json({ status: 'failed', message: 'School not found' });
+    const children = await childrenOf(parent, schoolRows[0].school_code);
+    return res.status(200).json({ status: 'success', data: { signedIn: true, children } });
+  } catch (error) {
+    logger.error({ err: error }, 'Error loading a parent’s children for a public form');
+    return res.status(500).json({ status: 'failed', message: 'Error loading your children' });
+  }
+};
+
+/**
  * POST /api/registration/public/:schoolSlug/:formSlug/submit
  * Submit a public form
  */
@@ -143,6 +190,20 @@ const submitForm = async (req, res) => {
 
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null;
 
+    // ── The child it is for (a signed-in parent only) ──
+    const parent = signedInParent(req);
+    let studentId = null;
+    if (req.body.studentId != null && req.body.studentId !== '') {
+      if (!parent) {
+        return res.status(401).json({ status: 'failed', code: 'SIGN_IN_AGAIN', message: 'Sign in again to say which child this is for.' });
+      }
+      const mine = UUID_RE.test(String(req.body.studentId)) ? await childrenOf(parent, schoolCode, req.body.studentId) : [];
+      if (mine.length === 0) {
+        return res.status(403).json({ status: 'failed', message: 'That child isn’t linked to your account at this school.' });
+      }
+      studentId = mine[0].studentId;
+    }
+
     // ── Payment ──
     // What is owed is worked out here from the form's own prices.
     const paymentField = fields.find((f) => f.field_type === 'payment' && f.payment_config);
@@ -192,6 +253,8 @@ const submitForm = async (req, res) => {
         schoolCode,
         JSON.stringify(sanitizedAnswers),
         ipAddress,
+        studentId,
+        parent ? parent.userId : null,
       ]));
       if (priced && priced.totalCents > 0) {
         charge = await charges.createForSubmission(client, {
@@ -203,6 +266,7 @@ const submitForm = async (req, res) => {
           priced,
           method,
           payerEmail,
+          studentId,
           account: pay.account,
         });
       }
@@ -307,6 +371,7 @@ const startPayment = async (req, res) => {
 
 module.exports = {
   getPublicForm,
+  getChildren,
   submitForm,
   getPayment,
   startPayment,

@@ -20,6 +20,7 @@ const stripeClient = require('./stripeClient');
 const connect = require('./connect');
 const events = require('./events');
 const charges = require('./charges');
+const requests = require('./requests');
 const chargeQueries = require('../../queries/charges.queries');
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -137,7 +138,9 @@ async function runDailyIfDue({ client = stripeClient.clientFromEnv(), today = to
   lastDailyDate = today;
   const refreshed = await refreshAllAccounts({ client });
   const { rowCount } = await db.query(queries.purgeOldEvents, [client.livemode]);
-  logger.info({ refreshed, purged: rowCount }, 'Payments: daily account re-check done');
+  // Families who still owe on a request due within three days get one reminder.
+  const reminded = await requests.sendDueSoonReminders({ livemode: client.livemode, today });
+  logger.info({ refreshed, purged: rowCount, reminded }, 'Payments: daily account re-check done');
   return true;
 }
 
@@ -168,7 +171,7 @@ function startWorker(intervalMs = DEFAULT_INTERVAL_MS) {
         disabledReason = 'the payments migrations have not been applied';
         stopWorker();
         logger.error(
-          { migrations: ['payments_stripe_connect_migration.sql', 'payments_stripe_events_migration.sql', 'payments_form_charges_migration.sql'] },
+          { migrations: ['payments_stripe_connect_migration.sql', 'payments_stripe_events_migration.sql', 'payments_form_charges_migration.sql', 'payments_requests_migration.sql'] },
           'Payments worker disabled: tables are missing. Apply the migrations and restart.',
         );
         return;
