@@ -36,6 +36,27 @@ const KINDS = {
     count: (n) => `${n} ${n === 1 ? 'mark' : 'marks'}`,
   },
 
+  // The school's daily (general) attendance for one day. args: { date, scope }; a value is a status or null (unmarked).
+  general_attendance: {
+    topics: (args) => [`attendance:general:${args.date}`],
+    async read(read, args) {
+      const { data } = await read('generalAttendance', { query: { date: args.date } });
+      const current = {};
+      for (const mark of data || []) current[mark.studentId] = mark.status;
+      return current;
+    },
+    valueOf: (current, key) => current[key] ?? null,
+    same: (a, b) => (a ?? null) === (b ?? null),
+    async write(write, args, values) {
+      const entries = Object.entries(values).filter(([, status]) => status).map(([studentId, status]) => ({ studentId, status }));
+      const cleared = Object.entries(values).filter(([, status]) => !status).map(([studentId]) => studentId);
+      await write('saveGeneralAttendance', { body: { attendanceDate: args.date, entries, cleared } });
+      return null;
+    },
+    label: (value) => STATUS_LABEL[value] || 'unmarked',
+    count: (n) => `${n} ${n === 1 ? 'mark' : 'marks'}`,
+  },
+
   // args: { classId, assessmentId, outOf, assessmentName }; a value is { score: number|null, status: 'graded'|'missing'|'excused' }
   scores: {
     topics: (args) => [`scores:${args.classId}`],

@@ -25,6 +25,8 @@ function dayFrom(value, today) {
   return value;
 }
 
+const { dailyRoster, WHO } = require('./dailyRoster');
+
 const PREPARED_NOTE = 'The person now sees a preview of exactly this change with a Save button. Nothing is saved until they press it. In one or two sentences, say what will change and that they can press Save. Do not say it was saved.';
 
 defineTool({
@@ -32,7 +34,7 @@ defineTool({
   doing: 'Preparing attendance',
   writes: true,
   description:
-    'Prepare class attendance for one class and day, for the person to apply. Name the students whose mark you know in `marks`; `everyone_else` marks every other student of the class (only those not marked yet, unless `overwrite` is true). Example: "everyone is here except Yusuf, Maryam was late" is marks [{student: Yusuf\'s ref, status: ABSENT}, {student: Maryam\'s ref, status: LATE}] with everyone_else PRESENT. Read the roster first so you have the students\' refs; if a name matches more than one student, ask the person to choose instead.',
+    'Prepare class attendance (the roll taken in one class) for one class and day, for the person to save. For several classes ("all my classes"), call it once for each class in the same turn: each gets its own card. For the school\'s daily attendance taken by grade, use propose_general_attendance instead. Name the students whose mark you know in `marks`; `everyone_else` marks every other student of the class (only those not marked yet, unless `overwrite` is true). Example: "everyone is here except Yusuf, Maryam was late" is marks [{student: Yusuf\'s ref, status: ABSENT}, {student: Maryam\'s ref, status: LATE}] with everyone_else PRESENT. Read the roster first so you have the students\' refs; if a name matches more than one student, ask the person to choose instead.',
   parameters: {
     type: 'object',
     properties: {
@@ -323,6 +325,99 @@ defineTool({
         hiddenCount: Math.max(0, rows.length - MAX_ROWS_SHOWN),
         tally: null,
         note: COUNT_NOTE,
+      },
+    };
+  },
+});
+
+defineTool({
+  name: 'propose_general_attendance',
+  doing: 'Preparing daily attendance',
+  writes: true,
+  description:
+    'Prepare the school\'s daily (general) attendance for one day, for the person to save: the attendance taken once a day by grade on the General Attendance page, which is what most schools mean by "attendance" when no class is named. who is "homeroom" (this person\'s homeroom students; what a teacher means by "my students"), "grade" (give grade) or "school". Name the students whose mark you know in marks (refs from find_student or get_daily_attendance); everyone_else marks every other student in scope (only those not marked yet, unless overwrite is true).',
+  parameters: {
+    type: 'object',
+    properties: {
+      date: { type: 'string', description: '"today" or a day written YYYY-MM-DD (never a future day).' },
+      who: WHO,
+      grade: { type: ['string', 'null'], description: 'The grade when who is "grade", else null.' },
+      marks: {
+        type: 'array',
+        maxItems: 400,
+        items: {
+          type: 'object',
+          properties: { student: REF, status: { type: 'string', enum: ATTENDANCE } },
+          required: ['student', 'status'],
+          additionalProperties: false,
+        },
+      },
+      everyone_else: { type: ['string', 'null'], enum: [...ATTENDANCE, null], description: 'The mark for every student in scope not named in marks, or null to leave them.' },
+      overwrite: { type: 'boolean', description: 'true to replace marks already saved for that day; false to fill in only students not marked yet.' },
+    },
+    required: ['date', 'who', 'grade', 'marks', 'everyone_else', 'overwrite'],
+    additionalProperties: false,
+  },
+  views: STAFF,
+  handler: async (args, ctx) => {
+    const date = dayFrom(args.date, ctx.today);
+    const kind = KINDS.general_attendance;
+    const [{ students, label: scopeLabel }, current] = await Promise.all([
+      dailyRoster(ctx, { scope: args.who, grade: args.grade }),
+      kind.read(ctx.read, { date }),
+    ]);
+    const inScope = new Map(students.map((s) => [s.id, s]));
+    const named = new Map();
+    for (const mark of args.marks) {
+      const student = ctx.refs.resolve(mark.student, 'student');
+      if (!inScope.has(student.id)) throw new ToolError('NOT_IN_SCOPE', `${student.label} is not in ${scopeLabel.toLowerCase()}.`);
+      named.set(student.id, mark.status);
+    }
+    const targets = {};
+    const before = {};
+    for (const s of students) {
+      const now = current[s.id] ?? null;
+      let next = now;
+      if (named.has(s.id)) next = named.get(s.id);
+      else if (args.everyone_else && (args.overwrite || now === null)) next = args.everyone_else;
+      if (next !== now) {
+        targets[s.id] = next;
+        before[s.id] = now;
+      }
+    }
+    const changed = students.filter((s) => s.id in targets);
+    if (changed.length === 0) {
+      return { summary: 'Nothing to change', forModel: { prepared: false, note: `Every daily attendance mark for ${scopeLabel.toLowerCase()} on ${date} is already as asked. Tell the person nothing needed changing.` } };
+    }
+    const tally = {};
+    for (const s of students) {
+      const status = s.id in targets ? targets[s.id] : current[s.id] ?? null;
+      const labelOf = STATUS_LABEL[status] || 'Unmarked';
+      tally[labelOf] = (tally[labelOf] || 0) + 1;
+    }
+    const rows = changed.map((s) => ({ key: s.id, name: s.name, now: STATUS_LABEL[before[s.id]] || 'unmarked', next: STATUS_LABEL[targets[s.id]] }));
+    const left = students.length - changed.length;
+    const action = await ctx.propose({
+      kind: 'general_attendance',
+      title: `Daily attendance · ${scopeLabel} · ${date}`,
+      args: { date, scope: scopeLabel, targets },
+      before,
+      preview: { rows },
+    });
+    return {
+      summary: `${changed.length} ${changed.length === 1 ? 'mark' : 'marks'} ready to save`,
+      forModel: { prepared: true, attendance: 'daily', scope: scopeLabel, date, changes: rows.slice(0, 40).map(({ name, now, next }) => ({ name, now, next })), unchanged: left, note: PREPARED_NOTE },
+      action,
+      card: {
+        type: 'change',
+        actionId: action.id,
+        title: `Daily attendance · ${scopeLabel}`,
+        subtitle: date,
+        columns: ['Student', 'Now', 'New'],
+        rows: rows.slice(0, MAX_ROWS_SHOWN).map(({ name, now, next }) => ({ name, now, next })),
+        hiddenCount: Math.max(0, rows.length - MAX_ROWS_SHOWN),
+        tally: Object.entries(tally).map(([label, count]) => ({ label, count })),
+        note: left > 0 ? `${left} ${left === 1 ? 'student keeps their mark' : 'students keep their marks'}.` : null,
       },
     };
   },

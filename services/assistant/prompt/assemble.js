@@ -45,6 +45,9 @@ function assemble({ firstName, view, access, schoolYearLabel, today, page, allow
   if (page && page.classRef) {
     lines.push(`They are looking at the class ${page.label} right now. Its ref is ${page.classRef}.`);
   }
+  if (page && page.dailyAttendance) {
+    lines.push('They are on the General Attendance page, the school\'s daily attendance: "attendance" here means daily attendance (get_daily_attendance, propose_general_attendance).');
+  }
   return [STATIC_PREFIX, lines.join('\n')];
 }
 

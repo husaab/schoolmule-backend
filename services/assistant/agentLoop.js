@@ -41,6 +41,9 @@ function recent(transcript, limit) {
 
 /** The class the person is looking at, when their account can open it: checked with a real, guarded read. */
 async function pageOf(pageContext, read, refs) {
+  const route = pageContext && typeof pageContext.route === 'string' ? pageContext.route : '';
+  // The school's daily attendance page: no class, but it says which attendance "attendance" means.
+  if (/^\/attendance\/general(?:\/|$)/.test(route)) return { label: 'Daily attendance', dailyAttendance: true };
   const classId = pageContext && typeof pageContext.classId === 'string' && UUID_RE.test(pageContext.classId) ? pageContext.classId : null;
   if (!classId) return null;
   try {

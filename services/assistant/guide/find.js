@@ -7,10 +7,16 @@
 
 const { ENTRIES, STAFF, FULL_ADMIN, PARENT } = require('./catalog');
 
-const STOP = new Set(['a', 'an', 'the', 'to', 'of', 'in', 'on', 'for', 'and', 'or', 'do', 'i', 'my', 'how', 'where', 'is', 'are', 'can', 'find', 'page', 'from', 'with', 'what', 'it']);
+const STOP = new Set(['a', 'an', 'the', 'to', 'of', 'in', 'on', 'for', 'and', 'or', 'do', 'i', 'my', 'how', 'where', 'is', 'are', 'can', 'find', 'page', 'from', 'with', 'what', 'it',
+  // Words that say nothing about which page: "all" once sent "mark all my classes" to All Messages.
+  'all', 'me', 'please', 'show', 'open', 'go', 'get', 'want', 'need', 'one', 'each', 'every', 'everyone', 'there', 'this', 'that', 'we', 'our', 'you', 'your']);
 const wordsOf = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w));
 // "grades" and "grade", "templates" and "template" count as the same word.
-const stem = (word) => (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word);
+// "classes" and "class", "batches" and "batch": -es after s, x, z, ch or sh goes too.
+const stem = (word) => {
+  if (word.length > 4 && /(?:s|x|z|ch|sh)es$/.test(word)) return word.slice(0, -2);
+  return word.length > 3 && word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word;
+};
 
 /** How well an entry answers the query: its title counts most, then the words people use for it. */
 function score(entry, queryWords) {
@@ -65,4 +71,7 @@ function pathFor(entry, classId) {
   return entry.path;
 }
 
-module.exports = { find, canOpen, whoCan, pathFor };
+/** Whether the best hit is the answer, not one of several: a button opens it only then. */
+const isClear = (hits) => hits.length > 0 && hits[0].score >= 3 && (hits.length === 1 || hits[0].score > hits[1].score);
+
+module.exports = { find, canOpen, whoCan, pathFor, isClear, stem };

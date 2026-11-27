@@ -110,8 +110,21 @@ describe('the site guide', () => {
     expect(top('where is the report templates')).toBe('report-templates');
     expect(top('change our school stamp')).toBe('school-assets');
     expect(top('how do I omit a student from class average')).toBe('class-average-exclusion');
-    expect(top('take attendance')).toBe('class-attendance');
+    expect(top('daily attendance')).toBe('general-attendance');
     expect(top('invite a teacher')).toBe('users');
+  });
+
+  it('gives a button only for a clear match, and never matches on filler words', () => {
+    // "all" sent "mark everyone present in all my classes" to All Messages.
+    const hits = guide.find('mark everyone present in all my classes');
+    expect(hits.map((h) => h.entry.id)).not.toContain('all-messages');
+    expect(guide.find('all').length).toBe(0);
+    // Two kinds of attendance fit "take attendance" as well as each other: no button, both named.
+    const both = guide.find('take attendance');
+    expect(both.map((h) => h.entry.id)).toEqual(expect.arrayContaining(['class-attendance', 'general-attendance']));
+    expect(guide.isClear(both)).toBe(false);
+    expect(guide.isClear(guide.find('where are the report templates'))).toBe(true);
+    expect(['classes', 'grades', 'batches', 'address'].map(guide.stem)).toEqual(['class', 'grade', 'batch', 'address']);
   });
 
   it('finds nothing for something that is not in the app', () => {
@@ -211,7 +224,7 @@ describe('the loopback reader', () => {
     expect(writes).toEqual({
       saveClassAttendance: 'POST', saveScores: 'POST', saveStatsExclusion: 'PUT', removeStatsExclusion: 'DELETE',
       replaceSchoolAsset: 'POST', restoreSchoolAssetVersion: 'POST', deleteSchoolAsset: 'DELETE',
-      saveReportCardFeedback: 'POST',
+      saveReportCardFeedback: 'POST', saveGeneralAttendance: 'POST',
     });
     const { read: readOnly } = dispatcher(async () => ({ status: 200, body: {} }));
     await expect(readOnly('saveScores', { params: { classId: ID(1) } })).rejects.toThrow(/not a route a tool can read/);

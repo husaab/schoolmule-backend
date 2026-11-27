@@ -50,7 +50,8 @@ defineTool({
       summary: `Found "${best.title}"`,
       // The path is for the button, not for the model to read out: it can hold an id.
       forModel: { results: results.map(({ path, ...rest }) => rest), note: 'A button that opens the first result is already shown when the person can open it. Give the steps in your reply.' },
-      card: best.canOpen ? { type: 'link', label: `Open ${best.title}`, href: best.path } : null,
+      // A button only for a clear match: when two pages fit as well, the reply names both instead.
+      card: best.canOpen && guide.isClear(hits) ? { type: 'link', label: `Open ${best.title}`, href: best.path } : null,
     };
   },
 });

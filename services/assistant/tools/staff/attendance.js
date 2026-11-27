@@ -7,6 +7,7 @@
 
 const { defineTool } = require('../registry');
 const { ToolError } = require('../../errors');
+const { dailyRoster, WHO } = require('./dailyRoster');
 
 const STAFF = ['ADMIN', 'TEACHER'];
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -132,6 +133,42 @@ defineTool({
             rows: students.slice(0, MAX_ROWS_SHOWN).map((s) => ({ name: s.name, absent: s.absent, late: s.late })),
           }
         : null,
+    };
+  },
+});
+
+const STATUS_LABEL = { PRESENT: 'Present', LATE: 'Late', ABSENT: 'Absent', EXCUSED: 'Excused' };
+
+defineTool({
+  name: 'get_daily_attendance',
+  doing: 'Reading daily attendance',
+  description:
+    'The school\'s daily (general) attendance for one day, the attendance taken once a day by grade on the General Attendance page: each student\'s mark, and who is not marked yet. For this person\'s homeroom, one grade or the whole school. Use it for "who is unmarked today" or before preparing daily attendance.',
+  parameters: {
+    type: 'object',
+    properties: {
+      date: { type: 'string', description: '"today" or a day written YYYY-MM-DD.' },
+      who: WHO,
+      grade: { type: ['string', 'null'], description: 'The grade when who is "grade", else null.' },
+    },
+    required: ['date', 'who', 'grade'],
+    additionalProperties: false,
+  },
+  views: STAFF,
+  handler: async (args, ctx) => {
+    const date = args.date === 'today' ? ctx.today : args.date;
+    if (!ISO_DAY.test(date)) throw new ToolError('INVALID_ARGUMENTS', 'date must be "today" or a day written YYYY-MM-DD.');
+    const [{ students, label }, { data }] = await Promise.all([
+      dailyRoster(ctx, { scope: args.who, grade: args.grade }),
+      ctx.read('generalAttendance', { query: { date } }),
+    ]);
+    const marks = new Map((data || []).map((m) => [m.studentId, m.status]));
+    const rows = students.map((s) => ({ ref: ctx.refs.mint('student', s.id, s.name), name: s.name, grade: s.grade, mark: STATUS_LABEL[marks.get(s.id)] || 'unmarked' }));
+    const counts = {};
+    for (const r of rows) counts[r.mark] = (counts[r.mark] || 0) + 1;
+    return {
+      summary: `${label}: ${counts.unmarked || 0} unmarked of ${rows.length}`,
+      forModel: { attendance: 'daily', scope: label, date, counts, students: rows.slice(0, 400), more: Math.max(0, rows.length - 400) },
     };
   },
 });

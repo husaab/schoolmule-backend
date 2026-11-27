@@ -18,6 +18,7 @@ const ROUTES = Object.freeze({
   classScores: { method: 'GET', path: '/api/studentAssessments/classes/:classId/scores' }, // gradebook
   classAttendance: { method: 'GET', path: '/api/attendance/class/:classId' },          // ?date=YYYY-MM-DD
   classAttendanceRange: { method: 'GET', path: '/api/attendance/class/:classId/range' }, // ?from=&to=
+  generalAttendance: { method: 'GET', path: '/api/attendance/general' },              // ?date=, the school's daily attendance
   generalAttendanceRange: { method: 'GET', path: '/api/attendance/general/range' },    // ?from=&to=, the school's daily attendance
   classAssessments: { method: 'GET', path: '/api/classes/:classId/assessments' },
   gridOverlay: { method: 'GET', path: '/api/classroom/classes/:classId/grid-overlay' }, // columns filled from Classwork
@@ -45,6 +46,7 @@ const ROUTES = Object.freeze({
   // when the person presses Apply or Undo on a change they were shown.
   saveClassAttendance: { method: 'POST', path: '/api/attendance/class' },
   saveScores: { method: 'POST', path: '/api/studentAssessments/classes/:classId/scores' },
+  saveGeneralAttendance: { method: 'POST', path: '/api/attendance/general' },
   saveStatsExclusion: { method: 'PUT', path: '/api/classes/:classId/stats-exclusions/:studentId' },
   removeStatsExclusion: { method: 'DELETE', path: '/api/classes/:classId/stats-exclusions/:studentId' },
   replaceSchoolAsset: { method: 'POST', path: '/api/school-assets/from-assistant' },
