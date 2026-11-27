@@ -18,17 +18,44 @@ const stem = (word) => {
   return word.length > 3 && word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word;
 };
 
-/** How well an entry answers the query: its title counts most, then the words people use for it. */
-function score(entry, queryWords) {
-  const title = new Set(wordsOf(entry.title).map(stem));
-  const others = new Set(entry.words.flatMap(wordsOf).map(stem));
-  let total = 0;
-  for (const word of queryWords.map(stem)) {
-    if (title.has(word)) total += 3;
-    else if (others.has(word)) total += 2;
-    else if ([...title, ...others].some((known) => known.length > 3 && (known.startsWith(word) || word.startsWith(known)))) total += 1;
+const termsOf = (entry) => ({ title: new Set(wordsOf(entry.title).map(stem)), others: new Set(entry.words.flatMap(wordsOf).map(stem)) });
+
+/**
+ * How much each word says about which page, for one audience's entries: a
+ * word only one page uses ("stamp") counts fully, one many pages use
+ * ("report", "student") counts less. Without it, "the stamp at the bottom of
+ * report cards" went to Report Templates, which matched "report" and "card".
+ */
+function rarityOf(entries) {
+  const pages = new Map();
+  for (const entry of entries) {
+    const { title, others } = termsOf(entry);
+    for (const word of new Set([...title, ...others])) pages.set(word, (pages.get(word) || 0) + 1);
   }
-  return total;
+  const n = Math.max(2, entries.length);
+  return (word) => (pages.has(word) ? Math.max(0.25, Math.log(n / pages.get(word)) / Math.log(n)) : 1);
+}
+
+/**
+ * How well an entry answers the query: its title counts most, then the words
+ * people use for it, each by how rare the word is. -> { score, matched }
+ */
+function score(entry, queryWords, rarity) {
+  const { title, others } = termsOf(entry);
+  let total = 0;
+  let matched = 0;
+  for (const word of queryWords) {
+    if (title.has(word)) total += 3 * rarity(word);
+    else if (others.has(word)) total += 2 * rarity(word);
+    else {
+      // A word cut short ("gradeb", "timetab"); "fee" is too short to be "feedback".
+      const near = word.length > 3 && [...title, ...others].find((known) => known.length > 3 && (known.startsWith(word) || word.startsWith(known)));
+      if (!near) continue;
+      total += rarity(near);
+    }
+    matched += 1;
+  }
+  return { score: Math.round(total * 100) / 100, matched };
 }
 
 /** Whether this account can open the entry's page. `access` is req.access. */
@@ -48,20 +75,27 @@ function whoCan(entry) {
   return 'Someone whose role includes this area, such as an administrator';
 }
 
+const AUDIENCES = {
+  staff: ENTRIES.filter((entry) => entry.needs !== PARENT),
+  parent: ENTRIES.filter((entry) => entry.needs === PARENT),
+};
+const RARITY = { staff: rarityOf(AUDIENCES.staff), parent: rarityOf(AUDIENCES.parent) };
+
 /**
- * The entries that best answer `query`, best first.
- * @returns {Array<{entry: object, score: number}>}
+ * The entries that best answer `query`, best first. A parent is shown the
+ * parent portal's pages, and staff never are.
+ * @returns {Array<{entry: object, score: number, matched: number, of: number}>}
  */
 function find(query, { limit = 3, parent = false } = {}) {
-  const queryWords = wordsOf(query);
+  const queryWords = [...new Set(wordsOf(query).map(stem))];
   if (queryWords.length === 0) return [];
-  // A parent is shown the parent portal's pages, and staff never are.
-  const hits = ENTRIES.filter((entry) => (entry.needs === PARENT) === parent)
-    .map((entry) => ({ entry, score: score(entry, queryWords) }))
+  const audience = parent ? 'parent' : 'staff';
+  const hits = AUDIENCES[audience]
+    .map((entry) => ({ entry, ...score(entry, queryWords, RARITY[audience]), of: queryWords.length }))
     .filter((hit) => hit.score > 0)
     .sort((a, b) => b.score - a.score || a.entry.title.localeCompare(b.entry.title));
   // A weak echo of a strong match is noise: keep what is close to the best.
-  const floor = hits.length ? Math.max(2, hits[0].score * 0.4) : 0;
+  const floor = hits.length ? Math.max(1, hits[0].score * 0.4) : 0;
   return hits.filter((hit) => hit.score >= floor).slice(0, limit);
 }
 
@@ -71,7 +105,17 @@ function pathFor(entry, classId) {
   return entry.path;
 }
 
-/** Whether the best hit is the answer, not one of several: a button opens it only then. */
-const isClear = (hits) => hits.length > 0 && hits[0].score >= 3 && (hits.length === 1 || hits[0].score > hits[1].score);
+/**
+ * Whether the best hit is the answer, not one of several: a button opens it
+ * only then. It has to stand out from the next, carry a distinctive word, and
+ * match at least half of what was asked: "compare Math grades across all
+ * classes" matched only "grades" in "Publish grades to parents", and showed
+ * its button.
+ */
+const isClear = (hits) => {
+  if (hits.length === 0) return false;
+  const [best, next] = hits;
+  return best.score >= 2 && best.matched * 2 >= best.of && (!next || best.score > next.score);
+};
 
 module.exports = { find, canOpen, whoCan, pathFor, isClear, stem };

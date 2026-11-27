@@ -92,8 +92,9 @@ const ENTRIES = [
     steps: ['In the sidebar, open Admin Panel.', 'Under School setup, choose School Settings.'] },
   { id: 'school-calendar', title: 'School Calendar', words: ['holidays', 'pa days', 'events', 'term dates', 'school days'], path: '/admin-panel/school-calendar', needs: ['school_setup'],
     steps: ['In the sidebar, open Admin Panel.', 'Under School setup, choose School Calendar.'] },
-  { id: 'school-assets', title: 'School Assets', words: ['logo', 'stamp', 'school stamp', 'seal', 'principal signature', 'branding', 'restore the old stamp', 'earlier versions'], path: '/admin-panel/school-assets', needs: ['school_setup'],
-    steps: ['In the sidebar, open Admin Panel.', 'Under School setup, choose School Assets.', 'Pick a file under the logo, the principal signature or the stamp, then Upload. The file you replace is kept under Earlier versions, where you can restore it.'] },
+  { id: 'school-assets', title: 'School Assets', words: ['logo', 'stamp', 'school stamp', 'seal', 'principal signature', 'branding', 'restore the old stamp', 'earlier versions', 'stamp on report cards', 'stamp at the bottom of progress reports', 'logo on report cards', 'signature on report cards'], path: '/admin-panel/school-assets', needs: ['school_setup'],
+    steps: ['In the sidebar, open Admin Panel.', 'Under School setup, choose School Assets.', 'Pick a file under the logo, the principal signature or the stamp, then Upload. Report cards and progress reports use the new one from then on. The file you replace is kept under Earlier versions, where you can restore it.'],
+    muley: 'propose_school_asset' },
   { id: 'report-templates', title: 'Report Templates', words: ['report card design', 'report layout', 'progress report template', 'comment limits', 'subject headings'], path: '/admin-panel/report-templates', needs: ['school_setup'],
     steps: ['In the sidebar, open Admin Panel.', 'Under School setup, choose Report Templates.'] },
 

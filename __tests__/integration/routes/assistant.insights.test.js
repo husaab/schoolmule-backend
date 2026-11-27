@@ -126,6 +126,35 @@ describe('Muley: how a class and a student are doing', () => {
     expect(answer.rule).toMatch(/under 60%/);
   });
 
+  it('ranks the top students in a grade by their overall average', async () => {
+    const fake = script([[toolCall('get_top_students', { grade: '6', subject: null, order: 'highest', limit: 10 }, 'top')], [text('Sara is first.')]]);
+    const { of } = await turn({ message: 'who is the number one student in grade 6?' });
+    const answer = answerOf(fake, 'top');
+    expect(answer).toMatchObject({ scope: 'Grade 6', order: 'highest', outOf: 3 });
+    expect(answer.ranked.map((r) => [r.place, r.name, r.grade])).toEqual([[1, 'Sara Malik', 85], [2, 'Omar Haddad', 70], [3, 'Yusuf Rahman', 20]]);
+    expect(answer.basis).toMatch(/overall average/);
+    const card = of('card').find((c) => c.id === 'top').card;
+    expect(card).toMatchObject({ type: 'table', title: 'Top students · Grade 6' });
+    expect(card.rows[0]).toEqual({ place: 1, name: 'Sara Malik', where: 'Grade 6', grade: '85%' });
+    for (const id of Object.values(ids)) expect(fake.seen()).not.toContain(id);
+  });
+
+  it('ranks one subject across all its classes, lowest first when asked', async () => {
+    const fake = script([
+      [toolCall('get_top_students', { grade: null, subject: 'math', order: 'highest', limit: 2 }, 'math')],
+      [toolCall('get_top_students', { grade: null, subject: 'Math', order: 'lowest', limit: 1 }, 'low')],
+      [toolCall('get_top_students', { grade: null, subject: 'Science', order: 'highest', limit: 5 }, 'sci')],
+      [text('Done.')],
+    ]);
+    await turn({ message: 'who is best in math, in all the classes?' });
+    const math = answerOf(fake, 'math');
+    expect(math.ranked.map((r) => [r.name, r.class])).toEqual([['Sara Malik', 'Math · Grade 6'], ['Omar Haddad', 'Math · Grade 6']]);
+    expect(math.ranked[0].gradedWork).toBe('2 of 2');
+    expect(math.outOf).toBe(3);
+    expect(answerOf(fake, 'low').ranked.map((r) => r.name)).toEqual(['Yusuf Rahman']);
+    expect(answerOf(fake, 'sci')).toMatchObject({ error: expect.objectContaining({ code: 'NO_CLASSES' }) });
+  });
+
   it('says plainly when nobody matches the name', async () => {
     const fake = script([[toolCall('find_student', { name: 'zzz nobody' }, 'none')], [text('No one by that name.')]]);
     const { of } = await turn({ message: 'how is zzz doing?' });

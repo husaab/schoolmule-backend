@@ -233,3 +233,123 @@ defineTool({
     };
   },
 });
+
+const MAX_CLASSES_READ = 24;
+
+defineTool({
+  name: 'get_top_students',
+  doing: 'Ranking students',
+  description:
+    'Rank students by their term grade so far: the highest (or lowest) overall average in a grade or the whole school, or the highest (or lowest) grade in one subject across all its classes (such as every Math class), optionally in one grade. Use it for "who is the top student in Grade 6", "best in Math", "lowest marks in Science". Students left out of a class average are not ranked in that subject.',
+  parameters: {
+    type: 'object',
+    properties: {
+      grade: { type: ['string', 'null'], description: 'One grade (such as "6"), or null for every grade.' },
+      subject: { type: ['string', 'null'], description: 'A subject (such as "Math"), or null to rank by the overall average across all subjects.' },
+      order: { type: 'string', enum: ['highest', 'lowest'] },
+      limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many to list (10 unless they asked for a number).' },
+    },
+    required: ['grade', 'subject', 'order', 'limit'],
+    additionalProperties: false,
+  },
+  views: STAFF,
+  handler: async (args, ctx) => {
+    const limit = Math.min(50, Math.max(1, args.limit || 10));
+    const grade = args.grade ? String(args.grade).trim() : null;
+    const byScore = (a, b) => (args.order === 'lowest' ? a.score - b.score : b.score - a.score) || a.name.localeCompare(b.name);
+    let ranked = [];
+    let basis;
+    let scope;
+    let leftOut = 0;
+    let partial = false;
+
+    if (args.subject) {
+      const wanted = String(args.subject).trim().toLowerCase();
+      const { data: classes } = await ctx.read('classes');
+      let matching = (classes || []).filter((c) => !c.archivedAt && String(c.subject || '').toLowerCase().includes(wanted) && (!grade || String(c.grade) === grade));
+      if (matching.length === 0) throw new ToolError('NO_CLASSES', `No ${args.subject} classes${grade ? ` in Grade ${grade}` : ''} were found.`);
+      // A class belongs to one term: rank this term's classes when there are any.
+      const term = await currentTerm(ctx).catch((err) => {
+        if (err instanceof ToolError && err.code === 'NO_TERM') return null;
+        throw err;
+      });
+      if (term && matching.some((c) => c.termId === term.id)) matching = matching.filter((c) => c.termId === term.id);
+      partial = matching.length > MAX_CLASSES_READ;
+      const rows = [];
+      for (const c of matching.slice(0, MAX_CLASSES_READ)) {
+        try {
+          const { data } = await ctx.read('analyticsClass', { params: { classId: c.classId } });
+          for (const s of (data && data.students) || []) {
+            if (s.leftOut) { leftOut += 1; continue; }
+            if (s.finalPct === null || s.finalPct === undefined) continue;
+            rows.push({ id: s.studentId, name: s.studentName, score: Number(s.finalPct), where: classLabel(c), coverage: s.coverage || null });
+          }
+        } catch (err) {
+          if (!(err instanceof ToolError) || err.code === 'FORBIDDEN') throw err;
+          // A class with no term or no grades yet has nothing to rank.
+        }
+      }
+      // Someone in two matching classes is ranked once, by their better (or worse) grade.
+      const best = new Map();
+      for (const r of rows) {
+        const had = best.get(r.id);
+        if (!had || (args.order === 'lowest' ? r.score < had.score : r.score > had.score)) best.set(r.id, r);
+      }
+      ranked = [...best.values()];
+      basis = `term grade so far in ${args.subject}${term ? `, ${term.name}` : ''}`;
+      scope = `${args.subject}${grade ? ` · Grade ${grade}` : ' · every grade'}`;
+    } else {
+      const term = await currentTerm(ctx);
+      const { data } = await ctx.read('analyticsSnapshot', { query: { termId: term.id } });
+      ranked = ((data && data.students) || [])
+        .filter((s) => s.overallAvg !== null && s.overallAvg !== undefined && (!grade || String(s.gradeLevel) === grade))
+        .map((s) => ({ id: s.studentId, name: s.studentName, score: Number(s.overallAvg), where: s.gradeLevel ? `Grade ${s.gradeLevel}` : null, classes: s.classCount }));
+      basis = `overall average across their classes, ${term.name}`;
+      scope = grade ? `Grade ${grade}` : 'Whole school';
+    }
+    if (ranked.length === 0) {
+      return { summary: 'No grades to rank yet', forModel: { scope, ranked: [], note: 'Nobody in that group has graded work yet, so there is no ranking. Say so.' } };
+    }
+    ranked.sort(byScore);
+    // Equal grades share a place (1, 2, 2, 4).
+    let place = 0;
+    const list = ranked.slice(0, limit).map((r, i, all) => {
+      if (i === 0 || r.score !== all[i - 1].score) place = i + 1;
+      return {
+        place,
+        ref: ctx.refs.mint('student', r.id, r.name),
+        name: r.name,
+        grade: pct(r.score),
+        ...(r.where && { [args.subject ? 'class' : 'gradeLevel']: r.where }),
+        ...(r.coverage && { gradedWork: `${r.coverage.assessed ?? '?'} of ${r.coverage.total ?? '?'}` }),
+      };
+    });
+    return {
+      summary: `${args.order === 'lowest' ? 'Lowest' : 'Top'} ${list.length} · ${scope}`,
+      forModel: {
+        scope,
+        order: args.order,
+        basis,
+        ranked: list,
+        outOf: ranked.length,
+        ...(leftOut > 0 && { leftOutOfClassAverages: leftOut }),
+        ...(partial && { note: `Only the first ${MAX_CLASSES_READ} classes were read.` }),
+        howToSay: 'Give the ranking with each grade and what it is based on. A grade on little graded work can move a lot; mention it when gradedWork is low.',
+      },
+      card: {
+        type: 'table',
+        title: `${args.order === 'lowest' ? 'Lowest' : 'Top'} students · ${scope}`,
+        subtitle: `By ${basis} · ${ranked.length} ranked`,
+        tier: 'read',
+        columns: [
+          { key: 'place', label: '#', align: 'right' },
+          { key: 'name', label: 'Student' },
+          { key: 'where', label: args.subject ? 'Class' : 'Grade' },
+          { key: 'grade', label: args.subject ? 'Grade' : 'Overall', align: 'right' },
+        ],
+        rows: list.map((r) => ({ place: r.place, name: r.name, where: r.class || r.gradeLevel || '—', grade: shown(r.grade) })),
+      },
+    };
+  },
+});
+

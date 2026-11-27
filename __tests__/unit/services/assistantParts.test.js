@@ -109,6 +109,10 @@ describe('the site guide', () => {
   it('finds a page by its name and by the words people use', () => {
     expect(top('where is the report templates')).toBe('report-templates');
     expect(top('change our school stamp')).toBe('school-assets');
+    // A word one page uses counts for more than words many pages use: the stamp is on School Assets.
+    const stamp = guide.find('how do i change the stamp of my school that appears in bottom of progress report cards');
+    expect(stamp[0].entry.id).toBe('school-assets');
+    expect(guide.isClear(stamp)).toBe(true);
     expect(top('how do I omit a student from class average')).toBe('class-average-exclusion');
     expect(top('daily attendance')).toBe('general-attendance');
     expect(top('invite a teacher')).toBe('users');
@@ -124,6 +128,12 @@ describe('the site guide', () => {
     expect(both.map((h) => h.entry.id)).toEqual(expect.arrayContaining(['class-attendance', 'general-attendance']));
     expect(guide.isClear(both)).toBe(false);
     expect(guide.isClear(guide.find('where are the report templates'))).toBe(true);
+    // One common word in a page's name is not an answer: "grades" isn't "Publish grades to parents".
+    expect(guide.isClear(guide.find('compare math grades across all classes'))).toBe(false);
+    expect(guide.isClear(guide.find('top student grade'))).toBe(false);
+    expect(guide.isClear(guide.find('publish grades'))).toBe(true);
+    // "fees" is not "feedback".
+    expect(guide.find('pay fees', { parent: true }).map((h) => h.entry.id)).not.toContain('parent-feedback');
     expect(['classes', 'grades', 'batches', 'address'].map(guide.stem)).toEqual(['class', 'grade', 'batch', 'address']);
   });
 
