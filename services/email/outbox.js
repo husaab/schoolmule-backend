@@ -50,6 +50,7 @@ const HANDLERS = {
   payment_receipt: () => require('../payments/emails').receiptHandler,
   payment_link: () => require('../payments/emails').linkHandler,
   payment_refund: () => require('../payments/emails').refundHandler,
+  payment_request: () => require('../payments/emails').requestHandler,
 };
 
 // Refusals that a retry can't fix (a bad address, a misconfigured sender or key).

@@ -610,7 +610,7 @@ describe('the office', () => {
     expect(res.body.data).toHaveLength(1);
 
     res = await authenticatedRequest('get', '/api/payments/charges.csv');
-    expect(res.text).toMatch(/Grade 5 Field Trip,sara@example\.com,Paid,\$31\.00/);
+    expect(res.text).toMatch(/Grade 5 Field Trip,,,sara@example\.com,Paid,\$31\.00/);
   });
 
   it('shows the school’s payouts and balance from Stripe', async () => {

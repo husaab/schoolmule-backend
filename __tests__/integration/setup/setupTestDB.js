@@ -88,6 +88,7 @@ const ALL_TABLES = [
   'charge_payments',
   'charge_lines',
   'charges',
+  'payment_requests',
   'planner_period_rules',
   'planner_schedule_sessions',
   'planner_schedules',

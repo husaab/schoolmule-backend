@@ -46,6 +46,7 @@ const UNFENCED_ROUTES = [
   'POST /api/email/contact',                                      // public contact form
   'GET /api/registration/public/:schoolSlug/:formSlug',           // public registration form
   'POST /api/registration/public/:schoolSlug/:formSlug/submit',   // public registration form
+  'GET /api/registration/public/:schoolSlug/:formSlug/children', // a signed-in parent's children (checks a PARENT token itself), rate limited
   'GET /api/registration/public/payments/:token',                 // a family's payment link (the token is the secret), rate limited
   'POST /api/registration/public/payments/:token/checkout',       // a family's payment link: open Stripe's page, rate limited
   'POST /api/payments/stripe/webhook',                            // Stripe's webhook (signature over the raw body)

@@ -39,6 +39,7 @@ Finance → Payments lets a school connect its own Stripe account (`services/pay
 | `STRIPE_LIVE_ENABLED` | production only | Must be `true` for a live key (`sk_live_…`) to be accepted. A local backend uses the production database, so it must never run with a live key. |
 | `STRIPE_API_VERSION` | optional | Overrides the pinned Stripe API version (`services/payments/stripeClient.js`). |
 | `STRIPE_WEBHOOK_SECRET` | everywhere payments should work | The signing secret of the Stripe webhook endpoint (`whsec_…`). Comma-separate several when more than one endpoint sends here. Locally, `stripe listen --print-secret` prints the CLI's. |
+| `PARENT_PAYMENTS_ENABLED` | off until launch | `true` turns on the parent portal's Payments page (`GET /api/parent-portal/payments`). Unset, the route answers 404. |
 
 Rows in `payment_accounts` are kept per Stripe mode, so a backend running with a test key only ever reads and writes test rows.
 
