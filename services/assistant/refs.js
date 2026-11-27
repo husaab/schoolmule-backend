@@ -11,7 +11,7 @@
 
 const { ToolError } = require('./errors');
 
-const PREFIX = Object.freeze({ class: 'c', student: 's', assessment: 'a', term: 't' });
+const PREFIX = Object.freeze({ class: 'c', student: 's', assessment: 'a', term: 't', file: 'f' });
 const REF_SHAPE = /^[a-z][0-9]{1,5}$/;
 
 class Refs {

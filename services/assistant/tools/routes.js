@@ -8,6 +8,9 @@
 // Each of these is guarded by the route's own middleware exactly as it is
 // for the app: the call carries the signed-in person's own token.
 
+const ASSET_TYPE = /^(logo|principal_signature|school_stamp)$/;
+const SCHOOL_CODE = /^[A-Z0-9_]{2,60}$/;
+
 const ROUTES = Object.freeze({
   classes: { method: 'GET', path: '/api/classes' },                                    // the classes this person may see
   class: { method: 'GET', path: '/api/classes/:classId' },                             // one class (page context)
@@ -23,6 +26,8 @@ const ROUTES = Object.freeze({
   analyticsClass: { method: 'GET', path: '/api/analytics/class/:classId' },            // the Analytics page's class detail
   analyticsStudent: { method: 'GET', path: '/api/analytics/student/:studentId' },      // ?termId=
   analyticsSnapshot: { method: 'GET', path: '/api/analytics/snapshot' },               // ?termId=, one record per student
+  schoolAssets: { method: 'GET', path: '/api/school-assets/school-code/:schoolCode', params: { schoolCode: SCHOOL_CODE } },
+  schoolAssetVersions: { method: 'GET', path: '/api/school-assets/:schoolId/:assetType/versions', params: { assetType: ASSET_TYPE } },
 
   // Writes. Never given to a tool: only services/assistant/actions runs them,
   // when the person presses Apply or Undo on a change they were shown.
@@ -30,6 +35,9 @@ const ROUTES = Object.freeze({
   saveScores: { method: 'POST', path: '/api/studentAssessments/classes/:classId/scores' },
   saveStatsExclusion: { method: 'PUT', path: '/api/classes/:classId/stats-exclusions/:studentId' },
   removeStatsExclusion: { method: 'DELETE', path: '/api/classes/:classId/stats-exclusions/:studentId' },
+  replaceSchoolAsset: { method: 'POST', path: '/api/school-assets/from-assistant' },
+  restoreSchoolAssetVersion: { method: 'POST', path: '/api/school-assets/:schoolId/:assetType/versions/:versionId/restore', params: { assetType: ASSET_TYPE } },
+  deleteSchoolAsset: { method: 'DELETE', path: '/api/school-assets/:schoolId/:assetType', params: { assetType: ASSET_TYPE } },
 });
 
 module.exports = { ROUTES };

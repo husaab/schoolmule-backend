@@ -12,6 +12,8 @@
 const STATUS_LABEL = { PRESENT: 'Present', LATE: 'Late', ABSENT: 'Absent', EXCUSED: 'Excused' };
 const num = (value) => (value === null || value === undefined || value === '' ? null : Number(value));
 const sortedIds = (ids) => [...(ids || [])].sort();
+const ASSET_LABELS = { logo: 'school logo', principal_signature: 'principal signature', school_stamp: 'school stamp' };
+const LIVE_PATH_FIELD = { logo: 'logoPath', principal_signature: 'principalSignaturePath', school_stamp: 'schoolStampPath' };
 
 const KINDS = {
   // args: { classId, date, className }; a value is 'PRESENT' | 'LATE' | 'ABSENT' | 'EXCUSED' | null (unmarked)
@@ -105,6 +107,57 @@ const KINDS = {
       return `Left out of ${n} ${n === 1 ? 'assessment' : 'assessments'}`;
     },
     count: (n) => `${n} ${n === 1 ? 'change' : 'changes'}`,
+  },
+
+  // The school's logo, stamp or principal signature, from an image attached in Muley's panel.
+  // args: { schoolCode, assetType }; the one key is the asset type. A value as read is
+  // { path, newestVersionId, schoolId } (the live file and the newest kept copy); the target
+  // is { attachmentId }. Undo brings back the copy the replace kept, or removes an asset that
+  // had no file before.
+  school_asset: {
+    topics: (args) => [`school-assets:${args.schoolCode}`],
+    async read(read, args) {
+      const { data } = await read('schoolAssets', { params: { schoolCode: args.schoolCode } });
+      const schoolId = data ? data.schoolId : null;
+      let newestVersionId = null;
+      if (schoolId) {
+        const { data: versions } = await read('schoolAssetVersions', { params: { schoolId, assetType: args.assetType } });
+        newestVersionId = versions && versions[0] ? versions[0].versionId : null;
+      }
+      return { [args.assetType]: { path: (data && data[LIVE_PATH_FIELD[args.assetType]]) || null, newestVersionId, schoolId } };
+    },
+    valueOf: (current, key) => current[key] ?? { path: null, newestVersionId: null, schoolId: null },
+    same: (a, b) => {
+      // An attached image is never already the live file.
+      if ((a && a.attachmentId) || (b && b.attachmentId)) return false;
+      return (a ? a.path : null) === (b ? b.path : null) && (a ? a.newestVersionId : null) === (b ? b.newestVersionId : null);
+    },
+    async write(write, args, values, { result } = {}) {
+      const value = values[args.assetType];
+      if (value && value.attachmentId) {
+        const { data } = await write('replaceSchoolAsset', { body: { assetType: args.assetType, attachmentId: value.attachmentId } });
+        return { keptVersionId: data.keptVersionId ?? null, schoolId: data.schoolId };
+      }
+      const extra = (result && result.extra) || {};
+      if (extra.keptVersionId) {
+        await write('restoreSchoolAssetVersion', { params: { schoolId: extra.schoolId, assetType: args.assetType, versionId: extra.keptVersionId } });
+      } else {
+        await write('deleteSchoolAsset', { params: { schoolId: extra.schoolId, assetType: args.assetType } });
+      }
+      return null;
+    },
+    label: (value) => (!value || (!value.path && !value.attachmentId) ? 'none' : value.attachmentId ? 'the new image' : 'an image'),
+    count: () => 'the new image',
+    // Said in the asset's own words, not as a count.
+    labels: (args, result) => {
+      const asset = ASSET_LABELS[args.assetType] || 'image';
+      const hadOne = !result || !result.extra || Boolean(result.extra.keptVersionId);
+      return {
+        apply: `Save the new ${asset}`,
+        done: `Saved the new ${asset}`,
+        undone: hadOne ? `Undone. The earlier ${asset} is back.` : `Undone. The ${asset} was removed again.`,
+      };
+    },
   },
 };
 

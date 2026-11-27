@@ -3,6 +3,7 @@
 require('./staff/classes');
 require('./staff/guide');
 require('./staff/insights');
+require('./staff/assets');
 require('./staff/writes');
 
 module.exports = require('./registry');

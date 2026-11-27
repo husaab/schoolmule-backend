@@ -19,6 +19,8 @@ const { openStream } = require('../services/assistant/stream/ndjson');
 const { available } = require('../middleware/requireAssistant');
 const actions = require('../services/assistant/actions/service');
 const queries = require('../queries/assistant.queries');
+const multer = require('multer');
+const attachments = require('../services/assistant/attachments');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = { status: 'failed', message: 'Conversation not found' };
@@ -70,12 +72,12 @@ const getSettings = async (req, res) => {
 
 /**
  * POST /api/assistant/turns
- * Body: { message, conversationId?, choice?: { ref }, pageContext?: { route?, classId? } }
+ * Body: { message, conversationId?, choice?: { ref }, attachments?: [{ id, name }] (up to 3, from POST /attachments), pageContext?: { route?, classId? } }
  * Answers 400/404/409/429 as JSON before anything is streamed; once the
  * stream is open every outcome is an event on it, ending with `done`.
  */
 const startTurn = async (req, res) => {
-  const { message, conversationId, choice, pageContext } = req.body || {};
+  const { message, conversationId, choice, pageContext, attachments: files } = req.body || {};
   const caps = config.caps();
   const text = typeof message === 'string' ? message.trim() : '';
 
@@ -84,6 +86,10 @@ const startTurn = async (req, res) => {
   if (conversationId !== undefined && conversationId !== null && !UUID_RE.test(String(conversationId))) return res.status(404).json(NOT_FOUND);
   if (choice && (typeof choice !== 'object' || (choice.ref !== null && typeof choice.ref !== 'string'))) {
     return failed(res, 400, 'INVALID_CHOICE', 'That choice is not one Muley offered.');
+  }
+  const attached = Array.isArray(files) ? files : [];
+  if (files !== undefined && files !== null && (!Array.isArray(files) || attached.length > 3 || attached.some((f) => !f || !attachments.isId(f.id) || typeof f.name !== 'string'))) {
+    return failed(res, 400, 'INVALID_ATTACHMENT', 'Those attachments could not be read. Attach the image again.');
   }
 
   const who = whoOf(req);
@@ -114,6 +120,7 @@ const startTurn = async (req, res) => {
       reason = await runTurn({
         who, access: req.access, token: req.headers.authorization.slice(7), schoolYear, conversation, turnId,
         text, choice: choice || null, pageContext: pageContext && typeof pageContext === 'object' ? pageContext : null,
+        attached: attached.map((f) => ({ id: f.id, name: f.name.replace(/[\r\n"]/g, ' ').trim().slice(0, 120) || 'image' })),
         allowWrites: Boolean(req.assistant && req.assistant.settings.allowWrites),
         emit: stream.send, signal: stop.signal,
       });
@@ -186,6 +193,30 @@ const deleteConversation = async (req, res) => {
   } catch (error) {
     logger.error({ err: error }, 'Error deleting an assistant conversation');
     return res.status(500).json({ status: 'failed', message: 'Error deleting the conversation' });
+  }
+};
+
+// ── Attachments ───────────────────────────────────────────────
+
+const attachmentUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: attachments.MAX_BYTES, files: 1 } }).single('file');
+/** Multer, with its refusals said plainly. */
+const receiveAttachment = (req, res, next) => attachmentUpload(req, res, (err) => {
+  if (!err) return next();
+  if (err.code === 'LIMIT_FILE_SIZE') return failed(res, 400, 'FILE_TOO_LARGE', 'Keep the image under 5 MB.');
+  return failed(res, 400, 'FILE_REFUSED', 'That file could not be read.');
+});
+
+// POST /api/assistant/attachments (multipart, one image as `file`): keep an image for a change
+// Muley may prepare, such as a new school stamp. Nothing is changed by it.
+const uploadAttachment = async (req, res) => {
+  if (!req.assistant || !req.assistant.settings.allowWrites) return failed(res, 403, 'WRITES_OFF', "Your school hasn't switched on saving changes through Muley.");
+  if (!req.file) return failed(res, 400, 'FILE_REQUIRED', 'Attach an image.');
+  try {
+    return res.status(201).json({ status: 'success', data: await attachments.store(whoOf(req), req.file) });
+  } catch (err) {
+    if (err.status === 400) return failed(res, 400, err.code, err.message);
+    logger.error({ err }, 'Error keeping an image attached in Muley');
+    return res.status(500).json({ status: 'failed', message: "The image couldn't be uploaded. Try again." });
   }
 };
 
@@ -315,4 +346,5 @@ module.exports = {
   getSettings, startTurn, listConversations, getConversation, renameConversation, deleteConversation,
   getAction, applyAction, undoAction, dismissAction,
   getSchoolSettings, saveSchoolSettings, listSchoolSettings,
+  receiveAttachment, uploadAttachment,
 };

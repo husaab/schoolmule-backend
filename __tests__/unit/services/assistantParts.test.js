@@ -200,7 +200,10 @@ describe('the loopback reader', () => {
 
   it('reads only GET routes, writes only the save routes, and builds the path itself', async () => {
     const writes = Object.fromEntries(Object.entries(ROUTES).filter(([, route]) => route.method !== 'GET').map(([id, route]) => [id, route.method]));
-    expect(writes).toEqual({ saveClassAttendance: 'POST', saveScores: 'POST', saveStatsExclusion: 'PUT', removeStatsExclusion: 'DELETE' });
+    expect(writes).toEqual({
+      saveClassAttendance: 'POST', saveScores: 'POST', saveStatsExclusion: 'PUT', removeStatsExclusion: 'DELETE',
+      replaceSchoolAsset: 'POST', restoreSchoolAssetVersion: 'POST', deleteSchoolAsset: 'DELETE',
+    });
     const { read: readOnly } = dispatcher(async () => ({ status: 200, body: {} }));
     await expect(readOnly('saveScores', { params: { classId: ID(1) } })).rejects.toThrow(/not a route a tool can read/);
     const seen = [];
@@ -211,6 +214,11 @@ describe('the loopback reader', () => {
     expect(seen[0].method).toBe('GET');
     expect(seen[0].path).toBe(`/api/attendance/class/${ID(1)}?date=2026-11-26`);
     expect(seen[0].headers).toMatchObject({ Authorization: 'Bearer tok', 'X-School-Year': ID(7), 'X-Request-Id': 'turn-1:1' });
+
+    await read('schoolAssetVersions', { params: { schoolId: ID(2), assetType: 'school_stamp' } });
+    expect(seen[1].path).toBe(`/api/school-assets/${ID(2)}/school_stamp/versions`);
+    await expect(read('schoolAssetVersions', { params: { schoolId: ID(2), assetType: '../users' } })).rejects.toThrow(/needs a valid assetType/);
+    await expect(read('schoolAssets', { params: { schoolCode: 'al haadi' } })).rejects.toThrow(/needs a valid schoolCode/);
   });
 
   it('refuses a route it does not know and a parameter that is not an id', async () => {

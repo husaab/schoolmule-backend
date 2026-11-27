@@ -42,9 +42,11 @@ const __setTransportForTests = (replacement) => {
 function createDispatcher({ token, schoolYearId = null, requestId = 'assistant', transport = defaultTransport }) {
   let calls = 0;
 
+  // A parameter is a uuid unless the route names a stricter pattern for it (an asset type, a school code).
   const pathOf = (routeId, route, params) => route.path.replace(/:(\w+)/g, (_match, name) => {
     const value = params[name];
-    if (!UUID_RE.test(String(value))) throw new Error(`Route "${routeId}" needs a valid ${name}`);
+    const pattern = (route.params && route.params[name]) || UUID_RE;
+    if (!pattern.test(String(value))) throw new Error(`Route "${routeId}" needs a valid ${name}`);
     return value;
   });
   const headersFor = () => {

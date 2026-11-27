@@ -67,7 +67,7 @@ const MESSAGES = {
  *   emit: (event: object) => void, signal: AbortSignal }} turn
  * @returns {Promise<'end'|'choices'|'limit'|'error'|'aborted'>} why the turn ended
  */
-async function runTurn({ who, access, token, schoolYear, conversation, turnId, text: typed, choice = null, pageContext = null, allowWrites = false, emit, signal }) {
+async function runTurn({ who, access, token, schoolYear, conversation, turnId, text: typed, choice = null, attached = [], pageContext = null, allowWrites = false, emit, signal }) {
   const caps = config.caps();
   // Anything shaped like an education number is taken out of what the person
   // typed before it is stored or sent to the model.
@@ -97,12 +97,19 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
       await store.append(conversation.id, turnId, { role: 'event', content: note });
       messages.push({ role: 'event', content: note });
     }
+    if (attached.length > 0) {
+      // The model never sees the image itself: its name and a ref a tool can take.
+      const named = attached.map((f) => `"${f.name}" (ref ${refs.mint('file', f.id, f.name)})`);
+      const note = `The person attached ${attached.length === 1 ? 'an image' : `${attached.length} images`}: ${named.join(', ')}. You can't see images; use the ref with a tool that takes a file.`;
+      await store.append(conversation.id, turnId, { role: 'event', content: note });
+      messages.push({ role: 'event', content: note });
+    }
 
     const system = assemble({ firstName, view, access, schoolYearLabel: schoolYear ? schoolYear.label : null, today, page, allowWrites });
     const tools = registry.definitionsFor(view, { allowWrites });
     const offered = new Set(tools.map((tool) => tool.name));
     // offers(name): whether this conversation has that tool (a change tool only where the school allows changes).
-    const baseCtx = { read, refs, access, user: { userId: who.userId }, today: today.date, pageContext: page, offers: (name) => offered.has(name) };
+    const baseCtx = { read, refs, access, user: { userId: who.userId, school: who.school }, today: today.date, pageContext: page, offers: (name) => offered.has(name) };
     // A tool that prepares a change records it here; nothing is written to school data.
     const contextFor = (toolCallId) => ({
       ...baseCtx,

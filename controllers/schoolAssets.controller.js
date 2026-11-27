@@ -6,6 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const history = require('../services/schoolAssetHistory');
 const audit = require('../services/audit/auditLog');
+const attachments = require('../services/assistant/attachments');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The live file was not touched: its copy could not be made first.
@@ -101,6 +102,101 @@ const getSchoolAssetsBySchoolId = async (req, res) => {
 };
 
 // Upload single asset file
+// An answer the caller sends as it is (a 404, or the file that couldn't be kept).
+class Refusal extends Error {
+  constructor(status, body) {
+    super(body.message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Make a file the school's asset of this type: the current file is kept
+ * first (School Assets -> earlier versions; if it can't be kept, nothing is
+ * changed), then the new one is uploaded, the record points at it, an old
+ * file left at another path is removed, and the change is audited.
+ * Shared by an upload on School Assets and a change saved through Muley.
+ * -> { row, fileName, kept, schoolId }. Throws a Refusal for a 404 or 500 to send.
+ */
+async function replaceAsset(req, { schoolCode, assetType, buffer, mimetype, ext }) {
+  const { rows: schoolRows } = await db.query('SELECT school_id FROM schools WHERE school_code = $1', [schoolCode]);
+  if (schoolRows.length === 0) throw new Refusal(404, { status: 'error', message: 'School not found' });
+  const schoolId = schoolRows[0].school_id;
+
+  // Create folder structure similar to progress reports
+  const schoolFolder = schoolCode.replace(/\s+/g, '').toUpperCase();
+  const fileName = `${schoolFolder}/${assetType}${ext}`;
+
+  const { rows: existingAssets } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolId]);
+  const currentAssets = existingAssets.length > 0 ? existingAssets[0] : {};
+  const previousPath = currentAssets[`${assetType}_path`] || null;
+  let kept = null;
+  try {
+    kept = await history.archiveCurrent({
+      schoolId, school: req.user.school, assetType, currentPath: previousPath,
+      userId: req.user.userId, reason: 'replaced',
+    });
+  } catch (archiveError) {
+    logger.error({ err: archiveError }, 'School asset upload stopped: the current file could not be kept');
+    throw new Refusal(500, NOT_KEPT);
+  }
+
+  const { error } = await supabase
+    .storage
+    .from('school-assets')
+    .upload(fileName, buffer, {
+      contentType: mimetype,
+      upsert: true
+    });
+  if (error) {
+    logger.error('Supabase upload error:', error);
+    throw new Error('Upload to storage failed');
+  }
+
+  const updatedAssets = {
+    logo_path: currentAssets.logo_path,
+    principal_signature_path: currentAssets.principal_signature_path,
+    school_stamp_path: currentAssets.school_stamp_path
+  };
+  updatedAssets[`${assetType}_path`] = fileName;
+
+  const result = await db.query(schoolAssetsQueries.upsertSchoolAssets, [
+    schoolCode,
+    schoolId,
+    updatedAssets.logo_path,
+    updatedAssets.principal_signature_path,
+    updatedAssets.school_stamp_path
+  ]);
+
+  // A new file with another extension lives at another path: the old one
+  // would otherwise stay public for good.
+  await history.removeLiveFile(previousPath, fileName);
+  await audit.record({
+    ...audit.actorOf(req),
+    action: 'school_asset.replace',
+    entityType: 'school_asset',
+    entityId: schoolId,
+    summary: `${history.ASSET_LABELS[assetType]} ${previousPath ? 'replaced' : 'added'}`,
+    changes: [{ key: assetType, label: history.ASSET_LABELS[assetType], before: previousPath, after: fileName }],
+  });
+  return { row: result.rows[0], fileName, kept, schoolId };
+}
+
+const ASSET_TYPES = ['logo', 'principal_signature', 'school_stamp'];
+
+const uploaded = (res, assetType, { row, fileName, kept }) => res.json({
+  status: 'success',
+  message: 'Asset uploaded successfully',
+  data: {
+    ...toCamel(row),
+    uploadedAsset: assetType,
+    filePath: fileName,
+    // The version the replaced file was kept as, when there was one.
+    keptVersionId: kept ? kept.version_id : null
+  }
+});
+
 const uploadAsset = async (req, res) => {
   try {
     const { schoolCode, assetType } = req.body;
@@ -113,107 +209,47 @@ const uploadAsset = async (req, res) => {
       });
     }
 
-    const allowedAssetTypes = ['logo', 'principal_signature', 'school_stamp'];
-    if (!allowedAssetTypes.includes(assetType)) {
+    if (!ASSET_TYPES.includes(assetType)) {
       return res.status(400).json({
         status: 'error',
         message: 'Invalid asset type. Allowed types: logo, principal_signature, school_stamp'
       });
     }
 
-    // Get school information
-    const { rows: schoolRows } = await db.query('SELECT school_id FROM schools WHERE school_code = $1', [schoolCode]);
-    if (schoolRows.length === 0) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'School not found'
-      });
-    }
-    const schoolId = schoolRows[0].school_id;
-
-    // Create folder structure similar to progress reports
-    const schoolFolder = schoolCode.replace(/\s+/g, '').toUpperCase();
-    const fileExtension = path.extname(file.originalname);
-    const fileName = `${schoolFolder}/${assetType}${fileExtension}`;
-
-    // The file being replaced is kept first (School Assets -> earlier
-    // versions). If it can't be kept, it isn't overwritten.
-    const { rows: existingAssets } = await db.query(schoolAssetsQueries.getSchoolAssetsBySchoolId, [schoolId]);
-    const currentAssets = existingAssets.length > 0 ? existingAssets[0] : {};
-    const previousPath = currentAssets[`${assetType}_path`] || null;
-    let kept = null;
-    try {
-      kept = await history.archiveCurrent({
-        schoolId, school: req.user.school, assetType, currentPath: previousPath,
-        userId: req.user.userId, reason: 'replaced',
-      });
-    } catch (archiveError) {
-      logger.error({ err: archiveError }, 'School asset upload stopped: the current file could not be kept');
-      return res.status(500).json(NOT_KEPT);
-    }
-
-    // Upload to Supabase storage
-    const { error } = await supabase
-      .storage
-      .from('school-assets')
-      .upload(fileName, file.buffer, {
-        contentType: file.mimetype,
-        upsert: true
-      });
-
-    if (error) {
-      logger.error('Supabase upload error:', error);
-      throw new Error('Upload to storage failed');
-    }
-
-    // Update the specific asset path
-    const updatedAssets = {
-      logo_path: currentAssets.logo_path,
-      principal_signature_path: currentAssets.principal_signature_path,
-      school_stamp_path: currentAssets.school_stamp_path
-    };
-    
-    updatedAssets[`${assetType}_path`] = fileName;
-
-    // Upsert the record
-    const result = await db.query(schoolAssetsQueries.upsertSchoolAssets, [
-      schoolCode,
-      schoolId,
-      updatedAssets.logo_path,
-      updatedAssets.principal_signature_path,
-      updatedAssets.school_stamp_path
-    ]);
-
-    // A new file with another extension lives at another path: the old one
-    // would otherwise stay public for good.
-    await history.removeLiveFile(previousPath, fileName);
-    await audit.record({
-      ...audit.actorOf(req),
-      action: 'school_asset.replace',
-      entityType: 'school_asset',
-      entityId: schoolId,
-      summary: `${history.ASSET_LABELS[assetType]} ${previousPath ? 'replaced' : 'added'}`,
-      changes: [{ key: assetType, label: history.ASSET_LABELS[assetType], before: previousPath, after: fileName }],
-    });
-
-    res.json({
-      status: 'success',
-      message: 'Asset uploaded successfully',
-      data: {
-        ...toCamel(result.rows[0]),
-        uploadedAsset: assetType,
-        filePath: fileName,
-        // The version the replaced file was kept as, when there was one.
-        keptVersionId: kept ? kept.version_id : null
-      }
-    });
+    const replaced = await replaceAsset(req, { schoolCode, assetType, buffer: file.buffer, mimetype: file.mimetype, ext: path.extname(file.originalname) });
+    return uploaded(res, assetType, replaced);
   } catch (error) {
+    if (error instanceof Refusal) return res.status(error.status).json(error.body);
     logger.error('Error uploading asset:', error);
     res.status(500).json({
       status: 'error',
       message: 'Failed to upload asset',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+/**
+ * POST /api/school-assets/from-assistant { assetType, attachmentId }
+ * The person pressed Save on a change Muley prepared: the image they
+ * attached in Muley's panel becomes their own school's asset, exactly as an
+ * upload would (same permission, the current file kept first).
+ */
+const replaceFromAssistant = async (req, res) => {
+  const { assetType, attachmentId } = req.body || {};
+  if (!ASSET_TYPES.includes(assetType)) {
+    return res.status(400).json({ status: 'error', message: 'Invalid asset type. Allowed types: logo, principal_signature, school_stamp' });
+  }
+  if (!attachments.isId(attachmentId)) return res.status(400).json({ status: 'error', message: 'That is not an attached image.' });
+  try {
+    const file = await attachments.read({ school: req.user.school, userId: req.user.userId }, attachmentId);
+    const replaced = await replaceAsset(req, { schoolCode: req.user.school, assetType, buffer: file.buffer, mimetype: file.contentType, ext: file.ext });
+    return uploaded(res, assetType, replaced);
+  } catch (error) {
+    if (error instanceof Refusal) return res.status(error.status).json(error.body);
+    if (error.code === 'ATTACHMENT_GONE') return res.status(404).json({ status: 'error', code: error.code, message: error.message });
+    logger.error('Error replacing an asset from an attachment:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to upload asset' });
   }
 };
 
@@ -472,6 +508,7 @@ module.exports = {
   getSchoolAssetsBySchoolCode,
   getSchoolAssetsBySchoolId,
   uploadAsset,
+  replaceFromAssistant,
   deleteAsset,
   listAssetVersions,
   restoreAssetVersion,

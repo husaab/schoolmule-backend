@@ -45,6 +45,9 @@ router.get('/school-id/:schoolId', ownSchoolId, schoolAssetsController.getSchool
 // Upload single asset (logo, principal_signature, or school_stamp)
 router.post('/upload', schoolSetup, schoolAssetsController.upload.single('file'), ownSchoolCode((req) => req.body && req.body.schoolCode), schoolAssetsController.uploadAsset);
 
+// An image attached in Muley's panel becomes the caller's own school's asset (Save on a prepared change).
+router.post('/from-assistant', schoolSetup, schoolAssetsController.replaceFromAssistant);
+
 // Delete specific asset
 router.delete('/:schoolId/:assetType', schoolSetup, ownSchoolId, schoolAssetsController.deleteAsset);
 

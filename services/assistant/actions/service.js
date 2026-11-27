@@ -50,6 +50,7 @@ function publicView(row) {
   const kind = KINDS[row.kind];
   const n = Object.keys(row.args.targets || {}).length;
   const result = row.result || {};
+  const own = kind.labels ? kind.labels(row.args, row.result) : null;
   return {
     id: row.action_id,
     kind: row.kind,
@@ -57,10 +58,10 @@ function publicView(row) {
     title: row.title,
     hash: row.args_hash,
     expiresAt: row.expires_at,
-    applyLabel: `Save ${kind.count(n)}`,
-    doneLabel: result.written === 0 ? 'Already up to date' : `Saved ${kind.count(result.written ?? n)}`,
+    applyLabel: own ? own.apply : `Save ${kind.count(n)}`,
+    doneLabel: result.written === 0 ? 'Already up to date' : own ? own.done : `Saved ${kind.count(result.written ?? n)}`,
     undoLabel: 'Undo',
-    undoneLabel: `Undone. ${kind.count(n)} put back as ${n === 1 ? 'it was' : 'they were'}.`,
+    undoneLabel: own ? own.undone : `Undone. ${kind.count(n)} put back as ${n === 1 ? 'it was' : 'they were'}.`,
     canUndo: row.status === 'applied' && row.applied_at && Date.now() - new Date(row.applied_at).getTime() < UNDO_DAYS * 86_400_000,
     topics: kind.topics(row.args),
     error: row.error_message || null,
@@ -100,6 +101,7 @@ async function tellConversation(row, sentence) {
 
 /** Read, compare and write one direction of a change. -> { written, current } or throws ActionError(409) with the differences. */
 async function settle(row, { read, write }, { from, to, labelOf }) {
+  // -> also `extra`: what the kind's write reported (kept for its undo).
   const kind = KINDS[row.kind];
   const current = await kind.read(read, row.args);
   const keys = Object.keys(to);
@@ -115,8 +117,8 @@ async function settle(row, { read, write }, { from, to, labelOf }) {
     toWrite[key] = to[key];
   }
   if (conflicts.length > 0) return { conflicts, current };
-  if (Object.keys(toWrite).length > 0) await kind.write(write, row.args, toWrite);
-  return { conflicts: [], current, written: Object.keys(toWrite).length };
+  const extra = Object.keys(toWrite).length > 0 ? await kind.write(write, row.args, toWrite, { result: row.result }) : null;
+  return { conflicts: [], current, written: Object.keys(toWrite).length, extra: extra || null };
 }
 
 const namesOf = (row) => {
@@ -164,7 +166,7 @@ async function apply({ actionId, who, token, expectedHash, idempotencyKey = null
       if (!kind.same(after[key], row.args.targets[key])) mismatched += 1;
     }
     const { rows: [applied] } = await db.query(queries.markApplied, [
-      actionId, JSON.stringify(beforeApplied), JSON.stringify(after), JSON.stringify({ written: outcome.written, mismatched }), who.userId, idempotencyKey,
+      actionId, JSON.stringify(beforeApplied), JSON.stringify(after), JSON.stringify({ written: outcome.written, mismatched, ...(outcome.extra && { extra: outcome.extra }) }), who.userId, idempotencyKey,
     ]);
     await audit.record({
       school: who.school, schoolYearId: row.school_year_id, actorUserId: who.userId, actorView: who.view, source: 'assistant',
