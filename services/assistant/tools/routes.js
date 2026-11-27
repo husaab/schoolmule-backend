@@ -17,6 +17,12 @@ const ROUTES = Object.freeze({
   classAssessments: { method: 'GET', path: '/api/classes/:classId/assessments' },
   gridOverlay: { method: 'GET', path: '/api/classroom/classes/:classId/grid-overlay' }, // columns filled from Classwork
   classStatsExclusions: { method: 'GET', path: '/api/classes/:classId/stats-exclusions' }, // who is left out of the class average
+  students: { method: 'GET', path: '/api/students' },                                  // the school's students (roster permission)
+  activeTerm: { method: 'GET', path: '/api/terms/active' },
+  currentTerm: { method: 'GET', path: '/api/terms/current' },
+  analyticsClass: { method: 'GET', path: '/api/analytics/class/:classId' },            // the Analytics page's class detail
+  analyticsStudent: { method: 'GET', path: '/api/analytics/student/:studentId' },      // ?termId=
+  analyticsSnapshot: { method: 'GET', path: '/api/analytics/snapshot' },               // ?termId=, one record per student
 
   // Writes. Never given to a tool: only services/assistant/actions runs them,
   // when the person presses Apply or Undo on a change they were shown.

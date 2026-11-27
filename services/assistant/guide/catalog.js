@@ -41,7 +41,7 @@ const ENTRIES = [
   { id: 'messages', title: 'Messages', words: ['inbox', 'message a parent', 'conversations', 'chat with parents'], path: '/messages', needs: STAFF,
     steps: ['In the sidebar, choose Messages.'] },
   { id: 'analytics', title: 'Analytics', words: ['averages', 'at risk', 'trends', 'insights', 'performance', 'term comparison'], path: '/analytics', needs: ['analytics'],
-    steps: ['In the sidebar, choose Analytics.'], muley: null },
+    steps: ['In the sidebar, choose Analytics.'], muley: ['get_students_needing_attention', 'get_class_insights'] },
   { id: 'report-cards', title: 'Report Cards', words: ['generate report cards', 'report card comments', 'term reports'], path: '/report-cards', needs: ['report_cards'],
     steps: ['In the sidebar, choose Report Cards.'] },
   { id: 'reports', title: 'Reports', words: ['progress reports', 'student summary', 'interim report'], path: '/reports', needs: ['report_cards'],
