@@ -21,6 +21,7 @@ const actions = require('../services/assistant/actions/service');
 const queries = require('../queries/assistant.queries');
 const multer = require('multer');
 const attachments = require('../services/assistant/attachments');
+const voice = require('../services/assistant/transcribe');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = { status: 'failed', message: 'Conversation not found' };
@@ -269,6 +270,38 @@ const uploadAttachment = async (req, res) => {
   }
 };
 
+// ── Voice ─────────────────────────────────────────────────────
+
+const audioUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: voice.MAX_BYTES, files: 1 } }).single('audio');
+/** Multer, with its refusals said plainly. */
+const receiveAudio = (req, res, next) => audioUpload(req, res, (err) => {
+  if (!err) return next();
+  if (err.code === 'LIMIT_FILE_SIZE') return failed(res, 400, 'AUDIO_TOO_LONG', 'That recording is too long. Keep it under two minutes.');
+  return failed(res, 400, 'AUDIO_REFUSED', "That recording couldn't be read.");
+});
+
+// POST /api/assistant/transcribe (multipart, one recording as `audio`): the words, for the composer.
+// The person reads them before sending; nothing is stored. Counted against the AI limits like a turn.
+const transcribeAudio = async (req, res) => {
+  if (!req.file) return failed(res, 400, 'AUDIO_REQUIRED', 'Record something first.');
+  const who = whoOf(req);
+  try {
+    const verdict = await aiUsage.start({ school: who.school, userId: who.userId, feature: 'assistant_voice' });
+    if (!verdict.ok) return failed(res, 429, verdict.code, verdict.message);
+    const { text, usage } = await voice.transcribe({ buffer: req.file.buffer, mimetype: req.file.mimetype });
+    await aiUsage.record({
+      school: who.school, userId: who.userId, feature: 'assistant_voice',
+      inputTokens: usage && usage.input_tokens ? usage.input_tokens : 0, cachedInputTokens: 0, outputTokens: usage && usage.output_tokens ? usage.output_tokens : 0,
+    }).catch(() => {});
+    if (!text) return failed(res, 422, 'NOTHING_HEARD', "Muley didn't catch any words. Try again a little closer to the microphone.");
+    return res.status(200).json({ status: 'success', data: { text } });
+  } catch (err) {
+    if (err instanceof voice.TranscribeError) return failed(res, err.status, err.code, err.message);
+    logger.error({ err }, 'Error turning a recording into text');
+    return res.status(500).json({ status: 'failed', message: "Your recording couldn't be turned into text. Try again." });
+  }
+};
+
 // ── Prepared changes ──────────────────────────────────────────
 
 const actionFailed = (res, err) => {
@@ -396,4 +429,5 @@ module.exports = {
   getAction, applyAction, undoAction, dismissAction,
   getSchoolSettings, saveSchoolSettings, listSchoolSettings,
   receiveAttachment, uploadAttachment, getSchoolLog,
+  receiveAudio, transcribeAudio,
 };

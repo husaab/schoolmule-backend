@@ -35,6 +35,7 @@ router.delete('/conversations/:conversationId', requireAssistant, assistant.dele
 
 // A change Muley prepared: only the person it was shown to may apply, undo or dismiss it.
 router.post('/attachments', requireAssistant, assistant.receiveAttachment, assistant.uploadAttachment);
+router.post('/transcribe', requireAssistant, turnLimiter, assistant.receiveAudio, assistant.transcribeAudio);
 router.get('/actions/:actionId', requireAssistant, assistant.getAction);
 router.post('/actions/:actionId/apply', requireAssistant, assistant.applyAction);
 router.post('/actions/:actionId/undo', requireAssistant, assistant.undoAction);

@@ -35,6 +35,7 @@ const FEATURES = Object.freeze([
   'analytics_at_risk',
   'weekly_summary',
   'assistant',
+  'assistant_voice',
 ]);
 const isFeature = (feature) => FEATURES.includes(feature);
 
