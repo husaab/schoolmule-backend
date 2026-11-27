@@ -17,6 +17,8 @@
 //               ctx = { read, refs, access, user, today, pageContext }
 //               `read` is the only way to data, and it can only GET.
 //   terminal    the turn ends after this tool (it asked the person something).
+//   writes      it prepares a change (ctx.propose): offered only where the
+//               school lets Muley prepare changes.
 
 const { ToolError } = require('../errors');
 const { problems } = require('./validate');
@@ -46,10 +48,12 @@ function defineTool(tool) {
 }
 
 /** The tools a view gets, in name order (a stable order keeps the provider's prompt cache warm). */
-const toolsFor = (view) => [...TOOLS.values()].filter((tool) => tool.views.includes(view)).sort((a, b) => a.name.localeCompare(b.name));
+const toolsFor = (view, { allowWrites = false } = {}) => [...TOOLS.values()]
+  .filter((tool) => tool.views.includes(view) && (allowWrites || !tool.writes))
+  .sort((a, b) => a.name.localeCompare(b.name));
 
 /** The definitions as the provider adapter takes them. */
-const definitionsFor = (view) => toolsFor(view).map(({ name, description, parameters }) => ({ name, description, parameters }));
+const definitionsFor = (view, options) => toolsFor(view, options).map(({ name, description, parameters }) => ({ name, description, parameters }));
 
 const asToolError = (err) =>
   (err instanceof ToolError ? err : new ToolError('TOOL_FAILED', 'That tool hit a problem and could not finish.'));
@@ -59,11 +63,11 @@ const asToolError = (err) =>
  * -> { ok, forModel (already scrubbed and size-capped), summary, card, choices, terminal }
  * Never throws: a failure is an answer the model can read ({ ok: false, error }).
  */
-async function run({ name, argsJson, view, ctx, logger }) {
+async function run({ name, argsJson, view, ctx, logger, allowWrites = false }) {
   const tool = TOOLS.get(name);
   const failed = (error) => ({ ok: false, forModel: { ok: false, error: { code: error.code, message: error.message } }, summary: null, card: null, choices: null, terminal: false });
 
-  if (!tool || !tool.views.includes(view)) {
+  if (!tool || !tool.views.includes(view) || (tool.writes && !allowWrites)) {
     return failed(new ToolError('UNKNOWN_TOOL', `There is no tool called "${String(name).slice(0, 40)}".`));
   }
   let args;
@@ -90,6 +94,8 @@ async function run({ name, argsJson, view, ctx, logger }) {
       summary: result.summary || null,
       card: result.card ? scrubResult(result.card) : null,
       choices: result.choices ? scrubResult(result.choices) : null,
+      // A prepared change for the app to draw; it never reaches the model.
+      action: result.action || null,
       terminal: Boolean(tool.terminal),
     };
   } catch (err) {

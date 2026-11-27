@@ -112,4 +112,58 @@ module.exports = {
   `,
 
   selectFirstName: `SELECT first_name FROM users WHERE user_id = $1`,
+
+  // ── Actions (a change Muley prepared; nothing is written until it is applied) ──
+  // $1 conversation, $2 school, $3 year, $4 user, $5 kind, $6 tier, $7 title,
+  // $8 args, $9 preview, $10 before, $11 hash, $12 tool call, $13 expires
+  insertAction: `
+    INSERT INTO assistant_actions (
+      conversation_id, school, school_year_id, user_id, kind, tier, title,
+      args, preview, before_state, args_hash, tool_call_id, expires_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13)
+    ON CONFLICT (conversation_id, tool_call_id) WHERE tool_call_id IS NOT NULL DO NOTHING
+    RETURNING *
+  `,
+
+  // Only the person who was shown the change, at the school it was prepared for.
+  selectAction: `
+    SELECT * FROM assistant_actions
+    WHERE action_id = $1 AND user_id = $2 AND school = $3
+  `,
+
+  selectConversationActions: `
+    SELECT * FROM assistant_actions
+    WHERE conversation_id = $1
+    ORDER BY created_at
+  `,
+
+  // Moves an action on only from the state the caller saw: two clicks can't both apply it.
+  moveAction: `
+    UPDATE assistant_actions SET status = $3
+    WHERE action_id = $1 AND status = $2
+    RETURNING *
+  `,
+
+  markApplied: `
+    UPDATE assistant_actions
+    SET status = 'applied', before_applied = $2::jsonb, after_state = $3::jsonb, result = $4::jsonb,
+        applied_at = NOW(), applied_by = $5, apply_key = $6, error_code = NULL, error_message = NULL
+    WHERE action_id = $1 AND status = 'applying'
+    RETURNING *
+  `,
+
+  markUndone: `
+    UPDATE assistant_actions
+    SET status = 'undone', undone_at = NOW(), undone_by = $2, undo_key = $3, result = COALESCE(result, '{}'::jsonb) || $4::jsonb
+    WHERE action_id = $1 AND status = 'undoing'
+    RETURNING *
+  `,
+
+  // A write that was refused: back to where it was, with the reason.
+  markRefused: `
+    UPDATE assistant_actions SET status = $3, error_code = $4, error_message = $5
+    WHERE action_id = $1 AND status = $2
+    RETURNING *
+  `,
 };

@@ -198,8 +198,12 @@ describe('the tool registry', () => {
 describe('the loopback reader', () => {
   const dispatcher = (transport) => createDispatcher({ token: 'tok', schoolYearId: ID(7), requestId: 'turn-1', transport });
 
-  it('only knows GET routes, and builds the path itself', async () => {
-    for (const route of Object.values(ROUTES)) expect(route.method).toBe('GET');
+  it('reads only GET routes, writes only the two save routes, and builds the path itself', async () => {
+    const writes = Object.entries(ROUTES).filter(([, route]) => route.method !== 'GET').map(([id]) => id).sort();
+    expect(writes).toEqual(['saveClassAttendance', 'saveScores']);
+    for (const id of writes) expect(ROUTES[id].method).toBe('POST');
+    const { read: readOnly } = dispatcher(async () => ({ status: 200, body: {} }));
+    await expect(readOnly('saveScores', { params: { classId: ID(1) } })).rejects.toThrow(/not a route a tool can read/);
     const seen = [];
     const { read } = dispatcher(async (request) => { seen.push(request); return { status: 200, body: { data: [] } }; });
 

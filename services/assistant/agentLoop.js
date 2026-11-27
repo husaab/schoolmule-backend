@@ -23,6 +23,7 @@ const { getAdapter } = require('./provider');
 const { assemble, todayIn } = require('./prompt/assemble');
 const { ProviderError, ToolError } = require('./errors');
 const { scrubText } = require('./tools/shape/scrub');
+const actions = require('./actions/service');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -66,7 +67,7 @@ const MESSAGES = {
  *   emit: (event: object) => void, signal: AbortSignal }} turn
  * @returns {Promise<'end'|'choices'|'limit'|'error'|'aborted'>} why the turn ended
  */
-async function runTurn({ who, access, token, schoolYear, conversation, turnId, text: typed, choice = null, pageContext = null, emit, signal }) {
+async function runTurn({ who, access, token, schoolYear, conversation, turnId, text: typed, choice = null, pageContext = null, allowWrites = false, emit, signal }) {
   const caps = config.caps();
   // Anything shaped like an education number is taken out of what the person
   // typed before it is stored or sent to the model.
@@ -97,9 +98,14 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
       messages.push({ role: 'event', content: note });
     }
 
-    const system = assemble({ firstName, view, access, schoolYearLabel: schoolYear ? schoolYear.label : null, today, page });
-    const tools = registry.definitionsFor(view);
-    const ctx = { read, refs, access, user: { userId: who.userId }, today: today.date, pageContext: page };
+    const system = assemble({ firstName, view, access, schoolYearLabel: schoolYear ? schoolYear.label : null, today, page, allowWrites });
+    const tools = registry.definitionsFor(view, { allowWrites });
+    const baseCtx = { read, refs, access, user: { userId: who.userId }, today: today.date, pageContext: page };
+    // A tool that prepares a change records it here; nothing is written to school data.
+    const contextFor = (toolCallId) => ({
+      ...baseCtx,
+      propose: (proposal) => actions.create({ ...proposal, conversationId: conversation.id, toolCallId, who, schoolYearId: schoolYear ? schoolYear.schoolYearId : null }),
+    });
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       logger.warn('OPENAI_API_KEY is not set on the backend: the assistant cannot answer');
@@ -169,8 +175,9 @@ async function runTurn({ who, access, token, schoolYear, conversation, turnId, t
         emit({ t: 'tool', id: toolCall.id, name: toolCall.name, label: registry.doing(toolCall.name), state: 'started' });
         const result = toolRuns > caps.toolCalls
           ? { ok: false, forModel: { ok: false, error: { code: 'LIMIT', message: 'No more tool calls are allowed in this turn. Answer with what you have.' } }, summary: null, card: null, choices: null, terminal: false }
-          : await registry.run({ name: toolCall.name, argsJson: toolCall.args, view, ctx, logger });
+          : await registry.run({ name: toolCall.name, argsJson: toolCall.args, view, ctx: contextFor(toolCall.id), logger, allowWrites });
         emit({ t: 'tool', id: toolCall.id, state: 'finished', ok: result.ok, summary: result.summary });
+        if (result.action) emit({ t: 'action', action: result.action });
         if (result.card) emit({ t: 'card', id: toolCall.id, card: result.card });
         if (result.choices) emit({ t: 'choices', id: toolCall.id, ...result.choices });
 

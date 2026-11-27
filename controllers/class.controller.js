@@ -498,7 +498,9 @@ const getAssessmentsByClass = async (req, res) => {
         sortOrder:          a.sort_order,
         maxScore:           a.max_score,
         weightPoints:       a.weight_points,
-        date:               a.date || null
+        date:               a.date || null,
+        // Parents and students see an assessment's marks only once it is published.
+        isPublished:        a.is_published === true
       })),
     });
   } catch (error) {

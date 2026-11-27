@@ -17,6 +17,7 @@ const aiUsage = require('../services/aiUsage');
 const { runTurn } = require('../services/assistant/agentLoop');
 const { openStream } = require('../services/assistant/stream/ndjson');
 const { available } = require('../middleware/requireAssistant');
+const actions = require('../services/assistant/actions/service');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = { status: 'failed', message: 'Conversation not found' };
@@ -58,7 +59,7 @@ const getSettings = async (req, res) => {
     }
     return res.status(200).json({
       status: 'success',
-      data: { enabled: true, view: req.access.view, capabilities: { writes: false }, maxMessageLength: config.caps().messageChars },
+      data: { enabled: true, view: req.access.view, capabilities: { writes: Boolean(verdict.settings.allowWrites) }, maxMessageLength: config.caps().messageChars },
     });
   } catch (error) {
     logger.error({ err: error }, 'Error reading assistant settings');
@@ -112,6 +113,7 @@ const startTurn = async (req, res) => {
       reason = await runTurn({
         who, access: req.access, token: req.headers.authorization.slice(7), schoolYear, conversation, turnId,
         text, choice: choice || null, pageContext: pageContext && typeof pageContext === 'object' ? pageContext : null,
+        allowWrites: Boolean(req.assistant && req.assistant.settings.allowWrites),
         emit: stream.send, signal: stop.signal,
       });
     } finally {
@@ -147,9 +149,10 @@ const getConversation = async (req, res) => {
     const conversation = await store.find(conversationId, whoOf(req));
     if (!conversation) return res.status(404).json(NOT_FOUND);
     const messages = (await store.transcript(conversation.id)).map(toShown).filter(Boolean);
+    const prepared = await actions.forConversation(conversation.id);
     return res.status(200).json({
       status: 'success',
-      data: { id: conversation.id, title: conversation.title, createdAt: conversation.createdAt, lastMessageAt: conversation.lastMessageAt, messages },
+      data: { id: conversation.id, title: conversation.title, createdAt: conversation.createdAt, lastMessageAt: conversation.lastMessageAt, messages, actions: prepared },
     });
   } catch (error) {
     logger.error({ err: error }, 'Error loading an assistant conversation');
@@ -182,6 +185,72 @@ const deleteConversation = async (req, res) => {
   } catch (error) {
     logger.error({ err: error }, 'Error deleting an assistant conversation');
     return res.status(500).json({ status: 'failed', message: 'Error deleting the conversation' });
+  }
+};
+
+// ── Prepared changes ──────────────────────────────────────────
+
+const actionFailed = (res, err) => {
+  if (err instanceof actions.ActionError) {
+    // The differences (conflicts) and the action as it now stands go in `data`, where the apps' API clients keep them.
+    return res.status(err.status).json({ status: 'failed', code: err.code, message: err.message, data: err.extra });
+  }
+  logger.error({ err }, 'Error handling an assistant action');
+  return res.status(500).json({ status: 'failed', code: 'ACTION_FAILED', message: 'That could not be done. Nothing was changed.' });
+};
+const writesOn = (req, res) => {
+  if (req.assistant && req.assistant.settings.allowWrites) return true;
+  failed(res, 403, 'WRITES_OFF', "Your school hasn't switched on saving changes through Muley.");
+  return false;
+};
+const actionRequest = (req) => ({
+  actionId: req.params.actionId,
+  who: whoOf(req),
+  token: req.headers.authorization.slice(7),
+  idempotencyKey: typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'].slice(0, 100) : null,
+  requestId: req.id ? String(req.id) : 'assistant-action',
+});
+
+// GET /api/assistant/actions/:actionId
+const getAction = async (req, res) => {
+  if (!UUID_RE.test(req.params.actionId)) return failed(res, 404, 'ACTION_NOT_FOUND', 'That change was not found.');
+  try {
+    return res.status(200).json({ status: 'success', data: await actions.get({ actionId: req.params.actionId, who: whoOf(req) }) });
+  } catch (err) {
+    return actionFailed(res, err);
+  }
+};
+
+// POST /api/assistant/actions/:actionId/apply { expectedHash }: the person pressed Apply.
+const applyAction = async (req, res) => {
+  if (!UUID_RE.test(req.params.actionId)) return failed(res, 404, 'ACTION_NOT_FOUND', 'That change was not found.');
+  if (!writesOn(req, res)) return undefined;
+  try {
+    const action = await actions.apply({ ...actionRequest(req), expectedHash: req.body && req.body.expectedHash });
+    return res.status(200).json({ status: 'success', data: action });
+  } catch (err) {
+    return actionFailed(res, err);
+  }
+};
+
+// POST /api/assistant/actions/:actionId/undo: the person pressed Undo.
+const undoAction = async (req, res) => {
+  if (!UUID_RE.test(req.params.actionId)) return failed(res, 404, 'ACTION_NOT_FOUND', 'That change was not found.');
+  if (!writesOn(req, res)) return undefined;
+  try {
+    return res.status(200).json({ status: 'success', data: await actions.undo(actionRequest(req)) });
+  } catch (err) {
+    return actionFailed(res, err);
+  }
+};
+
+// POST /api/assistant/actions/:actionId/dismiss: the person doesn't want it.
+const dismissAction = async (req, res) => {
+  if (!UUID_RE.test(req.params.actionId)) return failed(res, 404, 'ACTION_NOT_FOUND', 'That change was not found.');
+  try {
+    return res.status(200).json({ status: 'success', data: await actions.dismiss({ actionId: req.params.actionId, who: whoOf(req) }) });
+  } catch (err) {
+    return actionFailed(res, err);
   }
 };
 
@@ -220,5 +289,6 @@ const saveSchoolSettings = async (req, res) => {
 
 module.exports = {
   getSettings, startTurn, listConversations, getConversation, renameConversation, deleteConversation,
+  getAction, applyAction, undoAction, dismissAction,
   getSchoolSettings, saveSchoolSettings,
 };

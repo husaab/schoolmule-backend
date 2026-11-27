@@ -22,7 +22,7 @@ function todayIn(timezone, now = new Date()) {
  *   today: { date: string, weekday: string }, page?: { label: string, classRef?: string|null } | null }} context
  * @returns {string[]} system instructions, static part first
  */
-function assemble({ firstName, view, access, schoolYearLabel, today, page }) {
+function assemble({ firstName, view, access, schoolYearLabel, today, page, allowWrites = false }) {
   const lines = ['# This conversation'];
   lines.push(`You are helping ${firstName ? `${firstName}, ` : ''}${VIEW_LABEL[view] || 'a member of staff'}.`);
   if (access.isFullAdmin) {
@@ -33,6 +33,9 @@ function assemble({ firstName, view, access, schoolYearLabel, today, page }) {
     if (held.length > 0) lines.push(`Beyond their own classes it has: ${held.join('; ')}.`);
   }
   lines.push(`Today is ${today.weekday}, ${today.date}.${schoolYearLabel ? ` The school year in use is ${schoolYearLabel}.` : ''}`);
+  lines.push(allowWrites
+    ? 'This school lets you prepare class attendance and marks for this person to apply (propose_class_attendance, propose_scores). Nothing else can be changed through you yet.'
+    : 'This school has not switched on preparing changes: you can only read, explain and show where things are.');
   if (page && page.classRef) {
     lines.push(`They are looking at the class ${page.label} right now. Its ref is ${page.classRef}.`);
   }

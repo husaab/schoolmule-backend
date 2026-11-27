@@ -265,6 +265,7 @@ const classQueries = {
       sort_order,
       max_score,
       weight_points,
+      is_published,
       date
     FROM assessments
     WHERE class_id = $1

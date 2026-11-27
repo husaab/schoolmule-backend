@@ -7,6 +7,7 @@
 //   settings        any signed-in account: is Muley on for me?
 //   turns           one message in, a stream of JSON lines out
 //   conversations   the caller's own, in their current view
+//   actions         apply, undo or dismiss a change Muley prepared
 //   platform/...    the platform owner switches a school on
 //
 // Students never reach this router (the student fence), and an admin "view
@@ -30,6 +31,12 @@ router.get('/conversations', requireAssistant, assistant.listConversations);
 router.get('/conversations/:conversationId', requireAssistant, assistant.getConversation);
 router.patch('/conversations/:conversationId', requireAssistant, assistant.renameConversation);
 router.delete('/conversations/:conversationId', requireAssistant, assistant.deleteConversation);
+
+// A change Muley prepared: only the person it was shown to may apply, undo or dismiss it.
+router.get('/actions/:actionId', requireAssistant, assistant.getAction);
+router.post('/actions/:actionId/apply', requireAssistant, assistant.applyAction);
+router.post('/actions/:actionId/undo', requireAssistant, assistant.undoAction);
+router.post('/actions/:actionId/dismiss', requireAssistant, assistant.dismissAction);
 
 router.get('/platform/settings/:school', requirePlatformOwner, assistant.getSchoolSettings);
 router.put('/platform/settings/:school', requirePlatformOwner, assistant.saveSchoolSettings);
