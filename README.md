@@ -47,6 +47,8 @@ Stripe sends payment events from schools' accounts to a **Connected accounts** d
 
 Rows in `payment_accounts` are kept per Stripe mode, so a backend running with a test key only ever reads and writes test rows.
 
+Tax: Finance → Payments → Settings keeps the school's tax rates and the tax number printed on receipts (`/api/payments/settings`, `/api/payments/tax-rates`; `services/payments/taxSettings.js`). Each form item or payment request names a rate (or none), added on top or included in the price; the math is in `services/payments/tax.js`, and every charge line keeps its own copy of the rate, so editing or removing one never changes a past payment. Removing a rate archives it. Apply `payments_tax_migration.sql` (it also adds `registration_form_submissions.entered_by`, for a payment the office records for a student whose family never sent the form: `POST /api/registration/forms/:formId/office-payments`).
+
 Stripe's webhook is `POST /api/payments/stripe/webhook` (no JWT; the signature over the raw body is the proof). It stores each event once in `stripe_events` and answers at once; `services/payments/paymentsWorker.js` acts on it, retries failures with backoff, and once a day re-reads every connected school's account. Apply `payments_stripe_events_migration.sql` too.
 
 In Stripe, create one endpoint at that URL listening to **events on connected accounts**. To try it locally:

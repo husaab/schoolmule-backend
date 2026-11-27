@@ -3137,3 +3137,38 @@ ALTER TABLE registration_form_submissions
   ADD COLUMN IF NOT EXISTS student_id UUID REFERENCES students_all(student_id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS submitted_by UUID REFERENCES users(user_id) ON DELETE SET NULL;
 
+-- Payments: tax, and responses the office entered (payments_tax_migration.sql).
+CREATE TABLE IF NOT EXISTS tax_rates (
+  tax_rate_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school      school NOT NULL,
+  name        TEXT NOT NULL,
+  rate_milli  INTEGER NOT NULL CHECK (rate_milli > 0 AND rate_milli <= 100000),
+  archived_at TIMESTAMPTZ,
+  created_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_rates_name ON tax_rates (school, lower(name)) WHERE archived_at IS NULL;
+ALTER TABLE tax_rates ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS payment_settings (
+  school     school PRIMARY KEY,
+  tax_number TEXT,
+  updated_by UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE payment_settings ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE charge_lines
+  ADD COLUMN IF NOT EXISTS tax_cents      INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tax_name       TEXT,
+  ADD COLUMN IF NOT EXISTS tax_rate_milli INTEGER,
+  ADD COLUMN IF NOT EXISTS tax_included   BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE charges ADD COLUMN IF NOT EXISTS tax_cents INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE payment_requests
+  ADD COLUMN IF NOT EXISTS tax_rate_id UUID REFERENCES tax_rates(tax_rate_id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS tax_mode VARCHAR(10) NOT NULL DEFAULT 'added' CHECK (tax_mode IN ('added','included'));
+
+ALTER TABLE registration_form_submissions
+  ADD COLUMN IF NOT EXISTS entered_by UUID REFERENCES users(user_id) ON DELETE SET NULL;

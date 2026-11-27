@@ -12,6 +12,9 @@
 //   - Every Stripe call is made on the school's own account (a direct charge).
 //   - Nothing about a student goes to Stripe: the description is the form's
 //     title and the metadata is our charge id.
+//   - Tax lives on each line (its own copy of the rate), so a rate edited or
+//     removed later never changes a charge. amount_cents is what the family
+//     owes: the prices plus any tax added on top.
 
 const db = require('../../config/database');
 const logger = require('../../logger');
@@ -21,6 +24,7 @@ const stripeClient = require('./stripeClient');
 const { StripeConfigError } = require('./errors');
 const { deriveCharge, balanceCents, refundableCents, canPayOnline } = require('./chargeStatus');
 const { formatCents } = require('./paymentField');
+const tax = require('./tax');
 const emails = require('./emails');
 
 // How long a Stripe payment page stays open. An unpaid one then expires and
@@ -29,11 +33,13 @@ const CHECKOUT_MINUTES = 60;
 const OFFLINE_KINDS = new Set(['cash', 'cheque', 'other']);
 
 class ChargeError extends Error {
-  constructor(message, status = 409, code = null) {
+  /** @param data  optional details for the answer (e.g. the charge a 409 points at) */
+  constructor(message, status = 409, code = null, data = undefined) {
     super(message);
     this.name = 'ChargeError';
     this.status = status;
     this.code = code;
+    this.data = data;
   }
 }
 
@@ -63,7 +69,16 @@ async function availability(school, client = clientOrNull()) {
 
 // ─── Shaping ──────────────────────────────────────────────────────────
 
-const toLine = (row) => ({ lineId: row.line_id, itemId: row.item_id, label: row.label, amountCents: row.amount_cents });
+const toLine = (row) => ({
+  lineId: row.line_id,
+  itemId: row.item_id,
+  label: row.label,
+  amountCents: row.amount_cents,
+  taxCents: row.tax_cents || 0,
+  taxName: row.tax_name || null,
+  taxRateMilli: row.tax_rate_milli ?? null,
+  taxIncluded: Boolean(row.tax_included),
+});
 
 /**
  * A payment as staff see it. The office's note and who recorded it are only
@@ -107,6 +122,7 @@ function toCharge(row, { finance = false, lines, payments } = {}) {
     payerEmail: row.payer_email,
     currency: row.currency,
     amountCents: row.amount_cents,
+    taxCents: row.tax_cents || 0,
     amountPaidCents: row.amount_paid_cents,
     amountRefundedCents: row.amount_refunded_cents,
     status: visibleStatus(row.status, finance),
@@ -120,7 +136,10 @@ function toCharge(row, { finance = false, lines, payments } = {}) {
   charge.balanceCents = balanceCents({ ...charge, status: row.status });
   if (row.last_payment !== undefined) charge.lastPayment = row.last_payment || null;
   if (row.stripe_fee_cents !== undefined && finance) charge.stripeFeeCents = Number(row.stripe_fee_cents) || 0;
-  if (lines) charge.lines = lines.map(toLine);
+  if (lines) {
+    charge.lines = lines.map(toLine);
+    charge.taxSummary = tax.summarize(charge.lines);
+  }
   if (payments) {
     const visible = finance ? payments : payments.filter((p) => p.kind !== 'waiver');
     charge.payments = visible.map((p) => toPayment(p, { finance }));
@@ -161,32 +180,54 @@ async function inTransaction(work) {
   }
 }
 
+/** A charge line's insert parameters, its tax included. */
+const lineParams = (chargeId, line, i) => [
+  chargeId, line.itemId ?? null, line.label, line.amountCents, i,
+  line.taxCents || 0, line.taxName || null, line.taxRateMilli ?? null, Boolean(line.taxIncluded),
+];
+
 /**
  * Makes the charge for a form response, inside the response's own
- * transaction. `priced` comes from paymentField.priceSelection.
+ * transaction. `priced` comes from paymentField.priceSelection: its
+ * totalCents (what the family owes) includes any tax added on top.
  */
 async function createForSubmission(tx, { school, livemode, submissionId, form, field, priced, method, payerEmail, studentId = null, account = null }) {
   const { rows: [charge] } = await tx.query(q.insertCharge, [
     school, livemode, submissionId, form.form_id, field.field_id, studentId, payerEmail || null,
     String(form.title || 'School payment').slice(0, 200), field.payment_config?.currency || 'cad',
     priced.totalCents, method, field.payment_config?.accountingCode || null, account?.payment_account_id || null,
+    priced.taxCents || 0,
   ]);
   for (const [i, line] of priced.lines.entries()) {
-    await tx.query(q.insertLine, [charge.charge_id, line.itemId, line.label, line.amountCents, i]);
+    await tx.query(q.insertLine, lineParams(charge.charge_id, line, i));
   }
   return charge;
 }
 
 // ─── Stripe Checkout ──────────────────────────────────────────────────
 
-/** The items on Stripe's page: the form's lines, or one "balance" line when part is already paid. */
+/**
+ * The items on Stripe's page: the form's lines and, when tax is added on top,
+ * one line per rate ("HST (13%)") so they still sum to what is owed. Tax
+ * already inside the prices adds nothing. When part is already paid, one
+ * "balance" line instead.
+ */
 function checkoutLines(charge, lines) {
   const balance = balanceCents({ amountCents: charge.amount_cents, amountPaidCents: charge.amount_paid_cents, status: charge.status });
-  if (charge.amount_paid_cents === 0 && lines.length > 0 && lines.reduce((s, l) => s + l.amount_cents, 0) === balance) {
-    return lines.map((line) => ({
-      price_data: { currency: charge.currency, unit_amount: line.amount_cents, product_data: { name: line.label } },
-      quantity: 1,
-    }));
+  const items = lines.map(toLine);
+  const added = tax.summarize(items).filter((t) => !t.included);
+  const listed = items.reduce((s, l) => s + l.amountCents, 0) + added.reduce((s, t) => s + t.cents, 0);
+  if (charge.amount_paid_cents === 0 && lines.length > 0 && listed === balance) {
+    return [
+      ...items.map((line) => ({
+        price_data: { currency: charge.currency, unit_amount: line.amountCents, product_data: { name: line.label } },
+        quantity: 1,
+      })),
+      ...added.map((t) => ({
+        price_data: { currency: charge.currency, unit_amount: t.cents, product_data: { name: tax.taxLineName(t) } },
+        quantity: 1,
+      })),
+    ];
   }
   return [{
     price_data: { currency: charge.currency, unit_amount: balance, product_data: { name: `Balance for ${charge.description}` } },
@@ -510,24 +551,37 @@ async function closeOpenCheckout(charge, client) {
   }
 }
 
+const checkOfflineKind = (kind) => {
+  if (!OFFLINE_KINDS.has(kind)) throw new ChargeError('Choose cash, cheque or other', 400);
+};
+
+/**
+ * Records cash, a cheque or another office payment inside the caller's
+ * transaction (amount defaults to all that is owed; part is fine) and queues
+ * its receipt. The caller commits, then kicks the email outbox.
+ * @returns {{ charge, before, paymentId }} the charge after, and as it was
+ */
+async function recordOfflineIn(tx, { school, livemode, chargeId, kind, amountCents, note, user, sendReceipt = true }) {
+  checkOfflineKind(kind);
+  const charge = await loadForStaff(tx, { school, livemode, chargeId });
+  const owed = balanceCents(factsOf(charge));
+  if (owed <= 0) throw new ChargeError('Nothing is owed on this.', 409, 'NOTHING_OWED');
+  const amount = amountCents == null ? owed : Number(amountCents);
+  if (!Number.isInteger(amount) || amount < 1 || amount > owed) {
+    throw new ChargeError(`Enter an amount between $0.01 and ${formatCents(owed)}`, 400);
+  }
+  const { rows: [payment] } = await tx.query(q.insertOfflinePayment, [
+    chargeId, school, kind, amount, note ? String(note).slice(0, 500) : null, user.userId,
+  ]);
+  const updated = await recompute(tx, chargeId);
+  if (sendReceipt) await emails.queueReceipt(tx, updated, payment.payment_id);
+  return { charge: updated, before: charge, paymentId: payment.payment_id };
+}
+
 /** Cash, cheque or another payment taken at the office. */
 async function recordOffline({ school, livemode, chargeId, kind, amountCents, note, user, sendReceipt = true, client = clientOrNull() }) {
-  if (!OFFLINE_KINDS.has(kind)) throw new ChargeError('Choose cash, cheque or other', 400);
-  const result = await inTransaction(async (tx) => {
-    const charge = await loadForStaff(tx, { school, livemode, chargeId });
-    const owed = balanceCents(factsOf(charge));
-    if (owed <= 0) throw new ChargeError('Nothing is owed on this.', 409, 'NOTHING_OWED');
-    const amount = amountCents == null ? owed : Number(amountCents);
-    if (!Number.isInteger(amount) || amount < 1 || amount > owed) {
-      throw new ChargeError(`Enter an amount between $0.01 and ${formatCents(owed)}`, 400);
-    }
-    const { rows: [payment] } = await tx.query(q.insertOfflinePayment, [
-      chargeId, school, kind, amount, note ? String(note).slice(0, 500) : null, user.userId,
-    ]);
-    const updated = await recompute(tx, chargeId);
-    if (sendReceipt) await emails.queueReceipt(tx, updated, payment.payment_id);
-    return { charge: updated, before: charge };
-  });
+  checkOfflineKind(kind);
+  const result = await inTransaction((tx) => recordOfflineIn(tx, { school, livemode, chargeId, kind, amountCents, note, user, sendReceipt }));
   if (sendReceipt) emails.kick();
   if (balanceCents(factsOf(result.charge)) === 0) await closeOpenCheckout(result.before, client);
   return result.charge;
@@ -687,6 +741,7 @@ async function publicView(token) {
   ]);
   const facts = factsOf(row);
   const lastCard = [...payments].reverse().find((p) => p.kind === 'card' && p.status === 'succeeded');
+  const items = lines.map(toLine);
   return {
     row,
     view: {
@@ -700,8 +755,14 @@ async function publicView(token) {
       studentName: row.student_name || null,
       allowOffline: row.source_type === 'request' ? Boolean(row.request_allow_offline) : row.chosen_method === 'offline',
       currency: row.currency,
-      lines: lines.map(toLine),
+      lines: items,
+      // What the family owes, and the prices before any tax added on top.
       amountCents: row.amount_cents,
+      subtotalCents: row.amount_cents - tax.addedTaxCents(items),
+      taxCents: row.tax_cents || 0,
+      taxSummary: tax.summarize(items),
+      // The school's, for receipts (a GST/HST number).
+      taxNumber: row.tax_number || null,
       amountPaidCents: row.amount_paid_cents,
       amountRefundedCents: row.amount_refunded_cents,
       balanceCents: balanceCents(facts),
@@ -729,6 +790,8 @@ module.exports = {
   syncRefunds,
   syncDispute,
   recordOffline,
+  recordOfflineIn,
+  lineParams,
   waive,
   voidPayment,
   refund,
@@ -746,4 +809,5 @@ module.exports = {
   ensureWalletDomain,
   UI_MODES,
   cardFacts,
+  OFFLINE_KINDS,
 };

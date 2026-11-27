@@ -220,6 +220,8 @@ const SUBMISSION_SELECT = `*,
         WHERE student_id = registration_form_submissions.imported_student_id) AS imported_student_name,
       (SELECT jsonb_build_object('name', st.name, 'grade', st.grade::text) FROM students_all st
         WHERE st.student_id = registration_form_submissions.student_id) AS linked_student,
+      (SELECT COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username, u.email) FROM users u
+        WHERE u.user_id = registration_form_submissions.entered_by) AS entered_by_name,
       (SELECT jsonb_build_object(
           'chargeId', c.charge_id, 'status', c.status, 'amountCents', c.amount_cents,
           'amountPaidCents', c.amount_paid_cents, 'amountRefundedCents', c.amount_refunded_cents,

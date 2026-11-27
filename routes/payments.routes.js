@@ -41,4 +41,11 @@ router.post('/requests/:requestId/remind', controller.remindRequest);
 // The school's payouts to its bank
 router.get('/payouts', controller.listPayouts);
 
+// Settings: the school's tax rates and the tax number on its receipts
+router.get('/settings', controller.getSettings);
+router.put('/settings', controller.updateSettings);
+router.post('/tax-rates', controller.createTaxRate);
+router.patch('/tax-rates/:taxRateId', controller.updateTaxRate);
+router.delete('/tax-rates/:taxRateId', controller.archiveTaxRate);
+
 module.exports = router;

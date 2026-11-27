@@ -140,6 +140,8 @@ const registrationQueries = {
       (SELECT name FROM students WHERE student_id = s.imported_student_id) AS imported_student_name,
       (SELECT jsonb_build_object('name', st.name, 'grade', st.grade::text) FROM students_all st
         WHERE st.student_id = s.student_id) AS linked_student,
+      (SELECT COALESCE(NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username, u.email) FROM users u
+        WHERE u.user_id = s.entered_by) AS entered_by_name,
       (SELECT jsonb_build_object(
           'chargeId', c.charge_id, 'status', c.status, 'amountCents', c.amount_cents,
           'amountPaidCents', c.amount_paid_cents, 'amountRefundedCents', c.amount_refunded_cents,
@@ -152,6 +154,29 @@ const registrationQueries = {
     FROM registration_form_submissions s
     JOIN registration_forms f ON s.form_id = f.form_id
     WHERE s.submission_id = $1 AND f.school = $2
+  `,
+
+  /**
+   * A response the office entered for a family (a payment for a student who
+   * never sent the form): the child, who entered it, the school's default
+   * status for a new response.
+   */
+  insertOfficeSubmission: `
+    INSERT INTO registration_form_submissions (form_id, school, answers, student_id, entered_by, status)
+    VALUES ($1, $2, $3, $4, $5,
+      COALESCE((SELECT rs.key FROM registration_statuses rs WHERE rs.school = $2 AND rs.is_default LIMIT 1), 'new'))
+    RETURNING *
+  `,
+
+  /** A charge already on this form for this student (through a response of the form), in this Stripe mode. */
+  selectStudentChargeOnForm: `
+    SELECT c.charge_id
+    FROM charges c
+    JOIN registration_form_submissions s ON s.submission_id = c.submission_id
+    WHERE s.form_id = $1 AND s.school = $2 AND c.livemode = $4
+      AND (s.student_id = $3 OR c.student_id = $3)
+    ORDER BY c.created_at
+    LIMIT 1
   `,
 
   updateSubmissionStatus: `

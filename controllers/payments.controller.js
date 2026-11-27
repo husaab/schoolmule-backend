@@ -2,8 +2,9 @@
 //
 // HTTP surface for Finance → Payments: the school's Stripe connection, the
 // overview, the ledger (every charge, from forms and payment requests) with
-// the office's actions, payment requests, and payouts. Everything here needs
-// the `finance` permission (routes/payments.routes.js).
+// the office's actions, payment requests, payouts, and the school's tax
+// settings. Everything here needs the `finance` permission
+// (routes/payments.routes.js).
 
 const ExcelJS = require('exceljs');
 const db = require('../config/database');
@@ -11,6 +12,7 @@ const logger = require('../logger');
 const connect = require('../services/payments/connect');
 const charges = require('../services/payments/charges');
 const requests = require('../services/payments/requests');
+const taxSettings = require('../services/payments/taxSettings');
 const chargeQueries = require('../queries/charges.queries');
 const { formatCents } = require('../services/payments/paymentField');
 const { paidWith } = require('../services/payments/emails');
@@ -51,7 +53,9 @@ function failStripe(res, error, action) {
     return fail(res, 502, 'Stripe could not complete that. Please try again in a moment.');
   }
   if (error instanceof charges.ChargeError) {
-    return res.status(error.status).json({ status: 'failed', code: error.code, message: error.message });
+    return res.status(error.status).json({
+      status: 'failed', code: error.code, message: error.message, ...(error.data !== undefined ? { data: error.data } : {}),
+    });
   }
   if (error.status === 404) return fail(res, 404, error.message);
   logger.error({ err: error }, `Payments: error (${action})`);
@@ -127,22 +131,27 @@ function monthStart() {
   return new Date(`${y}-${m}-01T05:00:00Z`);
 }
 
+/** The tiles: money in and out this month (and the tax inside it), what is still owed. */
+const toSummary = (row) => ({
+  collectedThisMonthCents: row.collected_this_month_cents,
+  refundedThisMonthCents: row.refunded_this_month_cents,
+  taxCollectedThisMonthCents: row.tax_collected_this_month_cents,
+  outstandingCents: row.outstanding_cents,
+  outstandingCount: row.outstanding_count,
+  openDisputes: row.open_disputes,
+});
+
 const getSummary = async (req, res) => {
   try {
     const { rows: [row] } = await db.query(chargeQueries.summary, [req.user.school, livemodeOf(), monthStart()]);
-    return ok(res, {
-      collectedThisMonthCents: row.collected_this_month_cents,
-      refundedThisMonthCents: row.refunded_this_month_cents,
-      outstandingCents: row.outstanding_cents,
-      outstandingCount: row.outstanding_count,
-      openDisputes: row.open_disputes,
-    });
+    return ok(res, toSummary(row));
   } catch (error) {
     return failStripe(res, error, 'load summary');
   }
 };
 
 const SOURCES = { form: 'form_submission', request: 'request' };
+const TAX_FILTERS = new Set(['taxed', 'untaxed']);
 const uuidOrNull = (value) => (UUID_RE.test(String(value || '')) ? value : null);
 
 function listParams(query) {
@@ -151,14 +160,17 @@ function listParams(query) {
   const requestId = uuidOrNull(query.requestId);
   const studentId = uuidOrNull(query.studentId);
   const source = SOURCES[query.source] || null;
+  const tax = TAX_FILTERS.has(query.tax) ? query.tax : null;
   const search = String(query.q || '').trim().slice(0, 80) || null;
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 25, 1), 100);
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
-  return { status, formId, requestId, studentId, source, search, limit, page };
+  return { status, formId, requestId, studentId, source, tax, search, limit, page };
 }
 
 /** The listCharges parameters, in order. */
-const listArgs = (school, p, limit, offset) => [school, livemodeOf(), limit, p.status, p.formId, p.search, offset, p.requestId, p.source, p.studentId];
+const listArgs = (school, p, limit, offset) => [
+  school, livemodeOf(), limit, p.status, p.formId, p.search, offset, p.requestId, p.source, p.studentId, p.tax,
+];
 
 const listCharges = async (req, res) => {
   try {
@@ -184,7 +196,7 @@ const exportCharges = async (req, res) => {
     const { rows } = await db.query(chargeQueries.listCharges, listArgs(req.user.school, listParams(req.query), 10000, 0));
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Payments');
-    sheet.addRow(['Date', 'For', 'Student', 'Grade', 'Email', 'Status', 'Amount', 'Paid', 'Refunded', 'Still owed', 'Stripe fee', 'Paid with', 'Due', 'Accounting code', 'Reference']);
+    sheet.addRow(['Date', 'For', 'Student', 'Grade', 'Email', 'Status', 'Amount', 'Tax', 'Paid', 'Refunded', 'Still owed', 'Stripe fee', 'Paid with', 'Due', 'Accounting code', 'Reference']);
     sheet.getRow(1).font = { bold: true };
     for (const row of rows) {
       const c = charges.toCharge(row, { finance: true });
@@ -197,6 +209,7 @@ const exportCharges = async (req, res) => {
         row.payer_email || '',
         STATUS_LABELS[row.status] || row.status,
         formatCents(c.amountCents),
+        c.taxCents ? formatCents(c.taxCents) : '',
         formatCents(c.amountPaidCents),
         c.amountRefundedCents ? formatCents(c.amountRefundedCents) : '',
         c.balanceCents ? formatCents(c.balanceCents) : '',
@@ -321,13 +334,7 @@ const getOverview = async (req, res) => {
     ]);
     const byMonth = new Map(monthRows.map((r) => [r.month, r]));
     return ok(res, {
-      summary: {
-        collectedThisMonthCents: summary.collected_this_month_cents,
-        refundedThisMonthCents: summary.refunded_this_month_cents,
-        outstandingCents: summary.outstanding_cents,
-        outstandingCount: summary.outstanding_count,
-        openDisputes: summary.open_disputes,
-      },
+      summary: toSummary(summary),
       months: months.map((month) => {
         const r = byMonth.get(month) || {};
         return {
@@ -434,6 +441,25 @@ const deleteRequest = async (req, res) => {
   }
 };
 
+// ─── Settings: tax ────────────────────────────────────────────────────
+
+/** Runs a settings change and answers with the settings as they now stand: { taxNumber, taxRates }. */
+const settingsAction = (name, run, status = 200) => async (req, res) => {
+  try {
+    const settings = await run({ school: req.user.school, user: req.user }, req.body || {}, req);
+    if (name) logger.info({ school: req.user.school, userId: req.user.userId, action: name }, `Payments: ${name}`);
+    return ok(res, settings, status);
+  } catch (error) {
+    return failStripe(res, error, name || 'load settings');
+  }
+};
+
+const getSettings = settingsAction(null, (b) => taxSettings.load(b.school));
+const updateSettings = settingsAction('tax number saved', (b, body) => taxSettings.setTaxNumber({ ...b, taxNumber: body.taxNumber }));
+const createTaxRate = settingsAction('tax rate added', (b, body) => taxSettings.createRate({ ...b, body }), 201);
+const updateTaxRate = settingsAction('tax rate edited', (b, body, req) => taxSettings.updateRate({ ...b, taxRateId: req.params.taxRateId, body }));
+const archiveTaxRate = settingsAction('tax rate removed', (b, body, req) => taxSettings.archiveRate({ ...b, taxRateId: req.params.taxRateId }));
+
 /** The school's payouts to its bank, straight from Stripe. */
 const listPayouts = async (req, res) => {
   try {
@@ -468,4 +494,5 @@ module.exports = {
   getSummary, listCharges, exportCharges, getCharge, recordOffline, waive, voidPayment, refund, sendLink, listPayouts,
   setStudent, searchStudents, getOverview, recentMonths,
   listRequests, getRequest, getRoster, createRequest, updateRequest, addRequestStudents, remindRequest, removeRequestCharge, deleteRequest,
+  getSettings, updateSettings, createTaxRate, updateTaxRate, archiveTaxRate,
 };

@@ -8,8 +8,10 @@ const { CHARGE_COLUMNS, CHARGE_JOINS, CHARGE_EXTRAS, CHARGE_STATS } = require('.
 const REQUEST_COLUMNS = `
   r.request_id, r.school, r.livemode, r.school_year_id, r.title, r.description, r.currency, r.amount_cents,
   r.due_date, to_char(r.due_date, 'YYYY-MM-DD') AS due_date_text, r.allow_offline, r.accounting_code,
-  r.created_by, r.created_at, r.updated_at,
-  (SELECT NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') FROM users u WHERE u.user_id = r.created_by) AS created_by_name
+  r.created_by, r.created_at, r.updated_at, r.tax_rate_id, r.tax_mode,
+  (SELECT NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') FROM users u WHERE u.user_id = r.created_by) AS created_by_name,
+  (SELECT jsonb_build_object('taxRateId', t.tax_rate_id, 'name', t.name, 'rateMilli', t.rate_milli, 'archived', t.archived_at IS NOT NULL)
+     FROM tax_rates t WHERE t.tax_rate_id = r.tax_rate_id) AS tax_rate
 `;
 
 const STATS = CHARGE_STATS;
@@ -34,8 +36,8 @@ const paymentRequestsQueries = {
 
   insertRequest: `
     INSERT INTO payment_requests (school, livemode, school_year_id, title, description, amount_cents, due_date,
-                                  allow_offline, accounting_code, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10)
+                                  allow_offline, accounting_code, created_by, tax_rate_id, tax_mode)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, $9, $10, $11, $12)
     RETURNING *
   `,
 
@@ -98,17 +100,26 @@ const paymentRequestsQueries = {
   updateRequest: `
     UPDATE payment_requests
     SET title = $2, description = $3, amount_cents = $4, due_date = $5::date, allow_offline = $6,
-        accounting_code = $7, updated_at = now()
+        accounting_code = $7, tax_rate_id = $8, tax_mode = $9, updated_at = now()
     WHERE request_id = $1
   `,
 
+  /** The name and code every family sees. What they owe changes only with updateRequestMoney. */
   updateRequestCharges: `
-    UPDATE charges SET description = $2, amount_cents = $3, accounting_code = $4, updated_at = now()
+    UPDATE charges SET description = $2, accounting_code = $3, updated_at = now()
     WHERE request_id = $1
   `,
 
+  /** $2 what each family owes (tax added on top included), $3 its tax. */
+  updateRequestMoney: `
+    UPDATE charges SET amount_cents = $2, tax_cents = $3, updated_at = now()
+    WHERE request_id = $1
+  `,
+
+  /** $3 the price as typed; $4 to $7 the line's own copy of its tax. */
   updateRequestLines: `
-    UPDATE charge_lines l SET label = $2, amount_cents = $3
+    UPDATE charge_lines l
+    SET label = $2, amount_cents = $3, tax_cents = $4, tax_name = $5, tax_rate_milli = $6, tax_included = $7
     FROM charges c WHERE c.charge_id = l.charge_id AND c.request_id = $1
   `,
 
